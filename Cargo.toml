@@ -10,6 +10,7 @@ members = [
     "crates/tether-terminal",
     "crates/tether-ssh",
     "crates/tether-core",
+    "crates/tether-ffi",
 ]
 
 [workspace.package]
@@ -26,3 +27,6 @@ alacritty_terminal = "0.26"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync"] }
 thiserror = "2"
 tracing = "0.1"
+uniffi = "0.32"
+async-trait = "0.1"
+tokio-util = "0.7"

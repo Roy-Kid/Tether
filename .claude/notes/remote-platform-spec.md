@@ -340,6 +340,24 @@ Requirements on the seam:
 - no dispatch queue, pthread, raw pointer, C callback or backend error number
   appears in the generated surface.
 
+Two of those requirements the generated code does **not** meet on its own, and
+neither is discoverable by reading the surface — both were measured in Phase 0
+(Decision 0003):
+
+- Swift's structured cancellation does not reach a Rust future. The generated
+  `uniffiRustCallAsync` polls to completion and never consults
+  `Task.isCancelled`, so a cancelled three-second call returned normally after
+  3002ms. Cancellation is therefore **part of the Rust API** — an explicit
+  token a caller can signal — and is not left to the binding layer.
+- The generated file does not compile under Swift 6 strict concurrency.
+
+Both are absorbed by a thin Swift façade that Tether owns: generated bindings
+are an internal Swift 5 module, the façade is the Swift 6 surface a consumer
+sees, and it ties `withTaskCancellationHandler` to the token so consumers still
+write ordinary structured concurrency. Generated code is an implementation
+detail of that façade, never the public surface. Any binding-level behaviour
+claimed here is a claim to be measured from Swift, never inferred.
+
 `aws-lc-rs` compiles native code; that it builds cleanly for Apple targets from
 `cargo` alone, with no CMake in a consumer's path, is a Phase 0 gate.
 

@@ -1,0 +1,27 @@
+[package]
+name = "tether-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "UniFFI surface over tether-core. Keeps tether-core binding-agnostic."
+
+# A staticlib is what an Apple consumer links; the rlib keeps `cargo test`
+# working on the same crate.
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+tether-core = { path = "../tether-core" }
+uniffi = { workspace = true, features = ["cli", "tokio"] }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
