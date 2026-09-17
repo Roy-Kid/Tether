@@ -1,0 +1,13 @@
+[package]
+name = "tether-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SSH: transport, authentication, host trust, channels, shells."
+
+[dependencies]
+russh = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

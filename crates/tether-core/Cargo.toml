@@ -1,0 +1,14 @@
+[package]
+name = "tether-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Session orchestration and the public API a consumer imports."
+
+[dependencies]
+tether-terminal = { path = "../tether-terminal" }
+tether-ssh = { path = "../tether-ssh" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,28 @@
+# Tether — embeddable SSH terminal components.
+#
+# Crates appear here only when they have work to do. tether-render,
+# tether-view and tether-app arrive with Phase 4 and 5; an empty crate now
+# would be a layer added "because it may be useful later", which the
+# specification forbids (§22).
+[workspace]
+resolver = "3"
+members = [
+    "crates/tether-terminal",
+    "crates/tether-ssh",
+    "crates/tether-core",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/tether/tether"
+
+[workspace.dependencies]
+# Engines are composed, never rewritten (spec §2, §5).
+russh = "0.63"
+alacritty_terminal = "0.26"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync"] }
+thiserror = "2"
+tracing = "0.1"

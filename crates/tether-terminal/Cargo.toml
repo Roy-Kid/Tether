@@ -1,0 +1,15 @@
+[package]
+name = "tether-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Terminal engine boundary: bytes in, screen state and damage out."
+
+# NOTE: this crate must never depend on tether-ssh, russh, or anything that
+# reaches a network. The byte-stream boundary (spec §8) is proved here, by the
+# dependency graph, not by good intentions. `cargo tree` is the test.
+[dependencies]
+alacritty_terminal = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
