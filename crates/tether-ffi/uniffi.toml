@@ -1,0 +1,6 @@
+# The generated bindings import the C module by this name; it matches the
+# binary target so the XCFramework and the generated Swift agree.
+[bindings.swift]
+ffi_module_name = "TetherFFI"
+module_name = "TetherFFIBindings"
+generate_immutable_records = true

@@ -3,3 +3,7 @@
 **/*.rs.bk
 Cargo.lock.orig
 .claude/settings.local.json
+.build/
+# Build output: 163MB of static libraries, produced by
+# scripts/build-xcframework.sh and published with a release, never committed.
+swift/Artifacts/
