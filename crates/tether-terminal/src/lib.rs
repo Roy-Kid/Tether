@@ -8,6 +8,18 @@
 //! This crate is headless and must stay that way: no network, no GPU, no
 //! windowing. See [`NO_SSH_DEPENDENCY`].
 
+mod damage;
+mod screen;
+mod size;
+mod style;
+mod terminal;
+
+pub use damage::{Changes, RowSpan, ScreenDamage};
+pub use screen::{Cell, Cursor, CursorShape, Modes, Screen};
+pub use size::{Position, ScreenSize};
+pub use style::{Color, NamedColor, Style, Underline};
+pub use terminal::Terminal;
+
 /// The byte-stream boundary in executable form.
 ///
 /// `tether-terminal` must never reach a network. Anything that feeds it —
@@ -16,28 +28,3 @@
 /// so the reason travels with the code (spec §3, §8).
 pub const NO_SSH_DEPENDENCY: &str =
     "tether-terminal links no SSH symbol; producers feed it bytes";
-
-/// Version of the upstream engine this boundary wraps.
-///
-/// Phase 2 replaces this with the real surface: feed, resize, screen state,
-/// damage, input encoding.
-pub fn engine_description() -> &'static str {
-    concat!("alacritty_terminal ", env!("CARGO_PKG_VERSION"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn engine_is_reachable() {
-        assert!(!engine_description().is_empty());
-    }
-
-    /// A compile-time canary: if someone adds an SSH dependency to this crate,
-    /// this module is where the reviewer is told why that is wrong.
-    #[test]
-    fn boundary_is_documented() {
-        assert!(NO_SSH_DEPENDENCY.contains("no SSH"));
-    }
-}
