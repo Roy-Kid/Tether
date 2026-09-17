@@ -3,7 +3,7 @@
 > The defining specification.
 >
 > Mirrored byte-for-byte in two repositories: **`Tether`** (where it governs the
-> SDK and the app) and **`molexp-apple`** (where it tells a consumer what it is
+> SDK and the app) and **`molab-apple`** (where it tells a consumer what it is
 > consuming). Neither copy is a summary and neither is subordinate. Change them
 > together, in the same change, or the project has two different north stars and
 > does not know it.
@@ -33,7 +33,7 @@ Two products live in this repository:
 - **the app** — a standalone terminal client, the first consumer of the SDK and
   the proof that its frontend contract is sufficient.
 
-molexp is another consumer. It must not influence the core architecture.
+molab is another consumer. It must not influence the core architecture.
 
 A consuming application should be able to embed a terminal, authenticate an SSH
 session and style the result without understanding SSH, PTYs, escape sequences,
