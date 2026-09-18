@@ -58,9 +58,7 @@ impl Shell {
     /// Tells the far side the terminal changed size, so full-screen programs
     /// redraw and line editing wraps in the right place.
     pub async fn resize(&mut self, size: WindowSize) -> Result<(), SshError> {
-        self.channel
-            .window_change(size.columns, size.rows, 0, 0)
-            .await?;
+        self.channel.window_change(size.columns, size.rows, 0, 0).await?;
         self.size = size;
         Ok(())
     }
@@ -73,18 +71,22 @@ impl Shell {
     pub async fn next_output(&mut self) -> Option<Output> {
         loop {
             match self.channel.wait().await? {
-                russh::ChannelMsg::Data { data } => {
-                    return Some(Output::Stdout(data.to_vec()))
-                }
+                russh::ChannelMsg::Data { data } => return Some(Output::Stdout(data.to_vec())),
                 // Extended type 1 is stderr; SSH defines no others in practice,
                 // and inventing a meaning for one would be guessing.
                 russh::ChannelMsg::ExtendedData { data, ext: 1 } => {
-                    return Some(Output::Stderr(data.to_vec()))
+                    return Some(Output::Stderr(data.to_vec()));
                 }
                 russh::ChannelMsg::ExitStatus { exit_status } => {
-                    return Some(Output::Exited(exit_status))
+                    return Some(Output::Exited(exit_status));
                 }
-                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => return None,
+                // EOF says the far side has no more *data*. It does not say
+                // the channel is over: SSH sends exit-status after EOF and
+                // before close, so returning here would throw away the
+                // status of every command that ran — measured: `exit 7`
+                // surfaced as a lost connection.
+                russh::ChannelMsg::Eof => continue,
+                russh::ChannelMsg::Close => return None,
                 // Window adjustments, unhandled requests and the rest are
                 // protocol bookkeeping a consumer has no use for.
                 _ => continue,

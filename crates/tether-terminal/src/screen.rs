@@ -1,5 +1,6 @@
 //! What is on the screen right now.
 
+use crate::scroll::Viewport;
 use crate::size::{Position, ScreenSize};
 use crate::style::Style;
 
@@ -87,6 +88,10 @@ pub struct Screen {
     pub size: ScreenSize,
     pub cursor: Cursor,
     pub modes: Modes,
+    /// Where these rows were taken from, and how much history is behind
+    /// them. A renderer drawing a scrollbar needs both to agree with the
+    /// rows it was handed (spec §12).
+    pub viewport: Viewport,
     /// Row-major, `size.rows` rows of `size.columns` cells. A double-width
     /// cell is followed by no entry for the column it covers, so a row may
     /// hold fewer cells than there are columns.
@@ -98,9 +103,10 @@ impl Screen {
         size: ScreenSize,
         cursor: Cursor,
         modes: Modes,
+        viewport: Viewport,
         rows: Vec<Vec<Cell>>,
     ) -> Self {
-        Self { size, cursor, modes, rows }
+        Self { size, cursor, modes, viewport, rows }
     }
 
     pub fn row(&self, row: u16) -> Option<&[Cell]> {

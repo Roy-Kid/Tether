@@ -28,6 +28,23 @@ public enum TetherError: Error, Equatable, Sendable {
     /// The person declined, or the surrounding `Task` was cancelled.
     case cancelled
     case timedOut(millis: UInt64)
+
+    case unreachable(endpoint: String, cause: String)
+    /// The application's own trust decision, handed back to it. Nothing was
+    /// sent: this is not a failed login.
+    case hostRejected(endpoint: String)
+    /// What the server said it would still accept, so an application can say
+    /// "this host wants a key" rather than "login failed".
+    case authenticationFailed(remaining: [String])
+    /// The credential was *accepted* and another factor is wanted, but none
+    /// was left to offer. Telling someone their password was wrong when it
+    /// was right is its own failure.
+    case moreFactorsNeeded(remaining: [String])
+    case nothingToOffer
+    case shellRefused(cause: String)
+    case disconnected(cause: String)
+    case sessionEnded
+    case protocolFailure(cause: String)
 }
 
 public enum Tether {
@@ -54,7 +71,7 @@ public enum Tether {
 
 /// Bridges a consumer's `AuthPrompter` onto the generated callback interface,
 /// so generated types never appear in a signature a consumer writes.
-private final class PrompterBridge: TetherFFIBindings.InteractivePrompter {
+final class PrompterBridge: TetherFFIBindings.InteractivePrompter {
     private let inner: AuthPrompter
 
     init(_ inner: AuthPrompter) { self.inner = inner }
@@ -95,10 +112,32 @@ extension Tether {
         do {
             return try await body()
         } catch let error as TetherFFIBindings.TetherError {
-            switch error {
-            case .Cancelled: throw TetherError.cancelled
-            case .TimedOut(let millis): throw TetherError.timedOut(millis: millis)
-            }
+            throw translate(error)
+        }
+    }
+
+    /// The same translation for the calls that do not await.
+    static func mappedSync<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as TetherFFIBindings.TetherError {
+            throw translate(error)
+        }
+    }
+
+    static func translate(_ error: TetherFFIBindings.TetherError) -> TetherError {
+        switch error {
+        case .Cancelled: .cancelled
+        case .TimedOut(let millis): .timedOut(millis: millis)
+        case .Unreachable(let endpoint, let cause): .unreachable(endpoint: endpoint, cause: cause)
+        case .HostRejected(let endpoint): .hostRejected(endpoint: endpoint)
+        case .AuthenticationFailed(let remaining): .authenticationFailed(remaining: remaining)
+        case .MoreFactorsNeeded(let remaining): .moreFactorsNeeded(remaining: remaining)
+        case .NothingToOffer: .nothingToOffer
+        case .ShellRefused(let cause): .shellRefused(cause: cause)
+        case .Disconnected(let cause): .disconnected(cause: cause)
+        case .SessionEnded: .sessionEnded
+        case .Protocol(let cause): .protocolFailure(cause: cause)
         }
     }
 }

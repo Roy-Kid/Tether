@@ -21,7 +21,7 @@ mod host;
 mod session;
 mod shell;
 
-pub use auth::{Challenge, Method, Prompt, Prompter, KEYBOARD_INTERACTIVE_IS_GENERIC};
+pub use auth::{Challenge, KEYBOARD_INTERACTIVE_IS_GENERIC, Method, Prompt, Prompter};
 pub use error::SshError;
 pub use host::{Endpoint, HostKey, HostVerifier, RejectAll, Verdict};
 pub use session::{Connection, Session, Step};
@@ -31,3 +31,16 @@ pub use shell::{Output, Shell, WindowSize};
 /// keepalives and timeouts and we have no better words for them than the
 /// protocol's own.
 pub use russh::client::Config;
+
+/// Which SSH implementation answers, for diagnostics and about screens.
+///
+/// The engine is named, not hidden: a consumer reporting a protocol bug needs
+/// to say which stack produced it. This is the only place `russh` is spoken
+/// aloud on the public surface — its *types* still stop at this crate (§8).
+pub fn backend_description() -> String {
+    format!("russh {RUSSH_VERSION}")
+}
+
+/// `russh` exposes no version constant of its own, so the pin in the workspace
+/// `Cargo.toml` is the authority and this mirrors it.
+const RUSSH_VERSION: &str = "0.63";

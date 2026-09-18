@@ -6,6 +6,21 @@
 
 uniffi::setup_scaffolding!();
 
+mod input;
+mod screen;
+mod session;
+mod tmux;
+pub use tmux::*;
+
+pub use input::{KeyModifiers, KeyPress, Resolved, TerminalInput};
+pub use screen::{
+    CaretShape, CellColor, CellStyle, ColorName, ScreenFrame, ScreenRow, StyledRun, UnderlineStyle,
+};
+pub use session::{
+    Destination, HostIdentity, HostTrust, Secret, Session, SessionEnding, connect,
+    connect_cancellable,
+};
+
 /// One prompt from an interactive authentication exchange.
 ///
 /// Deliberately opaque: text the server chose, and whether a person's typing
@@ -60,12 +75,89 @@ impl CancellationToken {
     }
 }
 
+/// Everything that can go wrong, in our words.
+///
+/// A backend's error number is diagnostic context inside `cause`, never the
+/// shape a consumer matches on — switching SSH libraries must not be a
+/// breaking change for an application (spec §18).
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum TetherError {
     #[error("the person declined to answer")]
     Cancelled,
     #[error("timed out after {millis}ms")]
     TimedOut { millis: u64 },
+
+    #[error("could not reach {endpoint}: {cause}")]
+    Unreachable { endpoint: String, cause: String },
+
+    /// The application's own trust decision, reported back to it. Not a
+    /// failure of the connection: nothing was sent.
+    #[error("the host key for {endpoint} was not trusted")]
+    HostRejected { endpoint: String },
+
+    #[error("authentication failed; the server still wants: {}", .remaining.join(", "))]
+    AuthenticationFailed { remaining: Vec<String> },
+
+    /// The credential was *accepted* and the server wants another factor, but
+    /// none was left to offer. Distinct from a rejection, because telling
+    /// someone their password was wrong when it was right is its own failure.
+    #[error("another factor is needed: {}", .remaining.join(", "))]
+    MoreFactorsNeeded { remaining: Vec<String> },
+
+    #[error("no credentials were offered")]
+    NothingToOffer,
+
+    #[error("the server refused to open a shell: {cause}")]
+    ShellRefused { cause: String },
+
+    #[error("the connection was lost: {cause}")]
+    Disconnected { cause: String },
+
+    #[error("the session has ended")]
+    SessionEnded,
+
+    #[error("protocol failure: {cause}")]
+    Protocol { cause: String },
+}
+
+impl From<tether_core::ssh::SshError> for TetherError {
+    fn from(error: tether_core::ssh::SshError) -> Self {
+        use tether_core::ssh::SshError;
+        match error {
+            SshError::Unreachable { endpoint, cause } => Self::Unreachable { endpoint, cause },
+            SshError::HostRejected { endpoint } => Self::HostRejected { endpoint },
+            SshError::Declined => Self::Cancelled,
+            SshError::ShellRefused { cause } => Self::ShellRefused { cause },
+            SshError::Disconnected { cause } => Self::Disconnected { cause },
+            SshError::Protocol { cause } => Self::Protocol { cause },
+            // Everything else is an authentication refusal with nothing more
+            // specific to say. Matching exhaustively rather than with a
+            // catch-all would break on an upstream variant we cannot see.
+            other => Self::AuthenticationFailed { remaining: vec![other.to_string()] },
+        }
+    }
+}
+
+impl From<tether_core::DialError> for TetherError {
+    fn from(error: tether_core::DialError) -> Self {
+        use tether_core::DialError;
+        match error {
+            DialError::Refused { remaining } => Self::AuthenticationFailed { remaining },
+            DialError::MoreFactorsNeeded { remaining } => Self::MoreFactorsNeeded { remaining },
+            DialError::NothingToOffer => Self::NothingToOffer,
+            DialError::Ssh(error) => error.into(),
+        }
+    }
+}
+
+impl From<tether_core::SessionError> for TetherError {
+    fn from(error: tether_core::SessionError) -> Self {
+        use tether_core::SessionError;
+        match error {
+            SessionError::Ended => Self::SessionEnded,
+            SessionError::Failed(cause) => Self::Protocol { cause },
+        }
+    }
 }
 
 /// What this build is composed of. Synchronous, for about screens.
@@ -122,13 +214,9 @@ pub async fn run_interactive_exchange(
     let mut collected = Vec::new();
 
     for round in 1..=2u8 {
-        let prompts = vec![AuthPrompt {
-            text: format!("Round {round}: answer please"),
-            echo: round == 1,
-        }];
-        let answers = prompter
-            .answer(format!("round {round}"), prompts)
-            .await;
+        let prompts =
+            vec![AuthPrompt { text: format!("Round {round}: answer please"), echo: round == 1 }];
+        let answers = prompter.answer(format!("round {round}"), prompts).await;
 
         if answers.is_empty() {
             return Err(TetherError::Cancelled);

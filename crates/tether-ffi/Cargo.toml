@@ -12,6 +12,7 @@ description = "UniFFI surface over tether-core. Keeps tether-core binding-agnost
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]
+tether-tmux = { path = "../tether-tmux" }
 tether-core = { path = "../tether-core" }
 uniffi = { workspace = true, features = ["cli", "tokio"] }
 tokio = { workspace = true }

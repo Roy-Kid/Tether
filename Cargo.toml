@@ -11,12 +11,13 @@ members = [
     "crates/tether-ssh",
     "crates/tether-core",
     "crates/tether-ffi",
+    "crates/tether-tmux",
 ]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.98.1"
 license = "MIT"
 repository = "https://github.com/tether/tether"
 

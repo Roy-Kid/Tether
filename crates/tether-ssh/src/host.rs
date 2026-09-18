@@ -66,9 +66,7 @@ impl HostVerifier for RejectAll {
     }
 }
 
-pub(crate) fn describe(
-    key: &russh::keys::PublicKeyOrCertificate,
-) -> Result<HostKey, SshError> {
+pub(crate) fn describe(key: &russh::keys::PublicKeyOrCertificate) -> Result<HostKey, SshError> {
     use russh::keys::ssh_key::{HashAlg, public::PublicKey};
 
     let public = match key {
@@ -85,9 +83,6 @@ pub(crate) fn describe(
         fingerprint: public.fingerprint(HashAlg::Sha256).to_string(),
         // The `authorized_keys` one-line form: what a person pastes, and what
         // a `known_hosts` file already holds.
-        encoded: public
-            .to_openssh()
-            .map_err(SshError::protocol)?
-            .into_bytes(),
+        encoded: public.to_openssh().map_err(SshError::protocol)?.into_bytes(),
     })
 }

@@ -1,7 +1,7 @@
 //! Recorded byte streams in, asserted screen state out.
 
 use tether_terminal::{
-    Cell, Color, CursorShape, NamedColor, ScreenDamage, ScreenSize, Terminal, Underline,
+    Cell, Color, CursorShape, NamedColor, Options, ScreenSize, Scroll, Terminal, Underline,
 };
 
 fn terminal(columns: u16, rows: u16) -> Terminal {
@@ -164,4 +164,176 @@ fn the_bell_is_reported_once() {
 
     assert!(term.take_changes().bell);
     assert!(!term.take_changes().bell);
+}
+
+/// One column hangs the engine's reflow: a wide character needs two, and
+/// fitting scrollback into a grid that has one never terminates. The engine's
+/// limit stops here rather than becoming a hang a consumer must know about.
+///
+/// Reachable from a frontend, not a theoretical input — dragging a window to
+/// a sliver asks for exactly this.
+#[test]
+fn a_grid_too_narrow_for_the_engine_is_widened_to_one_it_can_reflow() {
+    let mut term = fed("hello".as_bytes());
+
+    term.resize(ScreenSize::new(1, 10));
+    assert_eq!(term.size().columns, 2, "one column is widened to two");
+    assert_eq!(term.size().rows, 10, "rows are left alone");
+
+    term.resize(ScreenSize::new(0, 0));
+    assert_eq!(term.size(), ScreenSize::new(2, 1), "an empty grid is not a grid");
+
+    // The clamp is only a floor. Anything the engine can handle passes.
+    term.resize(ScreenSize::new(3, 1));
+    assert_eq!(term.size(), ScreenSize::new(3, 1));
+}
+
+/// A row must never claim more columns than it has.
+///
+/// Reflow onto a narrow screen can leave a wide character whose right-hand
+/// spacer is gone, sitting next to an ordinary cell. Reporting it as two
+/// columns wide overflows the row and sends a renderer past the end of its
+/// own line — found by the fuzzer, at two columns claiming three.
+#[test]
+fn no_row_claims_more_columns_than_the_screen_has() {
+    let mut term = Terminal::new(ScreenSize::new(40, 6));
+    for _ in 0..12 {
+        term.feed("中文字符中文字符中文字符\r\n".as_bytes());
+    }
+
+    for columns in [2u16, 3, 5, 8, 13, 21] {
+        term.resize(ScreenSize::new(columns, 6));
+        let screen = term.screen();
+
+        for (index, row) in screen.rows().enumerate() {
+            let claimed: usize = row.iter().map(|cell| cell.width as usize).sum();
+            assert!(
+                claimed <= columns as usize,
+                "at {columns} columns, row {index} claimed {claimed}"
+            );
+        }
+    }
+}
+
+/// Output that has scrolled off the top is still reachable.
+///
+/// Not a convenience: output a person cannot go back to is output they did
+/// not receive.
+#[test]
+fn lines_that_scrolled_off_can_be_looked_at_again() {
+    let mut term =
+        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
+    for line in 0..20 {
+        term.feed(format!("line-{line}\r\n").as_bytes());
+    }
+
+    // Only the last few are on screen.
+    let live = term.screen().text();
+    assert!(live.contains("line-19"), "the newest line is visible: {live}");
+    assert!(!live.contains("line-00"), "the oldest is not: {live}");
+    assert!(term.viewport().is_live());
+    assert!(term.history_lines() >= 16, "history kept: {}", term.history_lines());
+
+    term.scroll(Scroll::Oldest);
+    let oldest = term.screen().text();
+    assert!(oldest.contains("line-0"), "the oldest line is reachable: {oldest}");
+    assert!(!term.viewport().is_live());
+    assert_eq!(term.viewport().offset, term.history_lines(), "at the very top");
+
+    term.scroll(Scroll::Live);
+    assert!(term.viewport().is_live());
+    assert_eq!(term.screen().text(), live, "back to exactly where it was");
+}
+
+/// Scrolling past either end stops there rather than running away, so a
+/// wheel at the end of its travel is a no-op instead of a bug.
+#[test]
+fn the_viewport_is_clamped_at_both_ends() {
+    let mut term =
+        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
+    for line in 0..20 {
+        term.feed(format!("line-{line}\r\n").as_bytes());
+    }
+
+    for _ in 0..50 {
+        term.scroll(Scroll::PageUp);
+    }
+    assert_eq!(term.viewport().offset, term.history_lines(), "stops at the oldest line");
+
+    for _ in 0..50 {
+        term.scroll(Scroll::PageDown);
+    }
+    assert!(term.viewport().is_live(), "stops at the live screen");
+}
+
+/// A full-screen program's output is not scrollback, and the engine keeps
+/// none for it — so the viewport cannot leave the live screen there.
+#[test]
+fn the_alternate_screen_has_no_history_to_scroll_into() {
+    let mut term =
+        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
+    for line in 0..20 {
+        term.feed(format!("line-{line}\r\n").as_bytes());
+    }
+    assert!(term.history_lines() > 0);
+
+    term.feed(b"\x1b[?1049h");
+    assert!(term.screen().modes.alternate_screen);
+    assert_eq!(term.history_lines(), 0, "no history on the alternate screen");
+
+    term.scroll(Scroll::Oldest);
+    assert!(term.viewport().is_live(), "there is nowhere to scroll to");
+
+    // Leaving it puts the history back.
+    term.feed(b"\x1b[?1049l");
+    assert!(term.history_lines() > 0, "the history was waiting underneath");
+}
+
+/// What went past since the last frame, so a consumer holding its own view of
+/// the scrollback can keep it still.
+#[test]
+fn changes_report_how_many_lines_went_past() {
+    let mut term =
+        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
+    let _ = term.take_changes();
+
+    for line in 0..10 {
+        term.feed(format!("line-{line}\r\n").as_bytes());
+    }
+    let changes = term.take_changes();
+    assert!(changes.scrolled_lines > 0, "ten lines on a four-row screen scrolled some off");
+
+    // Nothing new, nothing reported.
+    assert_eq!(term.take_changes().scrolled_lines, 0);
+}
+
+/// Reading history while the far side is still talking must not yank the
+/// viewport around.
+///
+/// A terminal that jumps to the bottom whenever a line arrives cannot be read
+/// while anything is running, which is most of the time someone wants to read
+/// it. Asserted rather than assumed: whether the engine holds the position is
+/// its decision, and this is where we find out.
+#[test]
+fn new_output_does_not_move_a_viewport_that_is_reading_history() {
+    let mut term =
+        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
+    for line in 0..20 {
+        term.feed(format!("line-{line:02}\r\n").as_bytes());
+    }
+
+    term.scroll(Scroll::Oldest);
+    let reading = term.screen().text();
+    assert!(reading.contains("line-00"), "parked at the top: {reading}");
+
+    for line in 20..30 {
+        term.feed(format!("line-{line:02}\r\n").as_bytes());
+    }
+
+    assert_eq!(term.screen().text(), reading, "the viewport stayed where it was put");
+    assert!(!term.viewport().is_live(), "and is still reading history");
+
+    // And coming back reaches the newest line, not where it used to be.
+    term.scroll(Scroll::Live);
+    assert!(term.screen().text().contains("line-29"), "the present is still the present");
 }

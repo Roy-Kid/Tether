@@ -1,0 +1,9 @@
+# The prose in this codebase carries the reasoning, so lines run wider than
+# rustfmt's 80-column default — the existing code was written to ~100, and
+# reflowing it narrower would break the comment/code rhythm on every file.
+max_width = 100
+
+# Keep short struct literals, calls and blocks on one line instead of
+# exploding `Self { host, port }` across four. The default heuristics are
+# tuned for 80 columns; at 100 they fire where the code reads better whole.
+use_small_heuristics = "Max"

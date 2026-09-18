@@ -7,3 +7,7 @@ Cargo.lock.orig
 # Build output: 163MB of static libraries, produced by
 # scripts/build-xcframework.sh and published with a release, never committed.
 swift/Artifacts/
+
+# Assembled application bundles, produced by scripts/build-app.sh and
+# scripts/build-app-ios.sh. Hundreds of megabytes, reproducible from source.
+/build/

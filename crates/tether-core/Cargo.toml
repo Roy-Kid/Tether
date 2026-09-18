@@ -12,3 +12,7 @@ tether-ssh = { path = "../tether-ssh" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+async-trait = { workspace = true }

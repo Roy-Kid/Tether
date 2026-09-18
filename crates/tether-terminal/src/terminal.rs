@@ -10,7 +10,9 @@ use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 
 use crate::damage::{Changes, RowSpan, ScreenDamage};
+use crate::input::Input;
 use crate::screen::{Cell, Cursor, CursorShape, Modes, Screen};
+use crate::scroll::{Scroll, Viewport};
 use crate::size::{Position, ScreenSize};
 use crate::style::{Color, NamedColor, Style, Underline};
 
@@ -76,6 +78,41 @@ impl Dimensions for Dims {
     }
 }
 
+/// The narrowest grid the engine can reflow into.
+///
+/// One column hangs it. A wide character occupies two columns and cannot be
+/// placed in a row that has one, and reflowing scrollback into such a grid
+/// never terminates — measured: resizing a filled 40×12 terminal to 1×2
+/// allocated 1.6GB in twenty seconds and was killed, while 2×1 completes.
+/// Rows have no such floor; a one-row terminal is odd but finite.
+///
+/// Clamping here rather than letting it through is what this crate is for:
+/// an engine's limits stop at the boundary instead of becoming a hang a
+/// consumer has to know about (spec §8). A frontend whose window is dragged
+/// to a sliver reaches this every time.
+const MINIMUM_COLUMNS: u16 = 2;
+
+fn usable(size: ScreenSize) -> ScreenSize {
+    ScreenSize::new(size.columns.max(MINIMUM_COLUMNS), size.rows.max(1))
+}
+
+/// How a terminal is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// How many lines of scrollback to keep.
+    ///
+    /// A real cost, not a preference: every line is retained memory, and a
+    /// resize reflows all of them. An embedder on a phone and one on a
+    /// workstation want different numbers.
+    pub scrollback_lines: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self { scrollback_lines: 10_000 }
+    }
+}
+
 /// A headless terminal.
 ///
 /// Feed it the bytes a remote shell produced; ask it what the screen looks
@@ -90,6 +127,11 @@ pub struct Terminal {
     last_cursor: Option<Cursor>,
     last_modes: Option<Modes>,
     title: String,
+    /// Set when a title arrived and no consumer has been told yet.
+    title_changed: bool,
+    /// History depth at the last `take_changes`, so the next one can say how
+    /// many lines went past.
+    last_history: usize,
     pending_full_damage: bool,
     /// Whether anything has reached the engine since the last
     /// [`take_changes`](Terminal::take_changes).
@@ -104,8 +146,13 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new(size: ScreenSize) -> Self {
+        Self::with_options(size, Options::default())
+    }
+
+    pub fn with_options(size: ScreenSize, options: Options) -> Self {
+        let size = usable(size);
         let sink = Sink::default();
-        let config = Config { scrolling_history: 10_000, ..Config::default() };
+        let config = Config { scrolling_history: options.scrollback_lines, ..Config::default() };
         let inner = Term::new(config, &Dims { size }, sink.clone());
 
         Self {
@@ -116,6 +163,8 @@ impl Terminal {
             last_cursor: None,
             last_modes: None,
             title: String::new(),
+            title_changed: false,
+            last_history: 0,
             pending_full_damage: false,
             // A terminal nobody has drawn yet needs a first full paint.
             dirty: true,
@@ -142,12 +191,33 @@ impl Terminal {
         }
         self.dirty = true;
         self.parser.advance(&mut self.inner, bytes);
+        self.adopt_title();
+    }
+
+    /// Takes any title the bytes just carried.
+    ///
+    /// Done here rather than in [`Self::take_changes`] because `title` is
+    /// readable on its own, and a consumer that renders from `screen` and
+    /// `title` — which is what a frontend does — never calls `take_changes`
+    /// at all. Leaving the adoption there meant the window title a remote
+    /// program set never arrived: measured, an `OSC 0` title stayed empty
+    /// until something asked for damage.
+    fn adopt_title(&mut self) {
+        let arrived = {
+            let mut collected = self.sink.0.lock().expect("terminal event sink poisoned");
+            collected.title.take()
+        };
+        if let Some(title) = arrived {
+            self.title = title;
+            self.title_changed = true;
+        }
     }
 
     /// Changes the screen size.
     ///
     /// Always reported as full damage: reflow can move every line.
     pub fn resize(&mut self, size: ScreenSize) {
+        let size = usable(size);
         self.size = size;
         self.inner.resize(Dims { size });
         self.pending_full_damage = true;
@@ -174,23 +244,83 @@ impl Terminal {
         let modes_changed = self.last_modes != Some(modes);
         self.last_modes = Some(modes);
 
-        let mut collected = self.sink.0.lock().expect("sink poisoned");
-        let title = collected.title.take();
-        if let Some(title) = &title {
-            self.title = title.clone();
-        }
-        let bell = std::mem::replace(&mut collected.bell, false);
+        // `feed` already adopted anything that arrived; this only reports
+        // whether it is new to *this* consumer since the last call.
+        self.adopt_title();
+        let title = std::mem::replace(&mut self.title_changed, false).then(|| self.title.clone());
+
+        let bell = {
+            let mut collected = self.sink.0.lock().expect("sink poisoned");
+            std::mem::replace(&mut collected.bell, false)
+        };
+
+        // How much went past since the last time anyone asked. Measured from
+        // the history's depth rather than counted during parsing, because the
+        // engine is the thing that decides what a scroll is.
+        //
+        // It saturates: once the history is full, lines keep going past and
+        // the depth stops growing, so this reports zero for a terminal that
+        // has been running long enough. A consumer using it to hold a
+        // scrollback view steady must treat it as a floor, not a total —
+        // which is why the viewport is reported as a position as well.
+        let history = self.history_lines();
+        let scrolled_lines = history.saturating_sub(self.last_history);
+        self.last_history = history;
 
         Changes {
             screen,
             cursor: cursor_changed.then_some(cursor),
             title,
             modes: modes_changed.then_some(modes),
-            // Scrollback accounting is not wired up yet; reporting a guess
-            // would be worse than reporting nothing, and no consumer of this
-            // crate reads it today.
-            scrolled_lines: 0,
+            scrolled_lines,
             bell,
+        }
+    }
+
+    /// Turns something the person did into the bytes to send.
+    ///
+    /// A method rather than a free function because the encoding depends on
+    /// modes the *remote* program set: the same arrow key is `ESC [ A` or
+    /// `ESC O A` depending on state only the terminal knows.
+    pub fn encode(&self, input: &Input) -> Vec<u8> {
+        crate::input::encode(input, self.read_modes())
+    }
+
+    /// Where the viewport is, and how much history is behind it.
+    pub fn viewport(&self) -> Viewport {
+        Viewport { offset: self.inner.grid().display_offset(), history: self.history_lines() }
+    }
+
+    /// How many lines have scrolled off the top and are still kept.
+    ///
+    /// Zero while the alternate screen is up: a full-screen program's output
+    /// is not scrollback, and the engine keeps none for it.
+    pub fn history_lines(&self) -> usize {
+        self.inner.grid().history_size()
+    }
+
+    /// Moves the viewport over the history.
+    ///
+    /// Clamped by the engine at both ends, so a caller can send a page up at
+    /// the top or a page down at the bottom without checking first — which is
+    /// what a scroll wheel does constantly.
+    pub fn scroll(&mut self, scroll: Scroll) {
+        use alacritty_terminal::grid::Scroll as Engine;
+
+        let before = self.inner.grid().display_offset();
+        self.inner.scroll_display(match scroll {
+            Scroll::Lines(count) => Engine::Delta(count),
+            Scroll::PageUp => Engine::PageUp,
+            Scroll::PageDown => Engine::PageDown,
+            Scroll::Oldest => Engine::Top,
+            Scroll::Live => Engine::Bottom,
+        });
+
+        // Only a viewport that actually moved is a change. A wheel at the end
+        // of its travel would otherwise repaint the screen on every notch.
+        if self.inner.grid().display_offset() != before {
+            self.pending_full_damage = true;
+            self.dirty = true;
         }
     }
 
@@ -199,7 +329,14 @@ impl Terminal {
         let grid = self.inner.grid();
         let mut rows = Vec::with_capacity(self.size.rows as usize);
 
-        for line in 0..self.size.rows as i32 {
+        // `Line(0)` is the top of the *live* screen and history is negative,
+        // so the viewport is applied here rather than assumed away. Reading
+        // `0..rows` regardless is how scrolling can move the engine's
+        // viewport and change nothing a consumer can see.
+        let offset = grid.display_offset() as i32;
+
+        for row in 0..self.size.rows as i32 {
+            let line = row - offset;
             let mut cells = Vec::with_capacity(self.size.columns as usize);
             for column in 0..self.size.columns as usize {
                 let cell = &grid[Line(line)][Column(column)];
@@ -218,26 +355,44 @@ impl Terminal {
                     text.extend(zerowidth);
                 }
 
-                cells.push(Cell {
-                    text,
-                    width: if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 },
-                    style: style_of(cell),
-                });
+                // A wide character reports two columns only when the engine
+                // really did reserve the column to its right for it.
+                //
+                // Asking whether a column *index* remains is not the same
+                // question, and getting them confused overflows the row:
+                // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
+                // spacer is gone, with an ordinary cell beside it — measured
+                // by the fuzzer, a two-column row then claimed three. The
+                // spacer is the engine's own record of the reservation, so it
+                // is what gets asked.
+                let wide = cell.flags.contains(Flags::WIDE_CHAR)
+                    && (column + 1 < self.size.columns as usize)
+                    && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
+
+                cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
             }
             rows.push(cells);
         }
 
-        Screen::new(self.size, self.read_cursor(), self.read_modes(), rows)
+        Screen::new(self.size, self.read_cursor(), self.read_modes(), self.viewport(), rows)
     }
 
     fn read_cursor(&self) -> Cursor {
         let point = self.inner.grid().cursor.point;
         let mode = self.inner.mode();
-        let visible = mode.contains(TermMode::SHOW_CURSOR);
+
+        // The cursor sits on the live screen. Scrolling back moves the
+        // viewport away from it, and a cursor drawn at its live row while
+        // someone reads history would blink over unrelated text.
+        let offset = self.inner.grid().display_offset() as i32;
+        let row = point.line.0 + offset;
+        let within = row >= 0 && row < self.size.rows as i32;
+
+        let visible = mode.contains(TermMode::SHOW_CURSOR) && within;
 
         Cursor {
             position: Position::new(
-                point.line.0.max(0) as u16,
+                row.clamp(0, self.size.rows as i32 - 1) as u16,
                 point.column.0.min(u16::MAX as usize) as u16,
             ),
             shape: if visible {
@@ -269,18 +424,28 @@ impl Terminal {
         let damage = match self.inner.damage() {
             TermDamage::Full => ScreenDamage::Full,
             TermDamage::Partial(lines) => {
+                let rows = self.size.rows;
+                let last_column = self.size.columns.saturating_sub(1);
+
+                // Clamped, not trusted. The engine can report a span wider
+                // than the grid after a shrinking resize — measured: a
+                // 15-column grid reported `right: 15` several frames after
+                // being narrowed from 39. A renderer that indexed by that
+                // would run off the end of its own row, so the bound stops
+                // here rather than reaching a consumer (spec §8).
                 let spans: Vec<RowSpan> = lines
-                    .map(|line| RowSpan {
-                        row: line.line.min(u16::MAX as usize) as u16,
-                        first_column: line.left.min(u16::MAX as usize) as u16,
-                        last_column: line.right.min(u16::MAX as usize) as u16,
+                    .filter_map(|line| {
+                        let row = u16::try_from(line.line).ok()?;
+                        if row >= rows {
+                            return None;
+                        }
+                        let first = u16::try_from(line.left).unwrap_or(u16::MAX).min(last_column);
+                        let last = u16::try_from(line.right).unwrap_or(u16::MAX).min(last_column);
+                        Some(RowSpan { row, first_column: first.min(last), last_column: last })
                     })
                     .collect();
-                if spans.is_empty() {
-                    ScreenDamage::None
-                } else {
-                    ScreenDamage::Rows(spans)
-                }
+
+                if spans.is_empty() { ScreenDamage::None } else { ScreenDamage::Rows(spans) }
             }
         };
         self.inner.reset_damage();

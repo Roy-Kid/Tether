@@ -39,7 +39,11 @@ pub enum Color {
     Named(NamedColor),
     /// An index into the 256-colour palette.
     Indexed(u8),
-    Rgb { red: u8, green: u8, blue: u8 },
+    Rgb {
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
 }
 
 /// How text in a cell is decorated.

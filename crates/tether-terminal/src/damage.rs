@@ -7,9 +7,10 @@
 use crate::screen::{Cursor, Modes};
 
 /// Which parts of the grid changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ScreenDamage {
     /// Nothing changed.
+    #[default]
     None,
     /// Specific spans of specific rows changed.
     Rows(Vec<RowSpan>),
@@ -48,12 +49,6 @@ pub struct Changes {
     pub scrolled_lines: usize,
     /// The far side rang the bell.
     pub bell: bool,
-}
-
-impl Default for ScreenDamage {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl Changes {

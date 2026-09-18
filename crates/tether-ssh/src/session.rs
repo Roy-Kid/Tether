@@ -79,13 +79,10 @@ impl Connection {
             host_refused: Arc::clone(&host_refused),
         };
 
-        let handle = russh::client::connect(
-            config,
-            (endpoint.host.clone(), endpoint.port),
-            handler,
-        )
-        .await
-        .map_err(|error| classify_connect(error, &endpoint, &host_refused))?;
+        let handle =
+            russh::client::connect(config, (endpoint.host.clone(), endpoint.port), handler)
+                .await
+                .map_err(|error| classify_connect(error, &endpoint, &host_refused))?;
 
         Ok(Self { handle, endpoint })
     }
@@ -150,11 +147,7 @@ impl Connection {
         let key = russh::keys::decode_secret_key(pem, passphrase)
             .map_err(|error| SshError::Protocol { cause: format!("unusable key: {error}") })?;
 
-        let best_hash = self
-            .handle
-            .best_supported_rsa_hash()
-            .await?
-            .flatten();
+        let best_hash = self.handle.best_supported_rsa_hash().await?.flatten();
 
         let result = self
             .handle
@@ -175,10 +168,7 @@ impl Connection {
     ) -> Result<Step, SshError> {
         use russh::client::KeyboardInteractiveAuthResponse as Response;
 
-        let mut response = self
-            .handle
-            .authenticate_keyboard_interactive_start(user, None)
-            .await?;
+        let mut response = self.handle.authenticate_keyboard_interactive_start(user, None).await?;
 
         loop {
             match response {
@@ -212,10 +202,8 @@ impl Connection {
                         return Err(SshError::Declined);
                     };
 
-                    response = self
-                        .handle
-                        .authenticate_keyboard_interactive_respond(answers)
-                        .await?;
+                    response =
+                        self.handle.authenticate_keyboard_interactive_respond(answers).await?;
                 }
             }
         }
@@ -223,15 +211,11 @@ impl Connection {
 
     fn step_from(self, result: russh::client::AuthResult) -> Step {
         match result {
-            russh::client::AuthResult::Success => Step::Authenticated(Session {
-                handle: self.handle,
-                endpoint: self.endpoint,
-            }),
+            russh::client::AuthResult::Success => {
+                Step::Authenticated(Session { handle: self.handle, endpoint: self.endpoint })
+            }
             russh::client::AuthResult::Failure { remaining_methods, partial_success } => {
-                let remaining = remaining_methods
-                    .iter()
-                    .map(|m| Method(String::from(m)))
-                    .collect();
+                let remaining = remaining_methods.iter().map(|m| Method(String::from(m))).collect();
                 if partial_success {
                     Step::AnotherFactor { remaining, next: self }
                 } else {
@@ -288,12 +272,17 @@ impl Session {
         Ok(Shell { channel, size })
     }
 
+    /// Opens a command channel without a PTY. Output is never mixed with a shell.
+    pub async fn exec(&self, command: &str) -> Result<Shell, SshError> {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.exec(true, command).await?;
+        confirm(&mut channel, "the command").await?;
+        Ok(Shell { channel, size: WindowSize::default() })
+    }
+
     /// Ends the session, telling the server why.
     pub async fn disconnect(self) -> Result<(), SshError> {
-        self.handle
-            .disconnect(russh::Disconnect::ByApplication, "", "en")
-            .await
-            .map_err(Into::into)
+        self.handle.disconnect(russh::Disconnect::ByApplication, "", "en").await.map_err(Into::into)
     }
 }
 
@@ -306,11 +295,7 @@ impl std::fmt::Debug for Session {
 /// A refused host key surfaces from russh as an ordinary handshake failure.
 /// The flag the handler set is what tells the two apart, and a person needs
 /// them told apart: one means "check the fingerprint", the other "try again".
-fn classify_connect(
-    error: SshError,
-    endpoint: &Endpoint,
-    host_refused: &AtomicBool,
-) -> SshError {
+fn classify_connect(error: SshError, endpoint: &Endpoint, host_refused: &AtomicBool) -> SshError {
     if host_refused.load(Ordering::SeqCst) {
         return SshError::HostRejected { endpoint: endpoint.to_string() };
     }

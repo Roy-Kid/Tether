@@ -6,6 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Keep native dependencies aligned with the Swift packages, even on a newer Xcode host.
+export MACOSX_DEPLOYMENT_TARGET=26.0
+export IPHONEOS_DEPLOYMENT_TARGET=26.0
+
 TARGETS=(aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim)
 LIB=libtether_ffi.a
 OUT=swift/Artifacts

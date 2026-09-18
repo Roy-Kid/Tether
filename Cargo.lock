@@ -2196,6 +2196,7 @@ dependencies = [
 name = "tether-core"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "tether-ssh",
  "tether-terminal",
  "thiserror",
@@ -2209,6 +2210,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "tether-core",
+ "tether-tmux",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -2234,6 +2236,17 @@ dependencies = [
  "alacritty_terminal",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "tether-tmux"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "tether-terminal",
+ "thiserror",
+ "tmuxctl",
+ "tokio",
 ]
 
 [[package]]
@@ -2267,6 +2280,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tmuxctl"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c9fbeba436e925d3cf80251001bd97e84333cdd229a9c79fdd3d9c27f1074da"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "tokio"
 version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2276,6 +2298,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

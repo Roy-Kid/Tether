@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use russh::server::{Auth, Handler, Msg, Response, Session};
-use russh::{Channel, ChannelId, MethodSet, MethodKind, Pty};
+use russh::{Channel, ChannelId, MethodKind, MethodSet, Pty};
 
 pub const USER: &str = "scientist";
 pub const PASSWORD: &str = "correct horse";
@@ -190,7 +190,10 @@ impl Handler for FakeHost {
                 }
             }
             3 if answers.first().map(String::as_str) == Some(ONE_TIME_CODE) => Ok(Auth::Accept),
-            _ => Ok(Auth::Reject { proceed_with_methods: only_interactive(), partial_success: false }),
+            _ => Ok(Auth::Reject {
+                proceed_with_methods: only_interactive(),
+                partial_success: false,
+            }),
         }
     }
 
@@ -233,6 +236,20 @@ impl Handler for FakeHost {
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         session.data(channel, bytes::Bytes::from_static(BANNER.as_bytes()))?;
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        command: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        session.data(channel, bytes::Bytes::copy_from_slice(command))?;
+        session.exit_status_request(channel, 0)?;
+        session.eof(channel)?;
+        session.close(channel)?;
         Ok(())
     }
 

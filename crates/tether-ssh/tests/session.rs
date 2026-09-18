@@ -63,10 +63,7 @@ async fn logs_in_interactively_holds_a_shell_resizes_it_and_disconnects() {
     assert!(asked[1].prompts[0].echo, "this server echoes its code prompt");
 
     // A shell, with a pty the far side actually received.
-    let mut shell = session
-        .shell("xterm-256color", WindowSize::new(120, 40))
-        .await
-        .expect("shell");
+    let mut shell = session.shell("xterm-256color", WindowSize::new(120, 40)).await.expect("shell");
 
     assert_eq!(observed.lock().unwrap().pty_term.as_deref(), Some("xterm-256color"));
     assert_eq!(observed.lock().unwrap().pty_size, Some((120, 40)));
@@ -152,14 +149,10 @@ async fn the_verifier_is_shown_a_recognisable_fingerprint() {
     let (stream, _) = support::start(Policy::default());
     let verifier = Arc::new(support::TrustAndRecord::new());
 
-    let connection = Connection::connect_over(
-        endpoint(),
-        stream,
-        verifier.clone(),
-        support::client_config(),
-    )
-    .await
-    .expect("handshake");
+    let connection =
+        Connection::connect_over(endpoint(), stream, verifier.clone(), support::client_config())
+            .await
+            .expect("handshake");
 
     let seen = verifier.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
@@ -195,11 +188,8 @@ async fn read_text(shell: &mut tether_ssh::Shell) -> String {
 /// hygiene: nothing is typed, so there is no prompt to answer.
 #[tokio::test]
 async fn a_private_key_authenticates() {
-    let (connection, observed) = connect(Policy {
-        accepts_key: Some(CLIENT_PUBLIC_KEY),
-        ..Policy::default()
-    })
-    .await;
+    let (connection, observed) =
+        connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
 
     match connection.private_key(USER, CLIENT_KEY, None).await.expect("attempt") {
         Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
@@ -261,4 +251,23 @@ async fn a_key_accepted_as_a_first_factor_leads_to_a_second() {
         Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
         other => panic!("the second factor should have completed login, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn command_channels_are_independent_of_shell_lifetime() {
+    let (connection, _) = connect(Policy::default()).await;
+    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
+    let session = match connection.interactive(USER, &prompter).await.unwrap() {
+        Step::Authenticated(session) => session,
+        other => panic!("unexpected authentication: {other:?}"),
+    };
+    let mut shell = session.shell("xterm-256color", WindowSize::default()).await.unwrap();
+    assert_eq!(read_text(&mut shell).await, BANNER);
+    let mut command = session.exec("fixture command").await.unwrap();
+    assert_eq!(read_text(&mut command).await, "fixture command");
+    shell.write(b"still alive".to_vec()).await.unwrap();
+    assert_eq!(read_text(&mut shell).await, "still alive");
+    shell.close().await.unwrap();
+    let mut next = session.exec("after shell closed").await.unwrap();
+    assert_eq!(read_text(&mut next).await, "after shell closed");
 }
