@@ -1,0 +1,19 @@
+# A server shaped like the ones this project exists for: passwords are not
+# accepted as a method, and every login goes through keyboard-interactive.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+PasswordAuthentication no
+KbdInteractiveAuthentication yes
+UsePAM yes
+PermitRootLogin no
+PubkeyAuthentication yes
+
+# Interactive only. PAM turns this into the account password prompt.
+Match User scientist
+    AuthenticationMethods keyboard-interactive
+
+# A key *and* an interactive factor — the arrangement a research cluster uses,
+# and the only way to observe a real partial success on the wire.
+Match User twofactor
+    AuthenticationMethods publickey,keyboard-interactive

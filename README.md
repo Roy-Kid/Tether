@@ -35,6 +35,8 @@ document.
 
 ## Building
 
+Build with the latest stable Rust (`rustup update stable`); the current minimum is 1.98.1.
+
 ```bash
 cargo build
 cargo test
@@ -46,7 +48,7 @@ cargo tree -p tether-terminal   # must show no russh
 `.claude/notes/remote-platform-spec.md` is the defining specification, mirrored
 byte-for-byte in `molab-apple`, a consumer. `Decisions/` holds the ADRs.
 
-Status: Phase 0. The crates are scaffolding with real dependencies and real
-boundaries; the transport, session, terminal and binding layers are next.
+The native macOS app now includes a modular frontend and an optional tmux workspace.
+See [frontend extensions and tmux](docs/plugins.md) for building, extending and using it.
 
 MIT licensed.
