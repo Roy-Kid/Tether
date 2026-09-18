@@ -1,0 +1,99 @@
+# The gate that would have caught `tether-core` calling two functions that no
+# longer existed: the workspace compiled per-crate, but nothing ever built it
+# whole. Every check here is one CLAUDE.md or the specification already claims
+# is true — a claim nothing runs is a claim that drifts.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: build, test, boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the latest stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # --all-targets so tests and examples are linted too; they are where the
+      # dead imports collect.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      # The whole workspace in one invocation. Building crates separately is
+      # what let a caller and its callee disagree for two commits.
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Install tmux for integration tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Test
+        run: cargo test --workspace
+        env:
+          TETHER_REQUIRE_TMUX: "1"
+
+      # CLAUDE.md states this as law and names this command as the test, so the
+      # command runs rather than being quoted. `cargo tree` exits 0 whatever it
+      # prints, so the grep is the assertion.
+      - name: tether-terminal links no SSH symbol
+        run: |
+          if cargo tree -p tether-terminal | grep -q russh; then
+            echo "::error::tether-terminal reached russh (CLAUDE.md law, spec §3, §8)"
+            cargo tree -p tether-terminal | grep -B5 russh
+            exit 1
+          fi
+          echo "clean: no russh in tether-terminal's tree"
+
+      # The spec mirrors this file byte-for-byte into molab-apple. A copy that
+      # silently diverges is worse than no copy, so the hash is printed for a
+      # reviewer to compare against the other repository.
+      - name: Specification hash
+        run: shasum -a 256 .claude/notes/remote-platform-spec.md
+
+  apple:
+    name: aws-lc-rs for Apple targets
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the latest stable toolchain and iOS targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Phase 0 asks whether `aws-lc-rs` builds for Apple targets from cargo
+      # alone. That question is answered by trying, on every change, not once.
+      - name: Build for device and simulator
+        run: |
+          cargo build -p tether-ffi --target aarch64-apple-ios
+          cargo build -p tether-ffi --target aarch64-apple-ios-sim
+
+      - name: Build Apple artifacts and generated bindings
+        run: bash scripts/build-xcframework.sh
+
+      - name: Swift facade and plugin contract tests
+        run: |
+          swift test --package-path swift
+          swift test --package-path app/Packages/TetherFrontend
+
+      - name: Build macOS application
+        run: bash scripts/build-app.sh
