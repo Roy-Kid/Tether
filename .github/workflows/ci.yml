@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   # The fuzzers find in an hour what they will not find in a minute. Every
   # push gets a short pass; the night gets a long one.
