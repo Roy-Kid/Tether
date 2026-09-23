@@ -14,6 +14,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
 tether-tmux = { path = "../tether-tmux" }
 tether-core = { path = "../tether-core" }
+tether-files = { path = "../tether-files" }
 uniffi = { workspace = true, features = ["cli", "tokio"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
@@ -23,6 +24,12 @@ tokio-util = { workspace = true }
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
+
+# What a frame costs on this side of the boundary. Phase 4 chooses a GPU stack
+# by measurement (spec §23), so the measurement is a command, not a memory.
+[[bin]]
+name = "frame-cost"
+path = "src/bin/frame-cost.rs"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

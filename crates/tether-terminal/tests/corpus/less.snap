@@ -1,0 +1,75 @@
+# less — a pager — whole-screen scrolling and a status line rewritten
+#
+# 4044 bytes at 80x24. Regenerate with TETHER_BLESS=1.
+
+── after 2022 of 4044 bytes ──
+80x24 · cursor (10,47) Block · alt on · appkeys on · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │commit cf45cfcf6aab790ab4950221daa857be1657c496
+   │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ 1 │Author: Tether Fixture <fixture@example.invalid>
+ 2 │Date:   Mon Jan 1 00:00:00 2024 +0000
+ 3 │
+ 4 │    feat: a third entry, and a name that is two columns wide
+ 5 │
+ 6 │ README.md  | 3 +++
+   │················bbb
+ 7 │ ledger.txt | 4 +++-
+   │················bbbc
+ 8 │ 2 files changed, 6 insertions(+), 1 deletion(-)
+ 9 │
+10 │commit 62466e7320e09032ca9145be2cd81138ee79eb1e
+   │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+11 │Author: Tether Fixture <fixture@example.invalid>
+12 │Date:   Mon Jan 1 00:00:00 2024 +0000
+13 │
+14 │    feat: a ledger with two entries
+   │············dddddd
+15 │
+16 │ ledger.txt | 2 ++
+   │·dddddd·········bb
+17 │ 1 file changed, 2 insertions(+)
+18 │~
+   │e
+19 │~
+   │e
+20 │~
+   │e
+21 │~
+   │e
+22 │~
+   │e
+23 │
+    a = fg Yellow
+    b = fg Green
+    c = fg Red
+    d = inverse
+    e = bold
+
+── at the end ──
+80x24 · cursor (0,0) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │
+ 1 │
+ 2 │
+ 3 │
+ 4 │
+ 5 │
+ 6 │
+ 7 │
+ 8 │
+ 9 │
+10 │
+11 │
+12 │
+13 │
+14 │
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │

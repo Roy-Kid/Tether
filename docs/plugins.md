@@ -1,8 +1,15 @@
 # Frontend extensions
 
-Tether's macOS frontend loads extensions at compile time. A plugin is an independent
-Swift package depending on `TetherPluginKit`; import `TetherUI` when it needs a
-terminal surface. `app/Packages/TmuxPlugin` is the working example.
+Tether's frontend loads extensions at compile time. A plugin is an independent
+Swift package depending on `TetherPluginKit`; import `TetherUI` for a terminal
+surface and for the window's chrome vocabulary (`Theme`, `UIStyle`,
+`ChromeButtonStyle`), so what a plugin draws matches what the window draws.
+Built-in plugins live in `app/Plugins/`; `app/Plugins/Tmux` is the working
+example, and the app reaches it only through the kit (Decisions/0012).
+
+A plugin takes one of two shapes.
+
+**A workspace plugin** is a tab of its own.
 
 1. Implement `TetherPlugin` with a stable `PluginMetadata.id`, lifecycle methods,
    `launch(in:)` and optional `settings()`.
@@ -11,27 +18,46 @@ terminal surface. `app/Packages/TmuxPlugin` is the working example.
 3. Use `PluginContext.openWorkspace` to give the host ownership of a new tab.
    Use its connection for SDK operations and its reconnect closure when fresh
    authentication is required. Do not store credentials.
-4. Add the package product to the application's dependencies and register your
-   plugin in the application composition root. No RootView switch is needed.
-5. Release subscriptions, cancel operations and detach remote resources in `close()`.
-   Store nonsecret preferences with `PluginPreferences(pluginID:)`.
 
-The host renders each registered plugin as a navigation/toolbar entry, its commands
-in the workspace toolbar, its inspector in the native inspector, and its settings
-in Settings → Extensions. Disablement closes all matching tabs before deactivation.
-The example test plugin in `TetherPluginKitTests` verifies this lifecycle independently
-of tmux. This interface is a Swift source API, not a binary ABI or a permission sandbox.
+**A tab plugin** lives inside a terminal tab the person already has.
+
+1. Implement `TabPlugin`: a `TabAccessory` (a symbol, and the name its tooltip
+   and menu item use) and `attach(to:)`, called once per tab the first time
+   the accessory opens there.
+2. Return a `TabAttachment`. It reports whether it stands in for the shell, the
+   subtitle beside the tab's name, whether it is disconnected, a note for the
+   close confirmation, and its commands. It supplies content, an inspector and
+   what opens behind the accessory, and it releases everything in `close()`.
+3. Use `TabContext` for what only the host can do: focus the tab, dismiss the
+   accessory, present a sheet. Anything that spans tabs belongs to the
+   plugin, which is the one party that knows every tab it is attached to.
+
+For either shape:
+
+- Add the package product to the application's dependencies and register the
+  plugin in the application's composition root. That line is the only place
+  the app may name it; CI fails on any other.
+- Store nonsecret preferences with `PluginPreferences(pluginID:)`.
+
+The host renders each workspace plugin as a toolbar and palette entry, and
+each tab plugin as an icon on every terminal tab plus a submenu under Terminal.
+Inspectors go in the native inspector, settings in Settings → Extensions.
+Turning a plugin off closes its tabs and attachments before deactivation.
+`TetherPluginKitTests` verifies both shapes independently of tmux;
+`app/Plugins/Tmux/Tests` verifies tmux without a server. This interface is a
+Swift source API, not a binary ABI or a permission sandbox.
 
 # Using tmux
 
-Connect to a host, then click tmux in the toolbar or sidebar. The remote host must
+Connect to a host, then click the tmux icon on the terminal's tab. The remote host must
 have `tmux` on the SSH command's PATH. Select an existing session or name a new one.
 The toolbar creates windows, splits panes and toggles pane zoom. Click a pane to
 focus it; drag its borders to resize. Window context menus rename or end windows.
 The inspector exposes active-pane actions. Session context menus in the picker
 rename or end sessions.
 
-Closing the workspace tab detaches only. Ending remote tasks is a separate confirmed
+"Original shell" in the picker shows the tab's shell again with tmux still
+attached. Closing the tab detaches only. Ending remote tasks is a separate confirmed
 action. After a connection loss, Reconnect requests authentication and attaches the
 previous session if it still exists. Missing tmux, rejected commands and connection
 errors are shown in the workspace. Ordinary SSH remains available when tmux is disabled.
@@ -55,6 +81,7 @@ bash scripts/build-xcframework.sh
 swift test --package-path swift
 bash scripts/test-native-tmux.sh # loopback OpenSSH + real tmux end-to-end
 swift test --package-path app/Packages/TetherFrontend
+swift test --package-path app/Plugins/Tmux
 bash scripts/build-app.sh
 ```
 

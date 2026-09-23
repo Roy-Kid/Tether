@@ -184,6 +184,18 @@ impl Connection {
                         partial_success,
                     }));
                 }
+                Response::InfoRequest { prompts, .. } if prompts.is_empty() => {
+                    // A round with no prompts is the server talking, not
+                    // asking: PAM text such as "your password expires in 3
+                    // days" arrives this way, typically once a code has
+                    // already been accepted. RFC 4256 still wants a reply,
+                    // and the reply is an answer with no fields. Nobody is
+                    // asked, because there is nothing to answer — and asking
+                    // would mistake the message for a question and read the
+                    // empty answer as someone declining.
+                    response =
+                        self.handle.authenticate_keyboard_interactive_respond(Vec::new()).await?;
+                }
                 Response::InfoRequest { name, instructions, prompts } => {
                     let challenge = Challenge {
                         name,
@@ -277,6 +289,16 @@ impl Session {
         let mut channel = self.handle.channel_open_session().await?;
         channel.exec(true, command).await?;
         confirm(&mut channel, "the command").await?;
+        Ok(Shell { channel, size: WindowSize::default() })
+    }
+
+    /// Opens a channel on a named subsystem — a program the *server* chose
+    /// for that name, such as its `sftp-server` for `sftp`. No PTY and no
+    /// command line: nothing is parsed by a shell on the far side.
+    pub async fn subsystem(&self, name: &str) -> Result<Shell, SshError> {
+        let mut channel = self.handle.channel_open_session().await?;
+        channel.request_subsystem(true, name).await?;
+        confirm(&mut channel, &format!("the {name} subsystem")).await?;
         Ok(Shell { channel, size: WindowSize::default() })
     }
 

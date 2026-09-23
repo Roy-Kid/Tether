@@ -18,9 +18,21 @@ swift build --package-path app -c "$CONFIG"
 binary="$(swift build --package-path app -c "$CONFIG" --show-bin-path)/TetherApp"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$binary" "$APP/Contents/MacOS/TetherApp"
+
+# AppIcon.appiconset is the source; actool is what Xcode would run, and it
+# writes AppIcon.icns plus Assets.car into Resources.
+partial=$(mktemp)
+xcrun actool app/Assets.xcassets \
+  --compile "$APP/Contents/Resources" \
+  --platform macosx \
+  --minimum-deployment-target 26.0 \
+  --app-icon AppIcon \
+  --output-partial-info-plist "$partial" \
+  --notices --warnings
+rm -f "$partial"
 
 # The xcframework is a static library, linked into the binary above, so there
 # is nothing further to embed — the reason Decisions/0004 chose that shape.
@@ -36,9 +48,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.0.0</string>
     <key>CFBundleVersion</key><string>0</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSUserNotificationsUsageDescription</key>
+    <string>Nerve tells you when an agent needs you.</string>
 </dict>
 </plist>
 PLIST

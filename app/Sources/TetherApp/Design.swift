@@ -1,44 +1,11 @@
 import SwiftUI
+import TetherUI
 
-#if os(macOS)
-  import AppKit
-#else
-  import UIKit
-#endif
+// The shared vocabulary — `Theme`, `UIStyle`, `ChromeButtonStyle` — lives in
+// TetherUI, where a plugin's chrome can reach it too. What is left here
+// belongs to this window alone.
 
-/// The visual vocabulary, in one place.
-///
-/// Three surfaces, not one: a terminal client is read for hours, and the
-/// depth is what keeps a dense host list from reading as a wall. The terminal
-/// itself sits *below* the window background rather than above it — the
-/// content is the hole in the chrome, not a card on top of it.
-enum Theme {
-  // Semantic, not literal. Both platforms already have names for "the
-  // surface a window sits on" and "the surface content sits on", and they
-  // are the names that follow the person's appearance settings, their
-  // increased-contrast setting and their accent colour. Hard-coding hexes
-  // here would opt out of all three.
-  #if os(macOS)
-    static let window = Color(nsColor: .windowBackgroundColor)
-    static let sidebar = Color(nsColor: .controlBackgroundColor)
-    static let raised = Color(nsColor: .textBackgroundColor)
-    static let stroke = Color(nsColor: .separatorColor)
-    static let terminal = Color(nsColor: .textBackgroundColor)
-  #else
-    // A phone's grouped background is the one a `List` draws on, which is
-    // what the sidebar becomes when the split view collapses.
-    static let window = Color(uiColor: .systemGroupedBackground)
-    static let sidebar = Color(uiColor: .secondarySystemBackground)
-    static let raised = Color(uiColor: .systemBackground)
-    static let stroke = Color(uiColor: .separator)
-    static let terminal = Color(uiColor: .systemBackground)
-  #endif
-
-  static let text = Color.primary
-  static let subtle = Color.secondary
-  static let accent = Color.accentColor
-  static let danger = Color.red
-
+extension Theme {
   /// The eight tints a host tile can take.
   ///
   /// Assigned from the name rather than chosen, so the same host is the
@@ -60,20 +27,10 @@ enum Theme {
   }
 }
 
-extension Color {
-  init(hex: UInt32) {
-    self.init(
-      red: Double((hex >> 16) & 0xFF) / 255,
-      green: Double((hex >> 8) & 0xFF) / 255,
-      blue: Double(hex & 0xFF) / 255)
-  }
+enum Chrome {
+  static let tab: CGFloat = 36
+  static let status: CGFloat = 24
+  static let trafficLights: CGFloat = 76
+  static let margin: CGFloat = 12
+  static let tabTitleWidth: CGFloat = 180
 }
-
-
-// There is deliberately no `toolbarIconOnly()` helper here.
-//
-// `labelStyle` inherits down the whole view tree, so applying it once at the
-// container was not a convenience — it stripped the text from every `Label`
-// below it, and the tab strip lost its titles: a row of identical terminal
-// icons with no way to tell one session from another. Each button says
-// `.labelStyle(.iconOnly)` for itself, where the effect is visible.

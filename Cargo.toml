@@ -9,9 +9,11 @@ resolver = "3"
 members = [
     "crates/tether-terminal",
     "crates/tether-ssh",
+    "crates/tether-local",
     "crates/tether-core",
     "crates/tether-ffi",
     "crates/tether-tmux",
+    "crates/tether-files",
 ]
 
 [workspace.package]
@@ -24,6 +26,7 @@ repository = "https://github.com/tether/tether"
 [workspace.dependencies]
 # Engines are composed, never rewritten (spec §2, §5).
 russh = "0.63"
+portable-pty = "0.9"
 alacritty_terminal = "0.26"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync"] }
 thiserror = "2"

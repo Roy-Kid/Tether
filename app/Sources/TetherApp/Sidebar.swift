@@ -1,4 +1,8 @@
 import SwiftUI
+import TetherUI
+#if os(macOS)
+  import AppKit
+#endif
 
 /// The host list, and nothing else.
 ///
@@ -13,11 +17,22 @@ struct Sidebar: View {
   let onNew: () -> Void
   /// Only used where there is no preferences window to link to.
   let onSettings: () -> Void
+  var onDone: (() -> Void)? = nil
 
   @State private var selection: Host.ID?
 
   var body: some View {
     List(selection: $selection) {
+      if let problem = store.problem {
+        // The list is a file someone else can own the permissions of. A
+        // person who adds a host and sees nothing happen has no way to guess
+        // that, so it is said here rather than logged.
+        Label(problem, systemImage: "exclamationmark.triangle")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .padding(.vertical, UIStyle.Space.inline)
+      }
       Section("Hosts") {
         ForEach(store.filtered) { host in
           Button {
@@ -26,75 +41,152 @@ struct Sidebar: View {
           } label: {
             HStack(spacing: 10) {
               Image(systemName: "server.rack")
-                .font(.system(size: 17, weight: .medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Theme.tile(for: host.label))
                 .frame(width: 30, height: 34)
               VStack(alignment: .leading, spacing: 3) {
                 Text(host.label.isEmpty ? host.hostname : host.label).font(.body.weight(.medium))
+                  .adaptiveRowText()
                   .foregroundStyle(.primary)
-                Text(host.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(host.address).font(.caption).foregroundStyle(.secondary).adaptiveRowText()
               }
               Spacer(minLength: 0)
-            }.padding(.vertical, 4).contentShape(Rectangle())
+            }.padding(.vertical, UIStyle.Space.small)
+              .frame(minHeight: UIStyle.rowHeight)
+              .contentShape(Rectangle())
           }.buttonStyle(.plain).tag(host.id)
+            #if os(iOS)
+              .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !host.isLocal {
+                  Button("Edit…", systemImage: "pencil") { onEdit(host) }
+                    .tint(Theme.accent)
+                }
+              }
+            #endif
             .contextMenu {
               Button("Connect") { onOpen(host) }
-              Button("Edit…") { onEdit(host) }
-              Button("Delete host", role: .destructive) { store.delete(host) }
+              // A label, a hostname, a port and a user are four answers the
+              // local machine already knows, so there is nothing an editor
+              // could ask; and a person must not be able to delete their own
+              // computer out of a list they are reading on it. Not a second
+              // kind of host — a host with nothing left to decide.
+              if !host.isLocal {
+                Button("Edit…") { onEdit(host) }
+                Button("Delete host", role: .destructive) { store.delete(host) }
+              }
             }
         }
-        if store.filtered.isEmpty {
-          Text(store.hosts.isEmpty ? "Add a host to get started." : "No matching hosts.")
-            .font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
+        if store.filtered.isEmpty && !store.listed.isEmpty {
+          Text("No matching hosts.")
+            .font(.callout).foregroundStyle(.secondary).padding(.vertical, UIStyle.Space.group)
         }
       }
     }
-    .listStyle(.sidebar)
-    // `.sidebar` is a Mac placement. On a phone the split view has collapsed
-    // to a navigation stack, and asking for a sidebar slot puts the field
-    // below the bottom bar — two stacked bars, with search under the buttons.
+    .modifier(HostListStyle())
+    // This list is also used in a sheet, where `.sidebar` search placement
+    // promotes the field into an unrelated window toolbar. Keep Mac search
+    // inside the content; explicitly anchor phone search below the title.
     #if os(macOS)
-      .searchable(text: $store.search, placement: .sidebar, prompt: "Search hosts")
+      .safeAreaInset(edge: .top, spacing: 0) {
+        HostSearchField(text: $store.search)
+          .frame(height: UIStyle.controlHeight)
+          .padding(UIStyle.Space.inset)
+          .background(Theme.sidebar)
+      }
     #else
-      .searchable(text: $store.search, prompt: "Search hosts")
+      .searchable(text: $store.search,
+                  placement: .navigationBarDrawer(displayMode: .always), prompt: "Search hosts")
+      .scrollDismissesKeyboard(.interactively)
     #endif
-    .modifier(SidebarActions(onNew: onNew, onSettings: onSettings))
-    .navigationTitle("Tether")
+    .overlay {
+      if store.listed.isEmpty && store.problem == nil {
+        ContentUnavailableView {
+          Label("Hosts", systemImage: "server.rack")
+        } actions: {
+          Button("Add host", systemImage: "plus", action: onNew)
+            .buttonStyle(.borderedProminent)
+        }
+      }
+    }
+    .modifier(SidebarActions(onNew: onNew, onSettings: onSettings, onDone: onDone))
+    .navigationTitle(onDone == nil ? "Tether" : "Hosts")
   }
 }
 
-/// Where the two standing actions live.
+#if os(macOS)
+private struct HostSearchField: NSViewRepresentable {
+  @Binding var text: String
+
+  func makeNSView(context: Context) -> NSSearchField {
+    let field = NSSearchField()
+    field.placeholderString = "Search hosts"
+    field.setAccessibilityLabel("Search hosts")
+    field.sendsSearchStringImmediately = true
+    field.target = context.coordinator
+    field.action = #selector(Coordinator.changed(_:))
+    return field
+  }
+
+  func updateNSView(_ field: NSSearchField, context: Context) {
+    context.coordinator.text = $text
+    if field.stringValue != text { field.stringValue = text }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+  final class Coordinator: NSObject {
+    var text: Binding<String>
+    init(text: Binding<String>) { self.text = text }
+    @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
+  }
+}
+#endif
+
+private struct HostListStyle: ViewModifier {
+  #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+  #endif
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    #if os(macOS)
+      content.listStyle(.sidebar)
+    #else
+      if sizeClass == .regular {
+        content.listStyle(.sidebar)
+      } else {
+        content.listStyle(.insetGrouped)
+      }
+    #endif
+  }
+}
+
+/// Where Add lives under the host list.
 ///
-/// A Mac puts them in a bar under the sidebar, where they sit beside the list
-/// for the life of the window. A phone already has a navigation bar and a
-/// toolbar for exactly this, and adding a third bar underneath would be a
-/// second answer to a question the platform has already answered.
+/// Settings is not here. On a Mac it sits on the workspace status bar,
+/// opposite the host control. A phone has no preferences window and no
+/// status bar, so the gear stays in the navigation bar and presents a sheet.
 private struct SidebarActions: ViewModifier {
   let onNew: () -> Void
   let onSettings: () -> Void
+  let onDone: (() -> Void)?
 
   func body(content: Content) -> some View {
     #if os(macOS)
       content.safeAreaInset(edge: .bottom) {
         HStack {
-          // Icon-only, with the words in the tooltip: these two sit in the
-          // window for the whole of its life, and a label that is read once
-          // costs space on every frame after that.
           Button("Add host", systemImage: "plus", action: onNew)
             .labelStyle(.iconOnly)
             .help("Add host")
-
           Spacer()
-
-          // The system's own link, so ⌘, and this button open the same
-          // window rather than two copies of it.
-          SettingsLink {
-            Image(systemName: "gearshape")
+          if let onDone {
+            Button("Done", action: onDone)
+              .buttonStyle(.borderedProminent)
+              .keyboardShortcut(.cancelAction)
           }
-          .help("Settings")
         }
         .buttonStyle(.borderless)
-        .padding(14)
+        .padding(UIStyle.Space.inset)
         .background(.bar)
       }
     #else
@@ -106,6 +198,11 @@ private struct SidebarActions: ViewModifier {
         ToolbarItem(placement: .topBarTrailing) {
           Button("Add host", systemImage: "plus", action: onNew)
             .labelStyle(.iconOnly)
+        }
+        if let onDone {
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Done", action: onDone)
+          }
         }
       }
     #endif

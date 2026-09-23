@@ -1,6 +1,12 @@
 import SwiftUI
 import Tether
 
+#if os(macOS)
+  import AppKit
+#else
+  import UIKit
+#endif
+
 /// Resolves the names the engine reports into colours this app draws.
 ///
 /// The engine deliberately reports `red`, not an RGB triple, because the
@@ -106,5 +112,57 @@ public struct Palette: Equatable, Sendable {
       let grey = Double(8 + (Int(index) - 232) * 10) / 255
       return Color(red: grey, green: grey, blue: grey)
     }
+  }
+}
+
+extension Palette {
+  /// Which palette a setting and an environment add up to.
+  ///
+  /// One place, because two would drift: the surface draws with this and the
+  /// session tells the far side about it, and a screen drawn light while the
+  /// far side was told "dark" is worse than either mistake alone.
+  public static func chosen(setting: String, scheme: ColorScheme) -> Palette {
+    let dark = setting == "dark" || (setting == "system" && scheme == .dark)
+    return dark ? .dark : .light
+  }
+
+  /// This palette in the form the far side is told it.
+  ///
+  /// Only for answering colour queries. What the engine reports is still
+  /// names; this is what those names look like here (spec §12).
+  public var remoteForm: TerminalPalette {
+    TerminalPalette(
+      foreground: Palette.channels(foreground),
+      background: Palette.channels(background),
+      cursor: Palette.channels(cursor),
+      ansi: (normal + bright).map(Palette.channels))
+  }
+
+  /// A drawn colour as three bytes.
+  ///
+  /// Resolved through the platform's colour type rather than kept alongside
+  /// as numbers: some of these are the system's own blue and grey, which
+  /// only the system can turn into channels.
+  private static func channels(_ color: Color) -> TerminalColor {
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    var alpha: CGFloat = 0
+    #if os(macOS)
+      let native = NSColor(color).usingColorSpace(.sRGB) ?? .black
+      native.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+    #else
+      UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+    #endif
+    func byte(_ value: CGFloat) -> UInt8 {
+      UInt8((value * 255).rounded().clamped(to: 0...255))
+    }
+    return TerminalColor(red: byte(red), green: byte(green), blue: byte(blue))
+  }
+}
+
+extension CGFloat {
+  fileprivate func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+    Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
   }
 }

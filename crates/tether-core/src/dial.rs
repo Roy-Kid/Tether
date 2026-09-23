@@ -145,7 +145,7 @@ impl Dial {
         let connection = self.authenticate(credentials).await?;
         let shell =
             connection.shell(&term, WindowSize::new(size.columns as u32, size.rows as u32)).await?;
-        Ok(TerminalSession::start_connected(shell, size, options, connection))
+        Ok(TerminalSession::start_with(shell, size, options, crate::Connection::Remote(connection)))
     }
 
     /// Authenticate once, then open independent channels on this connection.

@@ -1,0 +1,109 @@
+[?1049h[24;1H[?1h=[33mcommit cf45cfcf6aab790ab4950221daa857be1657c496[m[m
+Author: Tether Fixture <fixture@example.invalid>[m
+Date:   Mon Jan 1 00:00:00 2024 +0000[m
+[m
+    feat: a third entry, and a name that is two columns wide[m
+[m
+ README.md  | 3 [32m+++[m[m
+ ledger.txt | 4 [32m+++[m[31m-[m[m
+ 2 files changed, 6 insertions(+), 1 deletion(-)[m
+[m
+[33mcommit 62466e7320e09032ca9145be2cd81138ee79eb1e[m[m
+Author: Tether Fixture <fixture@example.invalid>[m
+Date:   Mon Jan 1 00:00:00 2024 +0000[m
+[m
+    feat: a ledger with two entries[m
+[m
+ ledger.txt | 2 [32m++[m[m
+ 1 file changed, 2 insertions(+)[m
+[7m(END)[27m[K[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K/[Kll[Kee[Kdd[Kgg[Kee[Krr[K...skipping...
+[33mcommit cf45cfcf6aab790ab4950221daa857be1657c496[m[m
+Author: Tether Fixture <fixture@example.invalid>[m
+Date:   Mon Jan 1 00:00:00 2024 +0000[m
+[m
+    feat: a third entry, and a name that is two columns wide[m
+[m
+ README.md  | 3 [32m+++[m[m
+ [7mledger[27m.txt | 4 [32m+++[m[31m-[m[m
+ 2 files changed, 6 insertions(+), 1 deletion(-)[m
+[m
+[33mcommit 62466e7320e09032ca9145be2cd81138ee79eb1e[m[m
+Author: Tether Fixture <fixture@example.invalid>[m
+Date:   Mon Jan 1 00:00:00 2024 +0000[m
+[m
+    feat: a [7mledger[27m with two entries[m
+[m
+ [7mledger[27m.txt | 2 [32m++[m[m
+ 1 file changed, 2 insertions(+)[m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1;1H[K[33mcommit cf45cfcf6aab790ab4950221daa857be1657c496[m[m
+[2;1H[KAuthor: Tether Fixture <fixture@example.invalid>[m
+[3;1H[KDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[4;1H[K[m
+[5;1H[K    feat: a third entry, and a name that is two columns wide[m
+[6;1H[K[m
+[7;1H[K README.md  | 3 [32m+++[m[m
+[8;1H[K ledger.txt | 4 [32m+++[m[31m-[m[m
+[9;1H[K 2 files changed, 6 insertions(+), 1 deletion(-)[m
+[10;1H[K[m
+[11;1H[K[33mcommit 62466e7320e09032ca9145be2cd81138ee79eb1e[m[m
+[12;1H[KAuthor: Tether Fixture <fixture@example.invalid>[m
+[13;1H[KDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[14;1H[K[m
+[15;1H[K    feat: a ledger with two entries[m
+[16;1H[K[m
+[17;1H[K ledger.txt | 2 [32m++[m[m
+[18;1H[K 1 file changed, 2 insertions(+)[m
+[19;1H[K[1m~[0m
+[24;1H[1;1H[K[33mcommit cf45cfcf6aab790ab4950221daa857be1657c496[m[m
+[2;1H[KAuthor: Tether Fixture <fixture@example.invalid>[m
+[3;1H[KDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[4;1H[K[m
+[5;1H[K    feat: a third entry, and a name that is two columns wide[m
+[6;1H[K[m
+[7;1H[K README.md  | 3 [32m+++[m[m
+[8;1H[K [7mledger[27m.txt | 4 [32m+++[m[31m-[m[m
+[9;1H[K 2 files changed, 6 insertions(+), 1 deletion(-)[m
+[10;1H[K[m
+[11;1H[K[33mcommit 62466e7320e09032ca9145be2cd81138ee79eb1e[m[m
+[12;1H[KAuthor: Tether Fixture <fixture@example.invalid>[m
+[13;1H[KDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[14;1H[K[m
+[15;1H[K    feat: a [7mledger[27m with two entries[m
+[16;1H[K[m
+[17;1H[K [7mledger[27m.txt | 2 [32m++[m[m
+[18;1H[K 1 file changed, 2 insertions(+)[m
+[19;1H[K[1m~[0m
+[24;1H[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[7m(END)[27m[K[K/[K[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[1m~[0m
+[7m(END)[27m[K[K[HM[m
+[HMDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[HMAuthor: Tether Fixture <fixture@example.invalid>[m
+[HM[33mcommit 62466e7320e09032ca9145be2cd81138ee79eb1e[m[m
+[HM[m
+[HM 2 files changed, 6 insertions(+), 1 deletion(-)[m
+[HM [7mledger[27m.txt | 4 [32m+++[m[31m-[m[m
+[HM README.md  | 3 [32m+++[m[m
+[HM[m
+[HM    feat: a third entry, and a name that is two columns wide[m
+[HM[m
+[HMDate:   Mon Jan 1 00:00:00 2024 +0000[m
+[HMAuthor: Tether Fixture <fixture@example.invalid>[m
+[HM[33mcommit cf45cfcf6aab790ab4950221daa857be1657c496[m[m
+[24;1H[K[7m(END)[27m[K[K[?1l>[?1049l

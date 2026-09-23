@@ -7,10 +7,13 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Processor, Rgb};
 
 use crate::damage::{Changes, RowSpan, ScreenDamage};
+use crate::directory::DirectoryScanner;
 use crate::input::Input;
+use crate::link::{self, Glyph, Link, LinkTarget};
+use crate::palette::Palette;
 use crate::screen::{Cell, Cursor, CursorShape, Modes, Screen};
 use crate::scroll::{Scroll, Viewport};
 use crate::size::{Position, ScreenSize};
@@ -25,6 +28,9 @@ struct Collected {
     /// attributes, colour queries. A consumer that dropped these would hang
     /// any program that waits for an answer.
     replies: Vec<u8>,
+    /// What the consumer draws with, when it has said. Only colour queries
+    /// use it, and only to answer them.
+    palette: Option<Palette>,
 }
 
 /// Bridges the engine's event callback onto [`Collected`].
@@ -42,11 +48,22 @@ impl EventListener for Sink {
             Event::ResetTitle => collected.title = Some(String::new()),
             Event::Bell => collected.bell = true,
             Event::PtyWrite(text) => collected.replies.extend_from_slice(text.as_bytes()),
-            // Clipboard, colour and size queries all answer by writing back;
-            // the ones that need state we do not have are answered by the
+            // "What is your background?" is a question only whoever draws
+            // can answer, so it is answered from the consumer's palette or
+            // not at all — never from a colour we chose (spec §12). A
+            // consumer that said nothing, or an index it did not give us,
+            // leaves the program to its own default, which is what happened
+            // to every query before there was a palette to answer from.
+            Event::ColorRequest(index, format) => {
+                if let Some(colour) = collected.palette.and_then(|palette| palette.at(index)) {
+                    let reply = format(Rgb { r: colour.red, g: colour.green, b: colour.blue });
+                    collected.replies.extend_from_slice(reply.as_bytes());
+                }
+            }
+            // Clipboard and size queries also answer by writing back; the
+            // ones that need state we do not have are answered by the
             // consumer, not invented here.
-            Event::ColorRequest(_, _)
-            | Event::ClipboardLoad(_, _)
+            Event::ClipboardLoad(_, _)
             | Event::ClipboardStore(_, _)
             | Event::TextAreaSizeRequest(_)
             | Event::CursorBlinkingChange
@@ -133,6 +150,8 @@ pub struct Terminal {
     /// many lines went past.
     last_history: usize,
     pending_full_damage: bool,
+    /// Where the far side's shell last said it was.
+    directory: DirectoryScanner,
     /// Whether anything has reached the engine since the last
     /// [`take_changes`](Terminal::take_changes).
     ///
@@ -166,6 +185,7 @@ impl Terminal {
             title_changed: false,
             last_history: 0,
             pending_full_damage: false,
+            directory: DirectoryScanner::default(),
             // A terminal nobody has drawn yet needs a first full paint.
             dirty: true,
         }
@@ -191,7 +211,102 @@ impl Terminal {
         }
         self.dirty = true;
         self.parser.advance(&mut self.inner, bytes);
+        self.directory.feed(bytes);
         self.adopt_title();
+    }
+
+    /// The directory the far side's shell last reported, by `OSC 7` or
+    /// iTerm's `OSC 1337 ; CurrentDir`. `None` until one does: a shell
+    /// without integration says nothing, and nothing is guessed.
+    ///
+    /// It is the *shell's* directory. A program started from it — an agent,
+    /// an editor — may have moved since, and says nothing unless it too
+    /// reports; what it prints is still most often relative to this.
+    pub fn working_directory(&self) -> Option<&str> {
+        self.directory.current()
+    }
+
+    /// What the text at `position` names, if it names somewhere: the
+    /// hyperlink a program attached to it, or a web address or path it is
+    /// shaped like. Wrapped rows are read as the one line they are.
+    ///
+    /// Shape, not truth. Whether a path exists is for whoever holds the
+    /// connection to ask.
+    pub fn link_at(&self, position: Position) -> Option<Link> {
+        if position.row >= self.size.rows || position.column >= self.size.columns {
+            return None;
+        }
+        let (line, hit, links) = self.logical_line(position);
+        let hit = hit?;
+
+        if let Some(uri) = links[hit].clone() {
+            let mut start = hit;
+            while start > 0 && links[start - 1].as_ref() == Some(&uri) {
+                start -= 1;
+            }
+            let mut end = hit + 1;
+            while end < line.len() && links[end].as_ref() == Some(&uri) {
+                end += 1;
+            }
+            let text: String = line[start..end].iter().map(|glyph| glyph.text.as_str()).collect();
+            return Some(Link {
+                text,
+                target: LinkTarget::Hyperlink(uri),
+                spans: link::spans(&line[start..end]),
+            });
+        }
+        link::find(&line, hit)
+    }
+
+    /// The visible rows the one at `position` is part of — joined across
+    /// soft wraps, never across a newline — as glyphs with their screen
+    /// positions, which of them `position` is on, and each one's hyperlink.
+    fn logical_line(&self, position: Position) -> (Vec<Glyph>, Option<usize>, Vec<Option<String>>) {
+        let grid = self.inner.grid();
+        let offset = grid.display_offset() as i32;
+        let columns = self.size.columns as usize;
+        let wraps = |row: u16| {
+            grid[Line(row as i32 - offset)][Column(columns - 1)].flags.contains(Flags::WRAPLINE)
+        };
+
+        let mut first = position.row;
+        while first > 0 && wraps(first - 1) {
+            first -= 1;
+        }
+        let mut last = position.row;
+        while last + 1 < self.size.rows && wraps(last) {
+            last += 1;
+        }
+
+        let mut glyphs = Vec::new();
+        let mut links = Vec::new();
+        let mut hit = None;
+        for row in first..=last {
+            let cells = &grid[Line(row as i32 - offset)];
+            for column in 0..columns {
+                let cell = &cells[Column(column)];
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                if glyphs.len() >= link::LINE_LIMIT {
+                    break;
+                }
+                let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                if row == position.row
+                    && (column..column + width as usize).contains(&(position.column as usize))
+                {
+                    hit = Some(glyphs.len());
+                }
+                let mut text = String::from(cell.c);
+                if let Some(zerowidth) = cell.zerowidth() {
+                    text.extend(zerowidth);
+                }
+                links.push(cell.hyperlink().map(|link| link.uri().to_owned()));
+                glyphs.push(Glyph { text, row, column: column as u16, width });
+            }
+        }
+        (glyphs, hit, links)
     }
 
     /// Takes any title the bytes just carried.
@@ -222,6 +337,16 @@ impl Terminal {
         self.inner.resize(Dims { size });
         self.pending_full_damage = true;
         self.dirty = true;
+    }
+
+    /// Tells the engine what the consumer draws with, so that a program
+    /// asking `OSC 4`, `OSC 10`, `OSC 11` or `OSC 12` is answered.
+    ///
+    /// Nothing about the screen changes: cells still report names. This is
+    /// only what to say when asked — and saying nothing is how a light
+    /// window ends up with a program painting itself dark over it.
+    pub fn set_palette(&mut self, palette: Option<Palette>) {
+        self.sink.0.lock().expect("terminal event sink poisoned").palette = palette;
     }
 
     /// Takes the replies the terminal owes the far side, if any.
@@ -450,7 +575,67 @@ impl Terminal {
         };
         self.inner.reset_damage();
 
-        if forced_full { ScreenDamage::Full } else { damage }
+        if forced_full {
+            return ScreenDamage::Full;
+        }
+        match damage {
+            ScreenDamage::Rows(spans) => ScreenDamage::Rows(
+                spans.into_iter().map(|span| self.widen_to_whole_cells(span)).collect(),
+            ),
+            other => other,
+        }
+    }
+
+    /// Widens a damaged span to whole cells, and one cell to the left.
+    ///
+    /// The engine reports the column the *cursor* is at, which is not always
+    /// the cell that changed. A zero-width scalar — a combining mark, a
+    /// variation selector, the joiner in an emoji sequence — attaches to the
+    /// cell *before* the cursor, and the engine damages the cursor's column
+    /// instead. A consumer that redrew only what it was told would leave a
+    /// family emoji drawn as three separate people until something else
+    /// happened to touch the row.
+    ///
+    /// Found by `fuzz/terminal_damage`, on a chunking of the recorded shell
+    /// session that no hand-written test had tried.
+    ///
+    /// Widening rather than tracking which cell the engine meant: it costs
+    /// two lookups per span, it cannot under-report, and it also covers the
+    /// case a column index cannot express on its own — a span that starts or
+    /// ends inside a double-width cell, where half a glyph is not something a
+    /// renderer can draw.
+    fn widen_to_whole_cells(&self, span: RowSpan) -> RowSpan {
+        let grid = self.inner.grid();
+        // The same indexing [`screen`] reads by, so a span describes the rows
+        // a consumer was handed rather than the ones behind them.
+        //
+        // [`screen`]: Self::screen
+        let line = Line(span.row as i32 - grid.display_offset() as i32);
+        let columns = self.size.columns;
+
+        let spacer = |column: u16| {
+            let flags = grid[line][Column(column as usize)].flags;
+            flags.contains(Flags::WIDE_CHAR_SPACER)
+                || flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+        };
+
+        let mut first = span.first_column.min(columns.saturating_sub(1));
+        if spacer(first) {
+            first = first.saturating_sub(1);
+        }
+        if first > 0 {
+            first -= 1;
+            if spacer(first) {
+                first = first.saturating_sub(1);
+            }
+        }
+
+        let mut last = span.last_column.min(columns.saturating_sub(1));
+        if last + 1 < columns && spacer(last + 1) {
+            last += 1;
+        }
+
+        RowSpan { row: span.row, first_column: first, last_column: last }
     }
 }
 

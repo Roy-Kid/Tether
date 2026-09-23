@@ -1,0 +1,12 @@
+[38;5;39m⠋[0m thinking[K[38;5;39m⠙[0m thinking[K[38;5;39m⠹[0m thinking[K[38;5;39m⠸[0m thinking[K[38;5;39m⠼[0m thinking[K[38;5;39m⠴[0m thinking[K[38;5;39m⠦[0m thinking[K[38;5;39m⠧[0m thinking[K[38;5;39m⠇[0m thinking[K[38;5;39m⠏[0m thinking[K[38;5;39m⠋[0m thinking[K[38;5;39m⠙[0m thinking[K[38;5;39m⠹[0m thinking[K[38;5;39m⠸[0m thinking[K[38;5;83m✓[0m thought for a moment[K
+
+The terminal is a grid, and every cell holds one grapheme cluster — which is why 中文 takes two columns, why 👨‍👩‍👧 is one cell and not three, and why a renderer that counted bytes would draw all of them wrong.
+
+[38;5;170mpub fn[0m [38;5;80mfeed[0m(&mut self, bytes: &[[38;5;170mu8[0m]) {
+    [38;5;245m// bytes in, damage out
+[0m}
+
+see ]8;;https://example.invalid/spec\the specification]8;;\ for why
+[38;5;245m  ⋯ running 3 checks[0m
+[2A[38;5;83m  ✓ 3 checks passed[0m[K
+[1B

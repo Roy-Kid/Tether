@@ -9,9 +9,11 @@ description = "Session orchestration and the public API a consumer imports."
 [dependencies]
 tether-terminal = { path = "../tether-terminal" }
 tether-ssh = { path = "../tether-ssh" }
+tether-local = { path = "../tether-local" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+sha1 = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

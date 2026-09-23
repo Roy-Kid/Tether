@@ -1,0 +1,70 @@
+# agent — a streaming agent interface — a spinner, and lines rewritten
+#
+# 991 bytes at 80x24. Regenerate with TETHER_BLESS=1.
+
+── after 495 of 991 bytes ──
+80x24 · cursor (2,29) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │✓ thought for a moment
+   │a
+ 1 │
+ 2 │The terminal is a grid, and e
+ 3 │
+ 4 │
+ 5 │
+ 6 │
+ 7 │
+ 8 │
+ 9 │
+10 │
+11 │
+12 │
+13 │
+14 │
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │
+    a = fg #83
+
+── at the end ──
+80x24 · cursor (12,0) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │✓ thought for a moment
+   │a
+ 1 │
+ 2 │The terminal is a grid, and every cell holds one grapheme cluster — which is why
+ 3 │ 中文 takes two columns, why 👨‍👩‍👧 is one cell and not three, and why a rendere
+ 4 │r that counted bytes would draw all of them wrong.
+ 5 │
+ 6 │pub fn feed(&mut self, bytes: &[u8]) {
+   │bbbbbb·cccc·····················bb
+ 7 │    // bytes in, damage out
+   │····ddddddddddddddddddddddd
+ 8 │}
+ 9 │
+10 │  ✓ 3 checks passed
+   │aaaaaaaaaaaaaaaaaaa
+11 │  ⋯ running 3 checks
+   │dddddddddddddddddddd
+12 │
+13 │
+14 │
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │
+    a = fg #83
+    b = fg #170
+    c = fg #80
+    d = fg #245

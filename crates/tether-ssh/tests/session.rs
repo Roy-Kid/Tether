@@ -97,6 +97,34 @@ async fn declining_is_not_an_authentication_failure() {
     }
 }
 
+/// A message with no prompts is not a question, and answering it with
+/// nothing is not declining.
+///
+/// PAM text — "your password expires in 3 days", the line a cluster prints
+/// once a code is accepted — reaches a client as an info request with no
+/// fields, and RFC 4256 still wants a reply to it. Reading that reply as a
+/// decline failed the login at the very last step, after the person had
+/// already typed their code.
+#[tokio::test]
+async fn a_message_with_no_prompts_is_answered_without_asking_anyone() {
+    let (connection, _) =
+        connect(Policy { two_factor: true, announces_before_accepting: true, ..Policy::default() })
+            .await;
+
+    let prompter = support::ScriptedPrompter::new([
+        vec![PASSWORD.to_string()],
+        vec![ONE_TIME_CODE.to_string()],
+    ]);
+
+    match connection.interactive(USER, &prompter).await.expect("exchange") {
+        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
+        other => panic!("an announcement must not fail the login, got {other:?}"),
+    }
+
+    let asked = prompter.seen.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2, "nobody is asked about a message with nothing to answer");
+}
+
 /// A wrong answer must not cost the connection: someone mistypes a code and
 /// should get another go without a fresh handshake.
 #[tokio::test]
@@ -232,6 +260,7 @@ async fn a_key_accepted_as_a_first_factor_leads_to_a_second() {
         accepts_key: Some(CLIENT_PUBLIC_KEY),
         key_is_only_the_first_factor: true,
         two_factor: false,
+        announces_before_accepting: false,
     })
     .await;
 
@@ -270,4 +299,46 @@ async fn command_channels_are_independent_of_shell_lifetime() {
     shell.close().await.unwrap();
     let mut next = session.exec("after shell closed").await.unwrap();
     assert_eq!(read_text(&mut next).await, "after shell closed");
+}
+
+/// A subsystem is a channel the server runs a named program on — `sftp` is
+/// the one files need. It carries bytes both ways, and a name the server
+/// does not offer is refused rather than silently opened as nothing.
+#[tokio::test]
+async fn a_subsystem_opens_on_the_authenticated_session() {
+    let (connection, _) = connect(Policy::default()).await;
+    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
+    let session = match connection.interactive(USER, &prompter).await.unwrap() {
+        Step::Authenticated(session) => session,
+        other => panic!("unexpected authentication: {other:?}"),
+    };
+
+    let mut sftp = session.subsystem("sftp").await.unwrap();
+    sftp.write(b"\x00\x00\x00\x05\x01\x00\x00\x00\x03".to_vec()).await.unwrap();
+    assert_eq!(read_text(&mut sftp).await, "\x00\x00\x00\x05\x01\x00\x00\x00\x03");
+
+    assert!(matches!(session.subsystem("no-such-thing").await, Err(SshError::ShellRefused { .. })));
+}
+
+/// A second terminal is another channel, not another login. The handshake
+/// already happened; asking for a password again would be the client
+/// forgetting what it is holding.
+#[tokio::test]
+async fn a_second_shell_opens_on_the_authenticated_session() {
+    let (connection, _) = connect(Policy::default()).await;
+    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
+    let session = match connection.interactive(USER, &prompter).await.unwrap() {
+        Step::Authenticated(session) => session,
+        other => panic!("unexpected authentication: {other:?}"),
+    };
+
+    let mut first = session.shell("xterm-256color", WindowSize::default()).await.unwrap();
+    let mut second = session.shell("xterm-256color", WindowSize::default()).await.unwrap();
+    assert_eq!(read_text(&mut first).await, BANNER);
+    assert_eq!(read_text(&mut second).await, BANNER);
+
+    first.write(b"one\n".to_vec()).await.unwrap();
+    second.write(b"two\n".to_vec()).await.unwrap();
+    assert_eq!(read_text(&mut first).await, "one\n");
+    assert_eq!(read_text(&mut second).await, "two\n");
 }

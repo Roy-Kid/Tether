@@ -1,5 +1,6 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tether_terminal::Position;
 use tether_tmux::{Action, Error, Snapshot, Transport, Workspace};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -128,6 +129,61 @@ async fn real_tmux_split_input_resize_detach_and_restore() {
     restored.perform(Action::ClosePane(other)).await.unwrap();
     wait(&restored, |s| s.panes.len() == 1).await;
     restored.detach();
+}
+
+/// A path printed in a pane is found in that pane, and a pane whose shell
+/// reports its directory says so — the two things pointing at output needs,
+/// the same as for a terminal of its own.
+#[tokio::test]
+async fn a_pane_names_what_its_output_points_at() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        assert!(std::env::var_os("TETHER_REQUIRE_TMUX").is_none(), "tmux is required");
+        return;
+    }
+    let server = Server(format!(
+        "tether-link-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    assert!(
+        server
+            .command(&[
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-s",
+                "test",
+                "-x",
+                "80",
+                "-y",
+                "20",
+                "sh"
+            ])
+            .status
+            .success()
+    );
+    let workspace = server.attach();
+    let pane = wait(&workspace, |s| s.panes.len() == 1).await.panes[0].info.id;
+    workspace
+        .write(pane, b"printf '\\033]7;file://h/tmp/runs\\007wrote out/pl''ot.png\\n'\r".to_vec())
+        .unwrap();
+    let snapshot = wait(&workspace, |s| {
+        s.panes[0].screen.text().lines().any(|line| line.starts_with("wrote out/plot.png"))
+    })
+    .await;
+    let row = snapshot.panes[0]
+        .screen
+        .text()
+        .lines()
+        .position(|line| line.starts_with("wrote out/plot.png"))
+        .unwrap() as u16;
+
+    let link = workspace.link_at(pane, Position::new(row, 8)).expect("a link");
+    assert_eq!(link.text, "out/plot.png");
+    assert_eq!(workspace.working_directory(pane).as_deref(), Some("/tmp/runs"));
+    assert_eq!(workspace.link_at(pane + 1000, Position::new(row, 8)), None, "no such pane");
+    workspace.detach();
 }
 
 #[test]

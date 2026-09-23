@@ -1,0 +1,83 @@
+# tmux — tmux — a terminal inside a terminal, with borders and a status line
+#
+# 8281 bytes at 80x24. Regenerate with TETHER_BLESS=1.
+
+── after 4140 of 8281 bytes ──
+80x24 · cursor (12,15) Hidden (hidden) · alt on · appkeys on · bracketed on · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │recorder:tether-corpus tether$ printf 'left pane\n'
+ 1 │left pane
+ 2 │recorder:tether-corpus tether$
+ 3 │
+ 4 │
+ 5 │
+ 6 │
+ 7 │
+ 8 │
+ 9 │
+10 │
+11 │────────────────────────────────────────┬───────────────────────────────────────
+   │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+12 │033[33mlower pane\033[0m\n'             │31
+13 │lower pane                              │32
+   │bbbbbbbbbb
+14 │recorder:tether-corpus tether$          │33
+15 │                                        │34
+16 │                                        │35
+17 │                                        │36
+18 │                                        │37
+19 │                                        │38
+20 │                                        │39
+21 │                                        │40
+22 │                                        │recorder:tether-corpus tether$
+23 │[tether] 0:bash*
+   │ccccccccccccccccdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    a = fg Green
+    b = fg Yellow
+    c = fg Black bg Green
+    d = bg Green
+
+── at the end ──
+80x24 · cursor (22,72) Block · alt on · appkeys on · bracketed on · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │recorder:tether-corpus tether$ printf '\│19
+ 1 │033[33mlower pane\033[0m\n'             │20
+ 2 │lower pane                              │21
+   │aaaaaaaaaa
+ 3 │recorder:tether-corpus tether$          │22
+ 4 │                                        │23
+ 5 │                                        │24
+ 6 │                                        │25
+ 7 │                                        │26
+ 8 │                                        │27
+ 9 │                                        │28
+10 │                                        │29
+11 │                                        │30
+12 │                                        │31
+   │········································b
+13 │                                        │32
+   │········································b
+14 │                                        │33
+   │········································b
+15 │                                        │34
+   │········································b
+16 │                                        │35
+   │········································b
+17 │                                        │36
+   │········································b
+18 │                                        │37
+   │········································b
+19 │                                        │38
+   │········································b
+20 │                                        │39
+   │········································b
+21 │                                        │40
+   │········································b
+22 │                                        │recorder:tether-corpus tether$
+   │········································b
+23 │[tether] 0:bash*
+   │ccccccccccccccccdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    a = fg Yellow
+    b = fg Green
+    c = fg Black bg Green
+    d = bg Green

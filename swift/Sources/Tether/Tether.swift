@@ -24,7 +24,7 @@ public protocol AuthPrompter: Sendable {
     func answer(instruction: String, prompts: [AuthPrompt]) async -> [String]
 }
 
-public enum TetherError: Error, Equatable, Sendable {
+public enum TetherError: Error, Equatable, Sendable, LocalizedError {
     /// The person declined, or the surrounding `Task` was cancelled.
     case cancelled
     case timedOut(millis: UInt64)
@@ -41,10 +41,53 @@ public enum TetherError: Error, Equatable, Sendable {
     /// was right is its own failure.
     case moreFactorsNeeded(remaining: [String])
     case nothingToOffer
+    /// Neither side would give us a shell. Worded for both: by this point an
+    /// application holds a session and does not care whether the shell it
+    /// asked for was going to run here or somewhere else.
     case shellRefused(cause: String)
+    /// The system does not offer this at all. iOS and a local shell is the
+    /// case it exists for — distinct from a refusal, because a refusal is
+    /// something a person might be able to fix.
+    case unsupported(what: String)
     case disconnected(cause: String)
     case sessionEnded
     case protocolFailure(cause: String)
+
+    /// Without this, SwiftUI prints `The operation couldn’t be completed.
+    /// (TetherError error 8.)` — the NSError code, not the cause. The session
+    /// tree and every other `localizedDescription` site would then hide the
+    /// only sentence that can be acted on.
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            return "Cancelled."
+        case .timedOut(let millis):
+            return "Timed out after \(millis)ms."
+        case .unreachable(_, let cause):
+            return "Could not reach the host. \(cause)"
+        case .hostRejected:
+            return "The host key was not trusted."
+        case .authenticationFailed(let remaining):
+            return remaining.isEmpty
+                ? "Authentication failed."
+                : "Authentication failed. The server accepts: \(remaining.joined(separator: ", "))."
+        case .moreFactorsNeeded(let remaining):
+            return "Another factor is needed: \(remaining.joined(separator: ", "))."
+        case .nothingToOffer:
+            return "No credentials were offered."
+        case .shellRefused(let cause):
+            return "Could not open a shell. \(cause)"
+        case .unsupported(let what):
+            return "This device does not offer \(what)."
+        case .disconnected(let cause):
+            return "The connection was lost. \(cause)"
+        case .sessionEnded:
+            return "The session has ended."
+        case .protocolFailure(let cause):
+            let cause = cause.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cause.isEmpty ? "Protocol failure." : cause
+        }
+    }
 }
 
 public enum Tether {
@@ -135,6 +178,7 @@ extension Tether {
         case .MoreFactorsNeeded(let remaining): .moreFactorsNeeded(remaining: remaining)
         case .NothingToOffer: .nothingToOffer
         case .ShellRefused(let cause): .shellRefused(cause: cause)
+        case .Unsupported(let what): .unsupported(what: what)
         case .Disconnected(let cause): .disconnected(cause: cause)
         case .SessionEnded: .sessionEnded
         case .Protocol(let cause): .protocolFailure(cause: cause)

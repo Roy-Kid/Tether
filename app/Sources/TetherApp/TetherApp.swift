@@ -1,3 +1,7 @@
+#if os(macOS)
+  import NervePlugin
+#endif
+import FilesPlugin
 import SwiftUI
 import Tether
 import TetherPluginKit
@@ -14,9 +18,17 @@ struct TetherApp: App {
     return HostStore()
   }()
   @State private var tabs = TabSet()
+  /// One keychain for the process. Passwords are read at the moment of
+  /// connecting and never held here (spec §18).
+  private let secrets: any SecretStore = Keychain()
+  @Environment(\.scenePhase) private var phase
   @State private var registry: PluginRegistry = {
     let registry = PluginRegistry()
     registry.register(TmuxPlugin())
+    registry.register(FilesPlugin())
+    #if os(macOS)
+      registry.register(NervePlugin())
+    #endif
     return registry
   }()
 
@@ -34,23 +46,16 @@ struct TetherApp: App {
       // 44×89 points, off the bottom-left corner of the screen.
       .defaultSize(width: 1100, height: 700)
       .windowResizability(.contentMinSize)
-      .windowToolbarStyle(.unified)
+      .windowStyle(.hiddenTitleBar)
       .commands {
-        CommandGroup(replacing: .newItem) {}
-        CommandGroup(replacing: .saveItem) {
-          Button("Close workspace") { if let id = tabs.selected { tabs.close(id) } }
-            .keyboardShortcut("w").disabled(tabs.selected == nil)
-        }
-        CommandGroup(after: .appInfo) {
-          ForEach(Tether.composition(), id: \.self) { part in
-            Text(part)
-          }
-        }
+        WorkspaceCommands(tabs: tabs)
       }
 
       // A separate scene, because that is where a Mac keeps preferences and
       // where ⌘, already goes.
-      Settings { AppSettings(registry: registry) }
+      Settings {
+        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets)
+      }
     #else
       // A phone has no preferences window and no menu bar; settings are
       // reached from the sidebar and presented over the app.
@@ -61,10 +66,22 @@ struct TetherApp: App {
   }
 
   private var root: some View {
-    RootView(store: store, tabs: tabs, registry: registry)
+    RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
         await Task.yield()
-        openHostNamedOnCommandLine()
+        // The command line wins. Someone who typed `--open lab` asked for a
+        // specific machine, and answering with a different one would be the
+        // app overruling them.
+        if !openHostNamedOnCommandLine() {
+          openLocalAtLaunch()
+        }
+      }
+      // The host list is `~/.ssh/config`, which belongs to the person rather
+      // than to this app: they may well have added a stanza in an editor
+      // while this was in the background. Coming back to the front is when
+      // that is worth finding out.
+      .onChange(of: phase) { _, phase in
+        if phase == .active { store.reload() }
       }
   }
 }
@@ -78,76 +95,42 @@ extension TetherApp {
   /// nowhere on a command line to put a password that would not end up in
   /// a shell history.
   @MainActor
-  func openHostNamedOnCommandLine() {
+  @discardableResult
+  func openHostNamedOnCommandLine() -> Bool {
     let arguments = CommandLine.arguments
     guard let flag = arguments.firstIndex(of: "--open"),
       let name = arguments[safe: flag + 1]
-    else { return }
+    else { return false }
 
     let wanted = name.lowercased()
+    // `listed` rather than `hosts`, so `--open localhost` reaches the machine
+    // this is running on like any other name in the sidebar does.
     guard
-      let host = store.hosts.first(where: {
+      let host = store.listed.first(where: {
         $0.label.lowercased() == wanted || $0.hostname.lowercased() == wanted
       })
-    else { return }
+    else { return false }
 
     tabs.open(host, password: "")
+    return true
+  }
+
+  /// Opens a terminal on this machine, unless someone turned that off.
+  ///
+  /// The one host that needs no password, no key and no host key to trust, so
+  /// it is the only one that can be opened without asking a person anything.
+  /// Everything else in the list would need a sheet first, which is not a
+  /// thing to do to a window that has only just appeared.
+  @MainActor
+  func openLocalAtLaunch() {
+    guard TerminalSession.isLocalAvailable,
+      UserDefaults.standard.object(forKey: LaunchPreference.key) as? Bool
+        ?? LaunchPreference.default,
+      tabs.tabs.isEmpty
+    else { return }
+
+    tabs.open(.local, password: "")
   }
 }
 
-/// The open sessions.
-@MainActor
-@Observable
-final class TabSet {
-  var tabs: [SessionTab] = []
-  var extensions: [WorkspaceEntry] = []
-  var selected: SessionTab.ID?
 
-  var current: SessionTab? {
-    tabs.first { $0.id == selected }
-  }
-
-  /// The accepted host keys, shared by every session: trust belongs to the
-  /// person and their machine, not to one tab.
-  var known = KnownHosts()
-
-  func open(_ host: Host, password: String) {
-    let tab = SessionTab(host: host, password: password, known: known)
-    tabs.append(tab)
-    selected = tab.id
-  }
-
-  func closeAll() {
-    tabs.forEach { $0.close() }
-    extensions.forEach { $0.workspace.close() }
-    tabs.removeAll()
-    extensions.removeAll()
-    selected = nil
-  }
-  func closePlugin(_ pluginID: String) {
-    for entry in extensions.filter({ $0.pluginID == pluginID }) { close(entry.id) }
-  }
-  func close(_ id: SessionTab.ID) {
-    if let index = extensions.firstIndex(where: { $0.id == id }) {
-      extensions[index].workspace.close()
-      extensions.remove(at: index)
-      if selected == id { selected = extensions.last?.id ?? tabs.last?.id }
-      return
-    }
-    guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-    tabs[index].close()
-    tabs.remove(at: index)
-
-    // Select the neighbour rather than nothing, so closing a tab in the
-    // middle of a row does not empty the window.
-    if selected == id {
-      selected = tabs[safe: index]?.id ?? tabs.last?.id ?? extensions.last?.id
-    }
-  }
-}
-
-extension Array {
-  subscript(safe index: Int) -> Element? {
-    indices.contains(index) ? self[index] : nil
-  }
-}

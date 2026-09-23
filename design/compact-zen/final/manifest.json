@@ -1,0 +1,130 @@
+[
+  {
+    "key": "01-shell",
+    "name": "01 \u00b7 Ordinary terminal",
+    "file": "01-shell.svg",
+    "x": 0,
+    "y": 0,
+    "figmaNodeId": "10:2"
+  },
+  {
+    "key": "02-tmux",
+    "name": "02 \u00b7 tmux workspace",
+    "file": "02-tmux.svg",
+    "x": 1240,
+    "y": 0,
+    "figmaNodeId": "10:60"
+  },
+  {
+    "key": "03-session-tree",
+    "name": "03 \u00b7 Tab session tree",
+    "file": "03-session-tree.svg",
+    "x": 2480,
+    "y": 0,
+    "figmaNodeId": "10:111"
+  },
+  {
+    "key": "04-host",
+    "name": "04 \u00b7 Host switcher",
+    "file": "04-host.svg",
+    "x": 3720,
+    "y": 0,
+    "figmaNodeId": "10:189"
+  },
+  {
+    "key": "05-quick-switch",
+    "name": "05 \u00b7 Quick switch \u00b7 \u2318P",
+    "file": "05-quick-switch.svg",
+    "x": 0,
+    "y": 920,
+    "figmaNodeId": "10:257"
+  },
+  {
+    "key": "06-command",
+    "name": "06 \u00b7 Command menu \u00b7 Ctrl\u21e7P",
+    "file": "06-command.svg",
+    "x": 1240,
+    "y": 920,
+    "figmaNodeId": "10:321"
+  },
+  {
+    "key": "07-native-menu",
+    "name": "07 \u00b7 macOS menu bar",
+    "file": "07-native-menu.svg",
+    "x": 2480,
+    "y": 920,
+    "figmaNodeId": "10:391"
+  },
+  {
+    "key": "08-zen",
+    "name": "08 \u00b7 Zen Mode \u00b7 \u2318\u21e7Z",
+    "file": "08-zen.svg",
+    "x": 3720,
+    "y": 920,
+    "figmaNodeId": "10:480"
+  },
+  {
+    "key": "09-recovery",
+    "name": "09 \u00b7 Disconnected / recovery",
+    "file": "09-recovery.svg",
+    "x": 0,
+    "y": 1840,
+    "figmaNodeId": "10:534"
+  },
+  {
+    "key": "10-close",
+    "name": "10 \u00b7 Close workspace confirmation",
+    "file": "10-close.svg",
+    "x": 1240,
+    "y": 1840,
+    "figmaNodeId": "10:590"
+  },
+  {
+    "key": "11-empty",
+    "name": "11 \u00b7 No open terminals",
+    "file": "11-empty.svg",
+    "x": 2480,
+    "y": 1840,
+    "figmaNodeId": "10:651"
+  },
+  {
+    "key": "12-hosts",
+    "name": "12 \u00b7 Manage hosts",
+    "file": "12-hosts.svg",
+    "x": 3720,
+    "y": 1840,
+    "figmaNodeId": "10:715"
+  },
+  {
+    "key": "13-connect",
+    "name": "13 \u00b7 Connect / authenticate",
+    "file": "13-connect.svg",
+    "x": 0,
+    "y": 2760,
+    "figmaNodeId": "10:799"
+  },
+  {
+    "key": "14-new-session",
+    "name": "14 \u00b7 Create tmux session",
+    "file": "14-new-session.svg",
+    "x": 1240,
+    "y": 2760,
+    "figmaNodeId": "10:873"
+  },
+  {
+    "key": "15-settings",
+    "name": "15 \u00b7 Settings \u00b7 \u2318,",
+    "file": "15-settings.svg",
+    "x": 2480,
+    "y": 2760,
+    "figmaNodeId": "10:944"
+  },
+  {
+    "key": "16-inspector",
+    "name": "16 \u00b7 Inspector \u00b7 View menu",
+    "file": "16-inspector.svg",
+    "x": 3720,
+    "y": 2760,
+    "figmaNodeId": "13:2"
+  }
+]

@@ -7,8 +7,9 @@
 
 use std::sync::Arc;
 
+use tether_core::local_shell::Command;
 use tether_core::terminal::{Options, ScreenSize, Scroll};
-use tether_core::{Credential, Dial, Ending, TerminalSession};
+use tether_core::{Credential, Dial, Ending, Local, SshClient, TerminalSession};
 
 use crate::input::{Resolved, TerminalInput};
 use crate::screen::ScreenFrame;
@@ -76,7 +77,9 @@ impl tether_core::ssh::Prompter for ForeignPrompter {
         let answers = self.0.answer(challenge.instruction.clone(), prompts).await;
 
         // An empty vector is how the foreign side says "the person declined".
-        // Declining is a decision, not a rejected credential (spec §10).
+        // Declining is a decision, not a rejected credential (spec §10). It
+        // can only mean that: a round with nothing to answer never reaches a
+        // prompter.
         if answers.is_empty() { None } else { Some(answers) }
     }
 }
@@ -172,6 +175,102 @@ pub async fn connect_cancellable(
     }
 }
 
+/// Where a shell on this machine starts, and what it should believe it is
+/// running on.
+///
+/// No host, no user and no credential, and that absence is the design rather
+/// than an omission: there is no handshake with the machine the application
+/// is already running on. What comes back is the same [`Session`] a remote
+/// connection returns, so nothing above this point has two paths to maintain.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct LocalShell {
+    /// Where the shell starts. The person's home directory when absent,
+    /// which is what a shell would have chosen anyway.
+    pub directory: Option<String>,
+    /// What the shell will see in `$TERM`. It decides which sequences
+    /// programs emit, so it must describe what this frontend can actually
+    /// draw.
+    pub term: String,
+    pub columns: u16,
+    pub rows: u16,
+    pub scrollback_lines: u32,
+}
+
+/// Whether this platform lets an application start a shell.
+///
+/// A question, so a consumer can leave the feature out of its interface
+/// rather than offer one that always refuses. iOS answers `false`: there is
+/// no `fork`/`exec` outside the sandbox, and that is the system's decision,
+/// not a setting.
+#[uniffi::export]
+pub fn local_shell_available() -> bool {
+    tether_core::local_shell::is_available()
+}
+
+/// Opens a shell on this machine.
+///
+/// `async` although nothing here waits on a network: the session it returns
+/// spawns a pump task, and `async_runtime = "tokio"` is what puts this call
+/// inside a runtime that has one. Without it UniFFI polls on its own
+/// executor, where there is no reactor, and the failure reaches a consumer as
+/// an opaque `rustPanic`.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> {
+    let size = ScreenSize::new(shell.columns, shell.rows);
+
+    let mut local = Local::running(Command::login_shell())
+        .term(shell.term)
+        .size(size)
+        .options(Options { scrollback_lines: shell.scrollback_lines as usize });
+
+    // An empty string is how a record with no optionality left would say
+    // "unset", and honouring it as a path would start every shell in `/`.
+    if let Some(directory) = shell.directory.filter(|path| !path.is_empty()) {
+        local = local.directory(directory);
+    }
+
+    Ok(Arc::new(Session { inner: local.open().await? }))
+}
+
+/// Whether `ssh -O check` says a multiplexing master is already running
+/// for this config alias.
+///
+/// A live master is a handshake that has already been spent. The
+/// application attaches through OpenSSH instead of offering credentials
+/// again (Decisions/0010).
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn ssh_master_running(target: String) -> bool {
+    SshClient::new(target).master_running().await
+}
+
+/// Opens a shell by asking the OpenSSH client, typically a ControlMaster.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn connect_over_ssh_client(
+    target: String,
+    shell: LocalShell,
+) -> Result<Arc<Session>, TetherError> {
+    let size = ScreenSize::new(shell.columns, shell.rows);
+    let session = SshClient::new(target)
+        .connect(shell.term, size, Options { scrollback_lines: shell.scrollback_lines as usize })
+        .await
+        .map_err(|error| TetherError::ShellRefused { cause: error.cause })?;
+    Ok(Arc::new(Session { inner: session }))
+}
+
+/// Cancellation-aware attach; the original remains source compatible.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn connect_over_ssh_client_cancellable(
+    target: String,
+    shell: LocalShell,
+    cancellation: Arc<crate::CancellationToken>,
+) -> Result<Arc<Session>, TetherError> {
+    tokio::select! {
+        biased;
+        _ = cancellation.inner.cancelled() => Err(TetherError::Cancelled),
+        result = connect_over_ssh_client(target, shell) => result,
+    }
+}
+
 /// Where to put the viewport over the scrollback.
 ///
 /// Named by intent, not by line arithmetic: how much a page is depends on the
@@ -197,10 +296,60 @@ pub enum SessionEnding {
     Lost { cause: String },
 }
 
+/// One colour, as the far side will be told it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ColorValue {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+/// What a consumer draws with, for the questions the far side asks.
+///
+/// Not the screen: cells still report colour *names*, and what `red` looks
+/// like stays the consumer's business (spec §12). This is the answer to
+/// `OSC 11 ; ?` — "what is your background?" — which only whoever draws can
+/// give. A program that asks and hears nothing assumes the terminal is dark
+/// and paints its own theme over every cell, which is how a light window
+/// ends up black.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TerminalPalette {
+    pub foreground: ColorValue,
+    pub background: ColorValue,
+    pub cursor: ColorValue,
+    /// The sixteen ANSI colours: eight normal, then eight bright. Any other
+    /// length is refused rather than padded — a palette that is not sixteen
+    /// colours is a mistake on the consumer's side, not a default.
+    pub ansi: Vec<ColorValue>,
+}
+
+impl TerminalPalette {
+    fn resolve(self) -> Result<tether_core::terminal::Palette, TetherError> {
+        use tether_core::terminal::Rgb;
+        let ansi: Vec<Rgb> =
+            self.ansi.into_iter().map(|c| Rgb::new(c.red, c.green, c.blue)).collect();
+        let ansi: [Rgb; 16] = ansi.try_into().map_err(|_| TetherError::Protocol {
+            cause: "A palette needs sixteen ANSI colours".into(),
+        })?;
+        Ok(tether_core::terminal::Palette {
+            foreground: Rgb::new(self.foreground.red, self.foreground.green, self.foreground.blue),
+            background: Rgb::new(self.background.red, self.background.green, self.background.blue),
+            cursor: Rgb::new(self.cursor.red, self.cursor.green, self.cursor.blue),
+            ansi,
+        })
+    }
+}
+
 /// A live terminal session.
 #[derive(uniffi::Object)]
 pub struct Session {
     inner: TerminalSession,
+}
+
+impl Session {
+    pub(crate) fn wrap(inner: TerminalSession) -> Arc<Self> {
+        Arc::new(Self { inner })
+    }
 }
 
 /// Tokio again, for the same reason: `await_change` parks on a watch channel
@@ -211,9 +360,33 @@ impl Session {
         self.inner.connection().map(|inner| Arc::new(crate::RemoteConnection { inner }))
     }
 
+    /// Tells the engine what this consumer draws with, so that a program
+    /// asking for a colour is answered.
+    ///
+    /// Settable at any time: a person switching their window to light is the
+    /// same question being asked again. `None` goes back to saying nothing.
+    pub fn set_palette(&self, palette: Option<TerminalPalette>) -> Result<(), TetherError> {
+        let resolved = palette.map(TerminalPalette::resolve).transpose()?;
+        self.inner.set_palette(resolved);
+        Ok(())
+    }
+
     /// Everything needed to draw the screen once.
     pub fn frame(&self) -> ScreenFrame {
         ScreenFrame::of(&self.inner.screen(), self.inner.title())
+    }
+
+    /// What the text at a cell names, if anything, and where it is drawn.
+    /// Asked when a person points, not every frame.
+    pub fn link_at(&self, row: u16, column: u16) -> Option<crate::TerminalLink> {
+        self.inner
+            .link_at(tether_core::terminal::Position::new(row, column))
+            .map(crate::TerminalLink::from)
+    }
+
+    /// The directory the shell last reported, if it reports one.
+    pub fn working_directory(&self) -> Option<String> {
+        self.inner.working_directory()
     }
 
     /// Waits until the screen changed, returning `false` once the session has

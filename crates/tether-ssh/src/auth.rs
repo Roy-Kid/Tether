@@ -35,6 +35,10 @@ pub trait Prompter: Send + Sync {
     /// One answer per prompt, in order. Returning `None` abandons the
     /// exchange — the person declined, which is not an authentication
     /// failure and must not be reported as one.
+    ///
+    /// A challenge always carries at least one prompt. A round with none is
+    /// the server talking rather than asking, and is answered without anyone
+    /// being disturbed.
     async fn answer(&self, challenge: &Challenge) -> Option<Vec<String>>;
 }
 

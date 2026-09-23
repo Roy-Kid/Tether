@@ -27,6 +27,9 @@ public typealias CellColor = TetherFFIBindings.CellColor
 public typealias ColorName = TetherFFIBindings.ColorName
 public typealias UnderlineStyle = TetherFFIBindings.UnderlineStyle
 public typealias CaretShape = TetherFFIBindings.CaretShape
+public typealias TerminalLink = TetherFFIBindings.TerminalLink
+public typealias LinkKind = TetherFFIBindings.LinkKind
+public typealias LinkSpan = TetherFFIBindings.LinkSpan
 
 // MARK: - Input
 
@@ -68,6 +71,46 @@ public enum TerminalInput: Sendable, Equatable {
   case paste(String)
 }
 
+// MARK: - Colours
+
+/// One colour, as the far side will be told it.
+public struct TerminalColor: Sendable, Equatable {
+  public var red: UInt8
+  public var green: UInt8
+  public var blue: UInt8
+
+  public init(red: UInt8, green: UInt8, blue: UInt8) {
+    self.red = red
+    self.green = green
+    self.blue = blue
+  }
+}
+
+/// What an application draws with, for the questions the far side asks.
+///
+/// Not the screen — see [`TerminalSession.setPalette(_:)`]. The sixteen ANSI
+/// colours are a fixed-size list because that is what they are; a palette of
+/// some other length is refused rather than padded with colours nobody chose.
+public struct TerminalPalette: Sendable, Equatable {
+  public var foreground: TerminalColor
+  public var background: TerminalColor
+  public var cursor: TerminalColor
+  /// Eight normal, then eight bright.
+  public var ansi: [TerminalColor]
+
+  public init(
+    foreground: TerminalColor,
+    background: TerminalColor,
+    cursor: TerminalColor,
+    ansi: [TerminalColor]
+  ) {
+    self.foreground = foreground
+    self.background = background
+    self.cursor = cursor
+    self.ansi = ansi
+  }
+}
+
 /// Where to put the viewport over the scrollback.
 ///
 /// Named by intent rather than by line arithmetic: how much a page is depends
@@ -93,6 +136,20 @@ public struct HostIdentity: Sendable, Equatable {
   /// The `SHA256:…` form a person compares against what their
   /// administrator published.
   public let fingerprint: String
+
+  /// Public because a consumer has to be able to make one.
+  ///
+  /// `HostTrust` is where an application decides whether to talk to a
+  /// machine, and that decision is exactly the kind a person writes tests
+  /// for — "a key that changed must be refused" is not something to find out
+  /// in production. A memberwise initialiser is internal by default, which
+  /// would leave every consumer unable to exercise its own trust policy.
+  public init(host: String, port: UInt16, algorithm: String, fingerprint: String) {
+    self.host = host
+    self.port = port
+    self.algorithm = algorithm
+    self.fingerprint = fingerprint
+  }
 }
 
 /// Decides whether a host may be talked to.
@@ -145,6 +202,40 @@ public struct Destination: Sendable {
   }
 }
 
+/// Where a shell on this machine starts, and what it should believe it is
+/// running on.
+///
+/// There is no host, no user and no credential here, and that absence is the
+/// design: there is no handshake with the machine the application is already
+/// running on. What [`TerminalSession.local`] returns is the same type
+/// [`TerminalSession.connect`] returns, so a frontend has one kind of session
+/// to draw and not two.
+public struct LocalShell: Sendable {
+  /// Where the shell starts. The person's home directory when `nil`, which
+  /// is what a shell would have chosen anyway.
+  public var directory: String?
+  /// What the shell will see in `$TERM`. It decides which sequences programs
+  /// emit, so it must describe what this frontend can actually draw.
+  public var term: String
+  public var columns: UInt16
+  public var rows: UInt16
+  public var scrollbackLines: UInt32
+
+  public init(
+    directory: String? = nil,
+    term: String = "xterm-256color",
+    columns: UInt16 = 80,
+    rows: UInt16 = 24,
+    scrollbackLines: UInt32 = 10_000
+  ) {
+    self.directory = directory
+    self.term = term
+    self.columns = columns
+    self.rows = rows
+    self.scrollbackLines = scrollbackLines
+  }
+}
+
 /// Why a session stopped.
 public enum SessionEnding: Sendable, Equatable {
   /// The remote shell exited with this status.
@@ -165,7 +256,7 @@ public enum SessionEnding: Sendable, Equatable {
 public final class TerminalSession: Sendable {
   private let inner: TetherFFIBindings.Session
 
-  fileprivate init(_ inner: TetherFFIBindings.Session) {
+  init(_ inner: TetherFFIBindings.Session) {
     self.inner = inner
   }
 
@@ -201,8 +292,122 @@ public final class TerminalSession: Sendable {
     }
   }
 
+  /// Opens a shell on this machine.
+  ///
+  /// Not a different kind of session: what comes back reads, types, scrolls,
+  /// resizes and ends exactly like one that crossed a network, because it is
+  /// the same type over a different byte stream. A frontend that can draw one
+  /// can draw the other without knowing which it holds.
+  public static func local(_ shell: LocalShell = LocalShell()) async throws -> TerminalSession {
+    let session = try await Tether.mapped {
+      try await TetherFFIBindings.openLocal(
+        shell: TetherFFIBindings.LocalShell(
+          directory: shell.directory,
+          term: shell.term,
+          columns: shell.columns,
+          rows: shell.rows,
+          scrollbackLines: shell.scrollbackLines))
+    }
+    return TerminalSession(session)
+  }
+
+  /// Whether this platform lets an application start a shell.
+  ///
+  /// A question rather than a failure, so an application can leave the
+  /// feature out of its interface instead of offering one that always
+  /// refuses. iOS answers `false`: there is no `fork`/`exec` outside the
+  /// sandbox, and that is the system's decision rather than a setting.
+  public static var isLocalAvailable: Bool {
+    TetherFFIBindings.localShellAvailable()
+  }
+
+  /// Whether OpenSSH already has a multiplexing master for this config alias.
+  ///
+  /// A live master is a handshake that has already been spent. Attaching
+  /// through [`connectOverSsh`] reuses it instead of asking for credentials
+  /// again.
+  public static func sshMasterIsRunning(_ target: String) async -> Bool {
+    await TetherFFIBindings.sshMasterRunning(target: target)
+  }
+
+  /// Opens a shell by asking the OpenSSH client, typically a ControlMaster.
+  ///
+  /// The target is the stanza name (`Arrhenius`), which is the name `ssh`
+  /// takes. No host key is asked about and no credential is offered: those
+  /// were spent getting the master.
+  public static func connectOverSsh(
+    _ target: String,
+    term: String = "xterm-256color",
+    columns: UInt16 = 80,
+    rows: UInt16 = 24,
+    scrollbackLines: UInt32 = 10_000
+  ) async throws -> TerminalSession {
+    let token = TetherFFIBindings.CancellationToken()
+    return try await withTaskCancellationHandler {
+      try Task.checkCancellation()
+      let session = try await Tether.mapped {
+        try await TetherFFIBindings.connectOverSshClientCancellable(
+          target: target,
+          shell: TetherFFIBindings.LocalShell(
+            directory: nil,
+            term: term,
+            columns: columns,
+            rows: rows,
+            scrollbackLines: scrollbackLines),
+          cancellation: token)
+      }
+      if Task.isCancelled {
+        session.close()
+        throw CancellationError()
+      }
+      return TerminalSession(session)
+    } onCancel: {
+      token.cancel()
+    }
+  }
+
+  /// A lease on whatever can run a second command where this session's shell
+  /// is running.
+  ///
+  /// Present for both kinds of session, and that is the point: over SSH it is
+  /// another channel on the authenticated connection, and on this machine it
+  /// is another process. A feature that needs one — a tmux workspace is the
+  /// one that exists — is written against this and works on both.
+  ///
+  /// Still optional, because asking is how a frontend finds out rather than
+  /// by knowing what it is holding.
   public var connection: RemoteConnection? {
     inner.connection().map(RemoteConnection.init)
+  }
+
+  /// Tells the engine what this application draws with.
+  ///
+  /// Only used to answer the far side's colour queries. `OSC 11 ; ?` asks
+  /// "what is your background?", and a program that hears nothing falls back
+  /// to assuming a dark terminal — then paints its own dark theme over every
+  /// cell, which no palette on this side can undo, because those cells now
+  /// carry explicit colours.
+  ///
+  /// The screen itself is unchanged: cells still report colour *names*, and
+  /// what `red` looks like is still this application's business (spec §12).
+  /// Settable at any time — a person switching their window to light is the
+  /// same question being asked again.
+  public func setPalette(_ palette: TerminalPalette?) throws {
+    try Tether.mappedSync {
+      try inner.setPalette(palette: palette.map(bridged))
+    }
+  }
+
+  /// What the text at a cell names — a hyperlink a program attached, a web
+  /// address, or something shaped like a path — and where it is drawn, so
+  /// it can be underlined. Shape, not truth: a path has not been checked.
+  public func link(atRow row: UInt16, column: UInt16) -> TerminalLink? {
+    inner.linkAt(row: row, column: column)
+  }
+
+  /// The directory the shell last reported (`OSC 7`), if it reports one.
+  public var workingDirectory: String? {
+    inner.workingDirectory()
   }
 
   /// Everything needed to draw the screen once.
@@ -279,6 +484,17 @@ private func secret(_ credential: Credential) -> TetherFFIBindings.Secret {
   case .interactive(let prompter):
     .interactive(prompter: PrompterBridge(prompter))
   }
+}
+
+private func bridged(_ palette: TerminalPalette) -> TetherFFIBindings.TerminalPalette {
+  func colour(_ value: TerminalColor) -> TetherFFIBindings.ColorValue {
+    TetherFFIBindings.ColorValue(red: value.red, green: value.green, blue: value.blue)
+  }
+  return TetherFFIBindings.TerminalPalette(
+    foreground: colour(palette.foreground),
+    background: colour(palette.background),
+    cursor: colour(palette.cursor),
+    ansi: palette.ansi.map(colour))
 }
 
 func bridged(_ input: TerminalInput) -> TetherFFIBindings.TerminalInput {

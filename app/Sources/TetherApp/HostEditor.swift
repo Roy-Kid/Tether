@@ -1,102 +1,147 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import TetherUI
 
 /// Adding or changing a saved host.
+///
+/// Laid out like a connection editor, not a settings page: address first,
+/// then who you are, then the secret. Password is typed here and kept; the
+/// connect sheet is only for hosts that still have none.
 struct HostEditor: View {
-  @State var host: Host
-  let onSave: (Host) -> Void
+  private enum Authentication: Hashable {
+    case password, key
+  }
+
+  @State private var host: Host
+  @State private var password: String
+  let onSave: (Host, String?) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @State private var picking = false
+  @State private var authentication: Authentication
 
   private var isNew: Bool { host.hostname.isEmpty && host.label.isEmpty }
 
   private var canSave: Bool {
     !host.hostname.trimmingCharacters(in: .whitespaces).isEmpty
       && !host.username.trimmingCharacters(in: .whitespaces).isEmpty
+      && (authentication == .password || host.offersConfiguredKey)
+  }
+
+  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Void) {
+    self.onSave = onSave
+    _host = State(initialValue: host)
+    _password = State(initialValue: password)
+    _authentication = State(initialValue: host.offersConfiguredKey ? .key : .password)
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(isNew ? "New host" : "Edit host")
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(Theme.text)
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Address", text: $host.hostname, prompt: Text("hostname or IP"))
+            .hostFieldKeyboard()
+            #if os(iOS)
+              .keyboardType(.URL)
+              .textContentType(.URL)
+            #endif
+          TextField("Label", text: $host.label)
+            .hostFieldKeyboard()
+          TextField("Port", text: portText)
+            #if os(iOS)
+              .keyboardType(.numberPad)
+            #endif
+        }
 
-      Field(
-        label: "Name",
-        text: $host.label,
-        placeholder: host.hostname.isEmpty ? "Lab workstation" : host.hostname)
-
-      HStack(spacing: 10) {
-        Field(label: "Address", text: $host.hostname, placeholder: "10.0.0.4")
-        Field(label: "Port", text: portText).frame(width: 74)
-      }
-
-      Field(label: "User", text: $host.username)
-
-      VStack(alignment: .leading, spacing: 5) {
-        Text("Private key")
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(Theme.subtle)
-
-        HStack(spacing: 8) {
-          Text(host.keyPath.map(shorten) ?? "None")
-            .font(.system(size: 12, design: host.keyPath == nil ? .default : .monospaced))
-            .foregroundStyle(host.keyPath == nil ? Theme.subtle : Theme.text)
-            .lineLimit(1)
-            .truncationMode(.head)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-          if host.keyPath != nil {
-            Button("Clear") { host.keyPath = nil }
-              .buttonStyle(.plain)
-              .font(.system(size: 12))
-              .foregroundStyle(Theme.subtle)
+        Section {
+          TextField("Username", text: $host.username)
+            .hostFieldKeyboard()
+            #if os(iOS)
+              .textContentType(.username)
+            #endif
+          Picker("Authentication", selection: $authentication) {
+            Text("Password").tag(Authentication.password)
+            Text("Key").tag(Authentication.key)
           }
+          .pickerStyle(.segmented)
 
-          Button("Choose\u{2026}") { picking = true }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Theme.accent)
+          if authentication == .password {
+            // A row of its own. Nesting `SecureField` in an `HStack` inside a
+            // `Form` is how iOS ends up with a password row that will not
+            // take focus or open the keyboard.
+            SecureField("Password", text: $password)
+              #if os(iOS)
+                .textContentType(.password)
+              #endif
+          } else {
+            Button {
+              picking = true
+            } label: {
+              LabeledContent("Key") {
+                Text(host.keyPath.map(shorten) ?? "Choose…")
+                  .foregroundStyle(.secondary)
+                  .adaptiveRowText()
+                  .truncationMode(.head)
+              }
+            }
+            .foregroundStyle(.primary)
+            if host.keyPath != nil {
+              Button("Clear Key", role: .destructive) { host.keyPath = nil }
+            }
+          }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.stroke, lineWidth: 1))
       }
-
-      Text("Only connection details are saved. Passwords are requested when you connect.")
-        .font(.system(size: 11))
-        .foregroundStyle(Theme.subtle)
-        .fixedSize(horizontal: false, vertical: true)
-
-      HStack {
-        Button("Cancel") { dismiss() }
-          .buttonStyle(QuietButton())
-          .keyboardShortcut(.cancelAction)
-        Spacer()
-        Button(isNew ? "Add host" : "Save") {
-          var saved = host
-          saved.label =
-            host.label.trimmingCharacters(in: .whitespaces).isEmpty
-            ? host.hostname : host.label
-          onSave(saved)
-          dismiss()
+      .formStyle(.grouped)
+      #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+      #endif
+      .onChange(of: authentication) { _, value in
+        if value == .password {
+          host.keyPath = nil
+        } else {
+          password = ""
         }
-        .buttonStyle(FilledButton())
-        .disabled(!canSave)
-        .keyboardShortcut(.defaultAction)
       }
+      .navigationTitle(isNew ? "New Host" : "Edit Host")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+            .keyboardShortcut(.cancelAction)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Save") { commit() }
+            .disabled(!canSave)
+            .keyboardShortcut(.defaultAction)
+        }
+      }
+      .fileImporter(
+        isPresented: $picking,
+        allowedContentTypes: [.data],
+        allowsMultipleSelection: false,
+        onCompletion: adoptKey)
+      #if os(macOS)
+        .fileDialogDefaultDirectory(
+          URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appending(path: ".ssh"))
+      #endif
     }
-    .fileImporter(
-      isPresented: $picking,
-      allowedContentTypes: [.data],
-      allowsMultipleSelection: false,
-      onCompletion: adoptKey)
-    .padding(24)
-    .frame(width: 400)
-    .background(Theme.sidebar)
+    #if os(macOS)
+      .frame(minWidth: 440, minHeight: 480)
+    #endif
+  }
 
+  private func commit() {
+    var saved = host
+    if authentication == .password {
+      saved.keyPath = nil
+    }
+    saved.label =
+      host.label.trimmingCharacters(in: .whitespaces).isEmpty
+      ? host.hostname : host.label
+    onSave(saved, authentication == .password ? password : "")
+    dismiss()
   }
 
   /// `~/.ssh/id_ed25519` reads better than the whole path, and the whole
@@ -124,7 +169,30 @@ struct HostEditor: View {
     let reachable = url.startAccessingSecurityScopedResource()
     defer { if reachable { url.stopAccessingSecurityScopedResource() } }
 
-    host.keyPath = url.path
+    host.keyPath = persistIdentity(url) ?? url.path
+  }
+
+  /// Copies a picked key into `~/.ssh` so connect-time reads do not depend
+  /// on a security-scoped URL that dies at the end of this call. On a phone
+  /// that is the difference between offering publickey and failing with
+  /// "the server still wants publickey, keyboard-interactive".
+  private func persistIdentity(_ url: URL) -> String? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+      .appending(path: ".ssh", directoryHint: .isDirectory)
+    try? FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    let name = url.lastPathComponent.isEmpty ? "id_key" : url.lastPathComponent
+    let destination = directory.appending(path: name)
+    do {
+      try data.write(to: destination, options: .atomic)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600], ofItemAtPath: destination.path)
+    } catch {
+      return nil
+    }
+    return contractingHome(destination.path)
   }
 
   /// The port as text, so an empty field is possible while typing.
@@ -138,60 +206,72 @@ struct HostEditor: View {
   }
 }
 
+private extension View {
+  /// Host names, aliases and users are typed as written. The phone keyboard
+  /// otherwise capitalises the first letter of an address and offers to
+  /// correct `hpc` into a word.
+  func hostFieldKeyboard() -> some View {
+    #if os(iOS)
+      self.textInputAutocapitalization(.never).autocorrectionDisabled()
+    #else
+      self
+    #endif
+  }
+}
+
 /// Asks for the credential, once, at the moment of connecting.
+///
+/// Hosts that already have a password in the keychain, or a key, skip this.
 struct ConnectSheet: View {
   let host: Host
-  let onConnect: (String) -> Void
+  let remembered: String?
+  let onConnect: (_ password: String, _ remember: Bool) -> Void
 
-  @State private var password = ""
+  @State private var password: String
+  @State private var remember: Bool
   @Environment(\.dismiss) private var dismiss
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      HStack(spacing: 10) {
-        RoundedRectangle(cornerRadius: 7)
-          .fill(Theme.tile(for: host.label.isEmpty ? host.hostname : host.label))
-          .frame(width: 34, height: 34)
-          .overlay(
-            Text(host.initial)
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.white))
+  init(host: Host, remembered: String? = nil, onConnect: @escaping (String, Bool) -> Void) {
+    self.host = host
+    self.remembered = remembered
+    self.onConnect = onConnect
+    _password = State(initialValue: remembered ?? "")
+    _remember = State(initialValue: remembered != nil)
+  }
 
-        VStack(alignment: .leading, spacing: 1) {
-          Text(host.label.isEmpty ? host.hostname : host.label)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Theme.text)
-          Text(host.address)
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.subtle)
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          SecureField("Password", text: $password)
+            #if os(iOS)
+              .textContentType(.password)
+            #endif
+          Toggle("Remember password", isOn: $remember)
+            .disabled(password.isEmpty)
         }
       }
-
-      Field(label: "Password", text: $password, secure: true)
-
-      Text(
-        "Leave it empty and the server will ask instead — which is what a host wanting a one-time code will do."
-      )
-      .font(.system(size: 11))
-      .foregroundStyle(Theme.subtle)
-      .fixedSize(horizontal: false, vertical: true)
-
-      HStack {
-        Button("Cancel") { dismiss() }
-          .buttonStyle(QuietButton())
-          .keyboardShortcut(.cancelAction)
-        Spacer()
-        Button("Connect") {
-          onConnect(password)
-          dismiss()
+      .formStyle(.grouped)
+      .navigationTitle(host.label.isEmpty ? host.hostname : host.label)
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+            .keyboardShortcut(.cancelAction)
         }
-        .buttonStyle(FilledButton())
-        .keyboardShortcut(.defaultAction)
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Connect") {
+            onConnect(password, remember && !password.isEmpty)
+            dismiss()
+          }
+          .keyboardShortcut(.defaultAction)
+        }
       }
     }
-    .padding(24)
-    .frame(width: 380)
-    .background(Theme.sidebar)
-
+    #if os(macOS)
+      .frame(minWidth: 380, minHeight: 240)
+    #endif
   }
 }

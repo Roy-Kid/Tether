@@ -1,0 +1,55 @@
+@%begin 1789718593 279 0
+%end 1789718593 279 0
+%window-add @0
+%sessions-changed
+%session-changed $0 seed
+%output %0 \033[1m\033[7m%\033[27m\033[1m\033[0m                                                                               \015 \015\015\033[0m\033[27m\033[24m\033[Jtether@recorder Tether % \033[K\033[?2004h
+send-keys -t %0 "printf 'hello \033[31mworld\033[0m\n'" Enter
+%begin 1789718594 285 1
+%end 1789718594 285 1
+%output %0 p
+%output %0 \010prin
+%output %0 tf 
+%output %0 'h
+%output %0 ell
+%output %0 o 
+%output %0 \007
+%output %0 mw
+%output %0 or
+%output %0 ld
+%output %0 \007m
+%output %0 \033[
+%output %0 ?2
+%output %0 00
+%output %0 4l\015\015
+%output %0 \012
+%output %0 \015\033
+%output %0 [
+%output %0 0m\033[27m\033[24m\033[Jquote> \033[K\033[?2004h'\033[?2004l\015\015\012
+%output %0 hello mworldm\015\012
+%output %0 \033[1m\033[7m%\033[27m\033[1m\033[0m                                                                               \015 \015
+%output %0 \015\033[0m\033[27m\033[24m\033[Jtether@recorder Tether % \033[K\033[?2004h
+split-window
+%begin 1789718595 288 1
+%end 1789718595 288 1
+%window-pane-changed @0 %1
+%layout-change @0 c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1] c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1] *
+%window-renamed @0 tmux
+%output %0 \015\015\033[0m\033[27m\033[24m\033[Jtether@recorder Tether % 
+%output %1 \033[1m\033[7m%\033[27m\033[1m\033[0m                                                                               \015 \015
+%output %1 \015\033[0m\033[27m\033[24m\033[Jtether@recorder Tether % \033[K\033[?2004h
+list-panes
+%window-renamed @0 zsh
+%begin 1789718595 293 1
+0: [80x12] [history 1/2000, 1720 bytes] %0
+1: [80x11] [history 1/2000, 1080 bytes] %1 (active)
+%end 1789718595 293 1
+display-message -p "#{window_layout}"
+%begin 1789718596 294 1
+c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1]
+%end 1789718596 294 1
+kill-session
+%begin 1789718597 295 1
+%end 1789718597 295 1
+%sessions-changed
+%exit

@@ -5,7 +5,7 @@ let package = Package(name: "TetherFrontend", platforms: [.macOS(.v26), .iOS(.v2
     .library(name: "TetherPluginKit", targets: ["TetherPluginKit"])
 ], dependencies: [.package(path: "../../../swift")], targets: [
     .target(name: "TetherUI", dependencies: [.product(name: "Tether", package: "swift")]),
-    .target(name: "TetherPluginKit", dependencies: [.product(name: "Tether", package: "swift")]),
+    .target(name: "TetherPluginKit", dependencies: ["TetherUI", .product(name: "Tether", package: "swift")]),
     .testTarget(name: "TetherPluginKitTests", dependencies: ["TetherPluginKit"]),
     .testTarget(name: "TetherUITests", dependencies: ["TetherUI"])
 ])

@@ -80,7 +80,14 @@ pub struct CellStyle {
     pub hidden: bool,
 }
 
-/// A stretch of text on one row that looks the same all the way along.
+/// A stretch of text on one row that looks the same all the way along, every
+/// character of it covering the same number of columns.
+///
+/// Uniform width is part of the contract, not an accident of the data. A
+/// frontend draws a run as one string and has to space that string to the
+/// grid; it can only do that from `columns / characters`, which is a whole
+/// number of columns per character exactly when the run does not mix widths.
+/// So a row breaks where the width changes, as well as where the style does.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct StyledRun {
     pub text: String,
@@ -140,20 +147,25 @@ impl ScreenFrame {
     }
 }
 
-/// Collapses a row's cells into runs of identical style.
+/// Collapses a row's cells into runs of identical style and identical width.
 fn row_of(cells: &[tether_core::terminal::Cell]) -> ScreenRow {
     let mut runs: Vec<StyledRun> = Vec::new();
+    // The width the run being built is made of. A wide character next to a
+    // narrow one starts a new run even in the same style, because a run is
+    // what a frontend spaces to the grid in one piece.
+    let mut width = 0;
 
     for cell in cells {
         let style = style_of(&cell.style);
         match runs.last_mut() {
             // Extending in place rather than rebuilding: a full row of plain
             // text is one allocation that grows, not eighty.
-            Some(run) if run.style == style => {
+            Some(run) if run.style == style && width == cell.width => {
                 run.text.push_str(&cell.text);
                 run.columns += cell.width as u32;
             }
             _ => {
+                width = cell.width;
                 runs.push(StyledRun { text: cell.text.clone(), columns: cell.width as u32, style })
             }
         }

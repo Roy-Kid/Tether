@@ -9,7 +9,10 @@
 //! windowing. See [`NO_SSH_DEPENDENCY`].
 
 mod damage;
+mod directory;
 mod input;
+mod link;
+mod palette;
 mod screen;
 mod scroll;
 mod size;
@@ -18,6 +21,8 @@ mod terminal;
 
 pub use damage::{Changes, RowSpan, ScreenDamage};
 pub use input::{Input, Key, Modifiers};
+pub use link::{Link, LinkSpan, LinkTarget};
+pub use palette::{Palette, Rgb};
 pub use screen::{Cell, Cursor, CursorShape, Modes, Screen};
 pub use scroll::{Scroll, Viewport};
 pub use size::{Position, ScreenSize};

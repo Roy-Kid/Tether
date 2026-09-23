@@ -1,7 +1,7 @@
 # Native frontend modules and tmux workspaces
 
 Date: 2026-09-17
-Status: accepted
+Status: accepted · amended by 0012 (tab plugins; tmux lives in app/Plugins/Tmux)
 
 The macOS application needs independent extensions without teaching its root
 view about each feature. The first extension is a native tmux workspace.

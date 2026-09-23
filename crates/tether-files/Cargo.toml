@@ -1,0 +1,21 @@
+[package]
+name = "tether-files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Files where a session's shell is running, over SFTP on any duplex byte stream."
+
+[dependencies]
+# SFTP is composed, not written (spec §5; the judgement is Decisions/0013).
+# `russh` is only its dev-dependency: the client speaks over any ordered
+# duplex stream, which is what keeps this crate transport-independent.
+russh-sftp = "3"
+tokio = { workspace = true, features = ["io-util", "fs"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process", "io-util", "rt-multi-thread", "macros", "fs"] }

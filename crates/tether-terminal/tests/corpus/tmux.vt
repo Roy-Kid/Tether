@@ -1,0 +1,236 @@
+[?1049h[22;0;0t[?1h=[H[2J[?12l[?25h[?1000l[?1002l[?1003l[?1006l[?1005l[?2004h[?2031h[?996n(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;24r[c[>c[>q]10;?\]11;?\[1;1H[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:sh*[K(B[m[?12l[?25h[H[18t[14t(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;24r[1;1H[?25l[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:sh*[K(B[m[?12l[?25h[Hrecorder:tether-corpus tether$ [?25l[30m[42m[24;1H[tether] 0:bash*[K(B[m[?12l[?25h[1;32Hprintf 'left pane\n'
+left pane
+recorder:tether-corpus tether$ [?25l[12;1H─────────────────────────────────────────[32m───────────────────────────────────────(B[m[1;1Hrecorder:tether-corpus tether$ printf 'left pane\n'[K
+left pane[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[2B[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:bash*[K(B[m[?12l[?25h[13;1H[3drecorder:tether-corpus tether$ [K[13;1Hrecorder:tether-corpus tether$ printf '\033[33mlower pane\033[0m\n'
+[33mlower pane
+(B[mrecorder:tether-corpus tether$ [?25l[12;1H────────────────────────────────────────[32m┬───────────────────────────────────────[13;41H│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[Hrecorder:tether-corpus tether$ printf 'left pane\n'[K
+left pane[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[2B033[33mlower pane\033[0m\n'[13X[33m
+lower pane[39m[30X
+recorder:tether-corpus tether$[10X[16;40H[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K[13;42H[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:bash*[K(B[m[?12l[?25h[13;42H[?25l[12;1H────────────────────────────────────────[32m┬───────────────────────────────────────[13;41H│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[30m[42m
+[tether] 0:tmux*[K(B[m[?12l[?25h[13;42H[15;1Hrecorder:tether-corpus tether$ [9X[13;42Hrecorder:tether-corpus tether$ [?25l[12;1H────────────────────────────────────────[32m┬───────────────────────────────────────[13;41H│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[30m[42m
+[tether] 0:bash*[K(B[m[?12l[?25h[13;73Hseq 1 40[14;42H [?25l[A19[K[14;42H20[K[15;42H21[K[16;42H22[K[17;42H23[K[18;42H24[K[19;42H25[K[20;42H26[K[21;42H27[K[22;42H28[K[23;42H[K[?12l[?25h[?25l[10A31[K[14;42H32[K[15;42H33[K[16;42H34[K[17;42H35[K[18;42H36[K[19;42H37[K[20;42H38[K[21;42H39[K[22;42H40[K[23;42H[K[?12l[?25hrecorder:tether-corpus tether$ [?25l[12;1H[32m────────────────────────────────────────┬───────────────────────────────────────[13;41H[39m│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[Hrecorder:tether-corpus tether$ printf 'left pane\n'[K
+left pane[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[2B033[33mlower pane\033[0m\n'[13X[33m
+lower pane[39m[30X
+recorder:tether-corpus tether$[10X[16;40H[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K[13;42H31[K[14;42H32[K[15;42H33[K[16;42H34[K[17;42H35[K[18;42H36[K[19;42H37[K[20;42H38[K[21;42H39[K[22;42H40[K[23;42Hrecorder:tether-corpus tether$         [30m[42m[24;1H[tether] 0:bash*[K(B[m[?12l[?25h[3;32H[?7727h(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;24r[3;32H[?25l[12;1H[32m────────────────────────────────────────┬───────────────────────────────────────[13;41H[39m│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[Hrecorder:tether-corpus tether$ printf 'left pane\n'[K
+left pane[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[2B033[33mlower pane\033[0m\n'[13X[33m
+lower pane[39m[30X
+recorder:tether-corpus tether$[10X[16;40H[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K[13;42H31[K[14;42H32[K[15;42H33[K[16;42H34[K[17;42H35[K[18;42H36[K[19;42H37[K[20;42H38[K[21;42H39[K[22;42H40[K[23;42Hrecorder:tether-corpus tether$         [30m[42m[24;1H[tether] 0:bash*[K(B[m[?12l[?25h[3;32H[?25l[H[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:bash- 1:sh*[K(B[m[?12l[?25h[H[?25l[30m[42m[24d[tether] 0:bash- 1:tmux*[K(B[m[?12l[?25h[Hrecorder:tether-corpus tether$ [?25l[30m[42m[24;1H[tether] 0:bash- 1:bash*[K(B[m[?12l[?25h[1;32Hprintf 'second window\n'
+second window
+recorder:tether-corpus tether$ [?25l[30m[43m[24;1Hkill-window bash? (y/n)[39m[K(B[m[?12l[?25h[C[?25l[Hrecorder:tether-corpus tether$ printf 'second window\n'[K
+second window[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[tether] 0:bash- 1:bash*[K(B[m[?12l[?25h[3;32Hyxit
+-sh: yxit: command not found
+recorder:tether-corpus tether$ exit
+logout
+[?25l[5B[32m────────────────────────────────────────┬───────────────────────────────────────[13;41H[39m│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[Hrecorder:tether-corpus tether$ printf 'left pane\n'[K
+left pane[K
+recorder:tether-corpus tether$[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[2B033[33mlower pane\033[0m\n'[13X[33m
+lower pane[39m[30X
+recorder:tether-corpus tether$[10X[16;40H[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K[13;42H31[K[14;42H32[K[15;42H33[K[16;42H34[K[17;42H35[K[18;42H36[K[19;42H37[K[20;42H38[K[21;42H39[K[22;42H40[K[23;42Hrecorder:tether-corpus tether$         [30m[42m[24;1H[tether] 0:bash*[K(B[m[?12l[?25h[3;32Hexit
+logout
+[?25l[1;41H│[2;41H│[3;41H│[4;41H│[5;41H│[6;41H│[7;41H│[8;41H│[9;41H│[10;41H│[11;41H│[12;41H│[13;41H[32m│[14;41H│[15;41H│[16;41H│[17;41H│[18;41H│[19;41H│[20;41H│[21;41H│[22;41H│[23;41H│(B[m[Hrecorder:tether-corpus tether$ printf '\
+033[33mlower pane\033[0m\n'[13X[33m
+lower pane[39m[30X
+recorder:tether-corpus tether$[10X[5;40H[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K
+[1K[1;42H19[K[2;42H20[K[3;42H21[K[4;42H22[K[5;42H23[K[6;42H24[K[7;42H25[K[8;42H26[K[9;42H27[K[10;42H28[K[11;42H29[K[12;42H30[K[13;42H31[K[14;42H32[K[15;42H33[K[16;42H34[K[17;42H35[K[18;42H36[K[19;42H37[K[20;42H38[K[21;42H39[K[22;42H40[K[23;42Hrecorder:tether-corpus tether$         [30m[42m[24;1H[tether] 0:bash*[K(B[m[?12l[?25h[23;73H[4;1Hrecorder:tether-corpus tether$ [9X[23;73H[31Drecorder:tether-corpus tether$ [K

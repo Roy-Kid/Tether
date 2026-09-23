@@ -43,14 +43,18 @@ public protocol PluginWorkspace: AnyObject, Identifiable where ID == UUID {
 
 @MainActor
 public struct PluginContext {
-  public let connection: RemoteConnection
+  /// A lease on whatever can run a second command where the current tab's
+  /// shell is running: another channel over SSH, another process on this
+  /// machine. Optional because a tab that is still connecting has neither yet,
+  /// and because a plugin that needs none should not be kept waiting for one.
+  public let connection: RemoteConnection?
   public let hostLabel: String
   public let hostID: UUID
   public let openWorkspace: (any PluginWorkspace) -> Void
   /// Reauthentication belongs to the host, never the plugin. No credentials cross this API.
   public let reconnect: () async throws -> RemoteConnection
   public init(
-    connection: RemoteConnection, hostLabel: String, hostID: UUID,
+    connection: RemoteConnection?, hostLabel: String, hostID: UUID,
     openWorkspace: @escaping (any PluginWorkspace) -> Void,
     reconnect: @escaping () async throws -> RemoteConnection
   ) {
@@ -65,12 +69,20 @@ public struct PluginContext {
 @MainActor
 public protocol TetherPlugin: AnyObject {
   var metadata: PluginMetadata { get }
+  /// Whether this plugin needs the tab's connection before it can be
+  /// launched. tmux does — it runs commands where the shell is. Nerve reads
+  /// the hub on this Mac and needs nothing from the tab at all.
+  ///
+  /// Named for the remote case it was written for; it is the connection that
+  /// is needed, and a local session leases one too (`Decisions/0008`).
+  var needsRemoteConnection: Bool { get }
   func activate()
   func deactivate()
   func launch(in context: PluginContext)
   func settings() -> AnyView
 }
 extension TetherPlugin {
+  public var needsRemoteConnection: Bool { true }
   public func activate() {}
   public func deactivate() {}
   public func settings() -> AnyView { AnyView(Text("No additional settings")) }

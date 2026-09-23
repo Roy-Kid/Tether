@@ -6,10 +6,15 @@
 //! of bounds, and that is reachable from remote input.
 //!
 //! Deterministic by construction — a seeded generator, not a clock — so a
-//! failure here is a failure anyone can reproduce from the seed alone. Deeper
-//! coverage is `fuzz/`, which needs a nightly toolchain.
+//! failure here is a failure anyone can reproduce from the seed alone. The
+//! same invariants are checked against recorded real workloads in
+//! `corpus.rs`, and against coverage-guided input by `fuzz/`, which needs a
+//! nightly toolchain.
 
-use tether_terminal::{Options, ScreenDamage, ScreenSize, Terminal};
+mod support;
+
+use support::invariants;
+use tether_terminal::{Options, ScreenSize, Terminal};
 
 /// xorshift64*. A test that needs random bytes does not need a dependency.
 struct Rng(u64);
@@ -58,65 +63,6 @@ const FRAGMENTS: &[&[u8]] = &[
     b"e\xcc\x81",
 ];
 
-fn check_invariants(term: &mut Terminal, seed: u64, step: usize) {
-    let size = term.size();
-
-    let changes = term.take_changes();
-    if let ScreenDamage::Rows(spans) = &changes.screen {
-        for span in spans {
-            assert!(
-                span.row < size.rows,
-                "seed {seed} step {step}: damage at row {} of {} rows",
-                span.row,
-                size.rows
-            );
-            assert!(
-                span.first_column <= span.last_column,
-                "seed {seed} step {step}: inverted span {span:?}"
-            );
-            assert!(
-                span.last_column < size.columns,
-                "seed {seed} step {step}: damage at column {} of {} columns",
-                span.last_column,
-                size.columns
-            );
-        }
-    }
-
-    let screen = term.screen();
-    assert_eq!(screen.size, size);
-    assert_eq!(
-        screen.rows().count(),
-        size.rows as usize,
-        "seed {seed} step {step}: row count drifted"
-    );
-
-    assert!(
-        screen.cursor.position.row < size.rows,
-        "seed {seed} step {step}: cursor at row {} of {} rows",
-        screen.cursor.position.row,
-        size.rows
-    );
-    assert!(
-        screen.cursor.position.column <= size.columns,
-        "seed {seed} step {step}: cursor at column {} of {} columns",
-        screen.cursor.position.column,
-        size.columns
-    );
-
-    for (index, row) in screen.rows().enumerate() {
-        let width: usize = row.iter().map(|cell| cell.width as usize).sum();
-        assert!(
-            width <= size.columns as usize,
-            "seed {seed} step {step}: row {index} claims {width} columns of {}",
-            size.columns
-        );
-        for cell in row {
-            assert!(!cell.text.is_empty(), "seed {seed} step {step}: a cell with no text");
-        }
-    }
-}
-
 fn torture(seed: u64) {
     let mut rng = Rng(seed | 1);
     // A short scrollback on purpose: this test resizes constantly, and every
@@ -152,7 +98,7 @@ fn torture(seed: u64) {
             term.resize(ScreenSize::new(rng.below(200) as u16, rng.below(80) as u16));
         }
 
-        check_invariants(&mut term, seed, step);
+        invariants::check(&mut term, &format!("seed {seed} step {step}"));
     }
 }
 
@@ -173,6 +119,6 @@ fn every_prefix_of_a_stream_leaves_a_usable_terminal() {
         let mut term =
             Terminal::with_options(ScreenSize::new(20, 6), Options { scrollback_lines: 64 });
         term.feed(&stream[..cut]);
-        check_invariants(&mut term, 0, cut);
+        invariants::check(&mut term, &format!("prefix of {cut} bytes"));
     }
 }

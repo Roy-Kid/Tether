@@ -1,0 +1,73 @@
+# shell — a shell — colour, a wide character, and a prompt redrawn
+#
+# 524 bytes at 80x24. Regenerate with TETHER_BLESS=1.
+
+── after 262 of 524 bytes ──
+80x24 · cursor (4,32) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │$ printf 'plain \033[31mred\033[0m \033[1;32mbold green\033[0m\n'
+ 1 │plain red bold green
+   │······aaa·bbbbbbbbbb
+ 2 │$ printf '\033[4munderlined\033[24m \033[7minverse\033[0m\n'
+ 3 │underlined inverse
+   │cccccccccc·ddddddd
+ 4 │$ printf '中文 wide 👨‍👩‍👧 famil
+ 5 │
+ 6 │
+ 7 │
+ 8 │
+ 9 │
+10 │
+11 │
+12 │
+13 │
+14 │
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │
+    a = fg Red
+    b = fg Green bold
+    c = underline Single
+    d = inverse
+
+── at the end ──
+80x24 · cursor (15,0) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │$ printf 'plain \033[31mred\033[0m \033[1;32mbold green\033[0m\n'
+ 1 │plain red bold green
+   │······aaa·bbbbbbbbbb
+ 2 │$ printf '\033[4munderlined\033[24m \033[7minverse\033[0m\n'
+ 3 │underlined inverse
+   │cccccccccc·ddddddd
+ 4 │$ printf '中文 wide 👨‍👩‍👧 family\n'
+ 5 │中文 wide 👨‍👩‍👧 family
+ 6 │$ ls -GF
+ 7 │repo/      sample.rs
+   │eeee
+ 8 │$ false; echo "exit $?"
+ 9 │exit 1
+10 │$ printf 'tab\tseparated\tcolumns\r\nand a carriage return\rOVER\n'
+11 │tab	    separated	      columns
+12 │OVERa carriage return
+13 │$ exit
+14 │exit
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │
+    a = fg Red
+    b = fg Green bold
+    c = underline Single
+    d = inverse
+    e = fg Blue

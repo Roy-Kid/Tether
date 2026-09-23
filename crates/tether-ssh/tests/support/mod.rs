@@ -58,6 +58,10 @@ pub struct Policy {
     /// Accept the key only as a *first* factor, then still demand
     /// keyboard-interactive — how a cluster pairs a key with a one-time code.
     pub key_is_only_the_first_factor: bool,
+    /// Say something with no prompts before accepting, the way PAM text
+    /// reaches a client. It is a message, not a question, and RFC 4256 still
+    /// wants a reply to it: one with no fields.
+    pub announces_before_accepting: bool,
 }
 
 /// What the server observed, for tests to assert against.
@@ -189,7 +193,18 @@ impl Handler for FakeHost {
                     Ok(Auth::Accept)
                 }
             }
-            3 if answers.first().map(String::as_str) == Some(ONE_TIME_CODE) => Ok(Auth::Accept),
+            3 if answers.first().map(String::as_str) == Some(ONE_TIME_CODE) => {
+                if self.policy.announces_before_accepting {
+                    Ok(Auth::Partial {
+                        name: "".into(),
+                        instructions: "Your password expires in 3 days.".into(),
+                        prompts: Vec::new().into(),
+                    })
+                } else {
+                    Ok(Auth::Accept)
+                }
+            }
+            4 if self.policy.announces_before_accepting && answers.is_empty() => Ok(Auth::Accept),
             _ => Ok(Auth::Reject {
                 proceed_with_methods: only_interactive(),
                 partial_success: false,
@@ -250,6 +265,23 @@ impl Handler for FakeHost {
         session.exit_status_request(channel, 0)?;
         session.eof(channel)?;
         session.close(channel)?;
+        Ok(())
+    }
+
+    /// Grants `sftp` and nothing else, the way an `sshd` with one `Subsystem`
+    /// line does. What is written afterwards is echoed by [`Self::data`], so
+    /// a test can see the channel carries bytes both ways.
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if name == "sftp" {
+            session.channel_success(channel)?;
+        } else {
+            session.channel_failure(channel)?;
+        }
         Ok(())
     }
 

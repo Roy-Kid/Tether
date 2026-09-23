@@ -1,0 +1,58 @@
+# The fuzzers. Its own workspace on purpose: `libfuzzer-sys` needs nightly and
+# a sanitizer, and the main workspace must keep building on stable.
+[package]
+name = "tether-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+tether-terminal = { path = "../crates/tether-terminal" }
+tether-tmux = { path = "../crates/tether-tmux", features = ["fuzzing"] }
+
+# Fuzzing an unoptimised parser measures the debug build. These are cargo-fuzz's
+# own recommendations, stated here so a run is reproducible.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "terminal_stream"
+path = "fuzz_targets/terminal_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "terminal_damage"
+path = "fuzz_targets/terminal_damage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "terminal_session"
+path = "fuzz_targets/terminal_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tmux_control"
+path = "fuzz_targets/tmux_control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "terminal_links"
+path = "fuzz_targets/terminal_links.rs"
+test = false
+doc = false
+bench = false

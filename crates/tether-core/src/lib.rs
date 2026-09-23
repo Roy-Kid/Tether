@@ -29,18 +29,31 @@
 //! # fn render(_: &tether_core::terminal::Screen) {}
 //! ```
 
+mod connection;
 mod dial;
+mod local;
+mod producer;
 mod session;
+mod ssh_client;
 
+pub use connection::{Capture, Channel, Connection, ConnectionError};
 pub use dial::{Credential, Dial, DialError};
+pub use local::Local;
+pub use producer::{Output, Producer, ProducerError};
 pub use session::{Ending, SessionError, TerminalSession};
+pub use ssh_client::SshClient;
 
+pub use tether_local as local_shell;
 pub use tether_ssh as ssh;
 pub use tether_terminal as terminal;
 
 /// What this build is composed of, for diagnostics and about screens.
 pub fn composition() -> Vec<String> {
-    vec![tether_ssh::backend_description(), tether_terminal::engine_description().to_owned()]
+    vec![
+        tether_ssh::backend_description(),
+        tether_local::backend_description(),
+        tether_terminal::engine_description().to_owned(),
+    ]
 }
 
 #[cfg(test)]
@@ -48,10 +61,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn composition_names_both_engines() {
+    fn composition_names_every_engine() {
         let parts = composition();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         assert!(parts.iter().any(|p| p.starts_with("russh")));
+        assert!(parts.iter().any(|p| p.starts_with("portable-pty")));
         assert!(parts.iter().any(|p| p.contains("alacritty")));
     }
 }

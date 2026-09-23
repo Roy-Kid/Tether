@@ -82,25 +82,44 @@ fn a_change_of_style_starts_a_new_run() {
 /// recomputed from it.
 #[test]
 fn a_run_is_measured_in_columns_not_characters() {
-    // The wide character and the blanks after it share the default style, so
-    // they are one run — which is the point: a renderer cannot recover the
-    // column count by counting characters once anything has merged.
-    let wide = frame(40, 2, "中".as_bytes());
-    let run = &wide.lines[0].runs[0];
+    // Narrow enough that the wide character is the only thing on the row.
+    let exact = frame(2, 2, "中".as_bytes());
+    let run = &exact.lines[0].runs[0];
 
-    assert_eq!(run.columns, 40, "the run covers the whole row");
-    assert_eq!(run.text.chars().count(), 39, "one wide character and 38 blanks");
+    assert_eq!(run.text, "中");
+    assert_eq!(run.columns, 2);
     assert_ne!(
         run.text.chars().count() as u32,
         run.columns,
         "counting characters would misplace everything after this run"
     );
+}
 
-    // Narrow enough that the wide character is the only thing on the row.
-    let exact = frame(2, 2, "中".as_bytes());
-    let run = &exact.lines[0].runs[0];
-    assert_eq!(run.text, "中");
-    assert_eq!(run.columns, 2);
+/// A run is drawn as one string, and a string is spaced to the grid by a
+/// single number — so every character in it has to cost the same number of
+/// columns. A wide character merged in with narrow ones is how a line of
+/// Chinese slides out from under the cursor standing on it.
+#[test]
+fn a_change_of_width_starts_a_new_run() {
+    let frame = frame(40, 2, "ab中文cd".as_bytes());
+    let runs = &frame.lines[0].runs;
+
+    let shape: Vec<(&str, u32, usize)> =
+        runs.iter().map(|run| (run.text.as_str(), run.columns, run.text.chars().count())).collect();
+
+    for (text, columns, characters) in &shape {
+        assert_eq!(
+            *columns % *characters as u32,
+            0,
+            "{text:?} covers {columns} columns as {characters} characters, so there is no \
+             whole number of columns per character to space it by: {shape:?}"
+        );
+    }
+
+    assert_eq!(runs[0].text, "ab");
+    assert_eq!(runs[1].text, "中文");
+    assert_eq!(runs[1].columns, 4, "two wide characters, two columns each");
+    assert!(runs[2].text.starts_with("cd"), "narrow text resumes: {:?}", runs[2].text);
 }
 
 /// The frame carries the size it was built from, so a frontend never has to

@@ -1,6 +1,10 @@
 import SwiftUI
 import Tether
 
+#if os(macOS)
+  import AppKit
+#endif
+
 /// The same terminal surface is used for a shell and every plugin-owned pane.
 public struct TerminalSurface: View {
   let frame: ScreenFrame
@@ -10,19 +14,23 @@ public struct TerminalSurface: View {
   let onResize: (UInt16, UInt16) -> Void
   let onFocus: () -> Void
   let onScroll: (ScrollTo) -> Void
+  let links: TerminalLinks
+  /// The link under a ⌘-held pointer, underlined while it is.
+  @State private var hovered: TerminalLink?
+  /// Whether the hovered link is known to be there.
+  @State private var confirmed = false
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalAppearance") private var appearance = "system"
-  /// Lines already sent for the drag in progress, so each `onChanged` asks
-  /// for the difference rather than the total.
-  @State private var carried: Int32 = 0
 
   public init(
     frame: ScreenFrame, active: Bool = true, inset: CGFloat = 8,
     onInput: @escaping (TerminalInput) -> Void,
     onResize: @escaping (UInt16, UInt16) -> Void = { _, _ in },
     onFocus: @escaping () -> Void = {},
-    onScroll: @escaping (ScrollTo) -> Void = { _ in }
+    onScroll: @escaping (ScrollTo) -> Void = { _ in },
+    links: TerminalLinks = .none
   ) {
     self.frame = frame
     self.active = active
@@ -31,17 +39,23 @@ public struct TerminalSurface: View {
     self.onResize = onResize
     self.onFocus = onFocus
     self.onScroll = onScroll
+    self.links = links
   }
   public var body: some View {
     let metrics = FontMetrics(size: min(24, max(10, fontSize)))
-    let dark = appearance == "dark" || (appearance == "system" && scheme == .dark)
+    let palette = Palette.chosen(setting: appearance, scheme: scheme)
     GeometryReader { geometry in
       ZStack(alignment: .topLeading) {
-        TerminalView(frame: frame, metrics: metrics, palette: dark ? .dark : .light)
+        let cells = CellGeometry(
+          cellWidth: metrics.cellWidth, lineHeight: metrics.lineHeight, inset: inset,
+          columns: UInt16(frame.columns), rows: UInt16(frame.rows))
+        TerminalView(frame: frame, metrics: metrics, palette: palette)
           .padding(inset)
+        LinkUnderline(link: hovered, confirmed: confirmed, geometry: cells)
         KeyCapture(
           onInput: onInput, active: active, lineHeight: metrics.lineHeight,
-          onFocus: onFocus, onScroll: { onScroll(.lines($0)) }
+          onFocus: onFocus, onScroll: { onScroll(.lines($0)) },
+          links: links, geometry: cells, onHover: hover
         )
         // Filled on purpose. A bare `NSView` has no intrinsic size, so
         // without this it lays out at zero — and a zero-sized view still
@@ -50,12 +64,6 @@ public struct TerminalSurface: View {
         // Measured: typing worked and scrolling did nothing at all.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("Terminal")
-
-        // Touch reads the history by dragging the screen. A Mac has a wheel
-        // for this and would rather keep the drag for selecting text.
-        #if !os(macOS)
-          dragToScroll(metrics)
-        #endif
 
         if frame.viewportOffset > 0 {
           // Reading history is a state someone can get stuck in — output
@@ -71,37 +79,40 @@ public struct TerminalSurface: View {
           .transition(.opacity)
         }
       }
-      .animation(.easeOut(duration: 0.12), value: frame.viewportOffset > 0)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: frame.viewportOffset > 0)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .background(dark ? Palette.dark.background : Palette.light.background)
+      .background(palette.background)
       .clipped()
       .onAppear { fit(geometry.size, metrics) }
       .onChange(of: geometry.size) { _, size in fit(size, metrics) }
       .onChange(of: fontSize) { _, _ in fit(geometry.size, metrics) }
     }
   }
-  /// Dragging the screen moves the viewport, a line at a time.
-  private func dragToScroll(_ metrics: FontMetrics) -> some View {
-    Color.clear
-      .contentShape(Rectangle())
-      .gesture(
-        DragGesture(minimumDistance: 6)
-          .onChanged { value in
-            // Whole lines only: a terminal's history has no half-rows to stop
-            // between, and each change asks for the difference rather than
-            // the total so the two do not compound.
-            let lines = Int32((value.translation.height / metrics.lineHeight).rounded())
-            guard lines != carried else { return }
-            onScroll(.lines(lines - carried))
-            carried = lines
-          }
-          .onEnded { _ in carried = 0 })
-      .allowsHitTesting(frame.historyLines > 0)
+  /// Underlines a hovered link at once, dotted, and asks whether it is
+  /// there: solid if it is, gone if it is not. Text that only looks like a
+  /// path is not left promising a file.
+  private func hover(_ link: TerminalLink?) {
+    hovered = link
+    confirmed = false
+    guard let link else { return }
+    let exists = links.exists
+    Task { @MainActor in
+      let there = await exists(link)
+      guard hovered == link else { return }
+      if there {
+        confirmed = true
+      } else {
+        hovered = nil
+        #if os(macOS)
+          NSCursor.arrow.set()
+        #endif
+      }
+    }
   }
 
   private func fit(_ size: CGSize, _ metrics: FontMetrics) {
     onResize(
-      UInt16(min(1000, max(1, (size.width - inset * 2) / metrics.cellWidth))),
-      UInt16(min(500, max(1, (size.height - inset * 2) / metrics.lineHeight))))
+      metrics.columns(fitting: size.width - inset * 2),
+      metrics.rows(fitting: size.height - inset * 2))
   }
 }

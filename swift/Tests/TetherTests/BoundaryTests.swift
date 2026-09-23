@@ -20,9 +20,16 @@ private actor ScriptedPrompter: AuthPrompter {
 
 @Suite("Rust boundary")
 struct BoundaryTests {
-    @Test("both engines are reachable through one surface")
+    @Test("every engine is reachable through one surface")
     func composition() {
-        #expect(Tether.composition().count == 2)
+        // Three, not two: a terminal, and the two producers that can feed
+        // it. An about screen that named only some of what a build is made
+        // of would be worse than one that named none.
+        let parts = Tether.composition()
+        #expect(parts.count == 3)
+        #expect(parts.contains { $0.hasPrefix("russh") })
+        #expect(parts.contains { $0.hasPrefix("portable-pty") })
+        #expect(parts.contains { $0.contains("alacritty") })
     }
 
     @Test("an async Rust call completes")
@@ -35,6 +42,21 @@ struct BoundaryTests {
         await #expect(throws: TetherError.timedOut(millis: 20)) {
             try await Tether.probeDelay(millis: 500, budgetMillis: 20)
         }
+    }
+
+    @Test("a failure is a sentence, not an NSError code")
+    func failureIsReadable() {
+        let protocolFailure = TetherError.protocolFailure(cause: "no server running")
+        #expect(protocolFailure.localizedDescription == "no server running")
+        #expect(!protocolFailure.localizedDescription.contains("couldn't be completed"))
+
+        let refused = TetherError.shellRefused(cause: "server refused the command")
+        #expect(refused.localizedDescription.contains("server refused the command"))
+        #expect(!refused.localizedDescription.contains("couldn't be completed"))
+
+        let unsupported = TetherError.unsupported(what: "a local shell")
+        #expect(unsupported.localizedDescription.contains("a local shell"))
+        #expect(!unsupported.localizedDescription.contains("error 8"))
     }
 
     @Test("a multi-round exchange carries answers up and questions down")

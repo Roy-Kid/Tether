@@ -1,0 +1,22 @@
+[package]
+name = "tether-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A shell on this machine, on a pseudo-terminal. The local counterpart to tether-ssh."
+
+[dependencies]
+portable-pty = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# `F_SETNOSIGPIPE`, so a child that stops reading is an error rather than
+# the end of the embedding application (tests/sigpipe.rs).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+libc = "0.2"

@@ -1,9 +1,9 @@
-//! A remote byte stream bound to a terminal engine.
+//! A byte stream bound to a terminal engine.
 //!
 //! The two halves this crate composes disagree about shape, which is the
-//! whole reason a composition layer exists. [`Shell`] is asynchronous and
-//! owns itself; [`Terminal`] is synchronous and wants `&mut`. A consumer —
-//! especially one behind an FFI seam — is a third party that asks about the
+//! whole reason a composition layer exists. A [`Producer`] is asynchronous
+//! and owns itself; [`Terminal`] is synchronous and wants `&mut`. A consumer
+//! — especially one behind an FFI seam — is a third party that asks about the
 //! screen whenever it repaints, on a thread we do not control.
 //!
 //! So the shell goes to a task that owns it outright, the terminal goes
@@ -13,14 +13,19 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tether_ssh::{Output, Shell, SshError, WindowSize};
-use tether_terminal::{Changes, Input, Options, Screen, ScreenSize, Scroll, Terminal, Viewport};
+use tether_terminal::{
+    Changes, Input, Link, Options, Palette, Position, Screen, ScreenSize, Scroll, Terminal,
+    Viewport,
+};
+
+use crate::connection::Connection;
+use crate::producer::{Output, Producer};
 
 /// What a consumer asked the session to do.
 ///
-/// A queue rather than direct calls because the shell lives in the pump task:
-/// a keystroke arriving while the pump is awaiting output must not wait for
-/// output to arrive.
+/// A queue rather than direct calls because the producer lives in the pump
+/// task: a keystroke arriving while the pump is awaiting output must not wait
+/// for output to arrive.
 enum Command {
     Write(Vec<u8>),
     Resize(ScreenSize),
@@ -37,7 +42,7 @@ pub enum Ending {
     Exited(u32),
     /// The consumer closed the session.
     Closed,
-    /// The connection failed underneath us.
+    /// The stream failed underneath us.
     Lost(String),
 }
 
@@ -49,7 +54,7 @@ struct Shared {
     generation: AtomicU64,
     changed: tokio::sync::watch::Sender<u64>,
     ending: Mutex<Option<Ending>>,
-    /// Recorded when the far side reports it, which is *before* the stream
+    /// Recorded when the producer reports it, which is *before* the stream
     /// ends. Kept apart from `ending` because a session whose shell has
     /// exited is still delivering that shell's last output, and treating the
     /// status as the ending would stop a consumer repainting one frame early.
@@ -77,14 +82,19 @@ impl Shared {
     }
 }
 
-/// A live terminal session: a remote shell and the screen it is drawing.
+/// A live terminal session: a shell and the screen it is drawing.
+///
+/// One type, whichever producer it reads from. A shell on the far side of the
+/// world and a shell on this machine differ in how they are *started* and in
+/// nothing else, so nothing here — and nothing above here — has a branch for
+/// which one it got (spec §8).
 ///
 /// Cloneable handles would let two consumers disagree about who owns the
 /// lifetime, so this is not `Clone`. Everything on it takes `&self` — a
 /// frontend repaints from one thread and types from another, and making that
 /// its problem would push our locking into its code.
 pub struct TerminalSession {
-    connection: Option<Arc<tether_ssh::Session>>,
+    connection: Option<Connection>,
     shared: Arc<Shared>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     /// Kept across calls rather than re-subscribed per call: a receiver
@@ -99,12 +109,12 @@ pub struct TerminalSession {
 }
 
 impl TerminalSession {
-    /// Starts pumping `shell` into a terminal of `size`.
+    /// Starts pumping `producer` into a terminal of `size`.
     ///
-    /// Takes the shell by value because the session now owns its lifetime;
-    /// handing back a shell a caller could also write to would give the far
-    /// side two writers and no ordering between them.
-    pub fn start(shell: Shell, size: ScreenSize, options: Options) -> Self {
+    /// Takes the producer by value because the session now owns its lifetime;
+    /// handing back a stream a caller could also write to would give the far
+    /// end two writers and no ordering between them.
+    pub fn start<P: Producer>(producer: P, size: ScreenSize, options: Options) -> Self {
         let (commands, inbox) = tokio::sync::mpsc::unbounded_channel();
         let (changed, updates) = tokio::sync::watch::channel(0);
 
@@ -116,7 +126,7 @@ impl TerminalSession {
             exit_status: Mutex::new(None),
         });
 
-        let pump = tokio::spawn(pump(Arc::clone(&shared), shell, inbox));
+        let pump = tokio::spawn(pump(Arc::clone(&shared), producer, inbox));
 
         Self {
             connection: None,
@@ -127,20 +137,41 @@ impl TerminalSession {
         }
     }
 
-    pub(crate) fn start_connected(
-        shell: Shell,
+    /// Starts a session that can also run a second command where its shell
+    /// is running.
+    pub(crate) fn start_with<P: Producer>(
+        producer: P,
         size: ScreenSize,
         options: Options,
-        connection: Arc<tether_ssh::Session>,
+        connection: Connection,
     ) -> Self {
-        let mut session = Self::start(shell, size, options);
+        let mut session = Self::start(producer, size, options);
         session.connection = Some(connection);
         session
     }
 
-    /// A lease on the authenticated connection; closing a shell does not close other channels.
-    pub fn connection(&self) -> Option<Arc<tether_ssh::Session>> {
+    /// A lease on whatever can run a second command where this session's
+    /// shell is running.
+    ///
+    /// `None` for a session that has no such thing. Asking is how a consumer
+    /// finds out, rather than by knowing which kind of session it holds —
+    /// which is the point: a feature built on this works over SSH and on this
+    /// machine without being written twice.
+    pub fn connection(&self) -> Option<Connection> {
         self.connection.clone()
+    }
+
+    /// Tells the engine what this consumer draws with.
+    ///
+    /// Only used to answer the far side's colour queries — `OSC 11 ; ?` is
+    /// "what is your background?", and a program that hears nothing assumes
+    /// a dark one and paints its own theme over every cell. The screen's own
+    /// colours are still names, chosen by whoever draws them (spec §12).
+    ///
+    /// Settable at any time, because appearance is: a person switching their
+    /// window to light is the same question asked again.
+    pub fn set_palette(&self, palette: Option<Palette>) {
+        self.shared.terminal.lock().expect("terminal lock poisoned").set_palette(palette);
     }
 
     /// A snapshot of what the screen looks like now.
@@ -178,6 +209,25 @@ impl TerminalSession {
     /// What the far side set the window title to.
     pub fn title(&self) -> String {
         self.shared.terminal.lock().expect("terminal lock poisoned").title().to_owned()
+    }
+
+    /// The directory the far side's shell last reported, if it reports one.
+    pub fn working_directory(&self) -> Option<String> {
+        self.shared
+            .terminal
+            .lock()
+            .expect("terminal lock poisoned")
+            .working_directory()
+            .map(str::to_owned)
+    }
+
+    /// What the text at `position` names — a hyperlink, a web address, or
+    /// something shaped like a path — and where it is drawn. Shape only:
+    /// whether a path exists is asked of the [`Connection`], not here.
+    ///
+    /// [`Connection`]: crate::Connection
+    pub fn link_at(&self, position: Position) -> Option<Link> {
+        self.shared.terminal.lock().expect("terminal lock poisoned").link_at(position)
     }
 
     /// `Some` once the session has stopped, and why.
@@ -317,10 +367,11 @@ pub enum SessionError {
     Failed(String),
 }
 
-/// Carries bytes between the shell and the terminal until one of them stops.
-async fn pump(
+/// Carries bytes between the producer and the terminal until one of them
+/// stops.
+async fn pump<P: Producer>(
     shared: Arc<Shared>,
-    mut shell: Shell,
+    mut producer: P,
     mut inbox: tokio::sync::mpsc::UnboundedReceiver<Command>,
 ) {
     loop {
@@ -332,35 +383,30 @@ async fn pump(
             command = inbox.recv() => {
                 match command {
                     Some(Command::Write(bytes)) => {
-                        if let Err(error) = shell.write(bytes).await {
+                        if let Err(error) = producer.write(bytes).await {
                             shared.finish(Ending::Lost(error.to_string()));
                             return;
                         }
                     }
                     Some(Command::Resize(size)) => {
                         // The engine already resized, in `resize`. This arm
-                        // is only the half that has to cross the network.
-                        let window = WindowSize::new(size.columns as u32, size.rows as u32);
-                        if let Err(error) = shell.resize(window).await {
+                        // is only the half the producer has to carry.
+                        if let Err(error) = producer.resize(size).await {
                             shared.finish(Ending::Lost(error.to_string()));
                             return;
                         }
                     }
                     Some(Command::Close) | None => {
-                        let _ = shell.close().await;
+                        producer.close().await;
                         shared.finish(Ending::Closed);
                         return;
                     }
                 }
             }
 
-            output = shell.next_output() => {
+            output = producer.next_output() => {
                 match output {
-                    Some(Output::Stdout(bytes)) | Some(Output::Stderr(bytes)) => {
-                        // stderr is merged deliberately: a PTY gives the far
-                        // side one stream, and a shell that writes to stderr
-                        // expects it interleaved on the same screen. Keeping
-                        // them apart here would reorder what the person sees.
+                    Some(Output::Bytes(bytes)) => {
                         let replies = {
                             let mut terminal =
                                 shared.terminal.lock().expect("terminal lock poisoned");
@@ -374,7 +420,7 @@ async fn pump(
                         // asked and got no answer waits forever, so these go
                         // back out before anything else is read.
                         if !replies.is_empty()
-                            && let Err(error) = shell.write(replies).await
+                            && let Err(error) = producer.write(replies).await
                         {
                             shared.finish(Ending::Lost(error.to_string()));
                             return;
@@ -395,10 +441,7 @@ async fn pump(
                         let status = *shared.exit_status.lock().expect("exit status lock poisoned");
                         shared.finish(match status {
                             Some(status) => Ending::Exited(status),
-                            None => Ending::Lost(
-                                SshError::Disconnected { cause: "the shell closed".into() }
-                                    .to_string(),
-                            ),
+                            None => Ending::Lost("the shell closed".to_owned()),
                         });
                         return;
                     }

@@ -14,6 +14,12 @@ import Tether
 /// the text system decide advances would drift out of alignment within a line
 /// of box-drawing characters. So the geometry comes from one measurement of
 /// the font, and each run is placed at a column.
+///
+/// Placing a run is only half of it. A run is still drawn as one string, and
+/// a string drawn at the font's own advance drifts inside itself — so every
+/// run is also *spaced* to the grid it was placed on. Both halves are
+/// measured in `FontMetrics`; getting the second one wrong is what leaves a
+/// cursor standing next to the character it is on rather than over it.
 public struct TerminalView: View {
   let frame: ScreenFrame
   let metrics: FontMetrics
@@ -24,9 +30,14 @@ public struct TerminalView: View {
       draw(in: &context, size: size)
     }
     .background(palette.background)
+    // Ideal size is the grid, for a renderer that asks. It is not a
+    // minimum: a minWidth of columns × cell made the view larger than the
+    // window, and the last cells were clipped rather than never asked for.
     .frame(
-      minWidth: metrics.cellWidth * CGFloat(frame.columns),
-      minHeight: metrics.lineHeight * CGFloat(frame.rows))
+      minWidth: 0,
+      idealWidth: metrics.cellWidth * CGFloat(frame.columns),
+      minHeight: 0,
+      idealHeight: metrics.lineHeight * CGFloat(frame.rows))
   }
 
   public init(frame: ScreenFrame, metrics: FontMetrics, palette: Palette) {
@@ -36,11 +47,18 @@ public struct TerminalView: View {
   }
 
   private func draw(in context: inout GraphicsContext, size: CGSize) {
-    for (index, row) in frame.lines.enumerated() {
+    context.clip(to: Path(CGRect(origin: .zero, size: size)))
+
+    let visibleColumns = max(0, Int(size.width / metrics.cellWidth) + 1)
+    let visibleRows = min(frame.lines.count, max(0, Int(size.height / metrics.lineHeight) + 1))
+
+    for index in 0..<visibleRows {
+      let row = frame.lines[index]
       let y = metrics.lineHeight * CGFloat(index)
       var column = 0
 
       for run in row.runs {
+        if column >= visibleColumns { break }
         let x = metrics.cellWidth * CGFloat(column)
         let width = metrics.cellWidth * CGFloat(run.columns)
 
@@ -50,7 +68,6 @@ public struct TerminalView: View {
     }
 
     drawCursor(in: &context)
-    _ = size
   }
 
   private func draw(
@@ -76,17 +93,25 @@ public struct TerminalView: View {
     // not become a hole in a highlighted region.
     guard !run.style.hidden, !run.text.allSatisfy(\.isWhitespace) else { return }
 
+    // Tracking, not the font's own advance. A monospaced face advances by a
+    // fraction of a point that has nothing to do with the cell, so a run
+    // drawn as one string walks away from the grid a little per character —
+    // most of a column across an eighty-column line, which is why the cursor
+    // stopped standing over the character it is on. Spacing each character
+    // to exactly one cell puts the two back together.
     var text = Text(run.text)
       .font(metrics.font(bold: run.style.bold, italic: run.style.italic))
+      .tracking(metrics.tracking(cells: Int(run.columns), characters: run.text.count))
       .foregroundColor(run.style.dim ? foreground.opacity(0.6) : foreground)
 
     if run.style.strikethrough { text = text.strikethrough() }
     if case .none = run.style.underline {} else { text = text.underline() }
 
-    context.draw(
-      text,
-      at: CGPoint(x: origin.x, y: origin.y + metrics.baseline),
-      anchor: .bottomLeading)
+    // Top of the cell, not its baseline. `anchor` places the text's *box*,
+    // whose bottom sits a descender below the baseline, so asking for the
+    // baseline drew every row a descender high — half a row out of step with
+    // the cursor block, which is drawn on the cell.
+    context.draw(text, at: origin, anchor: .topLeading)
   }
 
   private func drawCursor(in context: inout GraphicsContext) {
@@ -118,11 +143,22 @@ public struct TerminalView: View {
 }
 
 /// One measurement of the monospaced font, reused for every cell.
+///
+/// The cell is a whole number of points wide so that a column lands on the
+/// same place every time, and the font is then *spaced into* that cell rather
+/// than trusted to fill it. Those are two different numbers: SF Mono advances
+/// 8.04pt at 13pt, and a grid built on 8 that draws text at 8.04 is a grid
+/// whose eightieth column is three characters out.
 public struct FontMetrics: Equatable, Sendable {
   let size: CGFloat
   public let cellWidth: CGFloat
   public let lineHeight: CGFloat
-  let baseline: CGFloat
+  /// What one column costs the font, before it is spaced to `cellWidth`.
+  private let narrowAdvance: CGFloat
+  /// The same for a character that covers two columns. Measured rather than
+  /// doubled: CJK comes from a fallback face whose advance is its own, and
+  /// assuming twice the Latin one misplaces every character after the first.
+  private let wideAdvance: CGFloat
 
   /// Measures the advance of a single character rather than assuming one.
   /// A monospaced face still differs between sizes and weights, and a
@@ -138,15 +174,44 @@ public struct FontMetrics: Equatable, Sendable {
       let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
     #endif
 
+    let advance = NSString(string: "M").size(withAttributes: [.font: font]).width
     self.size = size
-    self.cellWidth = ceil(NSString(string: "M").size(withAttributes: [.font: font]).width)
+    self.narrowAdvance = advance
+    self.wideAdvance = NSString(string: "\u{4e2d}").size(withAttributes: [.font: font]).width
+    // Nearest, not up: rounding up added most of a point per column at 13pt,
+    // and the text then had to be stretched by that much to keep up.
+    self.cellWidth = max(1, advance.rounded())
     self.lineHeight = ceil(font.ascender - font.descender + font.leading)
-    self.baseline = ceil(font.ascender)
+  }
+
+  /// The extra advance that makes `characters` characters cover exactly
+  /// `cells` columns.
+  ///
+  /// A run carries one cell width throughout — the boundary is drawn where it
+  /// changes — so this is a division rather than a per-character measurement
+  /// on the drawing path.
+  func tracking(cells: Int, characters: Int) -> CGFloat {
+    guard characters > 0 else { return 0 }
+    let columns = CGFloat(cells) / CGFloat(characters)
+    let advance = columns > 1.5 ? wideAdvance : narrowAdvance
+    return columns * cellWidth - advance
   }
 
   func font(bold: Bool, italic: Bool) -> Font {
     var font = Font.system(size: size, weight: bold ? .bold : .regular, design: .monospaced)
     if italic { font = font.italic() }
     return font
+  }
+
+  /// How many cells of this font fit in a view, which is also the size a
+  /// terminal is told it is. Floor, not nearest: a fraction of a cell is
+  /// not a cell, and rounding up is how the last column was drawn past the
+  /// clip and never seen.
+  public func columns(fitting width: CGFloat) -> UInt16 {
+    UInt16(min(1000, max(1, width / cellWidth)))
+  }
+
+  public func rows(fitting height: CGFloat) -> UInt16 {
+    UInt16(min(500, max(1, height / lineHeight)))
   }
 }

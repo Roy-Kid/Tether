@@ -1,7 +1,8 @@
 //! Recorded byte streams in, asserted screen state out.
 
 use tether_terminal::{
-    Cell, Color, CursorShape, NamedColor, Options, ScreenSize, Scroll, Terminal, Underline,
+    Cell, Color, CursorShape, NamedColor, Options, Palette, Rgb, ScreenSize, Scroll, Terminal,
+    Underline,
 };
 
 fn terminal(columns: u16, rows: u16) -> Terminal {
@@ -336,4 +337,71 @@ fn new_output_does_not_move_a_viewport_that_is_reading_history() {
     // And coming back reaches the newest line, not where it used to be.
     term.scroll(Scroll::Live);
     assert!(term.screen().text().contains("line-29"), "the present is still the present");
+}
+
+/// A program asking what the background is gets the consumer's answer.
+///
+/// The one that matters in practice: with no reply, a program falls back to
+/// assuming the terminal is dark and paints its own theme over every cell,
+/// which no palette on the drawing side can undo.
+#[test]
+fn a_colour_query_is_answered_from_the_consumers_palette() {
+    let mut term = terminal(20, 5);
+    term.set_palette(Some(light()));
+
+    term.feed(b"\x1b]11;?\x07");
+    let reply = String::from_utf8(term.take_replies()).expect("a reply is text");
+    assert!(reply.starts_with("\x1b]11;rgb:"), "answers the question that was asked: {reply:?}");
+    assert!(reply.contains("fbfb/fbfb/fdfd"), "with the colour the consumer draws: {reply:?}");
+
+    term.feed(b"\x1b]10;?\x07");
+    let foreground = String::from_utf8(term.take_replies()).expect("a reply is text");
+    assert!(foreground.starts_with("\x1b]10;rgb:1f1f/2121/2828"), "{foreground:?}");
+
+    term.feed(b"\x1b]4;1;?\x07");
+    let red = String::from_utf8(term.take_replies()).expect("a reply is text");
+    assert!(red.contains("b3b3/1f1f/2b2b"), "the sixteen are the consumer's too: {red:?}");
+}
+
+/// A consumer that has not said what it draws with says nothing, rather than
+/// having a colour invented for it (spec §12).
+#[test]
+fn a_colour_query_goes_unanswered_without_a_palette() {
+    let mut term = terminal(20, 5);
+    term.feed(b"\x1b]11;?\x07");
+    assert!(term.take_replies().is_empty(), "no palette, no answer");
+
+    // Nor for an index the consumer never gave us: the 6x6x6 cube is not
+    // part of what a palette says.
+    term.set_palette(Some(light()));
+    term.feed(b"\x1b]4;123;?\x07");
+    assert!(term.take_replies().is_empty(), "only what the consumer chose");
+}
+
+/// A light palette, the shape a frontend would hand down.
+fn light() -> Palette {
+    let grey = Rgb::new(0x80, 0x80, 0x80);
+    Palette {
+        foreground: Rgb::new(0x1f, 0x21, 0x28),
+        background: Rgb::new(0xfb, 0xfb, 0xfd),
+        cursor: Rgb::new(0x00, 0x7a, 0xff),
+        ansi: [
+            Rgb::new(0x00, 0x00, 0x00),
+            Rgb::new(0xb3, 0x1f, 0x2b),
+            Rgb::new(0x1a, 0x66, 0x33),
+            Rgb::new(0x8c, 0x59, 0x0d),
+            Rgb::new(0x1f, 0x4f, 0xd8),
+            Rgb::new(0x7a, 0x2f, 0xa8),
+            Rgb::new(0x00, 0x66, 0x80),
+            grey,
+            grey,
+            Rgb::new(0xe5, 0x48, 0x4d),
+            Rgb::new(0x1a, 0x80, 0x40),
+            Rgb::new(0xf5, 0xa5, 0x24),
+            Rgb::new(0x4c, 0x8d, 0xff),
+            Rgb::new(0x8e, 0x4e, 0xc6),
+            Rgb::new(0x00, 0xa2, 0xc7),
+            Rgb::new(0xff, 0xff, 0xff),
+        ],
+    }
 }

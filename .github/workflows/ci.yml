@@ -8,6 +8,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The fuzzers find in an hour what they will not find in a minute. Every
+  # push gets a short pass; the night gets a long one.
+  schedule:
+    - cron: "0 3 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,13 +44,14 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets
 
-      - name: Install tmux for integration tests
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux and sftp-server for integration tests
+        run: sudo apt-get update && sudo apt-get install -y tmux openssh-sftp-server
 
       - name: Test
         run: cargo test --workspace
         env:
           TETHER_REQUIRE_TMUX: "1"
+          TETHER_REQUIRE_SFTP: "1"
 
       # CLAUDE.md states this as law and names this command as the test, so the
       # command runs rather than being quoted. `cargo tree` exits 0 whatever it
@@ -59,6 +64,39 @@ jobs:
             exit 1
           fi
           echo "clean: no russh in tether-terminal's tree"
+
+      # The same law from the other side. tether-local exists so that "a
+      # consumer who wants to render a local terminal" (spec §3) can have one
+      # without a protocol stack coming along; a dependency edge to tether-ssh
+      # would make that sentence false while every test still passed.
+      - name: the two producers do not reach each other
+        run: |
+          if cargo tree -p tether-local | grep -q russh; then
+            echo "::error::tether-local reached russh (spec §3, §8)"
+            cargo tree -p tether-local | grep -B5 russh
+            exit 1
+          fi
+          if cargo tree -p tether-ssh | grep -q portable-pty; then
+            echo "::error::tether-ssh reached portable-pty (spec §3, §8)"
+            cargo tree -p tether-ssh | grep -B5 portable-pty
+            exit 1
+          fi
+          echo "clean: tether-local and tether-ssh share no backend"
+
+      # A plugin reaches the app through TetherPluginKit and nothing else.
+      # The one line allowed to know a plugin by name is the one that
+      # registers it; anything more is the host growing a special case the
+      # seam should have carried (Decisions/0012).
+      - name: the app names no plugin
+        run: |
+          leaks=$(grep -rniE 'tmux|FilesPlugin|FilesTab' app/Sources \
+            | grep -vE 'import (Tmux|Files)Plugin$|registry\.register\((Tmux|Files)Plugin\(\)\)' || true)
+          if [ -n "$leaks" ]; then
+            echo "::error::the app reaches past the plugin seam (Decisions/0012)"
+            echo "$leaks"
+            exit 1
+          fi
+          echo "clean: tmux and files are only registered, never named"
 
       # The spec mirrors this file byte-for-byte into molab-apple. A copy that
       # silently diverges is worse than no copy, so the hash is printed for a
@@ -90,10 +128,53 @@ jobs:
       - name: Build Apple artifacts and generated bindings
         run: bash scripts/build-xcframework.sh
 
-      - name: Swift facade and plugin contract tests
+      # Tether itself, and nothing that plugs into it. The app package links
+      # whichever extensions a person has — including ones that live outside
+      # this repository — so building it here would make Tether's CI fail for
+      # reasons that have nothing to do with Tether. The app and its plugins
+      # are built and tested locally; what CI defends is the SDK.
+      - name: Swift facade and frontend tests
         run: |
           swift test --package-path swift
+          # The frontend suite includes the render-cost measurement, which is
+          # asserted as a rate so a slower runner does not fail it
+          # (Decisions/0006).
           swift test --package-path app/Packages/TetherFrontend
+          # The built-in plugins are Tether's own and needs nothing from
+          # outside this repository, so it is defended here: it is how the
+          # plugin seam is exercised by something real (Decisions/0012).
+          swift test --package-path app/Plugins/Tmux
+          swift test --package-path app/Plugins/Files
 
-      - name: Build macOS application
-        run: bash scripts/build-app.sh
+  fuzz:
+    name: fuzz the parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo-fuzz` needs nightly and a sanitizer; the rest of this workspace
+      # stays on stable, which is why `fuzz/` is its own workspace.
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+          cargo install cargo-fuzz --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\nfuzz -> target"
+
+      # A minute a target on a push — enough to replay every input that has
+      # failed before and to catch a regression. Ten on the nightly schedule,
+      # which is where something new is actually found.
+      - name: Fuzz
+        run: bash scripts/fuzz.sh ${{ github.event_name == 'schedule' && 600 || 60 }}
+
+      # A crash is worth keeping even when the job fails: it is the input a
+      # fix has to be written against.
+      - name: Keep whatever crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

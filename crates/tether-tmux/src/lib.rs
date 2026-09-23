@@ -1,11 +1,15 @@
 //! Transport-independent tmux workspaces. Protocol parsing is composed from tmuxctl;
 //! each pane feeds the same terminal engine as an ordinary SSH shell.
+mod framing;
+use framing::Framing;
+#[cfg(feature = "fuzzing")]
+pub use framing::frame_for_fuzzing;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tether_terminal::{Input, Options, Screen, ScreenSize, Terminal};
-use tmuxctl::{Event, Notification, Parser};
+use tether_terminal::{Input, Link, Options, Position, Screen, ScreenSize, Terminal};
+use tmuxctl::{Event, Notification};
 use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -133,10 +137,7 @@ impl Workspace {
         tokio::spawn(async move {
             let mut driver = Driver {
                 transport: Box::new(transport),
-                parser: Parser::new(),
-                buffer: Vec::new(),
-                events: VecDeque::new(),
-                block_bytes: 0,
+                framing: Framing::new(),
                 state: shared.clone(),
                 changed,
                 dirty: true,
@@ -169,6 +170,16 @@ impl Workspace {
                 .map(|p| PaneSnapshot { info: p.info.clone(), screen: p.terminal.screen() })
                 .collect(),
         }
+    }
+    /// What the text at a cell of `pane` names, as for a terminal of its
+    /// own. `None` for a pane that is not there.
+    pub fn link_at(&self, pane: u32, position: Position) -> Option<Link> {
+        self.state.lock().unwrap().panes.get(&pane)?.terminal.link_at(position)
+    }
+    /// The directory `pane`'s shell last reported, if it reports one.
+    pub fn working_directory(&self, pane: u32) -> Option<String> {
+        let state = self.state.lock().unwrap();
+        state.panes.get(&pane)?.terminal.working_directory().map(str::to_owned)
     }
     pub async fn changed(&self) -> bool {
         if self.state.lock().unwrap().ended.is_some() {
@@ -213,10 +224,7 @@ impl Drop for Workspace {
 
 struct Driver {
     transport: Box<dyn Transport>,
-    parser: Parser,
-    buffer: Vec<u8>,
-    events: VecDeque<Event>,
-    block_bytes: usize,
+    framing: Framing,
     state: Arc<Mutex<State>>,
     changed: watch::Sender<u64>,
     dirty: bool,
@@ -229,34 +237,13 @@ impl Driver {
     }
     async fn event(&mut self) -> Result<Event> {
         loop {
-            if let Some(event) = self.events.pop_front() {
+            if let Some(event) = self.framing.next() {
                 return Ok(event);
             }
             let bytes = self.transport.read().await?.ok_or_else(|| {
                 Error("Connection closed. Reconnect to restore this session.".into())
             })?;
-            self.buffer.extend(bytes);
-            if self.buffer.len() > 4 * 1024 * 1024 {
-                return Err(Error("tmux protocol line exceeds limit".into()));
-            }
-            while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
-                let mut line: Vec<_> = self.buffer.drain(..=end).collect();
-                line.pop();
-                // Bound recursive layout parsing before passing remote data upstream.
-                if line.starts_with(b"%layout-change ")
-                    && line.iter().filter(|b| matches!(b, b'[' | b'{')).count() > 64
-                {
-                    return Err(Error("tmux layout exceeds nesting limit".into()));
-                }
-                self.block_bytes += line.len();
-                if self.block_bytes > 8 * 1024 * 1024 {
-                    return Err(Error("tmux response exceeds limit".into()));
-                }
-                if let Some(event) = self.parser.push(&line) {
-                    self.block_bytes = 0;
-                    self.events.push_back(event);
-                }
-            }
+            self.framing.push(&bytes)?;
         }
     }
     fn notification(&mut self, notification: Notification) -> Result<()> {

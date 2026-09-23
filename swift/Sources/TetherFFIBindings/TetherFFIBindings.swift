@@ -1268,13 +1268,40 @@ public func FfiConverterTypeInteractivePrompter_lower(_ value: InteractivePrompt
 
 public protocol RemoteConnectionProtocol: AnyObject, Sendable {
     
+    /**
+     * Starts a file session where this lease's shell is running.
+     *
+     * A session of its own, beside the shell: a listing never waits behind
+     * what the terminal is doing, and closing the files closes nothing else.
+     */
+    func files(cancellation: CancellationToken) async throws  -> RemoteFiles
+    
     func attachTmux(sessionId: String, cancellation: CancellationToken) async throws  -> TmuxWorkspace
     
     func createTmux(name: String, cancellation: CancellationToken) async throws  -> TmuxSessionInfo
     
     func endTmux(sessionId: String) async throws 
     
+    /**
+     * Ends one window without attaching to its session. A window id is
+     * unique across the server, so it names the window on its own.
+     */
+    func endTmuxWindow(windowId: UInt32) async throws 
+    
+    /**
+     * Opens an interactive shell on this lease. No handshake: the connection
+     * is already authenticated, and a second terminal is another channel.
+     */
+    func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, cancellation: CancellationToken) async throws  -> Session
+    
     func renameTmux(sessionId: String, name: String) async throws 
+    
+    /**
+     * Where tmux says a pane's program is — `#{pane_current_path}`, which
+     * tmux reads from the process itself, so it is known even when the
+     * shell in the pane reports nothing.
+     */
+    func tmuxPaneDirectory(paneId: UInt32) async throws  -> String
     
     func tmuxSessions(cancellation: CancellationToken) async throws  -> [TmuxSessionInfo]
     
@@ -1332,6 +1359,28 @@ open class RemoteConnection: RemoteConnectionProtocol, @unchecked Sendable {
     
 
     
+    /**
+     * Starts a file session where this lease's shell is running.
+     *
+     * A session of its own, beside the shell: a listing never waits behind
+     * what the terminal is doing, and closing the files closes nothing else.
+     */
+open func files(cancellation: CancellationToken)async throws  -> RemoteFiles  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_files(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeRemoteFiles_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
 open func attachTmux(sessionId: String, cancellation: CancellationToken)async throws  -> TmuxWorkspace  {
     return
         try  await uniffiRustCallAsync(
@@ -1380,6 +1429,46 @@ open func endTmux(sessionId: String)async throws   {
         )
 }
     
+    /**
+     * Ends one window without attaching to its session. A window id is
+     * unique across the server, so it names the window on its own.
+     */
+open func endTmuxWindow(windowId: UInt32)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_end_tmux_window(
+                        self.uniffiCloneHandle(),FfiConverterUInt32.lower(windowId)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+    /**
+     * Opens an interactive shell on this lease. No handshake: the connection
+     * is already authenticated, and a second terminal is another channel.
+     */
+open func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, cancellation: CancellationToken)async throws  -> Session  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_open_shell(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(term),FfiConverterUInt16.lower(columns),FfiConverterUInt16.lower(rows),FfiConverterUInt32.lower(scrollbackLines),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSession_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
 open func renameTmux(sessionId: String, name: String)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -1392,6 +1481,27 @@ open func renameTmux(sessionId: String, name: String)async throws   {
             completeFunc: ffi_tether_ffi_rust_future_complete_void,
             freeFunc: ffi_tether_ffi_rust_future_free_void,
             liftFunc: { $0 },
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+    /**
+     * Where tmux says a pane's program is — `#{pane_current_path}`, which
+     * tmux reads from the process itself, so it is known even when the
+     * shell in the pane reports nothing.
+     */
+open func tmuxPaneDirectory(paneId: UInt32)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_tmux_pane_directory(
+                        self.uniffiCloneHandle(),FfiConverterUInt32.lower(paneId)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
@@ -1463,6 +1573,438 @@ public func FfiConverterTypeRemoteConnection_lower(_ value: RemoteConnection) ->
 
 
 /**
+ * Files on the machine a session's shell is running on.
+ *
+ * Holds the lease it was opened on, so the connection outlives the shell
+ * that granted it for as long as a browser is open.
+ */
+public protocol RemoteFilesProtocol: AnyObject, Sendable {
+    
+    /**
+     * Ends the file session. The shell is untouched.
+     */
+    func close() async 
+    
+    /**
+     * Copies `path` to `destination` on this machine, returning the bytes
+     * copied. `destination` is replaced if it exists, and appears only once
+     * the copy is whole.
+     */
+    func download(path: String, destination: String, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
+    
+    /**
+     * The account's home directory, as an absolute path.
+     */
+    func home() async throws  -> String
+    
+    /**
+     * Whether these files are on this machine, so a path is also a local
+     * path: a preview can show the file itself instead of a copy.
+     */
+    func isLocal()  -> Bool
+    
+    /**
+     * What is in `directory`, sorted by name, links listed as links.
+     */
+    func list(directory: String, cancellation: CancellationToken) async throws  -> [FileEntry]
+    
+    /**
+     * What `path` is, reporting a link as a link.
+     */
+    func lstat(path: String) async throws  -> FileEntry
+    
+    func makeDirectory(path: String) async throws 
+    
+    /**
+     * Removes a file, a link, or an empty directory.
+     */
+    func remove(path: String) async throws 
+    
+    /**
+     * Removes `path` and everything under it without following links,
+     * returning how many things were removed. Cancelling stops the walk;
+     * what was removed stays removed.
+     */
+    func removeTree(path: String, cancellation: CancellationToken) async throws  -> UInt64
+    
+    /**
+     * Moves `from` to `to`, replacing a file at `to` only when asked.
+     */
+    func rename(from: String, to: String, replace: Bool) async throws 
+    
+    /**
+     * `path` with `.`, `..` and links resolved, as the server sees it.
+     */
+    func resolve(path: String) async throws  -> String
+    
+    /**
+     * What `path` is, looking through a link.
+     */
+    func stat(path: String) async throws  -> FileEntry
+    
+    /**
+     * Copies `source` on this machine to `path`, returning the bytes
+     * copied. Refuses to replace an existing file unless `replace` is set,
+     * and never replaces a directory.
+     */
+    func upload(source: String, path: String, replace: Bool, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
+    
+}
+/**
+ * Files on the machine a session's shell is running on.
+ *
+ * Holds the lease it was opened on, so the connection outlives the shell
+ * that granted it for as long as a browser is open.
+ */
+open class RemoteFiles: RemoteFilesProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tether_ffi_fn_clone_remotefiles(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tether_ffi_fn_free_remotefiles(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Ends the file session. The shell is untouched.
+     */
+open func close()async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_close(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+            
+        )
+}
+    
+    /**
+     * Copies `path` to `destination` on this machine, returning the bytes
+     * copied. `destination` is replaced if it exists, and appears only once
+     * the copy is whole.
+     */
+open func download(path: String, destination: String, progress: TransferProgress?, cancellation: CancellationToken)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_download(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterString.lower(destination),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * The account's home directory, as an absolute path.
+     */
+open func home()async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_home(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Whether these files are on this machine, so a path is also a local
+     * path: a preview can show the file itself instead of a copy.
+     */
+open func isLocal() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_remotefiles_is_local(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * What is in `directory`, sorted by name, links listed as links.
+     */
+open func list(directory: String, cancellation: CancellationToken)async throws  -> [FileEntry]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_list(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(directory),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFileEntry.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * What `path` is, reporting a link as a link.
+     */
+open func lstat(path: String)async throws  -> FileEntry  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_lstat(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFileEntry_lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+open func makeDirectory(path: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_make_directory(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Removes a file, a link, or an empty directory.
+     */
+open func remove(path: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_remove(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Removes `path` and everything under it without following links,
+     * returning how many things were removed. Cancelling stops the walk;
+     * what was removed stays removed.
+     */
+open func removeTree(path: String, cancellation: CancellationToken)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_remove_tree(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Moves `from` to `to`, replacing a file at `to` only when asked.
+     */
+open func rename(from: String, to: String, replace: Bool)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_rename(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(from),FfiConverterString.lower(to),FfiConverterBool.lower(replace)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * `path` with `.`, `..` and links resolved, as the server sees it.
+     */
+open func resolve(path: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_resolve(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * What `path` is, looking through a link.
+     */
+open func stat(path: String)async throws  -> FileEntry  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_stat(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFileEntry_lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Copies `source` on this machine to `path`, returning the bytes
+     * copied. Refuses to replace an existing file unless `replace` is set,
+     * and never replaces a directory.
+     */
+open func upload(source: String, path: String, replace: Bool, progress: TransferProgress?, cancellation: CancellationToken)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_upload(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(source),FfiConverterString.lower(path),FfiConverterBool.lower(replace),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRemoteFiles: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = RemoteFiles
+
+    public static func lift(_ handle: UInt64) throws -> RemoteFiles {
+        return RemoteFiles(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: RemoteFiles) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteFiles {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: RemoteFiles, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteFiles_lift(_ handle: UInt64) throws -> RemoteFiles {
+    return try FfiConverterTypeRemoteFiles.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRemoteFiles_lower(_ value: RemoteFiles) -> UInt64 {
+    return FfiConverterTypeRemoteFiles.lower(value)
+}
+
+
+
+
+
+
+/**
  * A live terminal session.
  */
 public protocol SessionProtocol: AnyObject, Sendable {
@@ -1496,6 +2038,12 @@ public protocol SessionProtocol: AnyObject, Sendable {
     func frame()  -> ScreenFrame
     
     /**
+     * What the text at a cell names, if anything, and where it is drawn.
+     * Asked when a person points, not every frame.
+     */
+    func linkAt(row: UInt16, column: UInt16)  -> TerminalLink?
+    
+    /**
      * Tells both the engine and the far side that the window changed size.
      */
     func resize(columns: UInt16, rows: UInt16) throws 
@@ -1517,6 +2065,20 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * (spec §12).
      */
     func send(input: TerminalInput) throws 
+    
+    /**
+     * Tells the engine what this consumer draws with, so that a program
+     * asking for a colour is answered.
+     *
+     * Settable at any time: a person switching their window to light is the
+     * same question being asked again. `None` goes back to saying nothing.
+     */
+    func setPalette(palette: TerminalPalette?) throws 
+    
+    /**
+     * The directory the shell last reported, if it reports one.
+     */
+    func workingDirectory()  -> String?
     
 }
 /**
@@ -1646,6 +2208,21 @@ open func frame() -> ScreenFrame  {
 }
     
     /**
+     * What the text at a cell names, if anything, and where it is drawn.
+     * Asked when a person points, not every frame.
+     */
+open func linkAt(row: UInt16, column: UInt16) -> TerminalLink?  {
+    return try!  FfiConverterOptionTypeTerminalLink.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_link_at(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt16.lower(row),
+        FfiConverterUInt16.lower(column),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Tells both the engine and the far side that the window changed size.
      */
 open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
@@ -1688,6 +2265,34 @@ open func send(input: TerminalInput)throws   {try rustCallWithError(FfiConverter
         FfiConverterTypeTerminalInput_lower(input),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Tells the engine what this consumer draws with, so that a program
+     * asking for a colour is answered.
+     *
+     * Settable at any time: a person switching their window to light is the
+     * same question being asked again. `None` goes back to saying nothing.
+     */
+open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_set_palette(
+            self.uniffiCloneHandle(),
+        FfiConverterOptionTypeTerminalPalette.lower(palette),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * The directory the shell last reported, if it reports one.
+     */
+open func workingDirectory() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_working_directory(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
 
@@ -1746,11 +2351,21 @@ public protocol TmuxWorkspaceProtocol: AnyObject, Sendable {
     
     func detach() 
     
+    /**
+     * What the text at a cell of a pane names, as `Session::link_at`.
+     */
+    func linkAt(pane: UInt32, row: UInt16, column: UInt16)  -> TerminalLink?
+    
     func perform(action: TmuxAction) async throws 
     
     func send(pane: UInt32, input: TerminalInput) throws 
     
     func snapshot()  -> TmuxSnapshot
+    
+    /**
+     * The directory a pane's shell last reported, if it reports one.
+     */
+    func workingDirectory(pane: UInt32)  -> String?
     
 }
 open class TmuxWorkspace: TmuxWorkspaceProtocol, @unchecked Sendable {
@@ -1831,6 +2446,21 @@ open func detach()  {try! rustCall() {
 }
 }
     
+    /**
+     * What the text at a cell of a pane names, as `Session::link_at`.
+     */
+open func linkAt(pane: UInt32, row: UInt16, column: UInt16) -> TerminalLink?  {
+    return try!  FfiConverterOptionTypeTerminalLink.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_tmuxworkspace_link_at(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(pane),
+        FfiConverterUInt16.lower(row),
+        FfiConverterUInt16.lower(column),uniffiCallStatus
+    )
+})
+}
+    
 open func perform(action: TmuxAction)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -1862,6 +2492,19 @@ open func snapshot() -> TmuxSnapshot  {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_snapshot(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The directory a pane's shell last reported, if it reports one.
+     */
+open func workingDirectory(pane: UInt32) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_tmuxworkspace_working_directory(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(pane),uniffiCallStatus
     )
 })
 }
@@ -1909,6 +2552,212 @@ public func FfiConverterTypeTmuxWorkspace_lift(_ handle: UInt64) throws -> TmuxW
 #endif
 public func FfiConverterTypeTmuxWorkspace_lower(_ value: TmuxWorkspace) -> UInt64 {
     return FfiConverterTypeTmuxWorkspace.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Hears how far a transfer has got: the running total in bytes, after each
+ * chunk. Called from a background thread.
+ */
+public protocol TransferProgress: AnyObject, Sendable {
+    
+    func advanced(bytes: UInt64) 
+    
+}
+/**
+ * Hears how far a transfer has got: the running total in bytes, after each
+ * chunk. Called from a background thread.
+ */
+open class TransferProgressImpl: TransferProgress, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tether_ffi_fn_clone_transferprogress(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tether_ffi_fn_free_transferprogress(handle, $0) }
+    }
+
+    
+
+    
+open func advanced(bytes: UInt64)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_transferprogress_advanced(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(bytes),uniffiCallStatus
+    )
+}
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceTransferProgress {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceTransferProgress = UniffiVTableCallbackInterfaceTransferProgress(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeTransferProgress.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface TransferProgress: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeTransferProgress.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface TransferProgress: handle missing in uniffiClone")
+            }
+        },
+        advanced: { (
+            uniffiHandle: UInt64,
+            bytes: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeTransferProgress.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.advanced(
+                     bytes: try FfiConverterUInt64.lift(bytes)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceTransferProgress> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceTransferProgress>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitTransferProgress() {
+    uniffi_tether_ffi_fn_init_callback_vtable_transferprogress(UniffiCallbackInterfaceTransferProgress.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTransferProgress: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<TransferProgress>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = TransferProgress
+
+    public static func lift(_ handle: UInt64) throws -> TransferProgress {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return TransferProgressImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: TransferProgress) -> UInt64 {
+         if let rustImpl = value as? TransferProgressImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferProgress {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TransferProgress, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferProgress_lift(_ handle: UInt64) throws -> TransferProgress {
+    return try FfiConverterTypeTransferProgress.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferProgress_lower(_ value: TransferProgress) -> UInt64 {
+    return FfiConverterTypeTransferProgress.lower(value)
 }
 
 
@@ -2065,6 +2914,67 @@ public func FfiConverterTypeCellStyle_lower(_ value: CellStyle) -> RustBuffer {
 
 
 /**
+ * One colour, as the far side will be told it.
+ */
+public struct ColorValue: Equatable, Hashable {
+    public let red: UInt8
+    public let green: UInt8
+    public let blue: UInt8
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(red: UInt8, green: UInt8, blue: UInt8) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ColorValue: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeColorValue: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ColorValue {
+        return
+            try ColorValue(
+                red: FfiConverterUInt8.read(from: &buf), 
+                green: FfiConverterUInt8.read(from: &buf), 
+                blue: FfiConverterUInt8.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ColorValue, into buf: inout [UInt8]) {
+        FfiConverterUInt8.write(value.red, into: &buf)
+        FfiConverterUInt8.write(value.green, into: &buf)
+        FfiConverterUInt8.write(value.blue, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeColorValue_lift(_ buf: RustBuffer) throws -> ColorValue {
+    return try FfiConverterTypeColorValue.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeColorValue_lower(_ value: ColorValue) -> RustBuffer {
+    return FfiConverterTypeColorValue.lower(value)
+}
+
+
+/**
  * Where to connect and as whom.
  */
 public struct Destination: Equatable, Hashable {
@@ -2148,6 +3058,94 @@ public func FfiConverterTypeDestination_lift(_ buf: RustBuffer) throws -> Destin
 #endif
 public func FfiConverterTypeDestination_lower(_ value: Destination) -> RustBuffer {
     return FfiConverterTypeDestination.lower(value)
+}
+
+
+/**
+ * A file, directory or link on the far side.
+ *
+ * `name` is exactly what the server sent: data, not a path, and not safe to
+ * show a person or use as a local file name without cleaning (spec §18).
+ */
+public struct FileEntry: Equatable, Hashable {
+    public let name: String
+    public let path: String
+    public let kind: FileKind
+    public let size: UInt64
+    /**
+     * Seconds since the Unix epoch, when the server said.
+     */
+    public let modified: UInt64?
+    /**
+     * Permission bits, without the type.
+     */
+    public let permissions: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, path: String, kind: FileKind, size: UInt64, 
+        /**
+         * Seconds since the Unix epoch, when the server said.
+         */modified: UInt64?, 
+        /**
+         * Permission bits, without the type.
+         */permissions: UInt32) {
+        self.name = name
+        self.path = path
+        self.kind = kind
+        self.size = size
+        self.modified = modified
+        self.permissions = permissions
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FileEntry: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFileEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileEntry {
+        return
+            try FileEntry(
+                name: FfiConverterString.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeFileKind.read(from: &buf), 
+                size: FfiConverterUInt64.read(from: &buf), 
+                modified: FfiConverterOptionUInt64.read(from: &buf), 
+                permissions: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FileEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterTypeFileKind.write(value.kind, into: &buf)
+        FfiConverterUInt64.write(value.size, into: &buf)
+        FfiConverterOptionUInt64.write(value.modified, into: &buf)
+        FfiConverterUInt32.write(value.permissions, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileEntry_lift(_ buf: RustBuffer) throws -> FileEntry {
+    return try FfiConverterTypeFileEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileEntry_lower(_ value: FileEntry) -> RustBuffer {
+    return FfiConverterTypeFileEntry.lower(value)
 }
 
 
@@ -2287,6 +3285,172 @@ public func FfiConverterTypeKeyModifiers_lift(_ buf: RustBuffer) throws -> KeyMo
 #endif
 public func FfiConverterTypeKeyModifiers_lower(_ value: KeyModifiers) -> RustBuffer {
     return FfiConverterTypeKeyModifiers.lower(value)
+}
+
+
+/**
+ * Where a link is drawn on one screen row.
+ */
+public struct LinkSpan: Equatable, Hashable {
+    public let row: UInt16
+    /**
+     * First column, inclusive.
+     */
+    public let start: UInt16
+    /**
+     * One past the last column.
+     */
+    public let end: UInt16
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(row: UInt16, 
+        /**
+         * First column, inclusive.
+         */start: UInt16, 
+        /**
+         * One past the last column.
+         */end: UInt16) {
+        self.row = row
+        self.start = start
+        self.end = end
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension LinkSpan: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLinkSpan: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkSpan {
+        return
+            try LinkSpan(
+                row: FfiConverterUInt16.read(from: &buf), 
+                start: FfiConverterUInt16.read(from: &buf), 
+                end: FfiConverterUInt16.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LinkSpan, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.row, into: &buf)
+        FfiConverterUInt16.write(value.start, into: &buf)
+        FfiConverterUInt16.write(value.end, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkSpan_lift(_ buf: RustBuffer) throws -> LinkSpan {
+    return try FfiConverterTypeLinkSpan.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkSpan_lower(_ value: LinkSpan) -> RustBuffer {
+    return FfiConverterTypeLinkSpan.lower(value)
+}
+
+
+/**
+ * Where a shell on this machine starts, and what it should believe it is
+ * running on.
+ *
+ * No host, no user and no credential, and that absence is the design rather
+ * than an omission: there is no handshake with the machine the application
+ * is already running on. What comes back is the same [`Session`] a remote
+ * connection returns, so nothing above this point has two paths to maintain.
+ */
+public struct LocalShell: Equatable, Hashable {
+    /**
+     * Where the shell starts. The person's home directory when absent,
+     * which is what a shell would have chosen anyway.
+     */
+    public let directory: String?
+    /**
+     * What the shell will see in `$TERM`. It decides which sequences
+     * programs emit, so it must describe what this frontend can actually
+     * draw.
+     */
+    public let term: String
+    public let columns: UInt16
+    public let rows: UInt16
+    public let scrollbackLines: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Where the shell starts. The person's home directory when absent,
+         * which is what a shell would have chosen anyway.
+         */directory: String?, 
+        /**
+         * What the shell will see in `$TERM`. It decides which sequences
+         * programs emit, so it must describe what this frontend can actually
+         * draw.
+         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32) {
+        self.directory = directory
+        self.term = term
+        self.columns = columns
+        self.rows = rows
+        self.scrollbackLines = scrollbackLines
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension LocalShell: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LocalShell {
+        return
+            try LocalShell(
+                directory: FfiConverterOptionString.read(from: &buf), 
+                term: FfiConverterString.read(from: &buf), 
+                columns: FfiConverterUInt16.read(from: &buf), 
+                rows: FfiConverterUInt16.read(from: &buf), 
+                scrollbackLines: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LocalShell, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.directory, into: &buf)
+        FfiConverterString.write(value.term, into: &buf)
+        FfiConverterUInt16.write(value.columns, into: &buf)
+        FfiConverterUInt16.write(value.rows, into: &buf)
+        FfiConverterUInt32.write(value.scrollbackLines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLocalShell_lift(_ buf: RustBuffer) throws -> LocalShell {
+    return try FfiConverterTypeLocalShell.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLocalShell_lower(_ value: LocalShell) -> RustBuffer {
+    return FfiConverterTypeLocalShell.lower(value)
 }
 
 
@@ -2456,7 +3620,14 @@ public func FfiConverterTypeScreenRow_lower(_ value: ScreenRow) -> RustBuffer {
 
 
 /**
- * A stretch of text on one row that looks the same all the way along.
+ * A stretch of text on one row that looks the same all the way along, every
+ * character of it covering the same number of columns.
+ *
+ * Uniform width is part of the contract, not an accident of the data. A
+ * frontend draws a run as one string and has to space that string to the
+ * grid; it can only do that from `columns / characters`, which is a whole
+ * number of columns per character exactly when the run does not mix widths.
+ * So a row breaks where the width changes, as well as where the style does.
  */
 public struct StyledRun: Equatable, Hashable {
     public let text: String
@@ -2523,6 +3694,219 @@ public func FfiConverterTypeStyledRun_lift(_ buf: RustBuffer) throws -> StyledRu
 #endif
 public func FfiConverterTypeStyledRun_lower(_ value: StyledRun) -> RustBuffer {
     return FfiConverterTypeStyledRun.lower(value)
+}
+
+
+/**
+ * Something on screen that names a place, and where it is drawn.
+ */
+public struct TerminalLink: Equatable, Hashable {
+    public let text: String
+    public let kind: LinkKind
+    public let spans: [LinkSpan]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, kind: LinkKind, spans: [LinkSpan]) {
+        self.text = text
+        self.kind = kind
+        self.spans = spans
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TerminalLink: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTerminalLink: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalLink {
+        return
+            try TerminalLink(
+                text: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeLinkKind.read(from: &buf), 
+                spans: FfiConverterSequenceTypeLinkSpan.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TerminalLink, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterTypeLinkKind.write(value.kind, into: &buf)
+        FfiConverterSequenceTypeLinkSpan.write(value.spans, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalLink_lift(_ buf: RustBuffer) throws -> TerminalLink {
+    return try FfiConverterTypeTerminalLink.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalLink_lower(_ value: TerminalLink) -> RustBuffer {
+    return FfiConverterTypeTerminalLink.lower(value)
+}
+
+
+/**
+ * What a consumer draws with, for the questions the far side asks.
+ *
+ * Not the screen: cells still report colour *names*, and what `red` looks
+ * like stays the consumer's business (spec §12). This is the answer to
+ * `OSC 11 ; ?` — "what is your background?" — which only whoever draws can
+ * give. A program that asks and hears nothing assumes the terminal is dark
+ * and paints its own theme over every cell, which is how a light window
+ * ends up black.
+ */
+public struct TerminalPalette: Equatable, Hashable {
+    public let foreground: ColorValue
+    public let background: ColorValue
+    public let cursor: ColorValue
+    /**
+     * The sixteen ANSI colours: eight normal, then eight bright. Any other
+     * length is refused rather than padded — a palette that is not sixteen
+     * colours is a mistake on the consumer's side, not a default.
+     */
+    public let ansi: [ColorValue]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(foreground: ColorValue, background: ColorValue, cursor: ColorValue, 
+        /**
+         * The sixteen ANSI colours: eight normal, then eight bright. Any other
+         * length is refused rather than padded — a palette that is not sixteen
+         * colours is a mistake on the consumer's side, not a default.
+         */ansi: [ColorValue]) {
+        self.foreground = foreground
+        self.background = background
+        self.cursor = cursor
+        self.ansi = ansi
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TerminalPalette: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTerminalPalette: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalPalette {
+        return
+            try TerminalPalette(
+                foreground: FfiConverterTypeColorValue.read(from: &buf), 
+                background: FfiConverterTypeColorValue.read(from: &buf), 
+                cursor: FfiConverterTypeColorValue.read(from: &buf), 
+                ansi: FfiConverterSequenceTypeColorValue.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TerminalPalette, into buf: inout [UInt8]) {
+        FfiConverterTypeColorValue.write(value.foreground, into: &buf)
+        FfiConverterTypeColorValue.write(value.background, into: &buf)
+        FfiConverterTypeColorValue.write(value.cursor, into: &buf)
+        FfiConverterSequenceTypeColorValue.write(value.ansi, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalPalette_lift(_ buf: RustBuffer) throws -> TerminalPalette {
+    return try FfiConverterTypeTerminalPalette.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalPalette_lower(_ value: TerminalPalette) -> RustBuffer {
+    return FfiConverterTypeTerminalPalette.lower(value)
+}
+
+
+/**
+ * A window discovered by listing, not by attaching. Listing is a capture;
+ * it must not open a control client.
+ */
+public struct TmuxListedWindow: Equatable, Hashable {
+    public let id: UInt32
+    public let index: UInt32
+    public let name: String
+    public let active: Bool
+    public let panes: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: UInt32, index: UInt32, name: String, active: Bool, panes: UInt32) {
+        self.id = id
+        self.index = index
+        self.name = name
+        self.active = active
+        self.panes = panes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TmuxListedWindow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTmuxListedWindow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxListedWindow {
+        return
+            try TmuxListedWindow(
+                id: FfiConverterUInt32.read(from: &buf), 
+                index: FfiConverterUInt32.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                active: FfiConverterBool.read(from: &buf), 
+                panes: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TmuxListedWindow, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.id, into: &buf)
+        FfiConverterUInt32.write(value.index, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterBool.write(value.active, into: &buf)
+        FfiConverterUInt32.write(value.panes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTmuxListedWindow_lift(_ buf: RustBuffer) throws -> TmuxListedWindow {
+    return try FfiConverterTypeTmuxListedWindow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTmuxListedWindow_lower(_ value: TmuxListedWindow) -> RustBuffer {
+    return FfiConverterTypeTmuxListedWindow.lower(value)
 }
 
 
@@ -2611,12 +3995,16 @@ public func FfiConverterTypeTmuxPaneFrame_lower(_ value: TmuxPaneFrame) -> RustB
 public struct TmuxSessionInfo: Equatable, Hashable {
     public let id: String
     public let name: String
+    public let attached: Bool
+    public let windows: [TmuxListedWindow]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String) {
+    public init(id: String, name: String, attached: Bool, windows: [TmuxListedWindow]) {
         self.id = id
         self.name = name
+        self.attached = attached
+        self.windows = windows
     }
 
     
@@ -2636,13 +4024,17 @@ public struct FfiConverterTypeTmuxSessionInfo: FfiConverterRustBuffer {
         return
             try TmuxSessionInfo(
                 id: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf)
+                name: FfiConverterString.read(from: &buf), 
+                attached: FfiConverterBool.read(from: &buf), 
+                windows: FfiConverterSequenceTypeTmuxListedWindow.read(from: &buf)
         )
     }
 
     public static func write(_ value: TmuxSessionInfo, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.name, into: &buf)
+        FfiConverterBool.write(value.attached, into: &buf)
+        FfiConverterSequenceTypeTmuxListedWindow.write(value.windows, into: &buf)
     }
 }
 
@@ -3142,6 +4534,227 @@ public func FfiConverterTypeColorName_lower(_ value: ColorName) -> RustBuffer {
 
 
 /**
+ * Why a file operation did not happen, in shapes a person can act on.
+ *
+ * The server's status code is context inside `cause`, never a case of its
+ * own (spec §18).
+ */
+public 
+enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case NotFound(path: String
+    )
+    case Exists(path: String
+    )
+    case PermissionDenied(path: String
+    )
+    case NotEmpty(path: String
+    )
+    case Cancelled
+    case Disconnected(cause: String
+    )
+    case Failed(cause: String
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension FileError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
+    typealias SwiftType = FileError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .NotFound(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .Exists(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .PermissionDenied(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .NotEmpty(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .Cancelled
+        case 6: return .Disconnected(
+            cause: try FfiConverterString.read(from: &buf)
+            )
+        case 7: return .Failed(
+            cause: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FileError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .NotFound(path):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .Exists(path):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .PermissionDenied(path):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .NotEmpty(path):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case .Cancelled:
+            writeInt(&buf, Int32(5))
+        
+        
+        case let .Disconnected(cause):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(cause, into: &buf)
+            
+        
+        case let .Failed(cause):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(cause, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileError_lift(_ buf: RustBuffer) throws -> FileError {
+    return try FfiConverterTypeFileError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileError_lower(_ value: FileError) -> RustBuffer {
+    return FfiConverterTypeFileError.lower(value)
+}
+
+
+/**
+ * What an entry is. A link is reported as a link; [`RemoteFiles::stat`]
+ * looks through it.
+ */
+
+public enum FileKind: Equatable, Hashable {
+    
+    case file
+    case directory
+    case link
+    case other
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FileKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFileKind: FfiConverterRustBuffer {
+    typealias SwiftType = FileKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .file
+        
+        case 2: return .directory
+        
+        case 3: return .link
+        
+        case 4: return .other
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FileKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .file:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .directory:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .link:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .other:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileKind_lift(_ buf: RustBuffer) throws -> FileKind {
+    return try FfiConverterTypeFileKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileKind_lower(_ value: FileKind) -> RustBuffer {
+    return FfiConverterTypeFileKind.lower(value)
+}
+
+
+
+/**
  * A key, named by what it is rather than by a scancode.
  *
  * `Char` carries a `String`, not a character: what a person typed may be a
@@ -3315,6 +4928,101 @@ public func FfiConverterTypeKeyPress_lift(_ buf: RustBuffer) throws -> KeyPress 
 #endif
 public func FfiConverterTypeKeyPress_lower(_ value: KeyPress) -> RustBuffer {
     return FfiConverterTypeKeyPress.lower(value)
+}
+
+
+
+/**
+ * What a link points at. A path is shape, not truth: nothing has asked the
+ * far side whether it exists.
+ */
+
+public enum LinkKind: Equatable, Hashable {
+    
+    /**
+     * The URI a program attached with `OSC 8`, exactly as sent.
+     */
+    case hyperlink(uri: String
+    )
+    case url(url: String
+    )
+    /**
+     * Relative or absolute, as printed; `line` and `column` when it carried
+     * `:12:5`.
+     */
+    case path(path: String, line: UInt32?, column: UInt32?
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension LinkKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLinkKind: FfiConverterRustBuffer {
+    typealias SwiftType = LinkKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .hyperlink(uri: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .url(url: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .path(path: try FfiConverterString.read(from: &buf), line: try FfiConverterOptionUInt32.read(from: &buf), column: try FfiConverterOptionUInt32.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: LinkKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .hyperlink(uri):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(uri, into: &buf)
+            
+        
+        case let .url(url):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(url, into: &buf)
+            
+        
+        case let .path(path,line,column):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(path, into: &buf)
+            FfiConverterOptionUInt32.write(line, into: &buf)
+            FfiConverterOptionUInt32.write(column, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkKind_lift(_ buf: RustBuffer) throws -> LinkKind {
+    return try FfiConverterTypeLinkKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkKind_lower(_ value: LinkKind) -> RustBuffer {
+    return FfiConverterTypeLinkKind.lower(value)
 }
 
 
@@ -3708,7 +5416,21 @@ enum TetherError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case MoreFactorsNeeded(remaining: [String]
     )
     case NothingToOffer
+    /**
+     * Neither side would give us a shell. Worded for both, because by this
+     * point a consumer holds a session and does not care whether the shell
+     * it asked for was going to run here or somewhere else.
+     */
     case ShellRefused(cause: String
+    )
+    /**
+     * The system does not let an application do this at all.
+     *
+     * iOS and a local shell is the case it exists for: there is no
+     * `fork`/`exec` outside the sandbox. Distinct from a refusal, because a
+     * refusal is something a person might fix and this is not.
+     */
+    case Unsupported(what: String
     )
     case Disconnected(cause: String
     )
@@ -3765,11 +5487,14 @@ public struct FfiConverterTypeTetherError: FfiConverterRustBuffer {
         case 8: return .ShellRefused(
             cause: try FfiConverterString.read(from: &buf)
             )
-        case 9: return .Disconnected(
+        case 9: return .Unsupported(
+            what: try FfiConverterString.read(from: &buf)
+            )
+        case 10: return .Disconnected(
             cause: try FfiConverterString.read(from: &buf)
             )
-        case 10: return .SessionEnded
-        case 11: return .Protocol(
+        case 11: return .SessionEnded
+        case 12: return .Protocol(
             cause: try FfiConverterString.read(from: &buf)
             )
 
@@ -3823,17 +5548,22 @@ public struct FfiConverterTypeTetherError: FfiConverterRustBuffer {
             FfiConverterString.write(cause, into: &buf)
             
         
-        case let .Disconnected(cause):
+        case let .Unsupported(what):
             writeInt(&buf, Int32(9))
+            FfiConverterString.write(what, into: &buf)
+            
+        
+        case let .Disconnected(cause):
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(cause, into: &buf)
             
         
         case .SessionEnded:
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(11))
         
         
         case let .Protocol(cause):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(12))
             FfiConverterString.write(cause, into: &buf)
             
         }
@@ -4123,6 +5853,54 @@ public func FfiConverterTypeUnderlineStyle_lower(_ value: UnderlineStyle) -> Rus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -4187,6 +5965,78 @@ fileprivate struct FfiConverterOptionTypeRemoteConnection: FfiConverterRustBuffe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeRemoteConnection.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeTransferProgress: FfiConverterRustBuffer {
+    typealias SwiftType = TransferProgress?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTransferProgress.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTransferProgress.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeTerminalLink: FfiConverterRustBuffer {
+    typealias SwiftType = TerminalLink?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTerminalLink.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTerminalLink.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeTerminalPalette: FfiConverterRustBuffer {
+    typealias SwiftType = TerminalPalette?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTerminalPalette.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTerminalPalette.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4293,6 +6143,81 @@ fileprivate struct FfiConverterSequenceTypeAuthPrompt: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeColorValue: FfiConverterRustBuffer {
+    typealias SwiftType = [ColorValue]
+
+    public static func write(_ value: [ColorValue], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeColorValue.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ColorValue] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ColorValue]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeColorValue.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFileEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [FileEntry]
+
+    public static func write(_ value: [FileEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFileEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FileEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FileEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFileEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeLinkSpan: FfiConverterRustBuffer {
+    typealias SwiftType = [LinkSpan]
+
+    public static func write(_ value: [LinkSpan], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeLinkSpan.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [LinkSpan] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [LinkSpan]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeLinkSpan.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeScreenRow: FfiConverterRustBuffer {
     typealias SwiftType = [ScreenRow]
 
@@ -4335,6 +6260,31 @@ fileprivate struct FfiConverterSequenceTypeStyledRun: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeStyledRun.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeTmuxListedWindow: FfiConverterRustBuffer {
+    typealias SwiftType = [TmuxListedWindow]
+
+    public static func write(_ value: [TmuxListedWindow], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTmuxListedWindow.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TmuxListedWindow] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TmuxListedWindow]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTmuxListedWindow.read(from: &buf))
         }
         return seq
     }
@@ -4677,6 +6627,101 @@ public func connectCancellable(destination: Destination, trust: HostTrust, secre
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
+/**
+ * Opens a shell by asking the OpenSSH client, typically a ControlMaster.
+ */
+public func connectOverSshClient(target: String, shell: LocalShell)async throws  -> Session  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_func_connect_over_ssh_client(FfiConverterString.lower(target),FfiConverterTypeLocalShell_lower(shell)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSession_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+/**
+ * Cancellation-aware attach; the original remains source compatible.
+ */
+public func connectOverSshClientCancellable(target: String, shell: LocalShell, cancellation: CancellationToken)async throws  -> Session  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_func_connect_over_ssh_client_cancellable(FfiConverterString.lower(target),FfiConverterTypeLocalShell_lower(shell),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSession_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+/**
+ * Whether this platform lets an application start a shell.
+ *
+ * A question, so a consumer can leave the feature out of its interface
+ * rather than offer one that always refuses. iOS answers `false`: there is
+ * no `fork`/`exec` outside the sandbox, and that is the system's decision,
+ * not a setting.
+ */
+public func localShellAvailable() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_func_local_shell_available(uniffiCallStatus
+    )
+})
+}
+/**
+ * Opens a shell on this machine.
+ *
+ * `async` although nothing here waits on a network: the session it returns
+ * spawns a pump task, and `async_runtime = "tokio"` is what puts this call
+ * inside a runtime that has one. Without it UniFFI polls on its own
+ * executor, where there is no reactor, and the failure reaches a consumer as
+ * an opaque `rustPanic`.
+ */
+public func openLocal(shell: LocalShell)async throws  -> Session  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_func_open_local(FfiConverterTypeLocalShell_lower(shell)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSession_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+/**
+ * Whether `ssh -O check` says a multiplexing master is already running
+ * for this config alias.
+ *
+ * A live master is a handshake that has already been spent. The
+ * application attaches through OpenSSH instead of offering credentials
+ * again (Decisions/0010).
+ */
+public func sshMasterRunning(target: String)async  -> Bool  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_func_ssh_master_running(FfiConverterString.lower(target)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_i8,
+            completeFunc: ffi_tether_ffi_rust_future_complete_i8,
+            freeFunc: ffi_tether_ffi_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: nil
+            
+        )
+}
 
 private enum InitializationResult {
     case ok
@@ -4708,6 +6753,21 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_func_connect_cancellable() != 18026) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client() != 50328) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client_cancellable() != 37312) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_func_local_shell_available() != 25015) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_func_open_local() != 41710) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 21514) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_cancellationtoken_cancel() != 61232) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4715,6 +6775,48 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_interactiveprompter_answer() != 43310) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_close() != 30556) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_download() != 8604) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_home() != 39425) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_is_local() != 2775) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_list() != 16513) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_lstat() != 44713) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_make_directory() != 20024) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_remove() != 43271) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_remove_tree() != 27763) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_rename() != 49340) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_resolve() != 21672) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_stat() != 59160) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_upload() != 59853) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55719) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_hosttrust_trusts() != 64491) {
@@ -4735,6 +6837,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_session_frame() != 8673) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_session_link_at() != 40864) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_session_resize() != 15330) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4742,6 +6847,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_send() != 41763) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_set_palette() != 2490) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_working_directory() != 14461) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_files() != 58178) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_attach_tmux() != 1714) {
@@ -4753,7 +6867,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux() != 28349) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux_window() != 61139) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 34310) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 30515) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 5827) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_sessions() != 42607) {
@@ -4765,6 +6888,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_tmuxworkspace_detach() != 14549) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_link_at() != 50267) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_tmuxworkspace_perform() != 33101) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4774,12 +6900,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_tmuxworkspace_snapshot() != 39639) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_working_directory() != 53044) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_constructor_cancellationtoken_new() != 63626) {
         return InitializationResult.apiChecksumMismatch
     }
 
     uniffiCallbackInitHostTrust()
     uniffiCallbackInitInteractivePrompter()
+    uniffiCallbackInitTransferProgress()
     return InitializationResult.ok
 }()
 

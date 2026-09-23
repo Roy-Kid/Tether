@@ -59,6 +59,19 @@ rm -rf "$APP"
 mkdir -p "$APP"
 cp "$binary" "$APP/TetherApp"
 
+# Same catalog as the Mac bundle. iOS wants the 60pt/76pt PNGs plus Assets.car.
+partial=$(mktemp)
+xcrun actool app/Assets.xcassets \
+  --compile "$APP" \
+  --platform iphonesimulator \
+  --minimum-deployment-target 26.0 \
+  --app-icon AppIcon \
+  --target-device iphone \
+  --target-device ipad \
+  --output-partial-info-plist "$partial" \
+  --notices --warnings
+rm -f "$partial"
+
 # A flat bundle, not Contents/MacOS: iOS puts the executable at the top.
 cat > "$APP/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -72,6 +85,31 @@ cat > "$APP/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.0.0</string>
     <key>CFBundleVersion</key><string>0</string>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+            </array>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+                <string>AppIcon76x76</string>
+            </array>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
+        </dict>
+    </dict>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>MinimumOSVersion</key><string>26.0</string>
     <key>UILaunchScreen</key><dict/>
@@ -79,6 +117,13 @@ cat > "$APP/Info.plist" <<'PLIST'
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>

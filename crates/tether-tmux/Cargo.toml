@@ -12,3 +12,8 @@ async-trait.workspace = true
 thiserror.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "rt-multi-thread"] }
+
+# `fuzz/` reaches the control-stream framing directly. Off by default: it is a
+# test seam, not part of the crate's surface.
+[features]
+fuzzing = []

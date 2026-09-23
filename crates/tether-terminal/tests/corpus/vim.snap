@@ -1,0 +1,88 @@
+# vim — an editor — the alternate screen, a status line, syntax colour
+#
+# 3585 bytes at 80x24. Regenerate with TETHER_BLESS=1.
+
+── after 1792 of 3585 bytes ──
+80x24 · cursor (20,28) Hidden (hidden) · alt on · appkeys on · bracketed on · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │  1 // A file with enough shape for an editor to colour.
+   │aaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+ 1 │  2 use std::collections::BTreeMap;
+   │aaaaaaa·cccddcccccccccccdd
+ 2 │  3
+   │aaaa
+ 3 │  4 /// 一个宽字符标题 — and an emoji: 👨<200d>👩<200d>👧
+   │aaaadddddddddddddddddddddddddddddddddddddccccccddccccccdd
+ 4 │  5 pub struct Ledger {
+   │aaaaaaa·aaaaaa·eeeeee
+ 5 │  6     entries: BTreeMap<String, i64>,
+   │aaaa·····················affffff··fffa
+ 6 │  7 }
+   │aaaa
+ 7 │  8
+   │aaaa
+ 8 │  9 impl Ledger {
+   │aaaaaaaa
+ 9 │ 10     pub fn credit(&mut self, who: &str, amount: i64) {
+   │aaaa····aaa·aa·eeeeee·ffff·gggg·······ffff··········fff
+10 │ 11         *self.entries.entry(who.to_string()).or_default() += amount;
+   │aaaa········fgggg·········eeeee·····eeeeeeeee····eeeeeeeeee···aa
+11 │ 12     }
+   │aaaa
+12 │ 13 }
+   │aaaa
+13 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+14 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+15 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+16 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+17 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+18 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+19 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+20 │~
+   │hhhhhhhhhhhhhhhhhhhhhhhhhhhh
+21 │
+22 │
+23 │"sample.rs" 13L, 354B
+    a = fg BrightYellow
+    b = fg BrightCyan
+    c = fg #81
+    d = fg #224
+    e = fg BrightCyan bold
+    f = fg #121
+    g = fg BrightMagenta
+    h = fg BrightBlue
+
+── at the end ──
+80x24 · cursor (0,0) Block · alt off · appkeys off · bracketed off · mouse off · wrap on
+viewport offset 0 of 0 history · title ""
+ 0 │
+ 1 │
+ 2 │
+ 3 │
+ 4 │
+ 5 │
+ 6 │
+ 7 │
+ 8 │
+ 9 │
+10 │
+11 │
+12 │
+13 │
+14 │
+15 │
+16 │
+17 │
+18 │
+19 │
+20 │
+21 │
+22 │
+23 │

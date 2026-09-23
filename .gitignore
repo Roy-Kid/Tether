@@ -11,3 +11,13 @@ swift/Artifacts/
 # Assembled application bundles, produced by scripts/build-app.sh and
 # scripts/build-app-ios.sh. Hundreds of megabytes, reproducible from source.
 /build/
+
+# Fuzzing. The corpus the fuzzer grows and its build are outputs; a crashing
+# input is not — it belongs under fuzz/artifacts/ as a committed regression.
+/fuzz/corpus/
+/fuzz/target/
+# Crashes land here; a fixed one is moved to fuzz/regressions/ and committed.
+/fuzz/artifacts/
+
+# Browser-automation logs; a tool's scratch, not the project's.
+/.playwright-mcp/

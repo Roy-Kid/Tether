@@ -8,11 +8,27 @@ import PackageDescription
 let package = Package(
     name: "TetherApp",
     platforms: [.macOS(.v26), .iOS(.v26)],
-    dependencies: [.package(path: "../swift"), .package(path: "Packages/TetherFrontend"), .package(path: "Packages/TmuxPlugin")],
+    dependencies: [
+        .package(path: "../swift"),
+        .package(path: "Packages/TetherFrontend"),
+        .package(path: "Plugins/Tmux"),
+        .package(path: "Plugins/Files"),
+        .package(path: "../../nerve/surfaces/tether"),
+    ],
     targets: [
         .executableTarget(
             name: "TetherApp",
-            dependencies: [.product(name: "Tether", package: "swift"), .product(name: "TetherUI", package: "TetherFrontend"), .product(name: "TetherPluginKit", package: "TetherFrontend"), .product(name: "TmuxPlugin", package: "TmuxPlugin")]
-        )
+            dependencies: [
+                .product(name: "Tether", package: "swift"),
+                .product(name: "TetherUI", package: "TetherFrontend"),
+                .product(name: "TetherPluginKit", package: "TetherFrontend"),
+                .product(name: "TmuxPlugin", package: "Tmux"),
+                .product(name: "FilesPlugin", package: "Files"),
+                .product(
+                    name: "NervePlugin", package: "tether",
+                    condition: .when(platforms: [.macOS])),
+            ]
+        ),
+        .testTarget(name: "TetherAppTests", dependencies: ["TetherApp"])
     ]
 )

@@ -6,19 +6,24 @@
 
 uniffi::setup_scaffolding!();
 
+mod files;
 mod input;
+mod link;
 mod screen;
 mod session;
 mod tmux;
 pub use tmux::*;
 
+pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
+
 pub use input::{KeyModifiers, KeyPress, Resolved, TerminalInput};
+pub use link::{LinkKind, LinkSpan, TerminalLink};
 pub use screen::{
     CaretShape, CellColor, CellStyle, ColorName, ScreenFrame, ScreenRow, StyledRun, UnderlineStyle,
 };
 pub use session::{
-    Destination, HostIdentity, HostTrust, Secret, Session, SessionEnding, connect,
-    connect_cancellable,
+    Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,
+    connect_cancellable, local_shell_available, open_local,
 };
 
 /// One prompt from an interactive authentication exchange.
@@ -107,8 +112,19 @@ pub enum TetherError {
     #[error("no credentials were offered")]
     NothingToOffer,
 
-    #[error("the server refused to open a shell: {cause}")]
+    /// Neither side would give us a shell. Worded for both, because by this
+    /// point a consumer holds a session and does not care whether the shell
+    /// it asked for was going to run here or somewhere else.
+    #[error("could not open a shell: {cause}")]
     ShellRefused { cause: String },
+
+    /// The system does not let an application do this at all.
+    ///
+    /// iOS and a local shell is the case it exists for: there is no
+    /// `fork`/`exec` outside the sandbox. Distinct from a refusal, because a
+    /// refusal is something a person might fix and this is not.
+    #[error("this platform does not offer that: {what}")]
+    Unsupported { what: String },
 
     #[error("the connection was lost: {cause}")]
     Disconnected { cause: String },
@@ -118,6 +134,21 @@ pub enum TetherError {
 
     #[error("protocol failure: {cause}")]
     Protocol { cause: String },
+}
+
+impl From<tether_core::local_shell::LocalError> for TetherError {
+    fn from(error: tether_core::local_shell::LocalError) -> Self {
+        use tether_core::local_shell::LocalError;
+        match error {
+            LocalError::Unsupported => Self::Unsupported { what: "a local shell".to_owned() },
+            LocalError::Ended => Self::SessionEnded,
+            // Everything else is "there is no shell, and here is what the
+            // system said". The distinction between a terminal that would
+            // not open and a program that would not start is diagnostic, not
+            // something a consumer branches on (spec §18).
+            other => Self::ShellRefused { cause: other.to_string() },
+        }
+    }
 }
 
 impl From<tether_core::ssh::SshError> for TetherError {

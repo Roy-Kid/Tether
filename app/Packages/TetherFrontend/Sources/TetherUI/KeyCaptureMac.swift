@@ -20,24 +20,31 @@ struct MacKeyCapture: NSViewRepresentable {
   var onFocus: () -> Void = {}
   var onScroll: (Int32) -> Void = { _ in }
   var lineHeight: CGFloat = 17
+  var links: TerminalLinks = .none
+  var geometry: CellGeometry = .empty
+  var onHover: (TerminalLink?) -> Void = { _ in }
 
   func makeNSView(context: Context) -> KeyCaptureView {
     let view = KeyCaptureView()
-    view.onInput = onInput
-    view.onFocus = onFocus
-    view.onScroll = onScroll
-    view.lineHeight = lineHeight
-    view.wantsFocus = active
+    apply(to: view)
     return view
   }
 
   func updateNSView(_ view: KeyCaptureView, context: Context) {
     if active && !view.wantsFocus { view.window?.makeFirstResponder(view) }
+    if !active && view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+    apply(to: view)
+  }
+
+  private func apply(to view: KeyCaptureView) {
     view.onInput = onInput
     view.onFocus = onFocus
     view.onScroll = onScroll
     view.lineHeight = lineHeight
     view.wantsFocus = active
+    view.links = links
+    view.geometry = geometry
+    view.onHover = onHover
   }
 }
 
@@ -52,8 +59,84 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var lineHeight: CGFloat = 17
   /// Fractional lines left over from the last wheel event.
   private var carried: CGFloat = 0
+  var links: TerminalLinks = .none
+  var geometry: CellGeometry = .empty
+  var onHover: ((TerminalLink?) -> Void)?
+  /// The link under the pointer while ⌘ is held.
+  private var hovered: TerminalLink?
+  /// A force click opens once per press, not once per pressure change.
+  private var forced = false
 
   override var acceptsFirstResponder: Bool { true }
+
+  // MARK: - Pointing at links
+  //
+  // A plain click belongs to whatever runs in the terminal — agents and
+  // editors turn on mouse reporting — so a link answers only to what a
+  // program there cannot ask for: ⌘, a force click, or the context menu.
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    trackingAreas.forEach(removeTrackingArea)
+    addTrackingArea(
+      NSTrackingArea(
+        rect: .zero,
+        options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+        owner: self))
+  }
+
+  override func mouseMoved(with event: NSEvent) {
+    hover(event.modifierFlags.contains(.command) ? link(at: event.locationInWindow) : nil)
+  }
+
+  override func flagsChanged(with event: NSEvent) {
+    super.flagsChanged(with: event)
+    guard let window else { return }
+    hover(
+      event.modifierFlags.contains(.command)
+        ? link(at: window.mouseLocationOutsideOfEventStream) : nil)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    hover(nil)
+  }
+
+  override func pressureChange(with event: NSEvent) {
+    if event.stage >= 2, !forced, let link = link(at: event.locationInWindow) {
+      forced = true
+      links.open(link)
+    } else if event.stage < 2 {
+      forced = false
+    }
+  }
+
+  override func menu(for event: NSEvent) -> NSMenu? {
+    guard let link = link(at: event.locationInWindow), let menu = links.menu(link),
+      !menu.items.isEmpty
+    else { return nil }
+    let built = NSMenu()
+    for item in menu.items {
+      let entry = ClosureMenuItem(title: item.title, action: item.action)
+      entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
+      built.addItem(entry)
+    }
+    return built
+  }
+
+  private func hover(_ link: TerminalLink?) {
+    guard link != hovered else { return }
+    hovered = link
+    onHover?(link)
+    (link == nil ? NSCursor.arrow : NSCursor.pointingHand).set()
+  }
+
+  /// The link under a point in window coordinates.
+  private func link(at location: NSPoint) -> TerminalLink? {
+    let point = convert(location, from: nil)
+    let flipped = CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y)
+    guard let cell = geometry.cell(at: flipped) else { return nil }
+    return links.find(cell.row, cell.column)
+  }
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
@@ -69,6 +152,13 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     // working, and a terminal has nothing to send for them anyway.
     guard !hasMarkedText(), window?.firstResponder === self, !event.modifierFlags.contains(.command)
     else { return false }
+    // Control-Shift-P is the command menu. It must not become terminal bytes.
+    if event.modifierFlags.contains(.control),
+      event.modifierFlags.contains(.shift),
+      event.charactersIgnoringModifiers?.lowercased() == "p"
+    {
+      return false
+    }
     if !event.modifierFlags.intersection([.control, .option]).isEmpty {
     } else if Self.namedKey(for: event) == nil {
       return false
@@ -105,6 +195,9 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   override func mouseDown(with event: NSEvent) {
     window?.makeFirstResponder(self)
     onFocus?()
+    if event.modifierFlags.contains(.command), let link = link(at: event.locationInWindow) {
+      links.open(link)
+    }
   }
 
   override func keyDown(with event: NSEvent) {
@@ -224,6 +317,23 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     default: return nil
     }
   }
+}
+
+/// A menu item that runs a closure: a context menu built from a
+/// [`LinkMenu`] has no target object to send a selector to.
+private final class ClosureMenuItem: NSMenuItem {
+  private let run: () -> Void
+
+  init(title: String, action: @escaping () -> Void) {
+    run = action
+    super.init(title: title, action: #selector(fire), keyEquivalent: "")
+    target = self
+  }
+
+  @available(*, unavailable)
+  required init(coder: NSCoder) { fatalError("not from a nib") }
+
+  @objc private func fire() { run() }
 }
 
 #endif

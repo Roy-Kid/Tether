@@ -1,0 +1,15 @@
+[?1034h$ printf 'plain \033[31mred\033[0m \033[1;32mbold green\033[0m\n'
+plain [31mred[0m [1;32mbold green[0m
+$ printf '\033[4munderlined\033[24m \033[7minverse\033[0m\n'
+[4munderlined[24m [7minverse[0m
+$ printf '中文 wide 👨‍👩‍👧 family\n'
+中文 wide 👨‍👩‍👧 family
+$ ls -GF
+[34mrepo[39;49m[0m/      sample.rs
+$ false; echo "exit $?"
+exit 1
+$ printf 'tab\tseparated\tcolumns\r\nand a carriage return\rOVER\n'
+tab	separated	columns
+and a carriage returnOVER
+$ exit
+exit

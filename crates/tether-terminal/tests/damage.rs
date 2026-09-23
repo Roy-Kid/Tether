@@ -64,8 +64,12 @@ fn an_edit_far_down_the_screen_damages_only_that_row() {
         ScreenDamage::Rows(rows) => *rows.iter().find(|r| r.row == 9).expect("row 9"),
         _ => unreachable!(),
     };
+    // The text landed on columns 4..8, and the span reaches one cell further
+    // left: a zero-width scalar attaches to the cell before the cursor, so
+    // every span carries that cell with it (see `Terminal::take_changes`).
+    // A cell of slack per span is the price of never under-reporting.
     assert!(
-        edited.first_column >= 4 && edited.last_column <= 8,
+        edited.first_column >= 3 && edited.last_column <= 8,
         "expected a span around columns 4..8, got {edited:?}"
     );
 }
@@ -130,4 +134,25 @@ fn a_prompt_redraw_does_not_invalidate_the_screen() {
         }
         other => panic!("line editing must not invalidate the screen, got {other:?}"),
     }
+}
+
+/// A zero-width scalar changes the cell *before* the cursor, and the engine
+/// reports the cursor's column. Found by `fuzz/terminal_damage`: a frontend
+/// that redrew only the reported column left a family emoji drawn as three
+/// separate people (spec §12).
+#[test]
+fn a_zero_width_joiner_damages_the_cell_it_joined() {
+    let mut term = terminal();
+    term.feed("👨\u{200d}👩".as_bytes());
+    let _ = term.take_changes();
+
+    // The joiner alone: it attaches to the 👩 at columns 2..3, while the
+    // cursor sits at column 4.
+    term.feed("\u{200d}".as_bytes());
+
+    let damaged = spans(&term.take_changes());
+    assert!(
+        damaged.iter().any(|(row, first, last)| *row == 0 && *first <= 2 && *last >= 2),
+        "the joined cell starts at column 2; damage was {damaged:?}"
+    );
 }
