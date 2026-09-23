@@ -1,5 +1,9 @@
 //! Attaching through an OpenSSH client, without a real network.
 //!
+//! Unix-only: the fake `ssh` is a shebang script and the test chmods it with
+//! `PermissionsExt`.
+#![cfg(unix)]
+//!
 //! ControlMaster is OpenSSH's own socket. The composition here is "run ssh
 //! the way a person would", so a fake binary that answers `ssh -O check`
 //! and runs a command is enough to prove the argv and the lease. A live

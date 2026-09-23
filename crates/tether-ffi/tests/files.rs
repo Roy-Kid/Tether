@@ -1,7 +1,10 @@
-//! Files through the surface a Swift consumer sees: a session's lease, then
+//! Files through the surface a consumer sees: a session's lease, then
 //! SFTP on it. Local, so it runs wherever OpenSSH's `sftp-server` is
 //! installed, and takes the same path a remote session does from the lease
 //! upward.
+//!
+//! Unix-only: OpenSSH's `sftp-server` install paths.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -7,12 +7,22 @@ license.workspace = true
 description = "SSH: transport, authentication, host trust, channels, shells."
 
 [dependencies]
-russh = { workspace = true }
+# Crypto is per-target. `aws-lc-rs` is the default everywhere it builds from
+# cargo + a C compiler alone (Apple, per Decisions/0002). On Windows its
+# `aws-lc-sys` wants NASM, which is outside that contract, so Windows uses
+# russh's `ring` fallback until the 0002 gate is re-measured for MSVC.
+russh = { workspace = true, default-features = false, features = ["flate2", "rsa"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 bytes = "1"
+
+[target.'cfg(windows)'.dependencies]
+russh = { workspace = true, default-features = false, features = ["flate2", "rsa", "ring"] }
+
+[target.'cfg(not(windows))'.dependencies]
+russh = { workspace = true, default-features = false, features = ["flate2", "rsa", "aws-lc-rs"] }
 
 [dev-dependencies]
 bytes = "1"

@@ -1,3 +1,8 @@
+//! tmux over a real `tmux` binary and a loopback `sshd`.
+//!
+//! Unix-only: tmux is a Unix program, and the fixture starts `sshd`.
+#![cfg(unix)]
+
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tether_terminal::Position;

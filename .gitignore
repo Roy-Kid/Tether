@@ -21,3 +21,13 @@ swift/Artifacts/
 
 # Browser-automation logs; a tool's scratch, not the project's.
 /.playwright-mcp/
+
+# .NET build output and Visual Studio state. The native DLL staged under
+# runtimes/ is produced by scripts/build-windows.ps1 and never committed
+# (Decisions/0017).
+.vs/
+/app-windows/bin/
+/dotnet/**/bin/
+/app-windows/obj/
+/dotnet/**/obj/
+/dotnet/Tether/runtimes/

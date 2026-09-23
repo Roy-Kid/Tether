@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Windows host. A consumer of the Tether façade like any other
+    (Decisions/0004: the app is not privileged). WinUI 3 / Windows App SDK is
+    the Win11-native view shell; the terminal is `Tether.TerminalSurface`.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
+    <RootNamespace>TetherApp</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      WinUI 3 has no AnyCPU: an architecture-less build produces a process
+      that dies at bootstrap with "This application could not be started".
+      `dotnet build` must therefore carry `-p:Platform=x64` (or arm64).
+    -->
+    <Platforms>x64;arm64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <!--
+      Unpackaged (`WindowsPackageType=None`) needs the Windows App Runtime
+      beside the executable, or a machine-wide install of the matching major
+      version. Self-contained is the honest default for a developer build
+      (Decisions/0017: the consumer sees one binary and the runtime).
+    -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <WindowsPackageType>None</WindowsPackageType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.3916" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The façade is the only Tether surface a host names (0004). -->
+    <ProjectReference Include="..\dotnet\Tether\Tether.csproj" />
+  </ItemGroup>
+
+</Project>

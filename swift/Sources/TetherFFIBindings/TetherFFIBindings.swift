@@ -39,52 +39,6 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
-
-    init(rawBufferPointer: UnsafeRawBufferPointer) {
-        self.init(
-            len: Int32(rawBufferPointer.count),
-            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
-        )
-    }
-}
-
-// Converter for `&[u8]` / `[ByRef] bytes` arguments.
-//
-// Conforms to `FfiConverter` so the compiler enforces the full converter
-// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
-// zero-copy byte buffers only flow foreign -> Rust, and only in argument
-// position. The four protocol-witness methods (`lift`, `lower`, `read`,
-// `write`) `fatalError` at runtime if anyone reaches them.
-//
-// The scope-bound `lower` takes a closure because the `ForeignBytes`
-// pointer is only guaranteed valid for the duration of
-// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
-// the closure body.
-fileprivate enum FfiConverterByRefBytes: FfiConverter {
-    typealias SwiftType = Data
-    typealias FfiType = ForeignBytes
-
-    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
-        return try value.withUnsafeBytes { rawBuf in
-            try body(ForeignBytes(rawBufferPointer: rawBuf))
-        }
-    }
-
-    static func lower(_ value: Data) -> ForeignBytes {
-        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
-    }
-
-    static func lift(_ value: ForeignBytes) throws -> Data {
-        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
-    }
-
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
-        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
-    }
-
-    static func write(_ value: Data, into buf: inout [UInt8]) {
-        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
-    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -551,6 +505,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -615,6 +585,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -692,8 +680,7 @@ open class CancellationToken: CancellationTokenProtocol, @unchecked Sendable {
 public convenience init() {
     let handle =
         try! rustCall() {
-        uniffiCallStatus in
-    uniffi_tether_ffi_fn_constructor_cancellationtoken_new(uniffiCallStatus
+    uniffi_tether_ffi_fn_constructor_cancellationtoken_new($0
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -712,18 +699,16 @@ public convenience init() {
 
     
 open func cancel()  {try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_cancellationtoken_cancel(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
 open func isCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_cancellationtoken_is_cancelled(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -857,7 +842,8 @@ open func trusts(host: HostIdentity)async  -> Bool  {
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_hosttrust_trusts(
-                        self.uniffiCloneHandle(),FfiConverterTypeHostIdentity_lower(host)
+                    self.uniffiCloneHandle(),
+                    FfiConverterTypeHostIdentity_lower(host)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_i8,
@@ -1103,7 +1089,8 @@ open func answer(instruction: String, prompts: [AuthPrompt])async  -> [String]  
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_interactiveprompter_answer(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(instruction),FfiConverterSequenceTypeAuthPrompt.lower(prompts)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(instruction),FfiConverterSequenceTypeAuthPrompt.lower(prompts)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1370,7 +1357,8 @@ open func files(cancellation: CancellationToken)async throws  -> RemoteFiles  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_files(
-                        self.uniffiCloneHandle(),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1386,7 +1374,8 @@ open func attachTmux(sessionId: String, cancellation: CancellationToken)async th
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_attach_tmux(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(sessionId),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(sessionId),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1402,7 +1391,8 @@ open func createTmux(name: String, cancellation: CancellationToken)async throws 
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(name),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(name),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1418,7 +1408,8 @@ open func endTmux(sessionId: String)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_end_tmux(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(sessionId)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(sessionId)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1438,7 +1429,8 @@ open func endTmuxWindow(windowId: UInt32)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_end_tmux_window(
-                        self.uniffiCloneHandle(),FfiConverterUInt32.lower(windowId)
+                    self.uniffiCloneHandle(),
+                    FfiConverterUInt32.lower(windowId)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1458,7 +1450,8 @@ open func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_open_shell(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(term),FfiConverterUInt16.lower(columns),FfiConverterUInt16.lower(rows),FfiConverterUInt32.lower(scrollbackLines),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(term),FfiConverterUInt16.lower(columns),FfiConverterUInt16.lower(rows),FfiConverterUInt32.lower(scrollbackLines),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1474,7 +1467,8 @@ open func renameTmux(sessionId: String, name: String)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_rename_tmux(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(sessionId),FfiConverterString.lower(name)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(sessionId),FfiConverterString.lower(name)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1495,7 +1489,8 @@ open func tmuxPaneDirectory(paneId: UInt32)async throws  -> String  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_tmux_pane_directory(
-                        self.uniffiCloneHandle(),FfiConverterUInt32.lower(paneId)
+                    self.uniffiCloneHandle(),
+                    FfiConverterUInt32.lower(paneId)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1511,7 +1506,8 @@ open func tmuxSessions(cancellation: CancellationToken)async throws  -> [TmuxSes
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_tmux_sessions(
-                        self.uniffiCloneHandle(),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1717,7 +1713,8 @@ open func close()async   {
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_close(
-                        self.uniffiCloneHandle()
+                    self.uniffiCloneHandle()
+                    
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1739,7 +1736,8 @@ open func download(path: String, destination: String, progress: TransferProgress
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_download(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterString.lower(destination),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path),FfiConverterString.lower(destination),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1758,7 +1756,8 @@ open func home()async throws  -> String  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_home(
-                        self.uniffiCloneHandle()
+                    self.uniffiCloneHandle()
+                    
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1775,9 +1774,8 @@ open func home()async throws  -> String  {
      */
 open func isLocal() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_remotefiles_is_local(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -1790,7 +1788,8 @@ open func list(directory: String, cancellation: CancellationToken)async throws  
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_list(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(directory),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(directory),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1809,7 +1808,8 @@ open func lstat(path: String)async throws  -> FileEntry  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_lstat(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1825,7 +1825,8 @@ open func makeDirectory(path: String)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_make_directory(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1844,7 +1845,8 @@ open func remove(path: String)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_remove(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1865,7 +1867,8 @@ open func removeTree(path: String, cancellation: CancellationToken)async throws 
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_remove_tree(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1884,7 +1887,8 @@ open func rename(from: String, to: String, replace: Bool)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_rename(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(from),FfiConverterString.lower(to),FfiConverterBool.lower(replace)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(from),FfiConverterString.lower(to),FfiConverterBool.lower(replace)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -1903,7 +1907,8 @@ open func resolve(path: String)async throws  -> String  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_resolve(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1922,7 +1927,8 @@ open func stat(path: String)async throws  -> FileEntry  {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_stat(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(path)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1943,7 +1949,8 @@ open func upload(source: String, path: String, replace: Bool, progress: Transfer
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remotefiles_upload(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(source),FfiConverterString.lower(path),FfiConverterBool.lower(replace),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(source),FfiConverterString.lower(path),FfiConverterBool.lower(replace),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -1997,6 +2004,194 @@ public func FfiConverterTypeRemoteFiles_lift(_ handle: UInt64) throws -> RemoteF
 #endif
 public func FfiConverterTypeRemoteFiles_lower(_ value: RemoteFiles) -> UInt64 {
     return FfiConverterTypeRemoteFiles.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A GPU terminal surface.
+ *
+ * Toolkit-free at the boundary: it takes a window handle and a
+ * [`ScreenFrame`], and paints. A consumer that wants to draw differently
+ * takes [`prepare`] and does its own pass.
+ */
+public protocol RenderSurfaceProtocol: AnyObject, Sendable {
+    
+    /**
+     * Draws one frame with the consumer's palette.
+     */
+    func draw(frame: ScreenFrame, palette: PaletteDto) throws 
+    
+    /**
+     * Measures the monospaced face this surface will draw with.
+     */
+    func measure(size: Float)  -> FontMetricsDto
+    
+    func resize(width: UInt32, height: UInt32) 
+    
+}
+/**
+ * A GPU terminal surface.
+ *
+ * Toolkit-free at the boundary: it takes a window handle and a
+ * [`ScreenFrame`], and paints. A consumer that wants to draw differently
+ * takes [`prepare`] and does its own pass.
+ */
+open class RenderSurface: RenderSurfaceProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tether_ffi_fn_clone_rendersurface(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tether_ffi_fn_free_rendersurface(handle, $0) }
+    }
+
+    
+    /**
+     * Creates a surface for a Win32 `HWND`.
+     *
+     * # Safety contract
+     *
+     * The window must outlive this surface. `hwnd` is what a WinUI host gets
+     * from `WindowNative.GetWindowHandle`; it is not a toolkit type here.
+     */
+public static func fromHwnd(hwnd: UInt64, width: UInt32, height: UInt32)async throws  -> RenderSurface  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_constructor_rendersurface_from_hwnd(FfiConverterUInt64.lower(hwnd),FfiConverterUInt32.lower(width),FfiConverterUInt32.lower(height)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeRenderSurface_lift,
+            errorHandler: FfiConverterTypeRenderFailure_lift
+        )
+}
+    
+
+    
+    /**
+     * Draws one frame with the consumer's palette.
+     */
+open func draw(frame: ScreenFrame, palette: PaletteDto)throws   {try rustCallWithError(FfiConverterTypeRenderFailure_lift) {
+    uniffi_tether_ffi_fn_method_rendersurface_draw(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeScreenFrame_lower(frame),
+        FfiConverterTypePaletteDto_lower(palette),$0
+    )
+}
+}
+    
+    /**
+     * Measures the monospaced face this surface will draw with.
+     */
+open func measure(size: Float) -> FontMetricsDto  {
+    return try!  FfiConverterTypeFontMetricsDto_lift(try! rustCall() {
+    uniffi_tether_ffi_fn_method_rendersurface_measure(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(size),$0
+    )
+})
+}
+    
+open func resize(width: UInt32, height: UInt32)  {try! rustCall() {
+    uniffi_tether_ffi_fn_method_rendersurface_resize(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(width),
+        FfiConverterUInt32.lower(height),$0
+    )
+}
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRenderSurface: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = RenderSurface
+
+    public static func lift(_ handle: UInt64) throws -> RenderSurface {
+        return RenderSurface(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: RenderSurface) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RenderSurface {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: RenderSurface, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderSurface_lift(_ handle: UInt64) throws -> RenderSurface {
+    return try FfiConverterTypeRenderSurface.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderSurface_lower(_ value: RenderSurface) -> UInt64 {
+    return FfiConverterTypeRenderSurface.lower(value)
 }
 
 
@@ -2150,7 +2345,8 @@ open func awaitChange()async  -> Bool  {
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_session_await_change(
-                        self.uniffiCloneHandle()
+                    self.uniffiCloneHandle()
+                    
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_i8,
@@ -2167,18 +2363,16 @@ open func awaitChange()async  -> Bool  {
      * cannot easily know whether the far side got there first.
      */
 open func close()  {try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_close(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 }
 }
     
 open func connection() -> RemoteConnection?  {
     return try!  FfiConverterOptionTypeRemoteConnection.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_connection(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2188,9 +2382,8 @@ open func connection() -> RemoteConnection?  {
      */
 open func ending() -> SessionEnding?  {
     return try!  FfiConverterOptionTypeSessionEnding.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_ending(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2200,9 +2393,8 @@ open func ending() -> SessionEnding?  {
      */
 open func frame() -> ScreenFrame  {
     return try!  FfiConverterTypeScreenFrame_lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_frame(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2213,11 +2405,10 @@ open func frame() -> ScreenFrame  {
      */
 open func linkAt(row: UInt16, column: UInt16) -> TerminalLink?  {
     return try!  FfiConverterOptionTypeTerminalLink.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_link_at(
             self.uniffiCloneHandle(),
         FfiConverterUInt16.lower(row),
-        FfiConverterUInt16.lower(column),uniffiCallStatus
+        FfiConverterUInt16.lower(column),$0
     )
 })
 }
@@ -2226,11 +2417,10 @@ open func linkAt(row: UInt16, column: UInt16) -> TerminalLink?  {
      * Tells both the engine and the far side that the window changed size.
      */
 open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_resize(
             self.uniffiCloneHandle(),
         FfiConverterUInt16.lower(columns),
-        FfiConverterUInt16.lower(rows),uniffiCallStatus
+        FfiConverterUInt16.lower(rows),$0
     )
 }
 }
@@ -2243,10 +2433,9 @@ open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(F
      * handle on every notch.
      */
 open func scroll(to: ScrollTo)  {try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_scroll(
             self.uniffiCloneHandle(),
-        FfiConverterTypeScrollTo_lower(to),uniffiCallStatus
+        FfiConverterTypeScrollTo_lower(to),$0
     )
 }
 }
@@ -2259,10 +2448,9 @@ open func scroll(to: ScrollTo)  {try! rustCall() {
      * (spec §12).
      */
 open func send(input: TerminalInput)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_send(
             self.uniffiCloneHandle(),
-        FfiConverterTypeTerminalInput_lower(input),uniffiCallStatus
+        FfiConverterTypeTerminalInput_lower(input),$0
     )
 }
 }
@@ -2275,10 +2463,9 @@ open func send(input: TerminalInput)throws   {try rustCallWithError(FfiConverter
      * same question being asked again. `None` goes back to saying nothing.
      */
 open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_set_palette(
             self.uniffiCloneHandle(),
-        FfiConverterOptionTypeTerminalPalette.lower(palette),uniffiCallStatus
+        FfiConverterOptionTypeTerminalPalette.lower(palette),$0
     )
 }
 }
@@ -2288,9 +2475,8 @@ open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(F
      */
 open func workingDirectory() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_working_directory(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2426,7 +2612,8 @@ open func awaitChange()async  -> Bool  {
         try!  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_tmuxworkspace_await_change(
-                        self.uniffiCloneHandle()
+                    self.uniffiCloneHandle()
+                    
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_i8,
@@ -2439,9 +2626,8 @@ open func awaitChange()async  -> Bool  {
 }
     
 open func detach()  {try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_detach(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 }
 }
@@ -2451,12 +2637,11 @@ open func detach()  {try! rustCall() {
      */
 open func linkAt(pane: UInt32, row: UInt16, column: UInt16) -> TerminalLink?  {
     return try!  FfiConverterOptionTypeTerminalLink.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_link_at(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(pane),
         FfiConverterUInt16.lower(row),
-        FfiConverterUInt16.lower(column),uniffiCallStatus
+        FfiConverterUInt16.lower(column),$0
     )
 })
 }
@@ -2466,7 +2651,8 @@ open func perform(action: TmuxAction)async throws   {
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_tmuxworkspace_perform(
-                        self.uniffiCloneHandle(),FfiConverterTypeTmuxAction_lower(action)
+                    self.uniffiCloneHandle(),
+                    FfiConverterTypeTmuxAction_lower(action)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -2478,20 +2664,18 @@ open func perform(action: TmuxAction)async throws   {
 }
     
 open func send(pane: UInt32, input: TerminalInput)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_send(
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(pane),
-        FfiConverterTypeTerminalInput_lower(input),uniffiCallStatus
+        FfiConverterTypeTerminalInput_lower(input),$0
     )
 }
 }
     
 open func snapshot() -> TmuxSnapshot  {
     return try!  FfiConverterTypeTmuxSnapshot_lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_snapshot(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),$0
     )
 })
 }
@@ -2501,10 +2685,9 @@ open func snapshot() -> TmuxSnapshot  {
      */
 open func workingDirectory(pane: UInt32) -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_working_directory(
             self.uniffiCloneHandle(),
-        FfiConverterUInt32.lower(pane),uniffiCallStatus
+        FfiConverterUInt32.lower(pane),$0
     )
 })
 }
@@ -2626,10 +2809,9 @@ open class TransferProgressImpl: TransferProgress, @unchecked Sendable {
 
     
 open func advanced(bytes: UInt64)  {try! rustCall() {
-        uniffiCallStatus in
     uniffi_tether_ffi_fn_method_transferprogress_advanced(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(bytes),uniffiCallStatus
+        FfiConverterUInt64.lower(bytes),$0
     )
 }
 }
@@ -3150,6 +3332,75 @@ public func FfiConverterTypeFileEntry_lower(_ value: FileEntry) -> RustBuffer {
 
 
 /**
+ * The monospaced geometry a frontend lays out against.
+ */
+public struct FontMetricsDto: Equatable, Hashable {
+    public let size: Float
+    public let cellWidth: Float
+    public let lineHeight: Float
+    public let narrowAdvance: Float
+    public let wideAdvance: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(size: Float, cellWidth: Float, lineHeight: Float, narrowAdvance: Float, wideAdvance: Float) {
+        self.size = size
+        self.cellWidth = cellWidth
+        self.lineHeight = lineHeight
+        self.narrowAdvance = narrowAdvance
+        self.wideAdvance = wideAdvance
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FontMetricsDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFontMetricsDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FontMetricsDto {
+        return
+            try FontMetricsDto(
+                size: FfiConverterFloat.read(from: &buf), 
+                cellWidth: FfiConverterFloat.read(from: &buf), 
+                lineHeight: FfiConverterFloat.read(from: &buf), 
+                narrowAdvance: FfiConverterFloat.read(from: &buf), 
+                wideAdvance: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FontMetricsDto, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.size, into: &buf)
+        FfiConverterFloat.write(value.cellWidth, into: &buf)
+        FfiConverterFloat.write(value.lineHeight, into: &buf)
+        FfiConverterFloat.write(value.narrowAdvance, into: &buf)
+        FfiConverterFloat.write(value.wideAdvance, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFontMetricsDto_lift(_ buf: RustBuffer) throws -> FontMetricsDto {
+    return try FfiConverterTypeFontMetricsDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFontMetricsDto_lower(_ value: FontMetricsDto) -> RustBuffer {
+    return FfiConverterTypeFontMetricsDto.lower(value)
+}
+
+
+/**
  * What a host key looks like to an application being asked to trust it.
  */
 public struct HostIdentity: Equatable, Hashable {
@@ -3161,6 +3412,13 @@ public struct HostIdentity: Equatable, Hashable {
      * administrator published.
      */
     public let fingerprint: String
+    /**
+     * The `authorized_keys` one-line form (`ssh-ed25519 AAAA…`), which is
+     * also what a `known_hosts` file holds after the host pattern. A
+     * verifier that stores keys rather than fingerprints needs this
+     * (`tether-ssh::HostKey::encoded`).
+     */
+    public let encoded: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3168,11 +3426,18 @@ public struct HostIdentity: Equatable, Hashable {
         /**
          * The `SHA256:…` form a person compares against what their
          * administrator published.
-         */fingerprint: String) {
+         */fingerprint: String, 
+        /**
+         * The `authorized_keys` one-line form (`ssh-ed25519 AAAA…`), which is
+         * also what a `known_hosts` file holds after the host pattern. A
+         * verifier that stores keys rather than fingerprints needs this
+         * (`tether-ssh::HostKey::encoded`).
+         */encoded: Data) {
         self.host = host
         self.port = port
         self.algorithm = algorithm
         self.fingerprint = fingerprint
+        self.encoded = encoded
     }
 
     
@@ -3194,7 +3459,8 @@ public struct FfiConverterTypeHostIdentity: FfiConverterRustBuffer {
                 host: FfiConverterString.read(from: &buf), 
                 port: FfiConverterUInt16.read(from: &buf), 
                 algorithm: FfiConverterString.read(from: &buf), 
-                fingerprint: FfiConverterString.read(from: &buf)
+                fingerprint: FfiConverterString.read(from: &buf), 
+                encoded: FfiConverterData.read(from: &buf)
         )
     }
 
@@ -3203,6 +3469,7 @@ public struct FfiConverterTypeHostIdentity: FfiConverterRustBuffer {
         FfiConverterUInt16.write(value.port, into: &buf)
         FfiConverterString.write(value.algorithm, into: &buf)
         FfiConverterString.write(value.fingerprint, into: &buf)
+        FfiConverterData.write(value.encoded, into: &buf)
     }
 }
 
@@ -3451,6 +3718,137 @@ public func FfiConverterTypeLocalShell_lift(_ buf: RustBuffer) throws -> LocalSh
 #endif
 public func FfiConverterTypeLocalShell_lower(_ value: LocalShell) -> RustBuffer {
     return FfiConverterTypeLocalShell.lower(value)
+}
+
+
+/**
+ * The palette, in the form the renderer draws (Decision 0011).
+ *
+ * Deliberately parallel to `TerminalPalette`: one is what the far side is
+ * told, one is what is drawn. A consumer that keeps them in step (the
+ * `Palette.chosen` discipline) cannot disagree with itself.
+ */
+public struct PaletteDto: Equatable, Hashable {
+    public let background: RgbaDto
+    public let foreground: RgbaDto
+    public let cursor: RgbaDto
+    public let ansi: [RgbaDto]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(background: RgbaDto, foreground: RgbaDto, cursor: RgbaDto, ansi: [RgbaDto]) {
+        self.background = background
+        self.foreground = foreground
+        self.cursor = cursor
+        self.ansi = ansi
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension PaletteDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePaletteDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PaletteDto {
+        return
+            try PaletteDto(
+                background: FfiConverterTypeRgbaDto.read(from: &buf), 
+                foreground: FfiConverterTypeRgbaDto.read(from: &buf), 
+                cursor: FfiConverterTypeRgbaDto.read(from: &buf), 
+                ansi: FfiConverterSequenceTypeRgbaDto.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PaletteDto, into buf: inout [UInt8]) {
+        FfiConverterTypeRgbaDto.write(value.background, into: &buf)
+        FfiConverterTypeRgbaDto.write(value.foreground, into: &buf)
+        FfiConverterTypeRgbaDto.write(value.cursor, into: &buf)
+        FfiConverterSequenceTypeRgbaDto.write(value.ansi, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePaletteDto_lift(_ buf: RustBuffer) throws -> PaletteDto {
+    return try FfiConverterTypePaletteDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePaletteDto_lower(_ value: PaletteDto) -> RustBuffer {
+    return FfiConverterTypePaletteDto.lower(value)
+}
+
+
+public struct RgbaDto: Equatable, Hashable {
+    public let red: Float
+    public let green: Float
+    public let blue: Float
+    public let alpha: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(red: Float, green: Float, blue: Float, alpha: Float) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RgbaDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRgbaDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RgbaDto {
+        return
+            try RgbaDto(
+                red: FfiConverterFloat.read(from: &buf), 
+                green: FfiConverterFloat.read(from: &buf), 
+                blue: FfiConverterFloat.read(from: &buf), 
+                alpha: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RgbaDto, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.red, into: &buf)
+        FfiConverterFloat.write(value.green, into: &buf)
+        FfiConverterFloat.write(value.blue, into: &buf)
+        FfiConverterFloat.write(value.alpha, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRgbaDto_lift(_ buf: RustBuffer) throws -> RgbaDto {
+    return try FfiConverterTypeRgbaDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRgbaDto_lower(_ value: RgbaDto) -> RustBuffer {
+    return FfiConverterTypeRgbaDto.lower(value)
 }
 
 
@@ -4177,7 +4575,8 @@ public func FfiConverterTypeTmuxWindowInfo_lower(_ value: TmuxWindowInfo) -> Rus
     return FfiConverterTypeTmuxWindowInfo.lower(value)
 }
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum CaretShape: Equatable, Hashable {
     
@@ -4257,7 +4656,8 @@ public func FfiConverterTypeCaretShape_lower(_ value: CaretShape) -> RustBuffer 
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum CellColor: Equatable, Hashable {
     
@@ -4341,7 +4741,8 @@ public func FfiConverterTypeCellColor_lower(_ value: CellColor) -> RustBuffer {
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * One of the palette entries a terminal names rather than resolves.
  *
@@ -4539,8 +4940,7 @@ public func FfiConverterTypeColorName_lower(_ value: ColorName) -> RustBuffer {
  * The server's status code is context inside `cause`, never a case of its
  * own (spec §18).
  */
-public 
-enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -4669,7 +5069,8 @@ public func FfiConverterTypeFileError_lower(_ value: FileError) -> RustBuffer {
     return FfiConverterTypeFileError.lower(value)
 }
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * What an entry is. A link is reported as a link; [`RemoteFiles::stat`]
  * looks through it.
@@ -4753,7 +5154,8 @@ public func FfiConverterTypeFileKind_lower(_ value: FileKind) -> RustBuffer {
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * A key, named by what it is rather than by a scancode.
  *
@@ -4931,7 +5333,8 @@ public func FfiConverterTypeKeyPress_lower(_ value: KeyPress) -> RustBuffer {
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * What a link points at. A path is shape, not truth: nothing has asked the
  * far side whether it exists.
@@ -5027,6 +5430,101 @@ public func FfiConverterTypeLinkKind_lower(_ value: LinkKind) -> RustBuffer {
 
 
 
+/**
+ * Errors are ours: a backend error number is diagnostic context, never the
+ * public API (spec §18).
+ */
+public enum RenderFailure: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case NoAdapter
+    case NoDevice(cause: String
+    )
+    case Surface(cause: String
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension RenderFailure: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRenderFailure: FfiConverterRustBuffer {
+    typealias SwiftType = RenderFailure
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RenderFailure {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .NoAdapter
+        case 2: return .NoDevice(
+            cause: try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .Surface(
+            cause: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RenderFailure, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .NoAdapter:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .NoDevice(cause):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(cause, into: &buf)
+            
+        
+        case let .Surface(cause):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(cause, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderFailure_lift(_ buf: RustBuffer) throws -> RenderFailure {
+    return try FfiConverterTypeRenderFailure.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderFailure_lower(_ value: RenderFailure) -> RustBuffer {
+    return FfiConverterTypeRenderFailure.lower(value)
+}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Where to put the viewport over the scrollback.
  *
@@ -5126,7 +5624,8 @@ public func FfiConverterTypeScrollTo_lower(_ value: ScrollTo) -> RustBuffer {
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * A credential to offer, in the order they are given.
  */
@@ -5219,7 +5718,8 @@ public func FfiConverterTypeSecret_lower(_ value: Secret) -> RustBuffer {
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Why a session stopped.
  */
@@ -5301,7 +5801,8 @@ public func FfiConverterTypeSessionEnding_lower(_ value: SessionEnding) -> RustB
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Something the person did.
  */
@@ -5390,8 +5891,7 @@ public func FfiConverterTypeTerminalInput_lower(_ value: TerminalInput) -> RustB
  * shape a consumer matches on — switching SSH libraries must not be a
  * breaking change for an application (spec §18).
  */
-public 
-enum TetherError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public enum TetherError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -5585,7 +6085,8 @@ public func FfiConverterTypeTetherError_lower(_ value: TetherError) -> RustBuffe
     return FfiConverterTypeTetherError.lower(value)
 }
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum TmuxAction: Equatable, Hashable {
     
@@ -5756,7 +6257,8 @@ public func FfiConverterTypeTmuxAction_lower(_ value: TmuxAction) -> RustBuffer 
 }
 
 
-
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum UnderlineStyle: Equatable, Hashable {
     
@@ -6218,6 +6720,31 @@ fileprivate struct FfiConverterSequenceTypeLinkSpan: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeRgbaDto: FfiConverterRustBuffer {
+    typealias SwiftType = [RgbaDto]
+
+    public static func write(_ value: [RgbaDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRgbaDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RgbaDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RgbaDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRgbaDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeScreenRow: FfiConverterRustBuffer {
     typealias SwiftType = [ScreenRow]
 
@@ -6532,8 +7059,7 @@ public func uniffiForeignFutureHandleCountTetherFfi() -> Int {
  */
 public func composition() -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_tether_ffi_fn_func_composition(uniffiCallStatus
+    uniffi_tether_ffi_fn_func_composition($0
     )
 })
 }
@@ -6671,8 +7197,7 @@ public func connectOverSshClientCancellable(target: String, shell: LocalShell, c
  */
 public func localShellAvailable() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_tether_ffi_fn_func_local_shell_available(uniffiCallStatus
+    uniffi_tether_ffi_fn_func_local_shell_available($0
     )
 })
 }
@@ -6738,172 +7263,184 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_composition() != 49373) {
+    if (uniffi_tether_ffi_checksum_func_composition() != 48026) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_probe_delay() != 60686) {
+    if (uniffi_tether_ffi_checksum_func_probe_delay() != 23967) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_run_interactive_exchange() != 36958) {
+    if (uniffi_tether_ffi_checksum_func_run_interactive_exchange() != 1377) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect() != 50813) {
+    if (uniffi_tether_ffi_checksum_func_connect() != 49467) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect_cancellable() != 18026) {
+    if (uniffi_tether_ffi_checksum_func_connect_cancellable() != 17419) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client() != 50328) {
+    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client() != 1805) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client_cancellable() != 37312) {
+    if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client_cancellable() != 33331) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_local_shell_available() != 25015) {
+    if (uniffi_tether_ffi_checksum_func_local_shell_available() != 51057) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_open_local() != 41710) {
+    if (uniffi_tether_ffi_checksum_func_open_local() != 11421) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 21514) {
+    if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 59773) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_cancellationtoken_cancel() != 61232) {
+    if (uniffi_tether_ffi_checksum_method_cancellationtoken_cancel() != 15300) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_cancellationtoken_is_cancelled() != 10970) {
+    if (uniffi_tether_ffi_checksum_method_cancellationtoken_is_cancelled() != 42875) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_interactiveprompter_answer() != 43310) {
+    if (uniffi_tether_ffi_checksum_method_interactiveprompter_answer() != 11440) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_close() != 30556) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_close() != 46725) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_download() != 8604) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_download() != 52161) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_home() != 39425) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_home() != 49745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_is_local() != 2775) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_is_local() != 43090) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_list() != 16513) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_list() != 15532) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_lstat() != 44713) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_lstat() != 50462) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_make_directory() != 20024) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_make_directory() != 25469) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_remove() != 43271) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_remove() != 46955) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_remove_tree() != 27763) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_remove_tree() != 26299) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_rename() != 49340) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_rename() != 58355) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_resolve() != 21672) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_resolve() != 25920) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_stat() != 59160) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_stat() != 51684) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remotefiles_upload() != 59853) {
+    if (uniffi_tether_ffi_checksum_method_remotefiles_upload() != 31262) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55719) {
+    if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55166) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_hosttrust_trusts() != 64491) {
+    if (uniffi_tether_ffi_checksum_method_rendersurface_draw() != 12594) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_await_change() != 61272) {
+    if (uniffi_tether_ffi_checksum_method_rendersurface_measure() != 52593) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_close() != 6571) {
+    if (uniffi_tether_ffi_checksum_method_rendersurface_resize() != 36122) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_connection() != 2908) {
+    if (uniffi_tether_ffi_checksum_method_hosttrust_trusts() != 28272) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_ending() != 16509) {
+    if (uniffi_tether_ffi_checksum_method_session_await_change() != 5606) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_frame() != 8673) {
+    if (uniffi_tether_ffi_checksum_method_session_close() != 5216) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_link_at() != 40864) {
+    if (uniffi_tether_ffi_checksum_method_session_connection() != 52855) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_resize() != 15330) {
+    if (uniffi_tether_ffi_checksum_method_session_ending() != 40394) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_scroll() != 10531) {
+    if (uniffi_tether_ffi_checksum_method_session_frame() != 65084) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_send() != 41763) {
+    if (uniffi_tether_ffi_checksum_method_session_link_at() != 51569) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_set_palette() != 2490) {
+    if (uniffi_tether_ffi_checksum_method_session_resize() != 30687) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_session_working_directory() != 14461) {
+    if (uniffi_tether_ffi_checksum_method_session_scroll() != 51227) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_files() != 58178) {
+    if (uniffi_tether_ffi_checksum_method_session_send() != 9772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_attach_tmux() != 1714) {
+    if (uniffi_tether_ffi_checksum_method_session_set_palette() != 52819) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux() != 62768) {
+    if (uniffi_tether_ffi_checksum_method_session_working_directory() != 43738) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux() != 28349) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_files() != 29696) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux_window() != 61139) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_attach_tmux() != 15656) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 34310) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux() != 10787) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 30515) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux() != 60181) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 5827) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux_window() != 33963) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_sessions() != 42607) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 23719) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_await_change() != 54146) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 61319) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_detach() != 14549) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 23722) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_link_at() != 50267) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_sessions() != 65158) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_perform() != 33101) {
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_await_change() != 15937) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_send() != 28740) {
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_detach() != 42625) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_snapshot() != 39639) {
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_link_at() != 51039) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_working_directory() != 53044) {
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_perform() != 26795) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_constructor_cancellationtoken_new() != 63626) {
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_send() != 14490) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_snapshot() != 33846) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_working_directory() != 2918) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_constructor_cancellationtoken_new() != 18041) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_constructor_rendersurface_from_hwnd() != 64219) {
         return InitializationResult.apiChecksumMismatch
     }
 

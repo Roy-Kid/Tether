@@ -1,0 +1,30 @@
+# Byte-exact fixtures. A recorded terminal stream is bytes: converting LF
+# to CRLF on checkout rewrites the recording and the corpus test compares
+# screens, not files. Snapshots are compared line-by-line the same way.
+* text=auto
+
+*.rs   text eol=lf
+*.toml text eol=lf
+*.md  text eol=lf
+*.swift text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.js   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.wgsl text eol=lf
+
+# Terminal recordings and their asserted screens are binary as far as
+# line-ending conversion is concerned (spec §12: bytes in, state out).
+*.vt   -text
+*.snap text eol=lf
+
+# Native artifacts are build outputs, never committed (Decisions/0004).
+*.dll  binary
+*.lib  binary
+*.a    binary
+*.pdb  binary
+*.xcframework/** binary

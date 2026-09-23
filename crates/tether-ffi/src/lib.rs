@@ -9,10 +9,18 @@ uniffi::setup_scaffolding!();
 mod files;
 mod input;
 mod link;
+#[cfg(feature = "render")]
+mod render;
 mod screen;
 mod session;
 mod tmux;
 pub use tmux::*;
+
+#[cfg(feature = "render")]
+pub use render::{
+    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
+    RgbaDto, SelectionDto,
+};
 
 pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
 

@@ -288,7 +288,9 @@ fn spawn(command: &Command, stdin: Stdio) -> Result<Child, LocalError> {
     })
 }
 
-#[cfg(test)]
+/// Unix-only: the cases drive `/bin/sh` and `/bin/cat`. Windows gets its own
+/// dialect (ConPTY + cmd/pwsh) when `tether-local` is ported.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

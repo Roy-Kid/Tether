@@ -1,5 +1,9 @@
 //! The whole composition against a real shell on this machine.
 //!
+//! Unix-only: every case drives `/bin/sh`. Windows gets its own dialect
+//! (ConPTY + cmd/pwsh) and its own suite when `tether-local` is ported.
+#![cfg(unix)]
+//!
 //! The SSH end-to-end test is skipped unless a server is configured, which
 //! means the composition — a byte stream produced by software we did not
 //! write, landing on a screen — is usually proved by nothing. A local shell

@@ -136,6 +136,10 @@ public struct HostIdentity: Sendable, Equatable {
   /// The `SHA256:…` form a person compares against what their
   /// administrator published.
   public let fingerprint: String
+  /// The `authorized_keys` one-line form, which is what a `known_hosts` file
+  /// holds after the host pattern. A verifier that stores keys rather than
+  /// fingerprints needs this.
+  public let encoded: [UInt8]
 
   /// Public because a consumer has to be able to make one.
   ///
@@ -144,11 +148,14 @@ public struct HostIdentity: Sendable, Equatable {
   /// for — "a key that changed must be refused" is not something to find out
   /// in production. A memberwise initialiser is internal by default, which
   /// would leave every consumer unable to exercise its own trust policy.
-  public init(host: String, port: UInt16, algorithm: String, fingerprint: String) {
+  public init(
+    host: String, port: UInt16, algorithm: String, fingerprint: String, encoded: [UInt8] = []
+  ) {
     self.host = host
     self.port = port
     self.algorithm = algorithm
     self.fingerprint = fingerprint
+    self.encoded = encoded
   }
 }
 
@@ -540,6 +547,7 @@ private final class HostTrustBridge: TetherFFIBindings.HostTrust {
         host: host.host,
         port: host.port,
         algorithm: host.algorithm,
-        fingerprint: host.fingerprint))
+        fingerprint: host.fingerprint,
+        encoded: host.encoded))
   }
 }

@@ -251,7 +251,7 @@ impl Connection {
 /// not found, and the failure reads as "you have no tmux" to someone looking
 /// at tmux.
 fn shell_command(command: &str) -> Command {
-    Command::login_shell().arg("-c").arg(command)
+    Command::through_shell(command)
 }
 
 /// Where OpenSSH installs its SFTP server: macOS first, then the Linux

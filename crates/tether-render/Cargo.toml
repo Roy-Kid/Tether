@@ -1,0 +1,23 @@
+[package]
+name = "tether-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Terminal state → GPU draw: grid layout, cursor, damage, theming over wgpu + glyphon."
+
+# NOTE: this crate must never depend on tether-ssh, russh, or alacritty_terminal
+# types in its public surface. It consumes the frontend contract (semantic
+# state), not a backend's grid (spec §8, §14). `cargo tree` is the test.
+#
+# wgpu, glyphon and cosmic-text stop here (backend confinement, spec §8).
+# A consumer sees draw lists and metrics, never GPU objects. cosmic-text is
+# reached through glyphon's re-export so the graph carries exactly one copy
+# (Decisions/0016).
+[dependencies]
+wgpu = { workspace = true }
+glyphon = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+raw-window-handle = "0.6"

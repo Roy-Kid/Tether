@@ -4,6 +4,10 @@
 //! SFTP session, started as a child of the test. It is the same program a
 //! remote `sshd` hands a subsystem request to, so what passes here is the
 //! protocol, not a fake of it.
+//!
+//! Unix-only: the suite starts `sftp-server` from OpenSSH's Unix install
+//! paths and asserts symlink behaviour through `std::os::unix::fs`.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

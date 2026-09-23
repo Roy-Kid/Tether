@@ -24,6 +24,11 @@ pub struct HostIdentity {
     /// The `SHA256:…` form a person compares against what their
     /// administrator published.
     pub fingerprint: String,
+    /// The `authorized_keys` one-line form (`ssh-ed25519 AAAA…`), which is
+    /// also what a `known_hosts` file holds after the host pattern. A
+    /// verifier that stores keys rather than fingerprints needs this
+    /// (`tether-ssh::HostKey::encoded`).
+    pub encoded: Vec<u8>,
 }
 
 /// Asks the application whether a host may be talked to.
@@ -53,6 +58,7 @@ impl tether_core::ssh::HostVerifier for ForeignVerifier {
             port: endpoint.port,
             algorithm: key.algorithm.clone(),
             fingerprint: key.fingerprint.clone(),
+            encoded: key.encoded.clone(),
         };
         if self.0.trusts(identity).await {
             tether_core::ssh::Verdict::Trusted
@@ -194,6 +200,13 @@ pub struct LocalShell {
     pub columns: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+    /// The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
+    /// else on this machine's `PATH`.
+    ///
+    /// `None` is the platform default: the person's login shell on Unix,
+    /// `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
+    /// fills this in; the SDK does not know which one a consumer offers.
+    pub shell: Option<String>,
 }
 
 /// Whether this platform lets an application start a shell.
@@ -218,8 +231,15 @@ pub fn local_shell_available() -> bool {
 pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(shell.columns, shell.rows);
 
-    let mut local = Local::running(Command::login_shell())
-        .term(shell.term)
+    let mut command = match shell.shell.as_deref().map(str::trim) {
+        Some(program) if !program.is_empty() => Command::shell(program),
+        _ => Command::login_shell(),
+    };
+    if !shell.term.is_empty() {
+        command = command.term(shell.term);
+    }
+
+    let mut local = Local::running(command)
         .size(size)
         .options(Options { scrollback_lines: shell.scrollback_lines as usize });
 

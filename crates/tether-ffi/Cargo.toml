@@ -11,10 +11,20 @@ description = "UniFFI surface over tether-core. Keeps tether-core binding-agnost
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
+[features]
+default = []
+# Pulls `tether-render` (wgpu + glyphon) into the same DLL so a Windows
+# consumer links one binary for session *and* draw (Decisions/0017). Apple
+# builds leave this off and keep the XCFramework free of a GPU stack until
+# Decisions/0006's triggers fire.
+render = ["dep:tether-render", "dep:wgpu"]
+
 [dependencies]
 tether-tmux = { path = "../tether-tmux" }
 tether-core = { path = "../tether-core" }
 tether-files = { path = "../tether-files" }
+tether-render = { path = "../tether-render", optional = true }
+wgpu = { workspace = true, optional = true }
 uniffi = { workspace = true, features = ["cli", "tokio"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
