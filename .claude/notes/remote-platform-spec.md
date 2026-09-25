@@ -8,8 +8,8 @@
 > together, in the same change, or the project has two different north stars and
 > does not know it.
 >
-> Supersedes the Swift-native specification of 2026-09-16 in full. What changed
-> and why is in `Decisions/0002-rust-component-platform.md`.
+> Supersedes the Swift-native specification of 2026-09-16 in full. The platform
+> is these Rust components, with Swift as a consumer of the built artifact.
 
 ---
 

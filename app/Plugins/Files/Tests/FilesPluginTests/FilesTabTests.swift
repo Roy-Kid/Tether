@@ -12,6 +12,7 @@ import TetherPluginKit
 private final class HostProbe {
   var typed: [String] = []
   var shown = 0
+  var focused = 0
   var workingDirectory: String?
 
   func context() -> TabContext {
@@ -20,7 +21,7 @@ private final class HostProbe {
       plugin: PluginContext(
         connection: nil, hostLabel: "lab", hostID: UUID(),
         openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
-      focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
+      focus: { [weak self] in self?.focused += 1 }, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
       insertText: { [weak self] in self?.typed.append($0) },
       workingDirectory: { [weak self] in self?.workingDirectory },
       showAccessory: { [weak self] in self?.shown += 1 })
@@ -227,6 +228,30 @@ struct FilesTabTests {
     #expect(model.transfers.items.isEmpty, "a finished copy leaves the list")
   }
 
+  @Test("Quick Look opens before an uncached remote file finishes downloading")
+  func previewOpensWhileDownloading() async throws {
+    let source = StubSource(tree)
+    source.downloadDelay = .seconds(1)
+    var shown: [[URL]] = []
+    let host = HostProbe()
+    let model = FilesTab(
+      tab: host.context(), cache: scratchCache(), open: { _ in source },
+      present: { shown.append($0) })
+    await model.go(to: "/home/ada")
+    let file = try #require(model.entries.first { $0.name == "A.png" })
+
+    let fetching = Task { await model.preview([file]) }
+    try await settle(model) { !shown.isEmpty }
+    #expect(shown.count == 1)
+    let placeholderFolder = shown[0].first?.deletingLastPathComponent()
+      .deletingLastPathComponent().lastPathComponent
+    #expect(placeholderFolder == "Tether Preview Loading")
+
+    await fetching.value
+    #expect(shown.count == 2)
+    #expect(shown[1].first?.lastPathComponent == "A.png")
+  }
+
   @Test("a large file asks before it is fetched")
   func largeFileAsks() async {
     let model = browser(StubSource(tree))
@@ -289,7 +314,7 @@ struct FilesTabTests {
     #expect(await model.resolve(.at("nowhere.txt")) == nil)
   }
 
-  @Test("pointing at a file shows it; at a directory, shows the browser there")
+  @Test("pointing at a file focuses Files; at a directory, shows the browser there")
   func lookingAtALink() async {
     let source = StubSource(tree)
     let host = HostProbe()
@@ -299,7 +324,8 @@ struct FilesTabTests {
 
     await model.look(at: .at("runs/plot.png", in: "/home/ada"))
     #expect(model.previewed.map(\.lastPathComponent) == ["plot.png"])
-    #expect(host.shown == 0, "a file opens in Quick Look, not the browser")
+    #expect(host.shown == 1, "a file opens in Quick Look with Files focused")
+    #expect(host.focused == 1)
 
     await model.look(at: .at("runs", in: "/home/ada"))
     #if os(macOS)
@@ -310,7 +336,8 @@ struct FilesTabTests {
     #else
       #expect(model.directory == "/home/ada/runs")
     #endif
-    #expect(host.shown == 1)
+    #expect(host.shown == 2)
+    #expect(host.focused == 2)
 
     await model.reveal(.at("/home/ada/b.txt"))
     #expect(model.directory == "/home/ada")
@@ -325,6 +352,7 @@ struct FilesTabTests {
     await model.look(at: .at("not/there.png"))
     #expect(model.previewed.isEmpty)
     #expect(host.shown == 0)
+    #expect(host.focused == 0)
   }
 
   @Test("a web address is not a file; a file:// hyperlink is")

@@ -89,6 +89,8 @@ pub enum Action {
     Resize(u16, u16),
     RenameSession(String),
     EndSession,
+    CopyMode(u32),
+    ScrollPane(u32, i32),
 }
 impl Action {
     fn command(&self) -> Result<String> {
@@ -111,6 +113,12 @@ impl Action {
             }
             Self::RenameSession(name) => format!("rename-session {}", quote(name)?),
             Self::EndSession => "kill-session".into(),
+            Self::CopyMode(id) => format!("copy-mode -e -t %{id}"),
+            Self::ScrollPane(id, lines) => {
+                let count = lines.unsigned_abs();
+                let direction = if *lines > 0 { "scroll-up" } else { "scroll-down" };
+                format!("send-keys -X -t %{id} -N {count} {direction}")
+            }
         })
     }
 }
@@ -203,6 +211,13 @@ impl Workspace {
             target.terminal.encode(input)
         };
         self.write(pane, bytes)
+    }
+    /// Scrolls a tmux pane through tmux's copy-mode commands. Control-mode
+    /// clients do not receive native mouse-wheel events from the terminal.
+    pub async fn scroll(&self, pane: u32, lines: i32) -> Result<()> {
+        if lines == 0 { return Ok(()); }
+        self.perform(Action::CopyMode(pane)).await?;
+        self.perform(Action::ScrollPane(pane, lines)).await
     }
     pub fn write(&self, pane: u32, bytes: Vec<u8>) -> Result<()> {
         if bytes.len() > 1024 * 1024 {

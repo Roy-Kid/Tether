@@ -6,6 +6,29 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/build-xcframework.sh
+
+Produce swift/Artifacts/TetherFFI.xcframework and refresh the checked-in
+Swift bindings. Needs the Rust toolchain; consumers never run it.
+
+Options:
+  -h, --help   show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 # Keep native dependencies aligned with the Swift packages, even on a newer Xcode host.
 export MACOSX_DEPLOYMENT_TARGET=26.0
 export IPHONEOS_DEPLOYMENT_TARGET=26.0

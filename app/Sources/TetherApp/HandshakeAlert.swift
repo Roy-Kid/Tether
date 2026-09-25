@@ -19,6 +19,10 @@ enum HandshakeAlert {
     Task { @MainActor in
       await waitForClearPresentation()
       switch question.kind {
+      case .confirmation(let title, let detail, let answer):
+        await show(title: title, message: detail, fields: [], cancel: "Cancel", confirm: "Approve") {
+          answer($0 != nil)
+        }
       case .trust(let host, let why, let answer):
         let changed: KnownHost? = if case .changed(let from) = why { from } else { nil }
         let title = changed == nil ? "Unrecognised host" : "This host's key has changed"

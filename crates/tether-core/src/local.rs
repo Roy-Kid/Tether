@@ -76,7 +76,11 @@ impl Local {
         // held open — but a second command can be run here just as it can on
         // the far side of a network, and saying so is what keeps a feature
         // built on that from being remote-only by accident.
-        Ok(TerminalSession::start_with(shell, self.size, self.options, crate::Connection::Local))
+        let terminal_name = shell.tty_name().map(str::to_owned);
+        let process_id = shell.process_id();
+        Ok(TerminalSession::start_with(
+            shell, self.size, self.options, crate::Connection::Local, terminal_name, process_id,
+        ))
     }
 }
 

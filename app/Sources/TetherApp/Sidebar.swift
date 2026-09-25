@@ -20,6 +20,7 @@ struct Sidebar: View {
   var onDone: (() -> Void)? = nil
 
   @State private var selection: Host.ID?
+  @State private var identityHost: Host?
 
   var body: some View {
     List(selection: $selection) {
@@ -58,7 +59,7 @@ struct Sidebar: View {
             #if os(iOS)
               .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !host.isLocal {
-                  Button("Edit…", systemImage: "pencil") { onEdit(host) }
+                  Button("Identity…", systemImage: "person.badge.key") { identityHost = host }
                     .tint(Theme.accent)
                 }
               }
@@ -71,8 +72,13 @@ struct Sidebar: View {
               // computer out of a list they are reading on it. Not a second
               // kind of host — a host with nothing left to decide.
               if !host.isLocal {
-                Button("Edit…") { onEdit(host) }
-                Button("Delete host", role: .destructive) { store.delete(host) }
+                Button("Identity and Authentication…") { identityHost = host }
+                if host.isManaged {
+                  Button("Edit…") { onEdit(host) }
+                  Button("Delete host", role: .destructive) { store.delete(host) }
+                } else {
+                  Button("Add to Tether") { store.adopt(host) }
+                }
               }
             }
         }
@@ -81,6 +87,10 @@ struct Sidebar: View {
             .font(.callout).foregroundStyle(.secondary).padding(.vertical, UIStyle.Space.group)
         }
       }
+    }
+    .sheet(item: $identityHost) { host in
+      NavigationStack { HostIdentitySettings(store: store, id: host.id) }
+        .frame(minWidth: 400, minHeight: 420)
     }
     .modifier(HostListStyle())
     // This list is also used in a sheet, where `.sidebar` search placement
@@ -137,7 +147,9 @@ private struct HostSearchField: NSViewRepresentable {
   final class Coordinator: NSObject {
     var text: Binding<String>
     init(text: Binding<String>) { self.text = text }
-    @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
+    // The action arrives from the field on the main thread; reading
+    // `stringValue` and writing the binding both belong there.
+    @MainActor @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
   }
 }
 #endif

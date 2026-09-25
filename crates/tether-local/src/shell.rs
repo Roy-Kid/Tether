@@ -75,14 +75,57 @@ const SETTLING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// `/etc/zshrc_Apple_Terminal` and replays a saved Terminal.app session, so
 /// the first thing a person sees is somebody else's old output. Measured, not
 /// imagined — it was the first thing on screen the first time this ran.
+/// `TMUX` and `TMUX_PANE` are the same kind of claim: if Tether was launched
+/// from tmux, its shell and local tmux commands must not attach to the
+/// launcher's client or refuse a nested attach.
 ///
 /// Removed rather than corrected, because there is no honest value to write.
 /// A component may not name its consumer, so it cannot answer "which terminal
 /// is this?"; a consumer that wants to advertise itself can set these on the
 /// far side, having earned the claim. `TERM` is different and is set: it
 /// describes what can be *drawn*, which is a question this crate can answer.
-pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 3] =
-    ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"];
+pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 5] = [
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "TMUX",
+    "TMUX_PANE",
+];
+
+/// Read the working directory of a live local shell process.
+#[cfg(target_os = "macos")]
+pub fn process_current_directory(pid: u32) -> Option<String> {
+    use std::ffi::CStr;
+
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::pid_t,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+            std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int,
+        )
+    };
+    if size != std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int {
+        return None;
+    }
+    let path = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+    let path = path.to_str().ok()?;
+    path.starts_with('/').then(|| path.to_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn process_current_directory(pid: u32) -> Option<String> {
+    let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    let path = path.to_str()?;
+    path.starts_with('/').then(|| path.to_owned())
+}
+
+#[cfg(not(unix))]
+pub fn process_current_directory(_pid: u32) -> Option<String> {
+    None
+}
 
 /// A shell running on a pseudo-terminal of its own.
 ///
@@ -94,6 +137,10 @@ pub struct Shell {
     /// Shared, because [`hold_size`] speaks through it too — and `Weak`, on
     /// that side, so a settling thread cannot keep a closed terminal alive.
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// The controlling tty path, when the platform exposes it.
+    tty_name: Option<String>,
+    /// PID of the shell process group leader, for reading its live cwd.
+    process_id: Option<u32>,
     /// The size this terminal is supposed to be, for [`hold_size`] to defend.
     wanted: Arc<Mutex<PtySize>>,
     /// Behind a lock because a write happens on a blocking thread, and
@@ -130,6 +177,11 @@ impl Shell {
         let pair = native_pty_system()
             .openpty(pty_size(size))
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
+        let tty_name = pair.master.tty_name().map(|path| path.to_string_lossy().into_owned());
+        #[cfg(unix)]
+        let process_id = pair.master.process_group_leader().map(|pid| pid as u32);
+        #[cfg(not(unix))]
+        let process_id = None;
 
         let mut builder = CommandBuilder::new(program);
         for argument in arguments {
@@ -208,6 +260,8 @@ impl Shell {
 
         Ok(Self {
             master,
+            tty_name,
+            process_id,
             wanted,
             writer: Arc::new(Mutex::new(writer)),
             killer,
@@ -223,6 +277,21 @@ impl Shell {
     /// The size last requested.
     pub fn size(&self) -> WindowSize {
         self.size
+    }
+
+    /// The path of this shell's controlling tty, when available.
+    pub fn tty_name(&self) -> Option<&str> {
+        self.tty_name.as_deref()
+    }
+
+    /// The process group leader, when this PTY backend exposes it.
+    pub fn process_id(&self) -> Option<u32> {
+        self.process_id
+    }
+
+    /// The shell process's current directory, even when it does not emit OSC 7.
+    pub fn current_directory(&self) -> Option<String> {
+        self.process_id.and_then(process_current_directory)
     }
 
     /// Sends bytes to the shell's input.

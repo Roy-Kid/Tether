@@ -5,15 +5,48 @@
 # The default is a short budget — enough to catch a regression on every change;
 # finding something new takes hours, which is what the nightly schedule is for.
 #
-#   scripts/fuzz.sh          # 60 seconds per target
-#   scripts/fuzz.sh 3600     # an hour per target
+#   ./scripts/fuzz-targets.sh                    # 60 seconds per target
+#   ./scripts/fuzz-targets.sh --seconds 3600     # an hour per target
 #
 # Needs a nightly toolchain and cargo-fuzz:
 #   rustup toolchain install nightly
 #   cargo +nightly install cargo-fuzz
 set -euo pipefail
 
-seconds="${1:-60}"
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/fuzz-targets.sh [--seconds N]
+
+Coverage-guided fuzzing of everything that reads remote bytes (spec §19).
+Replays known regressions first, then fuzzes each target for N seconds.
+
+Options:
+  --seconds N   budget per target (default: 60)
+  -h, --help    show this help
+
+Needs a nightly toolchain and cargo-fuzz:
+  rustup toolchain install nightly
+  cargo +nightly install cargo-fuzz
+EOF
+}
+
+seconds=60
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --seconds)
+      [[ -n "${2:-}" ]] || { echo "--seconds needs a value" >&2; usage >&2; exit 2; }
+      seconds="$2"
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 cd "$(dirname "$0")/.."
 
 # The recorded workloads make good starting points: a fuzzer that begins from

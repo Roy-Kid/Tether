@@ -7,6 +7,30 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/verify-consumer-build.sh
+
+Prove a Swift consumer builds Tether with no Rust toolchain, no CMake and no
+network: strip cargo/rustc/cmake from PATH, build and test the Swift package,
+then type-check that generated symbols do not leak through the façade.
+
+Options:
+  -h, --help   show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 # Strip every PATH entry that carries cargo, rustc or cmake. This machine has
 # had more than one cmake installed at a time, so filter by content, not by a
 # remembered prefix.
@@ -41,7 +65,7 @@ bin=$(swift build --disable-automatic-resolution --show-bin-path)
 flags=(-I "$bin" -Xcc -fmodule-map-file="$bin/include/module.modulemap" -Xcc -I"$bin/include")
 probe=$(mktemp -d)
 
-# CancellationToken is an internal mechanism (Decisions/0003); a consumer that
+# CancellationToken is an internal mechanism; a consumer that
 # can name it is a consumer that can be told to manage it.
 cat > "$probe/leak.swift" <<'LEAK'
 import Tether

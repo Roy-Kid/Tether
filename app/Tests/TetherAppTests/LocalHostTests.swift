@@ -56,7 +56,8 @@ struct LocalHostTests {
 
     let written = (try? String(contentsOf: location, encoding: .utf8)) ?? ""
     #expect(!written.contains("localhost"))
-    #expect(written.contains("Host lab"))
+    #expect(store.snapshot.records.values.contains { $0.profile.label == "lab" })
+    #expect(store.snapshot.records[Host.localID] == nil)
   }
 
   @Test("cannot be deleted out of the list")

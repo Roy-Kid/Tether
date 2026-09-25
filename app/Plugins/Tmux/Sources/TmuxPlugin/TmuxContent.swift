@@ -106,6 +106,9 @@ struct TmuxContent: View {
             frame: pane.frame, active: pane.active, inset: 0,
             onInput: { model.send(pane.id, $0) },
             onFocus: { if !pane.active { model.perform(.selectPane(id: pane.id)) } },
+            onScroll: { scroll in
+              if case .lines(let count) = scroll { model.scroll(pane.id, lines: count) }
+            },
             links: model.links(for: pane.id)
           )
           .overlay(alignment: .topTrailing) {

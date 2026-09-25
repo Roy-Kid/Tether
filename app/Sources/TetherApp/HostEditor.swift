@@ -14,10 +14,11 @@ struct HostEditor: View {
 
   @State private var host: Host
   @State private var password: String
-  let onSave: (Host, String?) -> Void
+  let onSave: (Host, String?) -> Bool
 
   @Environment(\.dismiss) private var dismiss
   @State private var picking = false
+  @State private var importProblem: String?
   @State private var authentication: Authentication
 
   private var isNew: Bool { host.hostname.isEmpty && host.label.isEmpty }
@@ -28,7 +29,7 @@ struct HostEditor: View {
       && (authentication == .password || host.offersConfiguredKey)
   }
 
-  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Void) {
+  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Bool) {
     self.onSave = onSave
     _host = State(initialValue: host)
     _password = State(initialValue: password)
@@ -53,6 +54,25 @@ struct HostEditor: View {
             #endif
         }
 
+        if host.profile != nil {
+          Section("Identity") {
+            TextField("Account Identity", text: Binding(
+              get: { host.profile?.authentication.identity.name ?? "" },
+              set: { host.profile?.authentication.identity.name = $0 }))
+            Picker("Confirmation", selection: Binding(
+              get: { host.profile?.authentication.confirmation ?? .confirmAuthentication },
+              set: { host.profile?.authentication.confirmation = $0 })) {
+                Text("Automatic").tag(ConfirmationPolicy.automatic)
+                Text("Before Authentication").tag(ConfirmationPolicy.confirmAuthentication)
+                Text("Every Connection").tag(ConfirmationPolicy.confirmConnection)
+              }
+            if host.profile?.authentication.otp != nil {
+              TextField("OTP Challenge", text: Binding(
+                get: { host.profile?.authentication.otpPrompt ?? "" },
+                set: { host.profile?.authentication.otpPrompt = $0 }))
+            }
+          }
+        }
         Section {
           TextField("Username", text: $host.username)
             .hostFieldKeyboard()
@@ -65,6 +85,7 @@ struct HostEditor: View {
           }
           .pickerStyle(.segmented)
 
+          if let importProblem { Text(importProblem).foregroundStyle(.red) }
           if authentication == .password {
             // A row of its own. Nesting `SecureField` in an `HStack` inside a
             // `Form` is how iOS ends up with a password row that will not
@@ -78,7 +99,7 @@ struct HostEditor: View {
               picking = true
             } label: {
               LabeledContent("Key") {
-                Text(host.keyPath.map(shorten) ?? "Choose…")
+                Text(host.credentialSecretID != nil ? "Stored on this device" : host.keyPath.map(shorten) ?? "Choose…")
                   .foregroundStyle(.secondary)
                   .adaptiveRowText()
                   .truncationMode(.head)
@@ -98,6 +119,7 @@ struct HostEditor: View {
       .onChange(of: authentication) { _, value in
         if value == .password {
           host.keyPath = nil
+          host.credentialSecretID = nil
         } else {
           password = ""
         }
@@ -136,12 +158,15 @@ struct HostEditor: View {
     var saved = host
     if authentication == .password {
       saved.keyPath = nil
+      saved.credentialSecretID = nil
     }
     saved.label =
       host.label.trimmingCharacters(in: .whitespaces).isEmpty
       ? host.hostname : host.label
-    onSave(saved, authentication == .password ? password : "")
-    dismiss()
+    if authentication == .password {
+      saved.profile?.authentication.primary.purpose = .password
+    }
+    if onSave(saved, authentication == .password ? password : "") { dismiss() }
   }
 
   /// `~/.ssh/id_ed25519` reads better than the whole path, and the whole
@@ -169,30 +194,15 @@ struct HostEditor: View {
     let reachable = url.startAccessingSecurityScopedResource()
     defer { if reachable { url.stopAccessingSecurityScopedResource() } }
 
-    host.keyPath = persistIdentity(url) ?? url.path
-  }
-
-  /// Copies a picked key into `~/.ssh` so connect-time reads do not depend
-  /// on a security-scoped URL that dies at the end of this call. On a phone
-  /// that is the difference between offering publickey and failing with
-  /// "the server still wants publickey, keyboard-interactive".
-  private func persistIdentity(_ url: URL) -> String? {
-    guard let data = try? Data(contentsOf: url) else { return nil }
-    let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-      .appending(path: ".ssh", directoryHint: .isDirectory)
-    try? FileManager.default.createDirectory(
-      at: directory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    let name = url.lastPathComponent.isEmpty ? "id_key" : url.lastPathComponent
-    let destination = directory.appending(path: name)
     do {
-      try data.write(to: destination, options: .atomic)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o600], ofItemAtPath: destination.path)
+      let pem = try String(contentsOf: url, encoding: .utf8)
+      let id = UUID()
+      try DeviceCredentialStore().write(pem, id: id, label: host.label)
+      host.credentialSecretID = id
+      host.keyPath = nil
     } catch {
-      return nil
+      importProblem = error.localizedDescription
     }
-    return contractingHome(destination.path)
   }
 
   /// The port as text, so an empty field is possible while typing.

@@ -6,7 +6,7 @@
 //! has a shell: `sftp-server` is started by `sshd` for a subsystem request,
 //! or by us on this computer, and speaks the same bytes either way.
 //!
-//! The protocol is composed from `russh-sftp` (Decisions/0013) and spoken
+//! The protocol is composed from `russh-sftp` and spoken
 //! over a [`Transport`] — an ordered duplex byte stream, and nothing else. No
 //! SSH or process type crosses into this crate, which is what lets one
 //! implementation serve a remote session, an OpenSSH ControlMaster and this

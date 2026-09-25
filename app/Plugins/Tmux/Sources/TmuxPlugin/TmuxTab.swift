@@ -6,13 +6,14 @@ import TetherUI
 /// tmux on one terminal tab: the session it is attached to, if any, and
 /// whether that session is what the tab is showing.
 ///
-/// The tab's shell is never replaced — choosing "Original shell" shows it
-/// again with the tmux attachment still held, so going back to tmux is a
-/// switch and not a reattach.
+/// The tab's shell is never replaced — choosing its shell shows it again
+/// while keeping the tmux session attached, so switching back is immediate.
 @MainActor @Observable
 public final class TmuxTab: TabAttachment {
   public let tab: TabContext
   public var sessions: [TmuxSessionInfo] = []
+  /// The session a tmux client on this tab's own shell tty is showing.
+  public var shellSessionID: String?
   public var session: TmuxSessionInfo?
   public var snapshot: TmuxSnapshot?
   public var error: String?
@@ -159,24 +160,41 @@ public final class TmuxTab: TabAttachment {
   /// Shows a session on this tab — or, when another tab already has it,
   /// brings that tab forward instead of attaching a second time.
   public func choose(_ chosen: TmuxSessionInfo, windowID: UInt32?) {
-    defer { tab.dismissAccessory() }
+    // This session is already being rendered by the shell's tmux client on
+    // this tab. Keep that client as the one visible representation instead
+    // of attaching a second control-mode client to the same session.
+    if shellSessionID == chosen.id {
+      detachSession()
+      tab.dismissAccessory()
+      return
+    }
     if let other = owner(chosen.id), other !== self {
       other.showing = true
       other.tab.focus()
       if let windowID { other.perform(.selectWindow(id: windowID)) }
+      tab.dismissAccessory()
       return
     }
-    showing = true
     if session?.id == chosen.id {
+      showing = true
       if let windowID { perform(.selectWindow(id: windowID)) }
+      tab.dismissAccessory()
     } else {
-      open(chosen, windowID: windowID)
+      open(chosen, windowID: windowID) { [weak self] in
+        guard let self else { return }
+        self.showing = true
+        self.tab.dismissAccessory()
+      }
     }
   }
 
-  /// The shell this tab was opened with. tmux stays attached behind it.
+  /// Show the shell this tab was opened with, keeping tmux attached.
   public func showShell() {
-    showing = false
+    if let session, shellSessionID == session.id {
+      detachSession()
+    } else {
+      showing = false
+    }
     tab.dismissAccessory()
   }
 
@@ -215,7 +233,13 @@ public final class TmuxTab: TabAttachment {
     run { [self] in
       missing = false
       do {
-        sessions = try await lease().tmuxSessions()
+        let connection = try lease()
+        sessions = try await connection.tmuxSessions()
+        if let tty = tab.terminalName {
+          shellSessionID = try? await connection.tmuxSession(forClientTTY: tty)
+        } else {
+          shellSessionID = nil
+        }
       } catch {
         let text = error.localizedDescription
         missing =
@@ -232,11 +256,12 @@ public final class TmuxTab: TabAttachment {
   public func create(onSuccess: @escaping @MainActor () -> Void) {
     let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else { return }
+    let directory = tab.workingDirectory()
     run { [self] in
       let connection = try lease()
       let created = try await creation.perform(
         name: name,
-        create: { try await connection.createTmux(name: $0) },
+        create: { try await connection.createTmux(name: $0, directory: directory) },
         attach: { try await self.attach($0) })
       guard !closed, !Task.isCancelled else { return }
       if !sessions.contains(where: { $0.id == created.id }) { sessions.append(created) }
@@ -246,12 +271,17 @@ public final class TmuxTab: TabAttachment {
     }
   }
 
-  public func open(_ session: TmuxSessionInfo, windowID: UInt32? = nil) {
+  public func open(
+    _ session: TmuxSessionInfo, windowID: UInt32? = nil,
+    onSuccess: @escaping @MainActor () -> Void = {}
+  ) {
     run { [self] in
       try await attach(session)
       if let windowID {
         try await workspace?.perform(.selectWindow(id: windowID))
       }
+      guard !closed, !Task.isCancelled else { return }
+      onSuccess()
     }
   }
 
@@ -286,13 +316,13 @@ public final class TmuxTab: TabAttachment {
   }
 
   private func attach(_ session: TmuxSessionInfo) async throws {
-    workspace?.detach()
-    pump?.cancel()
     let workspace = try await lease().attachTmux(sessionID: session.id)
     guard !closed, !Task.isCancelled else {
       workspace.detach()
       return
     }
+    pump?.cancel()
+    self.workspace?.detach()
     self.workspace = workspace
     self.session = session
     self.snapshot = workspace.snapshot()
@@ -333,6 +363,20 @@ public final class TmuxTab: TabAttachment {
     guard !ended else { return }
     do { try workspace?.send(pane: pane, input: input) } catch {
       self.error = error.localizedDescription
+    }
+  }
+
+  func scroll(_ pane: UInt32, lines: Int32) {
+    guard !ended else { return }
+    guard let workspace else { return }
+    Task { [weak self] in
+      do {
+        try await workspace.scroll(pane: pane, lines: lines)
+        guard let self, !self.ended else { return }
+        self.snapshot = workspace.snapshot()
+      } catch {
+        self?.error = error.localizedDescription
+      }
     }
   }
 

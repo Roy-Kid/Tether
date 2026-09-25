@@ -35,7 +35,7 @@ mod shell;
 pub use command::Command;
 pub use error::LocalError;
 pub use process::{Capture, Stream};
-pub use shell::{Output, Shell, WindowSize};
+pub use shell::{Output, Shell, WindowSize, process_current_directory as current_directory};
 
 /// Whether this platform lets an application start a shell.
 ///

@@ -14,14 +14,13 @@
   /// measurement.
   ///
   /// It is a *shape*, not a benchmark: the absolute numbers belong to the
-  /// machine that ran them, and `Decisions/0006` records the ones this was
-  /// written against. What the assertion defends is the order of magnitude —
+  /// machine that ran them. What the assertion defends is the order of magnitude —
   /// a change that makes a frame ten times more expensive is a change that
   /// made the terminal unusable on the slowest machine it ships to, and that
   /// must fail here rather than in someone's hands.
   ///
   /// Print the table with:
-  /// `swift test --package-path app/Packages/TetherFrontend --filter RenderCost`
+  /// `swift test -c release --package-path app/Packages/TetherFrontend --filter RenderCost`
   @Suite("Render cost")
   @MainActor
   struct RenderCostTests {
@@ -41,7 +40,7 @@
     /// The worst case is measured as a *rate*, because its absolute number is
     /// already over any frame budget there is: at the time of writing, a
     /// screen where every cell carries its own colour costs 0.9s to draw at
-    /// 400x100 (`Decisions/0006`). Asserting the number it has today would be
+    /// 400x100. Asserting the number it has today would be
     /// asserting the problem. Asserting the cost per run catches the thing
     /// that can still be defended — that drawing one more run stays as cheap
     /// as it is.
@@ -56,7 +55,7 @@
         for size in Self.sizes {
           let frame = shape.frame(columns: size.columns, rows: size.rows)
           let runs = frame.lines.reduce(0) { $0 + $1.runs.count }
-          let measured = Self.draw(frame)
+          let measured = try Self.draw(frame)
           let perRun = measured / runs
 
           print(
@@ -90,23 +89,33 @@
     /// that dominates is the same on both: resolving and drawing one
     /// attributed string per run. It is measurable without a window server,
     /// which is what makes it a number CI can keep.
-    static func draw(_ frame: ScreenFrame, iterations: Int = 5) -> Duration {
+    static func draw(_ frame: ScreenFrame, iterations: Int = 5) throws -> Duration {
       let metrics = FontMetrics(size: 13)
-      var total = Duration.zero
+      var samples: [Duration] = []
 
-      for _ in 0..<iterations {
-        let view = TerminalView(frame: frame, metrics: metrics, palette: .dark)
-        let renderer = ImageRenderer(content: view)
-        renderer.proposedSize = ProposedViewSize(
-          width: metrics.cellWidth * CGFloat(frame.columns),
-          height: metrics.lineHeight * CGFloat(frame.rows))
-        renderer.scale = 2
+      for iteration in 0...iterations {
+        // Release each raster before the next sample. Large Retina frames
+        // otherwise accumulate autoreleased CoreGraphics objects throughout
+        // this synchronous test, measuring memory pressure as rendering cost.
+        let elapsed = try autoreleasepool {
+          let view = TerminalView(frame: frame, metrics: metrics, palette: .dark)
+          let renderer = ImageRenderer(content: view)
+          renderer.proposedSize = ProposedViewSize(
+            width: metrics.cellWidth * CGFloat(frame.columns),
+            height: metrics.lineHeight * CGFloat(frame.rows))
+          renderer.scale = 2
 
-        let started = ContinuousClock.now
-        _ = renderer.cgImage
-        total += ContinuousClock.now - started
+          let started = ContinuousClock.now
+          let image = renderer.cgImage
+          let elapsed = ContinuousClock.now - started
+          _ = try #require(image)
+          return elapsed
+        }
+        // Warm the font/raster caches, then use the median to avoid counting
+        // an isolated shared-runner scheduling pause as a rendering regression.
+        if iteration > 0 { samples.append(elapsed) }
       }
-      return total / iterations
+      return samples.sorted()[samples.count / 2]
     }
 
     /// The three screens worth measuring.

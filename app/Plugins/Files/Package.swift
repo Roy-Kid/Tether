@@ -3,7 +3,7 @@ import PackageDescription
 
 // Files where a terminal tab's shell is running: a browser in the inspector,
 // Quick Look, and transfers both ways. Everything files the app shows lives
-// here; the app reaches it only through TetherPluginKit (Decisions/0012).
+// here; the app reaches it only through TetherPluginKit.
 let package = Package(
     name: "FilesPlugin",
     platforms: [.macOS(.v26), .iOS(.v26)],

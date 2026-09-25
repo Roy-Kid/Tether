@@ -23,6 +23,7 @@ struct Question: Identifiable {
   let kind: Kind
 
   enum Kind {
+    case confirmation(title: String, detail: String, answer: (Bool) -> Void)
     case trust(host: HostIdentity, why: TrustQuestion, answer: (Bool) -> Void)
     case prompts(instruction: String, prompts: [AuthPrompt], answer: ([String]) -> Void)
   }
@@ -35,6 +36,7 @@ struct Question: Identifiable {
   /// symptom until there are enough of them.
   func decline() {
     switch kind {
+    case .confirmation(_, _, let answer): answer(false)
     case .trust(_, _, let answer): answer(false)
     case .prompts(_, _, let answer): answer([])
     }
@@ -95,6 +97,7 @@ final class SessionTab: Identifiable {
   private var ready: [CheckedContinuation<RemoteConnection, Error>] = []
   private var pump: Task<Void, Never>?
   private var dialTask: Task<Void, Never>?
+  private var authentication: AuthenticationCoordinator?
 
   private var columns: UInt16 = 80
   private var rows: UInt16 = 24
@@ -132,88 +135,25 @@ final class SessionTab: Identifiable {
     self.stage = live ? .connected : .ended(nil)
   }
 
-  /// Reads the keys this host will offer.
-  ///
-  /// At connect time rather than at save time, so a key that was moved or
-  /// had its permissions tightened is noticed now, when there is a person
-  /// to tell. `~/.ssh/id_ed25519` is how a path is written down, because
-  /// that is how it is written down in an ssh config; expanding it is this
-  /// side's job, at the moment of opening the file.
-  private func keyCredentials() -> [Credential] {
-    identityFiles(for: host).compactMap { path in
-      guard let pem = try? String(contentsOfFile: expandingTilde(path), encoding: .utf8) else {
-        return nil
-      }
-      return .privateKey(pem: pem, passphrase: nil)
-    }
-  }
-
   private func dial(_ password: String) async {
-    // The only branch in the whole app. Below this line a local session and
-    // a remote one are the same object: the same frames, the same input, the
-    // same ending. Everything that follows — the repaint loop, scrolling,
-    // resizing, closing — was written once and does not know which it got.
-    if host.isLocal {
-      await open()
+    if host.isLocal { await open(); return }
+    if let issue = host.connectionProblem {
+      fail(IdentityError.storage(issue)); return
+    }
+    if host.allowsMasterReuse, await TerminalSession.sshMasterIsRunning(host.sshTarget) {
+      do { adopt(try await TerminalSession.connectOverSsh(host.sshTarget, columns: columns, rows: rows)) }
+      catch { fail(error) }
       return
     }
-
-    if await TerminalSession.sshMasterIsRunning(host.sshTarget) {
-      do {
-        let session = try await TerminalSession.connectOverSsh(
-          host.sshTarget,
-          columns: columns,
-          rows: rows)
-        adopt(session)
-      } catch {
-        fail(error)
-      }
-      return
-    }
-
-    let destination = Destination(
-      host: host.hostname,
-      port: host.port,
-      user: host.username,
-      columns: columns,
-      rows: rows)
-
-    let keys = keyCredentials()
-    if let path = host.keyPath, !path.isEmpty, keys.isEmpty {
-      let failure = NSError(
-        domain: "Tether", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Could not read the key at \(path)."])
-      stage = .failed(failure.localizedDescription)
-      ready.forEach { $0.resume(throwing: failure) }
-      ready.removeAll()
-      return
-    }
-
-    do {
-      // Key first, then password, then interactive. The order is the
-      // offer order, and each is tried only if the server is still
-      // asking — which is also how "a key, then a one-time code" works
-      // without any special case for it.
-      // A key that is accepted as the first factor (Arrhenius) leaves the
-      // connection in partial success waiting for keyboard-interactive.
-      // Offering SSH password auth in between would spend that state on a
-      // method the server does not list. Password is kept for kbd-int
-      // "Password:" rounds via `offeredPassword`.
-      var credentials: [Credential] = keys
-      if keys.isEmpty, !password.isEmpty {
-        credentials.append(.password(password))
-      }
-      credentials.append(.interactive(Prompter(tab: self)))
-
-      let session = try await TerminalSession.connect(
-        to: destination,
-        trusting: Trust(tab: self),
-        offering: credentials)
-
-      adopt(session)
-    } catch {
-      fail(error)
-    }
+    let coordinator = AuthenticationCoordinator(host: host, password: password, known: known,
+      ask: { [weak self] kind in
+        guard let self else { Question(kind: kind).decline(); return }
+        self.ask(kind)
+      }, answered: { [weak self] in self?.answered() })
+    authentication = coordinator
+    defer { coordinator.cancel(); authentication = nil; offeredPassword = "" }
+    do { adopt(try await coordinator.connect(columns: columns, rows: rows)) }
+    catch { fail(error) }
   }
 
   /// Opens a shell on a lease that has already been authenticated.
@@ -335,6 +275,7 @@ final class SessionTab: Identifiable {
 
   /// The directory the shell last reported, if it reports one.
   var workingDirectory: String? { session?.workingDirectory }
+  var terminalName: String? { session?.terminalName }
 
   /// Moves the viewport over the scrollback.
   func scroll(_ to: ScrollTo) {
@@ -385,6 +326,7 @@ final class SessionTab: Identifiable {
     ready.removeAll()
     // Anyone still waiting on an answer is told no, before the state that
     // holds their continuation goes away.
+    authentication?.cancel()
     if case .asking(let question) = stage { question.decline() }
 
     pump?.cancel()
@@ -437,94 +379,6 @@ final class SessionTab: Identifiable {
   fileprivate var knownHosts: KnownHosts { known }
 }
 
-// MARK: - Bridges to the SDK's callbacks
-
-private struct Trust: HostTrust {
-  let tab: SessionTab
-
-  func trusts(_ host: HostIdentity) async -> Bool {
-    // Nobody is asked about a key they already vouched for. Asking again
-    // trains a person to accept without reading, which is exactly what the
-    // prompt exists to prevent.
-    guard let why = await tab.knownHosts.question(for: host) else { return true }
-
-    let accepted = await withCheckedContinuation {
-      (continuation: CheckedContinuation<Bool, Never>) in
-      let once = Once(continuation)
-      Task { @MainActor in
-        tab.ask(.trust(host: host, why: why) { once.resume($0) })
-      }
-    }
-
-    if accepted { await tab.knownHosts.remember(host) }
-    await tab.answered()
-    return accepted
-  }
-}
-
-/// Resumes a continuation at most once. System alerts can fire both
-/// Continue and Cancel on the same tap; the second resume would trap.
-private final class Once<Value: Sendable>: @unchecked Sendable {
-  private var continuation: CheckedContinuation<Value, Never>?
-  init(_ continuation: CheckedContinuation<Value, Never>) {
-    self.continuation = continuation
-  }
-  func resume(_ value: Value) {
-    continuation?.resume(returning: value)
-    continuation = nil
-  }
-}
-
-private struct Prompter: AuthPrompter {
-  let tab: SessionTab
-
-  func answer(instruction: String, prompts: [AuthPrompt]) async -> [String] {
-    let password = await MainActor.run { tab.offeredPassword }
-    var answers = Array(repeating: "", count: prompts.count)
-    var leftover: [AuthPrompt] = []
-    var leftoverAt: [Int] = []
-    for (index, prompt) in prompts.enumerated() {
-      if !password.isEmpty, isAccountPasswordPrompt(prompt) {
-        answers[index] = password
-      } else {
-        leftover.append(prompt)
-        leftoverAt.append(index)
-      }
-    }
-
-    if leftover.isEmpty { return answers }
-
-    let toAsk = leftover
-    let filled = await withCheckedContinuation {
-      (continuation: CheckedContinuation<[String], Never>) in
-      let once = Once(continuation)
-      Task { @MainActor in
-        tab.ask(
-          .prompts(instruction: instruction, prompts: toAsk) {
-            once.resume($0)
-          })
-      }
-    }
-    await tab.answered()
-    // Empty is decline, not an empty verification code. Sending "" as a
-    // code is how a dialog that never appeared used to fail the login.
-    if filled.isEmpty { return [] }
-    for (offset, index) in leftoverAt.enumerated() {
-      if offset < filled.count { answers[index] = filled[offset] }
-    }
-    return answers
-  }
-}
-
-/// What a failure says to the person in front of it.
-///
-/// Internal rather than private because these sentences are the app's voice
-/// at the worst moment it has, and a sentence nothing asserts is a sentence
-/// that drifts into jargon.
-/// Whether this prompt is the account password we may already have.
-///
-/// Keyboard-interactive is generic (spec §10). A verification code, a
-/// token, or a "one-time password" is not filled from the saved password.
 func isAccountPasswordPrompt(_ prompt: AuthPrompt) -> Bool {
   guard !prompt.echo else { return false }
   let folded = prompt.text.lowercased()
@@ -558,4 +412,3 @@ func message(for error: Error) -> String {
   let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
   return text.isEmpty ? "\(error)" : text
 }
-

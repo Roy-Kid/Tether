@@ -39,7 +39,7 @@ struct TetherApp: App {
       // host list with nothing open in it.
       Window("Tether", id: "main") {
         root
-          .frame(minWidth: 860, minHeight: 520)
+          .frame(minWidth: 760, minHeight: 460)
       }
       // `.contentSize` would bind the window to the content's *ideal* size,
       // and a terminal has no ideal size — measured: the window opened
@@ -54,7 +54,7 @@ struct TetherApp: App {
       // A separate scene, because that is where a Mac keeps preferences and
       // where ⌘, already goes.
       Settings {
-        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets)
+        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
       }
     #else
       // A phone has no preferences window and no menu bar; settings are
@@ -68,6 +68,7 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        await store.startSync()
         await Task.yield()
         // The command line wins. Someone who typed `--open lab` asked for a
         // specific machine, and answering with a different one would be the
@@ -76,12 +77,19 @@ struct TetherApp: App {
           openLocalAtLaunch()
         }
       }
-      // The host list is `~/.ssh/config`, which belongs to the person rather
-      // than to this app: they may well have added a stanza in an editor
-      // while this was in the background. Coming back to the front is when
-      // that is worth finding out.
+      .onChange(of: store.hosts) { _, hosts in
+        // A synchronized endpoint or policy change invalidates an in-flight
+        // attempt and its old lease. Stale tabs cannot keep granting channels.
+        for tab in tabs.tabs where tab.host.isManaged {
+          let current = hosts.first { $0.id == tab.host.id }
+          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id) }
+        }
+      }
+      .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }
+      // User-owned SSH entries are re-read on the way back to the front. A
+      // stanza added in an editor shows up here and is not rewritten.
       .onChange(of: phase) { _, phase in
-        if phase == .active { store.reload() }
+        if phase == .active { store.reload(); Task { await store.startSync(); await store.syncNow() } }
       }
   }
 }
@@ -132,5 +140,4 @@ extension TetherApp {
     tabs.open(.local, password: "")
   }
 }
-
 

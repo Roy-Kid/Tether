@@ -62,6 +62,8 @@ public struct TabContext {
   public let id: UUID
   /// The tab's lease and host, the same shape a workspace plugin is given.
   public let plugin: PluginContext
+  /// The local shell's controlling tty, if the producer exposes one.
+  public let terminalName: String?
   /// Brings this tab to the front.
   public let focus: () -> Void
   /// Closes this plugin's accessory, wherever the host drew it.
@@ -89,7 +91,7 @@ public struct TabContext {
   public let linkActions: (PointedLink) -> LinkActions?
 
   public init(
-    id: UUID, plugin: PluginContext,
+    id: UUID, plugin: PluginContext, terminalName: String? = nil,
     focus: @escaping () -> Void, dismissAccessory: @escaping () -> Void,
     present: @escaping (AnyView) -> Void, dismissSheet: @escaping () -> Void,
     insertText: @escaping (String) -> Void = { _ in },
@@ -99,6 +101,7 @@ public struct TabContext {
   ) {
     self.id = id
     self.plugin = plugin
+    self.terminalName = terminalName
     self.focus = focus
     self.dismissAccessory = dismissAccessory
     self.present = present

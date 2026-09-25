@@ -284,18 +284,73 @@ public final class FilesTab: TabAttachment {
       pendingLarge = large
       return
     }
+    guard let filesSource = try? await source() else { return }
+
+    var placeholders: [URL] = []
+    #if os(macOS)
+      // Open Quick Look before waiting for an uncached remote copy. The
+      // placeholder keeps the file's suffix so Quick Look chooses its normal
+      // type-specific previewer while the real bytes arrive.
+      var initial: [URL] = []
+      for file in files {
+        if filesSource.isLocal {
+          initial.append(URL(fileURLWithPath: file.path))
+        } else if let cached = cache.cached(file) {
+          initial.append(cached)
+        } else if let placeholder = loadingPreview(for: file) {
+          placeholders.append(placeholder)
+          initial.append(placeholder)
+        }
+      }
+      if !placeholders.isEmpty {
+        previewed = initial
+        presenter(initial)
+      }
+    #endif
+
     var urls: [URL] = []
     for file in files {
       do {
-        urls.append(try await local(file))
+        if filesSource.isLocal {
+          urls.append(URL(fileURLWithPath: file.path))
+        } else if let cached = cache.cached(file) {
+          urls.append(cached)
+        } else {
+          urls.append(
+            try await transfers.download(file, to: cache.location(for: file), from: filesSource))
+          cache.trim(to: FilesTab.cacheLimit)
+        }
       } catch {
         if (error as? FileError) != .cancelled { problem = describe(error) }
       }
     }
-    guard !urls.isEmpty else { return }
-    previewed = urls
-    presenter(urls)
+    if !urls.isEmpty {
+      previewed = urls
+      presenter(urls)
+    } else if !placeholders.isEmpty {
+      previewed = []
+      QuickLook.hide()
+    }
+    #if os(macOS)
+      placeholders.forEach { try? FileManager.default.removeItem(at: $0.deletingLastPathComponent()) }
+    #endif
   }
+
+  #if os(macOS)
+    private func loadingPreview(for file: FileEntry) -> URL? {
+      let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("Tether Preview Loading", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(Names.local(file.name))
+        try Data("Loading preview…".utf8).write(to: url)
+        return url
+      } catch {
+        return nil
+      }
+    }
+  #endif
 
   func previewSelection() {
     Task { await preview(selected) }
@@ -378,8 +433,8 @@ public final class FilesTab: TabAttachment {
 
   /// Deletes what was confirmed. A directory goes with everything in it; a
   /// link goes as a link, never what it points at.
-  func confirmDelete() async {
-    let doomed = pendingDeletion
+  func confirmDelete(_ confirmed: [FileEntry]? = nil) async {
+    let doomed = confirmed ?? pendingDeletion
     pendingDeletion = []
     for entry in doomed {
       do {

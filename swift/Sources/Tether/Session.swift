@@ -260,6 +260,9 @@ public final class TerminalSession: Sendable {
     self.inner = inner
   }
 
+  /// Local PTY name, used to identify tmux clients opened in this shell.
+  public var terminalName: String? { inner.terminalName() }
+
   /// Connects, authenticates and opens a shell.
   public static func connect(
     to destination: Destination,
@@ -405,9 +408,10 @@ public final class TerminalSession: Sendable {
     inner.linkAt(row: row, column: column)
   }
 
-  /// The directory the shell last reported (`OSC 7`), if it reports one.
+  /// The shell's current directory, preferring its OSC 7 report and falling
+  /// back to the local shell process when no report is available.
   public var workingDirectory: String? {
-    inner.workingDirectory()
+    inner.workingDirectory() ?? inner.currentDirectory()
   }
 
   /// Everything needed to draw the screen once.

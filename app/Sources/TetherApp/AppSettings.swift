@@ -34,6 +34,7 @@ struct AppSettings: View {
   let known: KnownHosts
   let store: HostStore
   let secrets: any SecretStore
+  var connections: TabSet? = nil
 
   #if os(macOS)
     /// Which pane the split view is showing. A phone pushes instead.
@@ -45,6 +46,7 @@ struct AppSettings: View {
     case general
     case appearance
     case security
+    case identities
     case extensions
 
     var id: String { rawValue }
@@ -54,6 +56,7 @@ struct AppSettings: View {
       case .general: "General"
       case .appearance: "Appearance"
       case .security: "Security"
+      case .identities: "Identities"
       case .extensions: "Extensions"
       }
     }
@@ -63,6 +66,7 @@ struct AppSettings: View {
       case .general: "gearshape"
       case .appearance: "paintpalette"
       case .security: "lock.shield"
+      case .identities: "person.badge.key"
       case .extensions: "puzzlepiece.extension"
       }
     }
@@ -75,15 +79,20 @@ struct AppSettings: View {
 
   var body: some View {
     #if os(macOS)
-      NavigationSplitView {
+      HStack(spacing: 0) {
         List(Section.available, selection: $section) { section in
           Label(section.title, systemImage: section.symbol).tag(section)
         }
-        .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-      } detail: {
+        .listStyle(.sidebar)
+        .frame(width: 180)
+        Divider()
         pane(section ?? .appearance)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .frame(minWidth: 600, idealWidth: 680, minHeight: 420, idealHeight: 420)
+      // Settings has permanent categories, not collapsible navigation. Let
+      // the native titlebar own its height instead of adding safe-area shims.
+      .frame(minWidth: 680, idealWidth: 720, minHeight: 460, idealHeight: 500)
+      .background { StandardTitlebar() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
     #else
       // The caller already supplies the stack and its Done button, so this
@@ -102,27 +111,33 @@ struct AppSettings: View {
 
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
-    switch section {
-    case .general: GeneralSettings()
-    case .appearance: AppearanceSettings()
-    case .security: SecuritySettings(known: known, store: store, secrets: secrets)
-    case .extensions: ExtensionSettings(registry: registry)
+    Form {
+      switch section {
+      case .identities:
+        IdentitySettings(store: store, connections: connections)
+        DeviceSettings(store: store, known: known)
+      case .general: GeneralSettings()
+      case .appearance: AppearanceSettings()
+      case .security: SecuritySettings(known: known, store: store, secrets: secrets)
+      case .extensions: ExtensionSettings(registry: registry)
+      }
     }
+    .formStyle(.grouped)
+    .navigationTitle(section.title)
   }
 }
 
 /// What the app does on its own, before anyone has asked for anything.
+///
+/// Emits form sections only — the caller owns the `Form`, so a Mac's one
+/// scrolling sheet and a phone's pushed pane share the same rows.
 private struct GeneralSettings: View {
   @AppStorage(LaunchPreference.key) private var openLocalAtLaunch = LaunchPreference.default
 
   var body: some View {
-    Form {
-      SwiftUI.Section("At launch") {
-        Toggle("Open a terminal on this Mac", isOn: $openLocalAtLaunch)
-      }
+    SwiftUI.Section("On Launch") {
+      Toggle("Open Local Terminal", isOn: $openLocalAtLaunch)
     }
-    .formStyle(.grouped)
-    .navigationTitle("General")
   }
 }
 
@@ -132,23 +147,19 @@ private struct AppearanceSettings: View {
   @AppStorage("terminalFontSize") private var fontSize = 13.0
 
   var body: some View {
-    Form {
-      SwiftUI.Section("Appearance") {
-        Picker("Window", selection: $appearance) {
-          Text("System").tag("system")
-          Text("Light").tag("light")
-          Text("Dark").tag("dark")
-        }
-        Picker("Terminal", selection: $terminalAppearance) {
-          Text("System").tag("system")
-          Text("Light").tag("light")
-          Text("Dark").tag("dark")
-        }
-        Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
+    SwiftUI.Section("Appearance") {
+      Picker("Window", selection: $appearance) {
+        Text("System").tag("system")
+        Text("Light").tag("light")
+        Text("Dark").tag("dark")
       }
+      Picker("Terminal", selection: $terminalAppearance) {
+        Text("System").tag("system")
+        Text("Light").tag("light")
+        Text("Dark").tag("dark")
+      }
+      Stepper("Font Size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
     }
-    .formStyle(.grouped)
-    .navigationTitle("Appearance")
   }
 }
 
@@ -162,43 +173,35 @@ private struct ExtensionSettings: View {
   let registry: PluginRegistry
 
   var body: some View {
-    Form {
-      if registry.plugins.isEmpty {
+    if registry.plugins.isEmpty {
+      SwiftUI.Section("Extensions") {
         ContentUnavailableView(
-          "No extensions installed",
+          "No Extensions",
           systemImage: "puzzlepiece.extension")
       }
+    }
 
-      ForEach(registry.plugins, id: \.metadata.id) { plugin in
-        let enabled = registry.isEnabled(plugin.metadata.id)
+    ForEach(registry.plugins, id: \.metadata.id) { plugin in
+      let enabled = registry.isEnabled(plugin.metadata.id)
 
-        SwiftUI.Section {
-          Toggle(
-            isOn: Binding(
-              get: { registry.isEnabled(plugin.metadata.id) },
-              set: { registry.setEnabled($0, id: plugin.metadata.id) })
-          ) {
-            Label {
-              VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-                Text(plugin.metadata.name)
-                Text(plugin.metadata.summary).font(.caption).foregroundStyle(.secondary)
-              }
-            } icon: {
-              Image(systemName: plugin.metadata.symbol)
-            }
-          }
+      SwiftUI.Section {
+        Toggle(
+          isOn: Binding(
+            get: { registry.isEnabled(plugin.metadata.id) },
+            set: { registry.setEnabled($0, id: plugin.metadata.id) })
+        ) {
+          Label(plugin.metadata.name, systemImage: plugin.metadata.symbol)
+        }
+        .help(plugin.metadata.summary)
 
-          // An extension's own settings are meaningless while it is off, and
-          // showing them anyway invites someone to change something that
-          // will not take effect.
-          if enabled {
-            plugin.settings()
-          }
+        // An extension's own settings are meaningless while it is off, and
+        // showing them anyway invites someone to change something that
+        // will not take effect.
+        if enabled {
+          plugin.settings()
         }
       }
     }
-    .formStyle(.grouped)
-    .navigationTitle("Extensions")
   }
 }
 
@@ -219,68 +222,64 @@ private struct SecuritySettings: View {
   @State private var forgetting: KnownHost?
 
   var body: some View {
-    Form {
+    Group {
       SwiftUI.Section {
-        if known.entries.isEmpty {
-          Text("None")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
-
-        ForEach(known.entries, id: \.endpoint) { entry in
-          HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-              Text(entry.endpoint)
-              // The fingerprint in full, in a monospaced face: it is the thing
-              // an administrator publishes, and a person checking one against
-              // the other needs every character of it.
-              Text("\(entry.algorithm) \(entry.fingerprint)")
-                .font(.caption.monospaced())
-                .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            }
-            Spacer()
-            Button("Forget") { forgetting = entry }
-              .buttonStyle(.borderless)
-          }
-        }
-      } header: {
-        Text("Accepted host keys")
-      } footer: {
-        Text("Asked again next time you connect.")
+      if known.entries.isEmpty {
+        Text("None")
+          .font(.callout)
+          .foregroundStyle(.secondary)
       }
 
-      SwiftUI.Section {
-        if saved.isEmpty {
-          Text("None")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
-
-        ForEach(saved) { secret in
-          HStack {
-            // The host's current name when it still exists, the label the
-            // keychain carries when it does not. An entry whose host was
-            // deleted is not hidden: it is the one most worth removing.
-            Text(store.hosts.first { $0.id == secret.id }.map(\.address) ?? secret.label)
-            Spacer()
-            Button("Delete", role: .destructive) { delete(secret) }
-              .buttonStyle(.borderless)
+      ForEach(known.entries, id: \.endpoint) { entry in
+        HStack(alignment: .firstTextBaseline) {
+          VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
+            Text(entry.endpoint)
+            // The fingerprint in full, in a monospaced face: it is the thing
+            // an administrator publishes, and a person checking one against
+            // the other needs every character of it.
+            Text("\(entry.algorithm) \(entry.fingerprint)")
+              .font(.caption.monospaced())
+              .fixedSize(horizontal: false, vertical: true)
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
           }
+          Spacer()
+          Button("Forget") { forgetting = entry }
+            .buttonStyle(.borderless)
         }
-      } header: {
-        Text("Saved passwords")
-      } footer: {
-        Text("On this device, in the keychain.")
+      }
+    } header: {
+      Text("Trusted Host Keys")
+    }
+
+    SwiftUI.Section {
+      if saved.isEmpty {
+        Text("None")
+          .font(.callout)
+          .foregroundStyle(.secondary)
       }
 
-      if let problem {
+      ForEach(saved) { secret in
+        HStack {
+          // The host's current name when it still exists, the label the
+          // keychain carries when it does not. An entry whose host was
+          // deleted is not hidden: it is the one most worth removing.
+          Text(store.hosts.first { $0.id == secret.id }.map(\.address) ?? secret.label)
+          Spacer()
+          Button("Delete", role: .destructive) { delete(secret) }
+            .buttonStyle(.borderless)
+        }
+      }
+    } header: {
+      Text("Saved Passwords")
+    }
+
+    if let problem {
+      SwiftUI.Section {
         Text(problem).font(.callout).foregroundStyle(Theme.danger)
       }
     }
-    .formStyle(.grouped)
-    .navigationTitle("Security")
+    }
     .onAppear(perform: reload)
     .confirmationDialog(
       "Forget this host key?",
@@ -292,6 +291,8 @@ private struct SecuritySettings: View {
         forgetting = nil
       }
       Button("Cancel", role: .cancel) { forgetting = nil }
+    } message: { _ in
+      Text("You’ll be asked to trust this host again when connecting.")
     }
   }
 

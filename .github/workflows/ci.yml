@@ -126,7 +126,7 @@ jobs:
           cargo build -p tether-ffi --target aarch64-apple-ios-sim
 
       - name: Build Apple artifacts and generated bindings
-        run: bash scripts/build-xcframework.sh
+        run: ./scripts/tether.sh --build-xcframework
 
       # Tether itself, and nothing that plugs into it. The app package links
       # whichever extensions a person has — including ones that live outside
@@ -136,15 +136,17 @@ jobs:
       - name: Swift facade and frontend tests
         run: |
           swift test --package-path swift
-          # The frontend suite includes the render-cost measurement, which is
-          # asserted as a rate so a slower runner does not fail it
-          # (Decisions/0006).
-          swift test --package-path app/Packages/TetherFrontend
+          swift test --package-path app/Packages/TetherFrontend --skip RenderCost
           # The built-in plugins are Tether's own and needs nothing from
           # outside this repository, so it is defended here: it is how the
           # plugin seam is exercised by something real (Decisions/0012).
           swift test --package-path app/Plugins/Tmux
           swift test --package-path app/Plugins/Files
+
+      # Performance budgets describe optimized shipping code. Keep this
+      # separate from debug correctness tests and their allocation overhead.
+      - name: Release rendering budget
+        run: swift test -c release --package-path app/Packages/TetherFrontend --filter RenderCost
 
   fuzz:
     name: fuzz the parsers
@@ -167,7 +169,7 @@ jobs:
       # failed before and to catch a regression. Ten on the nightly schedule,
       # which is where something new is actually found.
       - name: Fuzz
-        run: bash scripts/fuzz.sh ${{ github.event_name == 'schedule' && 600 || 60 }}
+        run: ./scripts/tether.sh --fuzz ${{ github.event_name == 'schedule' && 600 || 60 }}
 
       # A crash is worth keeping even when the job fails: it is the input a
       # fix has to be written against.

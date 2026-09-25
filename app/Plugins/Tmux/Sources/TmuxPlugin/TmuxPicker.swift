@@ -125,8 +125,8 @@ struct TmuxPicker: View {
       header(model.tab.plugin.hostLabel)
 
       row(
-        title: "Original shell",
-        selected: !model.showing
+        title: model.tab.plugin.shellLabel,
+        selected: !model.showing && model.shellSessionID == nil
       ) {
         model.showShell()
       }
@@ -146,7 +146,7 @@ struct TmuxPicker: View {
       }
 
       ForEach(model.sessions, id: \.id) { session in
-        sessionRow(session)
+        sessionRow(session).disabled(model.busy)
       }
 
       // Last in the list, because it is what there is to do when none of
@@ -195,12 +195,15 @@ struct TmuxPicker: View {
       ForEach(listed, id: \.id) { window in
         row(
           title: tmuxWindowLine(window),
-          selected: window.active && model.session?.id == session.id && model.showing,
+          selected: window.active
+            && ((model.session?.id == session.id && model.showing)
+              || (!model.showing && model.shellSessionID == session.id)),
           // The last window is the session; that one ends from the level above.
           end: listed.count > 1 ? RowEnd("End window") { model.windowToEnd = window } : nil
         ) {
           model.choose(session, windowID: window.id)
         }
+        .disabled(model.busy)
         .contextMenu {
           Button("Rename…") {
             model.renameWindow = TmuxWindowInfo(
@@ -232,7 +235,8 @@ struct TmuxPicker: View {
     let deeper = listed.count > 1
     return row(
       title: tmuxSessionLine(session, windows: listed, owned: owned),
-      selected: owned && model.showing,
+      selected: (owned && model.showing)
+        || (!model.showing && model.shellSessionID == session.id),
       chevron: deeper,
       end: RowEnd("End session") { model.sessionToEnd = session }
     ) {

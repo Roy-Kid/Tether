@@ -469,9 +469,18 @@ impl Terminal {
                 // The engine marks the right half of a wide character with a
                 // spacer. That is its bookkeeping, not a cell a consumer
                 // should have to skip.
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
                 {
+                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && column > 0
+                        && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
+                    {
+                        continue;
+                    }
+                    // A wrap placeholder or an orphaned spacer still occupies
+                    // a column. Dropping it shifts every later cell away from
+                    // the column indices used by cursor and damage reports.
+                    cells.push(Cell { text: " ".into(), width: 1, style: style_of(cell) });
                     continue;
                 }
 

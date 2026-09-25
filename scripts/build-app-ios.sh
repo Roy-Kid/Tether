@@ -3,19 +3,48 @@
 #
 # SwiftPM builds the executable but will not produce an app bundle for iOS,
 # and the simulator will not install anything else — so the bundle is put
-# together here, the same way scripts/build-app.sh does it for the Mac.
+# together here, the same way ./scripts/build-app.sh does it for the Mac.
 #
 # The device build is a different question: it needs a provisioning profile
 # and a real signing identity, which belong to whoever ships it, not to this
-# script (Decisions/0004).
+# script.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/build-app-ios.sh [--device <name-or-udid>]
+
+Assemble Tether.app for the iOS Simulator and install it.
+
+Options:
+  --device <name-or-udid>  simulator to target (default: "iPhone 17 Pro")
+  -h, --help               show this help
+EOF
+}
+
+DEVICE="iPhone 17 Pro"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --device)
+      [[ -n "${2:-}" ]] || { echo "--device needs a value" >&2; usage >&2; exit 2; }
+      DEVICE="$2"
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 # A name or a udid. A name is convenient and ambiguous — this machine has two
 # devices called "iPhone 17 Pro" — so a udid wins when one is given, and the
 # resolved udid is printed either way so it is obvious which one was used.
-DEVICE="${1:-iPhone 17 Pro}"
 DERIVED=build/ios
 APP="$ROOT/$DERIVED/Tether.app"
 

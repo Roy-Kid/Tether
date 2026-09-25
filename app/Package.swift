@@ -14,6 +14,7 @@ let package = Package(
         .package(path: "Plugins/Tmux"),
         .package(path: "Plugins/Files"),
         .package(path: "../../nerve/surfaces/tether"),
+        .package(path: "../../nerve/surfaces/ribbon"),
     ],
     targets: [
         .executableTarget(
@@ -26,6 +27,9 @@ let package = Package(
                 .product(name: "FilesPlugin", package: "Files"),
                 .product(
                     name: "NervePlugin", package: "tether",
+                    condition: .when(platforms: [.macOS])),
+                .product(
+                    name: "NerveRibbonUI", package: "ribbon",
                     condition: .when(platforms: [.macOS])),
             ]
         ),

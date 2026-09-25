@@ -22,6 +22,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var lineHeight: CGFloat = 17
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
+  var cursorRect: CGRect = .zero
   var onHover: (TerminalLink?) -> Void = { _ in }
 
   func makeNSView(context: Context) -> KeyCaptureView {
@@ -44,6 +45,7 @@ struct MacKeyCapture: NSViewRepresentable {
     view.wantsFocus = active
     view.links = links
     view.geometry = geometry
+    view.cursorRect = cursorRect
     view.onHover = onHover
   }
 }
@@ -61,6 +63,12 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   private var carried: CGFloat = 0
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
+  /// The terminal caret in top-left-origin surface coordinates.
+  var cursorRect: CGRect = .zero {
+    didSet {
+      if cursorRect != oldValue { inputContext?.invalidateCharacterCoordinates() }
+    }
+  }
   var onHover: ((TerminalLink?) -> Void)?
   /// The link under the pointer while ⌘ is held.
   private var hovered: TerminalLink?
@@ -243,8 +251,12 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   { nil }
   func characterIndex(for point: NSPoint) -> Int { 0 }
   func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-    window?.convertToScreen(
-      convert(NSRect(x: 8, y: bounds.height - 24, width: 1, height: 20), to: nil)) ?? .zero
+    actualRange?.pointee = markedRange()
+    guard let window else { return .zero }
+    var rect = cursorRect
+    // AppKit views normally count up from the bottom; terminal rows count down.
+    if !isFlipped { rect.origin.y = bounds.height - rect.maxY }
+    return window.convertToScreen(convert(rect, to: nil))
   }
   override func doCommand(by selector: Selector) {}
 

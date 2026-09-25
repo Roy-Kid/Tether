@@ -23,12 +23,12 @@ private enum InterfaceFixture {
 }
 
 #Preview("Host editor · light") {
-  HostEditor(host: InterfaceFixture.host) { _, _ in }
+  HostEditor(host: InterfaceFixture.host) { _, _ in true }
     .preferredColorScheme(.light)
 }
 
 #Preview("Host editor · dark") {
-  HostEditor(host: InterfaceFixture.host) { _, _ in }
+  HostEditor(host: InterfaceFixture.host) { _, _ in true }
     .preferredColorScheme(.dark)
 }
 

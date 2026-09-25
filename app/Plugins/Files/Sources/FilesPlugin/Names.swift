@@ -22,6 +22,20 @@ enum Names {
         }))
   }
 
+  /// A run of file text fit to show in a preview: like `display`, but
+  /// newlines and tabs stay, because a snippet that cannot wrap is not a
+  /// snippet of a text file.
+  static func displayText(_ text: String) -> String {
+    String(
+      String.UnicodeScalarView(
+        text.unicodeScalars.compactMap { scalar in
+          if bidiControls.contains(scalar.value) { return nil }
+          if scalar == "\n" || scalar == "\t" { return scalar }
+          if scalar.properties.generalCategory == .control { return "\u{FFFD}" }
+          return scalar
+        }))
+  }
+
   /// A name fit to be one file name on this machine: displayable, with the
   /// separators this system reads in a name replaced, and never `.` or `..`.
   static func local(_ name: String) -> String {
@@ -50,6 +64,21 @@ enum Names {
       .contains { type.conforms(to: $0) }
   }
 
+  /// Whether the bytes are almost certainly text a person can read as a
+  /// preview: source, config, logs, and the plain-text scientific tables a
+  /// lab writes (`xyz`, `cif`, `pdb`, …). Used when Quick Look has no
+  /// generator for the type and a snippet is the next best thing.
+  static func isTextLike(_ name: String) -> Bool {
+    let base = name.lowercased()
+    if textFileNames.contains(base) { return true }
+    let ext = (name as NSString).pathExtension.lowercased()
+    if textExtensions.contains(ext) { return true }
+    if ext.isEmpty { return false }
+    guard let type = UTType(filenameExtension: ext) else { return false }
+    return type.conforms(to: .text) || type.conforms(to: .sourceCode) || type.conforms(to: .json)
+      || type.conforms(to: .xml) || type.conforms(to: .yaml) || type.conforms(to: .propertyList)
+  }
+
   /// The SF Symbol for an entry.
   static func symbol(for name: String, kind: FileKind) -> String {
     switch kind {
@@ -58,13 +87,22 @@ enum Names {
     case .other: return "questionmark.square.dashed"
     case .file: break
     }
+    let base = name.lowercased()
+    if textFileNames.contains(base) { return "doc.text" }
     let ext = (name as NSString).pathExtension.lowercased()
-    // Source that this system has no registered type for is still text.
-    if sourceExtensions.contains(ext) { return "doc.text" }
+    // A dedicated symbol first — `json` is text and also has its own mark.
+    if let symbol = symbolByExtension[ext] { return symbol }
+    // Source and tables this system has no registered type for are still text.
+    if textExtensions.contains(ext) { return "doc.text" }
     guard !ext.isEmpty, let type = UTType(filenameExtension: ext) else { return "doc" }
     let symbols: [(UTType, String)] = [
       (.pdf, "doc.richtext"), (.image, "photo"), (.movie, "film"), (.audio, "waveform"),
-      (.archive, "archivebox"), (.sourceCode, "doc.text"), (.text, "doc.text"),
+      (.archive, "archivebox"), (.spreadsheet, "tablecells"),
+      (.presentation, "rectangle.on.rectangle"), (.epub, "book"),
+      (.diskImage, "externaldrive"), (.font, "textformat"),
+      (.usd, "cube"), (.sourceCode, "doc.text"), (.text, "doc.text"),
+      (.json, "curlybrackets"), (.xml, "chevron.left.forwardslash.chevron.right"),
+      (.html, "chevron.left.forwardslash.chevron.right"),
       (.executable, "terminal"),
     ]
     return symbols.first { type.conforms(to: $0.0) }?.1 ?? "doc"
@@ -95,12 +133,97 @@ enum Names {
     0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069,
   ]
 
+  /// Names with no extension that are still plain text (and often the most
+  /// important file in a tree).
+  private static let textFileNames: Set<String> = [
+    "makefile", "gnumakefile", "dockerfile", "containerfile", "cmakelists.txt",
+    "license", "licence", "copying", "readme", "changelog", "codeowners",
+    "gemfile", "rakefile", "procfile", "brewfile", "justfile", "vagrantfile",
+    "jenkinsfile", "gradle", "cargo.toml", "package.swift", "package.json",
+    ".gitignore", ".gitattributes", ".gitmodules", ".editorconfig", ".env",
+    ".envrc", ".zshrc", ".bashrc", ".bash_profile", ".profile", ".vimrc",
+    ".npmrc", ".nvmrc", ".python-version", ".ruby-version", ".tool-versions",
+  ]
+
   /// Plain text a system without the language's tools installed does not
-  /// know is text.
-  private static let sourceExtensions: Set<String> = [
-    "rs", "go", "py", "rb", "jl", "r", "swift", "kt", "java", "scala", "c", "h", "cc", "cpp",
-    "hpp", "cu", "f90", "js", "ts", "tsx", "jsx", "lua", "toml", "yaml", "yml", "ini", "cfg",
-    "md", "rst", "tex", "log", "csv", "tsv", "lock",
+  /// know is text — source, config, logs, and lab tables.
+  private static let textExtensions: Set<String> = [
+    // Programming languages
+    "rs", "go", "py", "pyi", "pyw", "rb", "jl", "r", "swift", "kt", "kts",
+    "java", "scala", "sc", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx",
+    "cu", "cuh", "m", "mm", "f", "f90", "f95", "for", "f03",
+    "js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx", "lua", "pl", "pm",
+    "php", "ex", "exs", "erl", "hrl", "hs", "lhs", "ml", "mli", "fs", "fsx",
+    "clj", "cljs", "edn", "rkt", "scm", "ss", "lisp", "el", "vim", "zig",
+    "nim", "v", "sv", "vhdl", "vhd", "d", "pas", "ada", "adb", "ads", "cob",
+    "dart", "vue", "svelte", "astro", "elm", "purs", "coffee", "groovy",
+    // Web and config
+    "toml", "yaml", "yml", "ini", "cfg", "conf", "config", "env", "properties",
+    "json", "jsonc", "ndjson", "json5", "xml", "plist", "html", "htm", "css",
+    "scss", "sass", "less", "sql", "graphql", "gql", "proto", "thrift",
+    "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "awk", "sed", "vimrc",
+    "editorconfig", "gitignore", "gitattributes", "gitmodules", "npmrc",
+    "cmake", "gradle", "mk", "mkd", "dockerfile", "tf", "tfvars", "hcl",
+    // Documents and data
+    "md", "markdown", "mdx", "rst", "tex", "ltx", "bib", "txt", "text",
+    "log", "out", "csv", "tsv", "tab", "lock", "sum", "diff", "patch",
+    // Scientific / lab tables written as plain text
+    "xyz", "pdb", "ent", "mol", "mol2", "sdf", "cif", "mmcif", "mcif",
+    "gro", "top", "itp", "ndx", "tpr", "lammpstrj", "lmp", "data", "in",
+    "cube", "xsf", "axsf", "poscar", "contcar", "incar", "kpoints", "potcar",
+    "outcar", "oszicar", "xdatcar", "chgcar", "locpot", "band", "dos",
+    "cp2k", "pwi", "pwo", "gjf", "com", "inp", "out", "chk", "fchk",
+    "xvg", "agr", "gp", "gnu", "plt", "py", "ipynb", "rmd", "qmd",
+  ]
+
+  /// SF Symbols for extensions `UTType` often leaves unregistered.
+  private static let symbolByExtension: [String: String] = [
+    "pdf": "doc.richtext",
+    "epub": "book",
+    "ipynb": "list.bullet.rectangle",
+    "json": "curlybrackets",
+    "jsonc": "curlybrackets",
+    "ndjson": "curlybrackets",
+    "xml": "chevron.left.forwardslash.chevron.right",
+    "html": "chevron.left.forwardslash.chevron.right",
+    "htm": "chevron.left.forwardslash.chevron.right",
+    "css": "paintbrush",
+    "scss": "paintbrush",
+    "sass": "paintbrush",
+    "less": "paintbrush",
+    "sql": "cylinder.split.1x2",
+    "graphql": "point.3.connected.trianglepath",
+    "proto": "square.stack.3d.up",
+    "dmg": "externaldrive",
+    "iso": "externaldrive",
+    "img": "externaldrive",
+    "ttf": "textformat",
+    "otf": "textformat",
+    "ttc": "textformat",
+    "woff": "textformat",
+    "woff2": "textformat",
+    "usdz": "cube",
+    "usd": "cube",
+    "usda": "cube",
+    "usdc": "cube",
+    "obj": "cube",
+    "stl": "cube",
+    "ply": "cube",
+    "fbx": "cube",
+    "gltf": "cube",
+    "glb": "cube",
+    "xyz": "atom",
+    "pdb": "atom",
+    "mol": "atom",
+    "mol2": "atom",
+    "sdf": "atom",
+    "cif": "atom",
+    "mmcif": "atom",
+    "gro": "atom",
+    "cube": "atom",
+    "xsf": "atom",
+    "smiles": "atom",
+    "inchi": "atom",
   ]
 
   /// Types that run when opened but that UTType does not call executable.

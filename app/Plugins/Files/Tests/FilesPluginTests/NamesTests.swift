@@ -53,6 +53,30 @@ struct NamesTests {
     #expect(Names.symbol(for: "main.rs", kind: .file) == "doc.text")
     #expect(Names.symbol(for: "latest", kind: .link) == "arrow.up.right.square")
     #expect(Names.symbol(for: "blob", kind: .file) == "doc")
+    // Config and lab tables this system may not register are still text.
+    #expect(Names.symbol(for: "config.toml", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "trajectory.xyz", kind: .file) == "atom")
+    #expect(Names.symbol(for: "Makefile", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "Dockerfile", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "notes.json", kind: .file) == "curlybrackets")
+  }
+
+  @Test("text a person can read as a snippet is text-like")
+  func textLike() {
+    #expect(Names.isTextLike("notes.md"))
+    #expect(Names.isTextLike("run.log"))
+    #expect(Names.isTextLike("trajectory.xyz"))
+    #expect(Names.isTextLike("crystal.cif"))
+    #expect(Names.isTextLike("protein.pdb"))
+    #expect(Names.isTextLike("topol.top"))
+    #expect(Names.isTextLike("Makefile"))
+    #expect(Names.isTextLike("Dockerfile"))
+    #expect(Names.isTextLike("config.yaml"))
+    #expect(Names.isTextLike("data.csv"))
+    #expect(!Names.isTextLike("plot.png"))
+    #expect(!Names.isTextLike("movie.mp4"))
+    #expect(!Names.isTextLike("archive.zip"))
+    #expect(!Names.isTextLike("blob"))
   }
 
   @Test("a path is quoted only when a shell would read something into it")

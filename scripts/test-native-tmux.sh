@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 # Isolated loopback OpenSSH fixture. Trust only its generated fingerprint.
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/test-native-tmux.sh
+
+Start an isolated loopback OpenSSH server (ephemeral keys and port), export
+TETHER_TEST_SSH_* for it, and run the Swift package tests against a real
+tmux on the far side. Trust only its generated fingerprint.
+
+Options:
+  -h, --help   show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 cd "$(dirname "$0")/.."
 command -v tmux >/dev/null
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/tether-native-test.XXXXXX")
@@ -42,7 +67,11 @@ else: raise SystemExit('Temporary sshd did not start')
 PY
 export TETHER_TEST_SSH_HOST=127.0.0.1
 export TETHER_TEST_SSH_PORT="$port"
-export TETHER_TEST_SSH_USER="$(id -un)"
+# Declared before export so shellcheck sees the assignment, not a masked
+# command-substitution exit status (SC2155).
+TETHER_TEST_SSH_USER="$(id -un)"
+export TETHER_TEST_SSH_USER
 export TETHER_TEST_SSH_KEY="$fixture/client"
-export TETHER_TEST_SSH_FINGERPRINT="$(ssh-keygen -lf "$fixture/host.pub" | awk '{print $2}')"
+TETHER_TEST_SSH_FINGERPRINT="$(ssh-keygen -lf "$fixture/host.pub" | awk '{print $2}')"
+export TETHER_TEST_SSH_FINGERPRINT
 swift test --package-path swift

@@ -223,11 +223,12 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
         .size(size)
         .options(Options { scrollback_lines: shell.scrollback_lines as usize });
 
-    // An empty string is how a record with no optionality left would say
-    // "unset", and honouring it as a path would start every shell in `/`.
-    if let Some(directory) = shell.directory.filter(|path| !path.is_empty()) {
-        local = local.directory(directory);
-    }
+    // A local shell starts in the user's home, regardless of the working
+    // directory inherited by an app launched from Finder or the Dock.
+    let directory = shell.directory.filter(|path| !path.is_empty()).or_else(|| {
+        std::env::var("HOME").ok().filter(|path| path.starts_with('/'))
+    });
+    if let Some(directory) = directory { local = local.directory(directory); }
 
     Ok(Arc::new(Session { inner: local.open().await? }))
 }
@@ -237,7 +238,7 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
 ///
 /// A live master is a handshake that has already been spent. The
 /// application attaches through OpenSSH instead of offering credentials
-/// again (Decisions/0010).
+/// again.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn ssh_master_running(target: String) -> bool {
     SshClient::new(target).master_running().await
@@ -358,6 +359,16 @@ impl Session {
 impl Session {
     pub fn connection(&self) -> Option<Arc<crate::RemoteConnection>> {
         self.inner.connection().map(|inner| Arc::new(crate::RemoteConnection { inner }))
+    }
+
+    /// The local shell's tty path, for matching tmux clients to this tab.
+    pub fn terminal_name(&self) -> Option<String> {
+        self.inner.terminal_name().map(str::to_owned)
+    }
+
+    /// The local shell's live working directory, if available.
+    pub fn current_directory(&self) -> Option<String> {
+        self.inner.current_directory()
     }
 
     /// Tells the engine what this consumer draws with, so that a program

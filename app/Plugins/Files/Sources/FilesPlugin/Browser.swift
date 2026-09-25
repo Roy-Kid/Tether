@@ -69,6 +69,7 @@ struct Browser: View {
 /// The entries of the current directory.
 private struct FileList: View {
   @Bindable var model: FilesTab
+  @FocusState private var listFocused: Bool
 
   var body: some View {
     List(selection: $model.selection) {
@@ -83,6 +84,7 @@ private struct FileList: View {
           FileRow(model: model, entry: row.entry, depth: row.depth)
             .tag(row.entry.path)
             .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
         }
       #else
         // A phone drills down: one directory a screen.
@@ -94,6 +96,8 @@ private struct FileList: View {
     }
     #if os(macOS)
       .listStyle(.inset)
+      .focused($listFocused)
+      .onAppear { listFocused = true }
       .environment(\.defaultMinListRowHeight, UIStyle.rowHeight)
       .contextMenu(forSelectionType: String.self) { paths in
         EntryMenu(model: model, entries: paths.compactMap(model.entry))
@@ -119,6 +123,11 @@ private struct FileList: View {
       .onKeyPress(.return) {
         guard model.renaming == nil, model.selection.count == 1 else { return .ignored }
         model.renaming = model.selection.first
+        return .handled
+      }
+      .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+        guard model.renaming == nil, !model.selection.isEmpty else { return .ignored }
+        model.requestDelete(model.selected)
         return .handled
       }
       .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
@@ -195,6 +204,10 @@ private struct FileRow: View {
           .controlSize(.mini)
       }
     }
+    #if os(macOS)
+      .padding(.leading, CGFloat(depth) * FileRow.indent)
+      .frame(minHeight: UIStyle.rowHeight)
+    #endif
     .help(detail)
     .accessibilityElement(children: .combine)
     .accessibilityValue(detail)
@@ -224,7 +237,6 @@ private struct FileRow: View {
     /// The indent, and a chevron on a folder that turns as it opens. A file
     /// gets the chevron's width, so names line up under their folder.
     @ViewBuilder private var disclosure: some View {
-      Color.clear.frame(width: CGFloat(depth) * FileRow.indent, height: 1)
       if entry.kind == .directory {
         Group {
           if model.opening.contains(entry.path) {
@@ -361,6 +373,10 @@ private struct PathMenu: View {
 
 #if os(macOS)
   /// The inspector's one row of controls.
+  ///
+  /// The directory name is the flexible middle: it gives way before the
+  /// trailing cluster, so a long path shrinks the label rather than pushing
+  /// Refresh / New Folder / Upload out of a 240pt column.
   private struct MacHeader: View {
     @Bindable var model: FilesTab
     @Binding var importing: Bool
@@ -368,7 +384,7 @@ private struct PathMenu: View {
     var body: some View {
       HStack(spacing: UIStyle.Space.tight) {
         icon("Back", "chevron.left", enabled: !model.history.isEmpty) { model.back() }
-        icon("Enclosing Folder", "arrow.up", enabled: model.directory != "/") { model.up() }
+        icon("Enclosing Folder", "arrow.up", enabled: model.directory != nil && model.directory != "/") { model.up() }
         Menu {
           PathMenu(model: model)
         } label: {
@@ -376,25 +392,43 @@ private struct PathMenu: View {
             .font(UIStyle.title)
             .lineLimit(1)
             .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(minWidth: 0, maxWidth: .infinity)
+        .clipped()
         .help(model.directory.map(Names.display) ?? "")
-        Spacer(minLength: UIStyle.Space.small)
-        if model.loading {
-          ProgressView().controlSize(.mini)
+        // Loading occupies the refresh slot, so directory text never jumps.
+        ZStack {
+          icon("Refresh", "arrow.clockwise", enabled: model.directory != nil) { model.refresh() }
+            .opacity(model.loading ? 0 : 1)
+            .allowsHitTesting(!model.loading)
+            .accessibilityHidden(model.loading)
+          if model.loading {
+            ProgressView().controlSize(.mini)
+          }
         }
-        icon("Refresh", "arrow.clockwise", enabled: model.directory != nil) { model.refresh() }
-        icon("New Folder", "folder.badge.plus", enabled: model.directory != nil) {
-          model.newFolder()
+        .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
+        Menu {
+          Button("New Folder", systemImage: "folder.badge.plus") { model.newFolder() }
+          Button("Upload", systemImage: "square.and.arrow.up") { importing = true }
+        } label: {
+          Image(systemName: "plus")
+            .font(UIStyle.symbol)
+            .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
         }
-        icon("Upload", "square.and.arrow.up", enabled: model.directory != nil) {
-          importing = true
-        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(model.directory == nil)
+        .help("Add files or folder")
+        .accessibilityLabel("Add files or folder")
       }
       .padding(.horizontal, UIStyle.Space.group)
       .frame(height: UIStyle.controlHeight + UIStyle.Space.group)
+      .frame(maxWidth: .infinity)
+      .background(Theme.sidebar)
     }
 
     private func icon(
@@ -407,6 +441,7 @@ private struct PathMenu: View {
         .buttonStyle(ChromeButtonStyle())
         .disabled(!enabled)
         .help(name)
+        .layoutPriority(1)
     }
   }
 #else
@@ -462,18 +497,12 @@ private struct PathMenu: View {
     let entry: FileEntry
 
     var body: some View {
-      Group {
-        if entry.kind == .file, let url = model.cache.cached(entry),
-          let image = UIImage(contentsOfFile: url.path)
-        {
-          Image(uiImage: image).resizable().scaledToFit()
-        } else {
-          Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
-            .font(.system(size: 64))
-            .foregroundStyle(Theme.subtle)
-            .padding(48)
-        }
-      }
+      FilePreview(
+        name: entry.name,
+        kind: entry.kind,
+        url: entry.kind == .file ? model.cache.cached(entry) : nil,
+        side: 240
+      )
       .frame(minWidth: 200, minHeight: 200)
     }
   }
@@ -541,41 +570,53 @@ private struct Confirmations: ViewModifier {
   func body(content: Content) -> some View {
     content
       .alert(
-        deletionTitle,
+        alertTitle,
         isPresented: Binding(
-          get: { !model.pendingDeletion.isEmpty },
-          set: { if !$0 { model.pendingDeletion = [] } })
+          get: { hasAlert },
+          set: { if !$0 { dismissCurrentAlert() } })
       ) {
-        Button("Delete", role: .destructive) { Task { await model.confirmDelete() } }
-        Button("Cancel", role: .cancel) { model.pendingDeletion = [] }
-      }
-      .alert(
-        conflictTitle,
-        isPresented: Binding(
-          get: { !model.conflicts.isEmpty },
-          set: { _ in })
-      ) {
-        if let conflict = model.conflicts.first {
+        if !model.pendingDeletion.isEmpty {
+          Button("Delete", role: .destructive) {
+            // The alert binding clears pendingDeletion as the alert closes.
+            // Capture the choice before SwiftUI runs that dismissal update.
+            let chosen = model.pendingDeletion
+            Task { await model.confirmDelete(chosen) }
+          }
+          Button("Cancel", role: .cancel) { model.pendingDeletion = [] }
+        } else if let conflict = model.conflicts.first {
           Button("Replace", role: .destructive) {
             Task { await model.resolve(conflict, .replace) }
           }
           Button("Keep Both") { Task { await model.resolve(conflict, .keepBoth) } }
           Button("Skip", role: .cancel) { Task { await model.resolve(conflict, .skip) } }
+        } else if let large = model.pendingLarge {
+          Button("Download") {
+            model.pendingLarge = nil
+            Task { await model.preview([large], confirmed: true) }
+          }
+          Button("Cancel", role: .cancel) { model.pendingLarge = nil }
         }
       }
-      .alert(
-        largeTitle,
-        isPresented: Binding(
-          get: { model.pendingLarge != nil },
-          set: { if !$0 { model.pendingLarge = nil } })
-      ) {
-        Button("Download") {
-          guard let large = model.pendingLarge else { return }
-          model.pendingLarge = nil
-          Task { await model.preview([large], confirmed: true) }
-        }
-        Button("Cancel", role: .cancel) { model.pendingLarge = nil }
-      }
+  }
+
+  private var hasAlert: Bool {
+    !model.pendingDeletion.isEmpty || !model.conflicts.isEmpty || model.pendingLarge != nil
+  }
+
+  private var alertTitle: String {
+    if !model.pendingDeletion.isEmpty { return deletionTitle }
+    if !model.conflicts.isEmpty { return conflictTitle }
+    return largeTitle
+  }
+
+  private func dismissCurrentAlert() {
+    if !model.pendingDeletion.isEmpty {
+      model.pendingDeletion = []
+    } else if let conflict = model.conflicts.first {
+      Task { await model.resolve(conflict, .skip) }
+    } else if model.pendingLarge != nil {
+      model.pendingLarge = nil
+    }
   }
 
   private var deletionTitle: String {

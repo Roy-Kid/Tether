@@ -41,19 +41,22 @@ public struct KeyCapture: View {
   var lineHeight: CGFloat
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
+  var cursorRect: CGRect = .zero
   var onHover: (TerminalLink?) -> Void = { _ in }
 
   /// The surface's own: pointing at text needs to know where the cells are.
   init(
     onInput: @escaping (TerminalInput) -> Void, active: Bool, lineHeight: CGFloat,
     onFocus: @escaping () -> Void, onScroll: @escaping (Int32) -> Void,
-    links: TerminalLinks, geometry: CellGeometry, onHover: @escaping (TerminalLink?) -> Void
+    links: TerminalLinks, geometry: CellGeometry, cursorRect: CGRect,
+    onHover: @escaping (TerminalLink?) -> Void
   ) {
     self.init(
       onInput: onInput, active: active, lineHeight: lineHeight, onFocus: onFocus,
       onScroll: onScroll)
     self.links = links
     self.geometry = geometry
+    self.cursorRect = cursorRect
     self.onHover = onHover
   }
 
@@ -78,7 +81,7 @@ public struct KeyCapture: View {
       MacKeyCapture(
         onInput: onInput, active: active && inputEnabled, onFocus: onFocus,
         onScroll: onScroll, lineHeight: lineHeight,
-        links: links, geometry: geometry, onHover: onHover)
+        links: links, geometry: geometry, cursorRect: cursorRect, onHover: onHover)
     #else
       // A phone drags the screen itself; the capture view owns that gesture
       // for the same reason the Mac's owns the wheel.

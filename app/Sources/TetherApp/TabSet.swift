@@ -126,12 +126,13 @@ final class TabSet {
   /// finishes, and waiting is how two "New Terminal"s share one login
   /// instead of asking for a password twice.
   func lease(for host: Host) async throws -> RemoteConnection? {
-    if let tab = tabs.first(where: { $0.host.id == host.id && $0.connection != nil }),
+    guard host.allowsConnectionReuse else { return nil }
+    if let tab = tabs.first(where: { $0.host == host && $0.connection != nil }),
       let connection = tab.connection
     {
       return connection
     }
-    if let pending = tabs.first(where: { $0.host.id == host.id && $0.isHandshaking }) {
+    if let pending = tabs.first(where: { $0.host == host && $0.isHandshaking }) {
       return try await pending.connectionReady()
     }
     return nil
@@ -250,6 +251,9 @@ final class TabSet {
     tabs.removeAll()
     extensions.removeAll()
     selected = nil
+    currentHost = nil
+    lastByHost = [:]
+    recents = []
     tabMenu = nil
     accessory = nil
     sheet = nil
@@ -416,7 +420,7 @@ final class TabSet {
   }
 
   func isLive(host: Host) -> Bool {
-    tabs.contains { $0.host.id == host.id && $0.isLive }
+    tabs.contains { $0.host == host && $0.isLive }
   }
 
   func connectedHosts(in listed: [Host]) -> [Host] {

@@ -46,7 +46,7 @@ cargo tree -p tether-terminal   # must show no russh
 ## Where to start
 
 `.claude/notes/remote-platform-spec.md` is the defining specification, mirrored
-byte-for-byte in `molab-apple`, a consumer. `Decisions/` holds the ADRs.
+byte-for-byte in `molab-apple`, a consumer.
 
 The native macOS app now includes a modular frontend and an optional tmux workspace.
 See [frontend extensions and tmux](docs/plugins.md) for building, extending and using it.

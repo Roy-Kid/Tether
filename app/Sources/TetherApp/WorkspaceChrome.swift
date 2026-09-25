@@ -1,6 +1,12 @@
 import SwiftUI
+#if os(macOS)
+  import AppKit
+#endif
 import TetherPluginKit
 import TetherUI
+#if os(macOS)
+import NerveRibbonUI
+#endif
 
 #if os(macOS)
   import AppKit
@@ -151,8 +157,55 @@ struct WorkspaceTabBar: View {
         attachment.accessoryContent()
       }
     }
+    #if os(macOS)
+      .overlay {
+        MiddleClickMonitor { onClose(id) }
+          .allowsHitTesting(false)
+      }
+    #endif
   }
 }
+
+#if os(macOS)
+/// Watches only the tab's bounds for a middle-button press; ordinary clicks
+/// continue to reach the SwiftUI tab button underneath.
+private struct MiddleClickMonitor: NSViewRepresentable {
+  let action: () -> Void
+
+  func makeNSView(context: Context) -> MiddleClickRegion {
+    let view = MiddleClickRegion()
+    view.action = action
+    return view
+  }
+
+  func updateNSView(_ view: MiddleClickRegion, context: Context) {
+    view.action = action
+  }
+
+  final class MiddleClickRegion: NSView {
+    var action: (() -> Void)?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let monitor {
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+      }
+      guard window != nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] event in
+        guard event.buttonNumber == 2, let self, event.window === self.window else { return event }
+        let point = self.convert(event.locationInWindow, from: nil)
+        guard self.bounds.contains(point) else { return event }
+        self.action?()
+        return nil
+      }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  }
+}
+#endif
 
 /// 24pt host switcher and connection status.
 ///
@@ -162,6 +215,8 @@ struct WorkspaceTabBar: View {
 struct HostStatusBar: View {
   @Bindable var tabs: TabSet
   let store: HostStore
+  let pluginStatusItems: [PluginStatusBarItem]
+  let makeStatusWorkspace: (String) -> (any PluginWorkspace)?
 
   var body: some View {
     HStack(spacing: UIStyle.Space.group) {
@@ -190,6 +245,12 @@ struct HostStatusBar: View {
       .help(tabs.currentHost == nil ? "Choose host" : hostLabel)
       .accessibilityLabel("Host, \(hostLabel)")
       .accessibilityValue(statusDescription)
+
+      ForEach(pluginStatusItems) { item in
+        PluginStatusRibbon(item: item) {
+          makeStatusWorkspace(item.id)
+        }
+      }
 
       statusMark
       Spacer(minLength: 0)
@@ -476,6 +537,63 @@ struct HostPicker: View {
   }
 }
 
+private struct StatusRibbonPopover: Identifiable {
+  let id = UUID()
+  let workspace: any PluginWorkspace
+}
+
+/// The Nerve status lamp uses the same continuous AppKit ribbon renderer as
+/// the Nerve menu-bar surface. Clicking it opens the plugin's job panel.
+private struct PluginStatusRibbon: View {
+  let item: PluginStatusBarItem
+  let makeWorkspace: () -> (any PluginWorkspace)?
+  @Environment(\.colorScheme) private var colorScheme
+  @State private var presentation: StatusRibbonPopover?
+  @State private var isPresented = false
+
+  var body: some View {
+    Button {
+      if isPresented {
+        isPresented = false
+      } else if let workspace = makeWorkspace() {
+        presentation = StatusRibbonPopover(workspace: workspace)
+        isPresented = true
+      }
+    } label: {
+      #if os(macOS)
+      Image(nsImage: NerveRibbonRenderer.image(
+        segments: item.segments.map {
+          NerveRibbonSegment(color: $0.color, weight: CGFloat($0.weight))
+        },
+        width: 76,
+        height: 22,
+        thickness: 9,
+        appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSAppearance(named: .aqua)!))
+        .resizable()
+        .interpolation(.high)
+        .frame(width: 76, height: 18)
+      #else
+      Image(systemName: "waveform.path").frame(width: 76, height: 18)
+      #endif
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .accessibilityLabel(item.label)
+    .help(item.label)
+    .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+      if let presentation {
+        presentation.workspace.content()
+          .frame(width: 380, height: 440)
+      }
+    }
+    .onChange(of: isPresented) { _, shown in
+      if !shown {
+        presentation?.workspace.close()
+        presentation = nil
+      }
+    }
+  }
+}
+
 struct EmptyWorkspace: View {
   var body: some View {
     ContentUnavailableView("No Open Terminals", systemImage: "terminal")
@@ -517,6 +635,32 @@ struct EmptyWorkspace: View {
       override func hitTest(_ point: NSPoint) -> NSView? { self }
       override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
+      }
+    }
+  }
+
+  /// The opposite of `CompactTitlebar`: a real titlebar, with room for the
+  /// traffic lights and the sidebar toggle. Settings uses this so its
+  /// section list does not start under the window buttons.
+  struct StandardTitlebar: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Hook() }
+    func updateNSView(_ view: NSView, context: Context) { (view as? Hook)?.apply() }
+
+    private final class Hook: NSView {
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        apply()
+      }
+
+      func apply() {
+        guard let window else { return }
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        window.titlebarSeparatorStyle = .automatic
+        window.styleMask.remove(.fullSizeContentView)
+        window.standardWindowButton(.closeButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.zoomButton)?.isHidden = false
       }
     }
   }

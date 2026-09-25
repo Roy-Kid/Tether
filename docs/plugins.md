@@ -5,7 +5,7 @@ Swift package depending on `TetherPluginKit`; import `TetherUI` for a terminal
 surface and for the window's chrome vocabulary (`Theme`, `UIStyle`,
 `ChromeButtonStyle`), so what a plugin draws matches what the window draws.
 Built-in plugins live in `app/Plugins/`; `app/Plugins/Tmux` is the working
-example, and the app reaches it only through the kit (Decisions/0012).
+example, and the app reaches it only through the kit.
 
 A plugin takes one of two shapes.
 
@@ -49,18 +49,21 @@ Swift source API, not a binary ABI or a permission sandbox.
 
 # Using tmux
 
-Connect to a host, then click the tmux icon on the terminal's tab. The remote host must
-have `tmux` on the SSH command's PATH. Select an existing session or name a new one.
+Open a local shell or connect to a host, then click the tmux icon on the terminal's tab.
+The machine running that shell must have `tmux` on its command path. Select an existing
+session or name a new one.
 The toolbar creates windows, splits panes and toggles pane zoom. Click a pane to
 focus it; drag its borders to resize. Window context menus rename or end windows.
 The inspector exposes active-pane actions. Session context menus in the picker
 rename or end sessions.
 
-"Original shell" in the picker shows the tab's shell again with tmux still
-attached. Closing the tab detaches only. Ending remote tasks is a separate confirmed
-action. After a connection loss, Reconnect requests authentication and attaches the
-previous session if it still exists. Missing tmux, rejected commands and connection
-errors are shown in the workspace. Ordinary SSH remains available when tmux is disabled.
+The shell row (labelled with the local shell name when known) returns to the tab's
+original terminal. If that terminal is itself attached to a tmux session, the picker
+marks that session and returns to the existing client instead of opening a second one.
+Closing the tab detaches only. Ending remote tasks is a separate confirmed action.
+After a connection loss, Reconnect requests authentication and attaches the previous
+session if it still exists. Missing tmux, rejected commands and connection errors are
+shown in the picker or workspace. Ordinary SSH remains available when tmux is disabled.
 
 Native frames restore existing screen content and a bounded history on attach.
 This initial terminal surface does not yet expose history scrolling or text selection;
@@ -77,12 +80,12 @@ Install tmux locally to run its integration tests.
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-bash scripts/build-xcframework.sh
+./scripts/tether.sh --build-xcframework
 swift test --package-path swift
-bash scripts/test-native-tmux.sh # loopback OpenSSH + real tmux end-to-end
+./scripts/tether.sh --test-tmux # loopback OpenSSH + real tmux end-to-end
 swift test --package-path app/Packages/TetherFrontend
 swift test --package-path app/Plugins/Tmux
-bash scripts/build-app.sh
+./scripts/tether.sh --build-app
 ```
 
 Debug builds support `TETHER_HOSTS_FILE=/absolute/path/hosts.json` for isolated UI

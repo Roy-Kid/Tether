@@ -33,11 +33,16 @@ public struct TerminalView: View {
     // Ideal size is the grid, for a renderer that asks. It is not a
     // minimum: a minWidth of columns × cell made the view larger than the
     // window, and the last cells were clipped rather than never asked for.
+    // It does fill, though — a canvas left at ideal size paints the grid in
+    // a hole beside the pane's background, which reads as a mis-sized
+    // terminal whenever the two palettes differ.
     .frame(
       minWidth: 0,
       idealWidth: metrics.cellWidth * CGFloat(frame.columns),
+      maxWidth: .infinity,
       minHeight: 0,
-      idealHeight: metrics.lineHeight * CGFloat(frame.rows))
+      idealHeight: metrics.lineHeight * CGFloat(frame.rows),
+      maxHeight: .infinity)
   }
 
   public init(frame: ScreenFrame, metrics: FontMetrics, palette: Palette) {

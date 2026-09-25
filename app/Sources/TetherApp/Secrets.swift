@@ -54,9 +54,11 @@ struct Keychain: SecretStore {
   /// One service for the whole app, so `saved()` can enumerate what it owns
   /// without walking a person's entire keychain.
   let service: String
+  let dataProtection: Bool
 
-  init(service: String = (Bundle.main.bundleIdentifier ?? "app.tether") + ".host-password") {
+  init(service: String = (Bundle.main.bundleIdentifier ?? "app.tether") + ".host-password", dataProtection: Bool = true) {
     self.service = service
+    self.dataProtection = dataProtection
   }
 
   func password(for host: UUID) throws -> String? {
@@ -66,23 +68,30 @@ struct Keychain: SecretStore {
 
     var item: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &item)
-    if status == errSecItemNotFound { return nil }
+    if status == errSecItemNotFound {
+      // Read-only compatibility with passwords saved in the legacy macOS keychain.
+      #if os(macOS)
+      if dataProtection { return try Keychain(service: service, dataProtection: false).password(for: host) }
+      #endif
+      return nil
+    }
     guard status == errSecSuccess else { throw SecretError.refused(status) }
     guard let data = item as? Data else { return nil }
     return String(data: data, encoding: .utf8)
   }
 
   func remember(_ password: String, for host: Host) throws {
-    // Deleted and re-added rather than updated: one path, and it is the same
-    // path whether or not something was there before.
-    try? forget(host.id)
-
+    let changes: [String: Any] = [
+      kSecValueData as String: Data(password.utf8),
+      kSecAttrLabel as String: "Tether — \(host.address)",
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+      kSecAttrSynchronizable as String: false,
+    ]
+    let updated = SecItemUpdate(base(host.id) as CFDictionary, changes as CFDictionary)
+    if updated == errSecSuccess { return }
+    guard updated == errSecItemNotFound else { throw SecretError.refused(updated) }
     var item = base(host.id)
-    item[kSecValueData as String] = Data(password.utf8)
-    item[kSecAttrLabel as String] = "Tether — \(host.address)"
-    item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    item[kSecAttrSynchronizable as String] = false
-
+    item.merge(changes) { _, new in new }
     let status = SecItemAdd(item as CFDictionary, nil)
     guard status == errSecSuccess else { throw SecretError.refused(status) }
   }
@@ -92,6 +101,9 @@ struct Keychain: SecretStore {
     guard status == errSecSuccess || status == errSecItemNotFound else {
       throw SecretError.refused(status)
     }
+    #if os(macOS)
+    if dataProtection { try Keychain(service: service, dataProtection: false).forget(host) }
+    #endif
   }
 
   func saved() throws -> [SavedSecret] {
@@ -101,6 +113,7 @@ struct Keychain: SecretStore {
       kSecMatchLimit as String: kSecMatchLimitAll,
       kSecReturnAttributes as String: true,
     ]
+    if dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
     // Never the data. This list exists so someone can delete a password, and
     // reading every password to draw a list of them would be the opposite of
     // the point.
@@ -108,23 +121,32 @@ struct Keychain: SecretStore {
 
     var items: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &items)
-    if status == errSecItemNotFound { return [] }
-    guard status == errSecSuccess else { throw SecretError.refused(status) }
+    guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretError.refused(status) }
 
-    return (items as? [[String: Any]] ?? []).compactMap { attributes in
+    var result: [SavedSecret] = (items as? [[String: Any]] ?? []).compactMap { attributes in
       guard let account = attributes[kSecAttrAccount as String] as? String,
         let id = UUID(uuidString: account)
       else { return nil }
       let label = attributes[kSecAttrLabel as String] as? String
       return SavedSecret(id: id, label: label ?? account)
     }
+    #if os(macOS)
+    if dataProtection {
+      let legacy = try Keychain(service: service, dataProtection: false).saved()
+      let existing = Set(result.map(\.id))
+      result += legacy.filter { !existing.contains($0.id) }
+    }
+    #endif
+    return result
   }
 
   private func base(_ host: UUID) -> [String: Any] {
-    [
+    var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
       kSecAttrAccount as String: host.uuidString,
     ]
+    if dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
+    return query
   }
 }

@@ -55,7 +55,12 @@ public struct TerminalSurface: View {
         KeyCapture(
           onInput: onInput, active: active, lineHeight: metrics.lineHeight,
           onFocus: onFocus, onScroll: { onScroll(.lines($0)) },
-          links: links, geometry: cells, onHover: hover
+          links: links, geometry: cells,
+          cursorRect: CGRect(
+            x: inset + CGFloat(frame.cursorColumn) * metrics.cellWidth,
+            y: inset + CGFloat(frame.cursorRow) * metrics.lineHeight,
+            width: metrics.cellWidth, height: metrics.lineHeight),
+          onHover: hover
         )
         // Filled on purpose. A bare `NSView` has no intrinsic size, so
         // without this it lays out at zero — and a zero-sized view still

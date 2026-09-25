@@ -352,3 +352,25 @@ func contractingHome(_ path: String) -> String {
   guard path.hasPrefix(home + "/") else { return path }
   return "~" + path.dropFirst(home.count)
 }
+
+extension SSHConfig {
+  /// Conservative import: configurations whose behavior cannot be represented are
+  /// left available through the existing local OpenSSH entry.
+  func importLimitations(alias: String) -> [String] {
+    let structural = lines.compactMap(directive).filter { ["include", "match"].contains($0.keyword) }.map(\.keyword)
+    let settings = resolved(alias: alias, in: blocks)
+    let supported: Set<String> = ["hostname", "user", "port", "identityfile", "controlmaster", "controlpath", "controlpersist", "identitiesonly"]
+    var issues = Set(structural + settings.keys.filter { !supported.contains($0) })
+    if settings.values.contains(where: { $0.contains("%") || $0.contains("${") }) {
+      // ControlPath expansion is local to OpenSSH, not part of the imported endpoint.
+      if ["hostname", "user", "identityfile"].contains(where: { settings[$0]?.contains("%") == true || settings[$0]?.contains("${") == true }) {
+        issues.insert("variable expansion")
+      }
+    }
+    let keyCount = blocks.filter { matches(patterns: $0.patterns, alias: alias) }.reduce(0) { count, block in
+      count + lines[(block.start + 1)..<block.end].compactMap(directive).filter { $0.keyword == "identityfile" }.count
+    }
+    if keyCount > 1 { issues.insert("multiple IdentityFile entries") }
+    return issues.sorted()
+  }
+}

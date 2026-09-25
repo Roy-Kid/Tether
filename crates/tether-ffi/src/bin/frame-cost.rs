@@ -9,7 +9,7 @@
 //! [`Screen`] and collapsing it into the [`ScreenFrame`] a frontend draws. It
 //! does not measure uniffi's lowering into Swift, nor the drawing itself;
 //! those are measured from Swift (`RenderCostTests`), and the two halves are
-//! added up in `Decisions/0006`.
+//! added up beside this binary's numbers.
 //!
 //! Run it against a release build, which is what ships:
 //!

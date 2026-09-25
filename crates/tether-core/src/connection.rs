@@ -159,12 +159,12 @@ impl Connection {
                 .map(|shell| Channel::Remote(Some(shell)))
                 .map_err(ConnectionError::new),
             Self::Local => Stream::start(&shell_command(command))
-                .map(Channel::Local)
+                .map(|stream| Channel::Local(Box::new(stream)))
                 .map_err(ConnectionError::new),
             Self::OpenSsh(client) => {
                 let client = client.clone().with_resolved_path().await;
                 Stream::start(&client.exec(command))
-                    .map(Channel::Local)
+                    .map(|stream| Channel::Local(Box::new(stream)))
                     .map_err(ConnectionError::new)
             }
         }
@@ -179,7 +179,7 @@ impl Connection {
     /// OpenSSH it is `ssh -s`, the same request. On this machine it is the
     /// `sftp-server` OpenSSH installed, started directly, which speaks the
     /// same protocol to the same client: files here and files there are one
-    /// implementation, as a second command is (Decisions/0013).
+    /// implementation, as a second command is.
     pub async fn sftp(&self) -> Result<Channel, ConnectionError> {
         match self {
             Self::Remote(session) => session
@@ -197,12 +197,14 @@ impl Connection {
                 if let Some(home) = std::env::home_dir() {
                     command = command.directory(home);
                 }
-                Stream::start(&command).map(Channel::Local).map_err(ConnectionError::new)
+                Stream::start(&command)
+                    .map(|stream| Channel::Local(Box::new(stream)))
+                    .map_err(ConnectionError::new)
             }
             Self::OpenSsh(client) => {
                 let client = client.clone().with_resolved_path().await;
                 Stream::start(&client.subsystem("sftp"))
-                    .map(Channel::Local)
+                    .map(|stream| Channel::Local(Box::new(stream)))
                     .map_err(ConnectionError::new)
             }
         }
@@ -226,7 +228,7 @@ impl Connection {
                     .shell(term, tether_ssh::WindowSize::new(size.columns as u32, size.rows as u32))
                     .await
                     .map_err(ConnectionError::new)?;
-                Ok(TerminalSession::start_with(shell, size, options, self.clone()))
+                Ok(TerminalSession::start_with(shell, size, options, self.clone(), None, None))
             }
             Self::Local => Local::new()
                 .term(term)
@@ -279,7 +281,7 @@ pub enum Channel {
     /// consumes it — which is right, because a closed channel is not a thing
     /// — while everything that speaks a protocol holds its stream by `&mut`.
     Remote(Option<Shell>),
-    Local(Stream),
+    Local(Box<Stream>),
 }
 
 impl Channel {

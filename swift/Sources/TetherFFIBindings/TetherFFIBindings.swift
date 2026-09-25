@@ -618,6 +618,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -1278,7 +1296,7 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
     
     func attachTmux(sessionId: String, cancellation: CancellationToken) async throws  -> TmuxWorkspace
     
-    func createTmux(name: String, cancellation: CancellationToken) async throws  -> TmuxSessionInfo
+    func createTmux(name: String, directory: String?, cancellation: CancellationToken) async throws  -> TmuxSessionInfo
     
     func endTmux(sessionId: String) async throws 
     
@@ -1287,6 +1305,12 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
      * unique across the server, so it names the window on its own.
      */
     func endTmuxWindow(windowId: UInt32) async throws 
+    
+    /**
+     * Executes without creating a terminal or performing another authentication.
+     * Both output size and duration are bounded at this public boundary.
+     */
+    func execute(command: String, cancellation: CancellationToken) async throws  -> CommandOutput
     
     /**
      * Opens an interactive shell on this lease. No handshake: the connection
@@ -1302,6 +1326,11 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
      * shell in the pane reports nothing.
      */
     func tmuxPaneDirectory(paneId: UInt32) async throws  -> String
+    
+    /**
+     * Finds the tmux session attached to a particular terminal, if any.
+     */
+    func tmuxSessionForClient(tty: String) async throws  -> String?
     
     func tmuxSessions(cancellation: CancellationToken) async throws  -> [TmuxSessionInfo]
     
@@ -1397,12 +1426,12 @@ open func attachTmux(sessionId: String, cancellation: CancellationToken)async th
         )
 }
     
-open func createTmux(name: String, cancellation: CancellationToken)async throws  -> TmuxSessionInfo  {
+open func createTmux(name: String, directory: String?, cancellation: CancellationToken)async throws  -> TmuxSessionInfo  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(name),FfiConverterTypeCancellationToken_lower(cancellation)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(name),FfiConverterOptionString.lower(directory),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
@@ -1445,6 +1474,26 @@ open func endTmuxWindow(windowId: UInt32)async throws   {
             completeFunc: ffi_tether_ffi_rust_future_complete_void,
             freeFunc: ffi_tether_ffi_rust_future_free_void,
             liftFunc: { $0 },
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+    /**
+     * Executes without creating a terminal or performing another authentication.
+     * Both output size and duration are bounded at this public boundary.
+     */
+open func execute(command: String, cancellation: CancellationToken)async throws  -> CommandOutput  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_execute(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(command),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeCommandOutput_lift,
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
@@ -1502,6 +1551,25 @@ open func tmuxPaneDirectory(paneId: UInt32)async throws  -> String  {
             completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+    /**
+     * Finds the tmux session attached to a particular terminal, if any.
+     */
+open func tmuxSessionForClient(tty: String)async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_tmux_session_for_client(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(tty)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
@@ -2028,6 +2096,11 @@ public protocol SessionProtocol: AnyObject, Sendable {
     func connection()  -> RemoteConnection?
     
     /**
+     * The local shell's live working directory, if available.
+     */
+    func currentDirectory()  -> String?
+    
+    /**
      * `null` while the session is still running.
      */
     func ending()  -> SessionEnding?
@@ -2074,6 +2147,11 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * same question being asked again. `None` goes back to saying nothing.
      */
     func setPalette(palette: TerminalPalette?) throws 
+    
+    /**
+     * The local shell's tty path, for matching tmux clients to this tab.
+     */
+    func terminalName()  -> String?
     
     /**
      * The directory the shell last reported, if it reports one.
@@ -2184,6 +2262,18 @@ open func connection() -> RemoteConnection?  {
 }
     
     /**
+     * The local shell's live working directory, if available.
+     */
+open func currentDirectory() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_current_directory(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * `null` while the session is still running.
      */
 open func ending() -> SessionEnding?  {
@@ -2284,6 +2374,18 @@ open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(F
 }
     
     /**
+     * The local shell's tty path, for matching tmux clients to this tab.
+     */
+open func terminalName() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_terminal_name(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * The directory the shell last reported, if it reports one.
      */
 open func workingDirectory() -> String?  {
@@ -2357,6 +2459,8 @@ public protocol TmuxWorkspaceProtocol: AnyObject, Sendable {
     func linkAt(pane: UInt32, row: UInt16, column: UInt16)  -> TerminalLink?
     
     func perform(action: TmuxAction) async throws 
+    
+    func scroll(pane: UInt32, lines: Int32) async throws 
     
     func send(pane: UInt32, input: TerminalInput) throws 
     
@@ -2467,6 +2571,22 @@ open func perform(action: TmuxAction)async throws   {
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_tmuxworkspace_perform(
                         self.uniffiCloneHandle(),FfiConverterTypeTmuxAction_lower(action)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_void,
+            completeFunc: ffi_tether_ffi_rust_future_complete_void,
+            freeFunc: ffi_tether_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+open func scroll(pane: UInt32, lines: Int32)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_tmuxworkspace_scroll(
+                        self.uniffiCloneHandle(),FfiConverterUInt32.lower(pane),FfiConverterInt32.lower(lines)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_void,
@@ -2971,6 +3091,67 @@ public func FfiConverterTypeColorValue_lift(_ buf: RustBuffer) throws -> ColorVa
 #endif
 public func FfiConverterTypeColorValue_lower(_ value: ColorValue) -> RustBuffer {
     return FfiConverterTypeColorValue.lower(value)
+}
+
+
+/**
+ * Bounded output from a command on an authenticated connection.
+ */
+public struct CommandOutput: Equatable, Hashable {
+    public let status: Int32?
+    public let stdout: Data
+    public let stderr: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: Int32?, stdout: Data, stderr: Data) {
+        self.status = status
+        self.stdout = stdout
+        self.stderr = stderr
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CommandOutput: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCommandOutput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CommandOutput {
+        return
+            try CommandOutput(
+                status: FfiConverterOptionInt32.read(from: &buf), 
+                stdout: FfiConverterData.read(from: &buf), 
+                stderr: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CommandOutput, into buf: inout [UInt8]) {
+        FfiConverterOptionInt32.write(value.status, into: &buf)
+        FfiConverterData.write(value.stdout, into: &buf)
+        FfiConverterData.write(value.stderr, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandOutput_lift(_ buf: RustBuffer) throws -> CommandOutput {
+    return try FfiConverterTypeCommandOutput.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandOutput_lower(_ value: CommandOutput) -> RustBuffer {
+    return FfiConverterTypeCommandOutput.lower(value)
 }
 
 
@@ -5877,6 +6058,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
+    typealias SwiftType = Int32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
     typealias SwiftType = UInt64?
 
@@ -6705,7 +6910,7 @@ public func openLocal(shell: LocalShell)async throws  -> Session  {
  *
  * A live master is a handshake that has already been spent. The
  * application attaches through OpenSSH instead of offering credentials
- * again (Decisions/0010).
+ * again.
  */
 public func sshMasterRunning(target: String)async  -> Bool  {
     return
@@ -6831,6 +7036,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_session_connection() != 2908) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_session_current_directory() != 11408) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_session_ending() != 16509) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6852,6 +7060,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_session_set_palette() != 2490) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_session_terminal_name() != 42426) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_session_working_directory() != 14461) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6861,13 +7072,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remoteconnection_attach_tmux() != 1714) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux() != 62768) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux() != 11877) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux() != 28349) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_end_tmux_window() != 61139) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_execute() != 7135) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 34310) {
@@ -6877,6 +7091,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 5827) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_session_for_client() != 8350) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_sessions() != 42607) {
@@ -6892,6 +7109,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_tmuxworkspace_perform() != 33101) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_tmuxworkspace_scroll() != 8917) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_tmuxworkspace_send() != 28740) {

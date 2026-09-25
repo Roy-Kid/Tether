@@ -42,10 +42,14 @@ enum QuickLook {
   }
 
   /// A thumbnail of a local file, or `nil` for a type Quick Look cannot draw.
+  ///
+  /// `.all` rather than `.thumbnail`: PDFs, source, and the plain-text
+  /// tables a lab writes have no bitmap thumbnail, but Quick Look will
+  /// still draw an icon or a generated representation if asked for one.
   static func thumbnail(of url: URL, side: CGFloat) async -> CGImage? {
     let request = QLThumbnailGenerator.Request(
       fileAt: url, size: CGSize(width: side, height: side), scale: 2,
-      representationTypes: .thumbnail)
+      representationTypes: .all)
     return try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).cgImage
   }
 }

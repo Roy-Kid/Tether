@@ -3,7 +3,7 @@
 //! One adapter, as for tmux: SFTP is spoken over [`tether_core::Channel`],
 //! which is a subsystem channel on a remote session, `ssh -s` through an
 //! OpenSSH master, and this machine's `sftp-server` on a local one. The
-//! protocol above it was written once (Decisions/0013).
+//! protocol above it was written once.
 
 use std::path::Path;
 use std::sync::Arc;

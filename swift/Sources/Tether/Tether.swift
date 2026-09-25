@@ -136,7 +136,7 @@ extension Tether {
     /// consults `Task.isCancelled` — measured, not assumed: a cancelled
     /// three-second call returned normally after 3002ms. Carrying the token
     /// across by hand is what makes ordinary `Task.cancel()` work for a
-    /// consumer. See `Decisions/0003`.
+    /// consumer.
     static func cancellable<T>(
         _ body: @escaping @Sendable (TetherFFIBindings.CancellationToken) async throws -> T
     ) async throws -> T {

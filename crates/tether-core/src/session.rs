@@ -95,6 +95,8 @@ impl Shared {
 /// its problem would push our locking into its code.
 pub struct TerminalSession {
     connection: Option<Connection>,
+    terminal_name: Option<String>,
+    local_process_id: Option<u32>,
     shared: Arc<Shared>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     /// Kept across calls rather than re-subscribed per call: a receiver
@@ -130,6 +132,8 @@ impl TerminalSession {
 
         Self {
             connection: None,
+            terminal_name: None,
+            local_process_id: None,
             shared,
             commands,
             updates: tokio::sync::Mutex::new(updates),
@@ -144,9 +148,13 @@ impl TerminalSession {
         size: ScreenSize,
         options: Options,
         connection: Connection,
+        terminal_name: Option<String>,
+        local_process_id: Option<u32>,
     ) -> Self {
         let mut session = Self::start(producer, size, options);
         session.connection = Some(connection);
+        session.terminal_name = terminal_name;
+        session.local_process_id = local_process_id;
         session
     }
 
@@ -159,6 +167,16 @@ impl TerminalSession {
     /// machine without being written twice.
     pub fn connection(&self) -> Option<Connection> {
         self.connection.clone()
+    }
+
+    /// The terminal name for a local shell, if its PTY exposes one.
+    pub fn terminal_name(&self) -> Option<&str> {
+        self.terminal_name.as_deref()
+    }
+
+    /// The local shell's live working directory when the backend can read it.
+    pub fn current_directory(&self) -> Option<String> {
+        self.local_process_id.and_then(tether_local::current_directory)
     }
 
     /// Tells the engine what this consumer draws with.

@@ -89,9 +89,28 @@ struct RootView: View {
           } else {
             WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestClose($0) })
           }
-          canvas
+          HSplitView {
+            canvas
+            // The inspector sits under the tab strip, not beside it in the
+            // titlebar: its own header belongs to the column, in the same
+            // row as the listing it controls (design 16-inspector).
+            if showInspector {
+              inspectorPane
+                .frame(minWidth: Chrome.inspectorMin, idealWidth: Chrome.inspectorIdeal, maxWidth: 480)
+                .frame(maxHeight: .infinity)
+                .background(Theme.sidebar)
+            }
+          }
           if !tabs.zen {
-            HostStatusBar(tabs: tabs, store: store)
+            HostStatusBar(
+              tabs: tabs,
+              store: store,
+              pluginStatusItems: registry.plugins
+                .filter { registry.isEnabled($0.metadata.id) }
+                .compactMap(\.statusBarItem),
+              makeStatusWorkspace: { pluginID in
+                registry.plugins.first { $0.metadata.id == pluginID }?.statusBarWorkspace()
+              })
           }
         }
         if tabs.hostPicker, !tabs.zen {
@@ -106,10 +125,12 @@ struct RootView: View {
       .background(Theme.window)
       .background { CompactTitlebar() }
       .ignoresSafeArea(.container, edges: .top)
-      .inspector(isPresented: inspectorBinding) {
-        inspectorPane.inspectorColumnWidth(min: 240, ideal: 280, max: 360)
-      }
     }
+
+    private var showInspector: Bool {
+      tabs.inspector && !tabs.zen
+    }
+
   #endif
 
   private var splitView: some View {
@@ -148,6 +169,7 @@ struct RootView: View {
   }
 
   private func openRemote(_ host: Host) async {
+    if let issue = host.connectionProblem { keychainProblem = issue; return }
     do {
       if let connection = try await tabs.lease(for: host) {
         tabs.open(host, on: connection)
@@ -156,7 +178,7 @@ struct RootView: View {
     } catch {
       // The in-flight handshake failed. Asking again is the remaining path.
     }
-    let master = await TerminalSession.sshMasterIsRunning(host.sshTarget)
+    let master = host.allowsMasterReuse ? await TerminalSession.sshMasterIsRunning(host.sshTarget) : false
     if master || host.offersConfiguredKey {
       tabs.open(host, password: "")
       return
@@ -169,12 +191,6 @@ struct RootView: View {
   }
 
   #if os(macOS)
-    private var inspectorBinding: Binding<Bool> {
-      Binding(
-        get: { tabs.inspector && !tabs.zen },
-        set: { tabs.inspector = $0 }
-      )
-    }
   #endif
 
   private var canvas: some View {
@@ -395,7 +411,7 @@ extension RootView {
       }
     }
     .sheet(item: $editing) { host in
-      HostEditor(host: host, password: (try? secrets.password(for: host.id)) ?? "") {
+      HostEditor(host: host, password: (try? secrets.password(for: host.passwordID)) ?? "") {
         store.save($0, password: $1)
       }
     }
@@ -455,7 +471,7 @@ extension RootView {
     #if !os(macOS)
       .sheet(isPresented: $showingSettings) {
         NavigationStack {
-          AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets)
+          AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
             .toolbar {
               ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { showingSettings = false }
@@ -538,7 +554,9 @@ extension RootView {
           tabs.toggleInspector()
         })
     #endif
-    items += registry.plugins.filter { registry.isEnabled($0.metadata.id) }.map { plugin in
+    items += registry.plugins
+      .filter { registry.isEnabled($0.metadata.id) && !$0.isStatusBarOnly }
+      .map { plugin in
       let blocked =
         plugin is any TabPlugin
         ? tabs.current?.canOpen(plugin.metadata.id) != true
@@ -554,12 +572,13 @@ extension RootView {
     return items
   }
 
+
   /// What the keychain already has for this host, if the person asked for it
   /// to be kept. Read at the moment of connecting, not held in memory: a
   /// password sitting in a view model is a password in a crash report.
   private func remembered(for host: Host) -> String? {
     guard host.remembersPassword else { return nil }
-    return try? secrets.password(for: host.id)
+    return try? secrets.password(for: host.passwordID)
   }
 
   /// Records or clears what a person asked to be remembered.
@@ -568,6 +587,10 @@ extension RootView {
   /// must agree: a host marked as remembering with nothing stored prefills
   /// an empty field for ever, so a keychain that refuses leaves the flag off.
   private func keep(_ password: String, remember: Bool, for host: Host) {
+    if host.isManaged {
+      if !store.save(host, password: remember ? password : "") { keychainProblem = store.problem }
+      return
+    }
     var updated = host
     updated.remembersPassword = remember
     do {
@@ -589,10 +612,17 @@ extension RootView {
     store.save(updated)
   }
   private func pluginContext(for tab: SessionTab) -> PluginContext {
-    PluginContext(
+    let shellLabel: String
+    if tab.host.isLocal, let path = ProcessInfo.processInfo.environment["SHELL"], !path.isEmpty {
+      shellLabel = URL(fileURLWithPath: path).lastPathComponent
+    } else {
+      shellLabel = "Shell"
+    }
+    return PluginContext(
       connection: tab.connection,
       hostLabel: tab.host.label.isEmpty ? tab.host.hostname : tab.host.label,
       hostID: tab.host.id,
+      shellLabel: shellLabel,
       openWorkspace: { _ in },
       reconnect: { try await reconnect(host: tab.host) }
     )
@@ -618,6 +648,7 @@ extension RootView {
     return TabContext(
       id: id,
       plugin: pluginContext(for: tab),
+      terminalName: tab.terminalName,
       focus: { tabs.select(id) },
       dismissAccessory: { if tabs.accessory?.tab == id { tabs.accessory = nil } },
       present: { view in tabs.sheet = PluginSheet(tab: id, plugin: pluginID, view: view) },
@@ -687,15 +718,19 @@ extension RootView {
   /// terminal does and all a local shell needs. Anywhere else a local path
   /// means nothing, so the tab's plugins are offered them — the first to
   /// take them decides what a drop means there.
-  private func drop(_ urls: [URL], on tab: SessionTab) -> Bool {
+  private func drop(_ urls: [URL], on tab: SessionTab) {
     let files = urls.filter(\.isFileURL)
-    guard !files.isEmpty else { return false }
+    guard !files.isEmpty else { return }
     if tab.host.isLocal {
       tab.send(.paste(files.map { shellQuoted($0.path) }.joined(separator: " ") + " "))
-      return true
+      return
     }
     for plugin in tabs.accessories { prepareAttachment(plugin.id, on: tab) }
-    return tab.attachments.contains { $0.attachment.receive(files: files) }
+    // First taker wins, which is what `contains` short-circuited on — spelled
+    // as a loop because no caller consumes whether anyone took them.
+    for attachment in tab.attachments {
+      if attachment.attachment.receive(files: files) { break }
+    }
   }
 
   private func reconnect(host: Host) async throws -> RemoteConnection {
@@ -704,7 +739,7 @@ extension RootView {
     }
     let requestID = UUID()
     let password: String
-    let master = await TerminalSession.sshMasterIsRunning(host.sshTarget)
+    let master = host.allowsMasterReuse ? await TerminalSession.sshMasterIsRunning(host.sshTarget) : false
     if host.isLocal || host.offersConfiguredKey || master {
       password = ""
     } else {

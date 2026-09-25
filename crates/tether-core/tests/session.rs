@@ -13,7 +13,8 @@
 //! To run it:
 //!
 //! ```text
-//! scripts/test-server.sh start     # prints the exports to set
+//! ./scripts/tether.sh --test-tmux   # loopback OpenSSH + real tmux
+//!                                   # (scripts/test-native-tmux.sh)
 //! cargo test -p tether-core
 //! ```
 
@@ -61,7 +62,9 @@ macro_rules! server_or_skip {
         match server() {
             Some(server) => server,
             None => {
-                eprintln!("skipped: TETHER_TEST_SSH_* not set (see scripts/test-server.sh)");
+                eprintln!(
+                    "skipped: TETHER_TEST_SSH_* not set (see ./scripts/tether.sh --test-tmux)"
+                );
                 return;
             }
         }

@@ -104,6 +104,8 @@ extension FilesTab {
     if entry.kind == .directory {
       await reveal(printed)
     } else {
+      tab.focus()
+      tab.showAccessory()
       await preview([entry])
     }
   }
@@ -111,6 +113,7 @@ extension FilesTab {
   /// Shows the path in the browser: its directory, with it selected.
   func reveal(_ printed: Printed) async {
     guard let entry = await resolve(printed) else { return missing() }
+    tab.focus()
     tab.showAccessory()
     #if os(macOS)
       // A tree: opened down to it, the root left where it was when it is
@@ -161,19 +164,21 @@ struct LinkPreview: View {
   let model: FilesTab?
   let printed: Printed
   @State private var entry: FileEntry?
-  @State private var image: CGImage?
+  @State private var url: URL?
   @State private var looked = false
 
   var body: some View {
     VStack(spacing: UIStyle.Space.group) {
-      if let image {
-        Image(decorative: image, scale: 2).resizable().scaledToFit()
-      } else if looked {
-        Image(systemName: Names.symbol(for: entry?.name ?? printed.path, kind: entry?.kind ?? .file))
-          .font(.system(size: 56))
-          .foregroundStyle(Theme.subtle)
-      } else {
+      if !looked {
         ProgressView()
+          .frame(minWidth: 240, minHeight: 200)
+      } else {
+        FilePreview(
+          name: entry?.name ?? Paths.name(printed.path),
+          kind: entry?.kind ?? .file,
+          url: url,
+          side: 320
+        )
       }
       Text(Names.display(entry?.name ?? Paths.name(printed.path)))
         .font(UIStyle.detail)
@@ -186,10 +191,8 @@ struct LinkPreview: View {
       defer { looked = true }
       guard let model, let found = await model.resolve(printed) else { return }
       entry = found
-      guard found.kind == .file, found.size <= LinkPreview.fetchLimit,
-        let url = try? await model.local(found)
-      else { return }
-      image = await QuickLook.thumbnail(of: url, side: 320)
+      guard found.kind == .file, found.size <= LinkPreview.fetchLimit else { return }
+      url = try? await model.local(found)
     }
   }
 }
