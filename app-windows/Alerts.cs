@@ -1,120 +1,217 @@
-// System dialogs for host-key trust and keyboard-interactive prompts.
+// Questions the handshake has to ask a person: host trust, and whatever
+// keyboard-interactive prompt the server sends.
 //
-// The shape `HandshakeAlert.swift` uses on Apple, and the silence law in
-// `.claude/notes/law.md`: a title and a verb. One extra line only when the
-// consequence is not the button — which is why the fingerprint is the body
-// of the trust dialog and nothing else is.
+// These run on a separate window, not a ContentDialog in the main one. The
+// terminal is a child HWND above the XAML island, so a dialog drawn there is
+// either hidden behind it or — if that child is hidden to reveal the dialog —
+// takes the shell with it. A real window sits above the shell and leaves it
+// where it is.
+//
+// The callback arrives on a thread-pool thread (UniFFI). WinUI throws if a
+// window is created there, and that exception's message is empty, which is
+// the "unexpected callback error" with a blank reason.
 
+using System.Runtime.InteropServices;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Tether;
+using Windows.Graphics;
 
 namespace TetherApp;
 
 public static class Alerts
 {
-    /// <summary>
-    /// Asks whether this host may be talked to. Called during the handshake,
-    /// before any credential exists on the wire (spec §18).
-    ///
-    /// A revoked key is not a question: one button, and the answer is always
-    /// no (see <see cref="TrustAsync(XamlRoot, HostIdentity, TrustQuestion)"/>).
-    /// </summary>
-    public static async Task<bool> TrustAsync(XamlRoot root, HostIdentity host, TrustQuestion question)
+    public static Task<bool> TrustAsync(DispatcherQueue queue, HostIdentity host, TrustQuestion question)
     {
-        // A revoked key gets a notice, not a choice. "Trust" would be a
-        // button that means "ignore the revoke", which is not a thing.
         if (question is TrustQuestion.Revoked)
-        {
-            var notice = new ContentDialog
-            {
-                XamlRoot = root,
-                Title = "This host's key is revoked",
-                Content = host.Fingerprint,
-                CloseButtonText = "Close",
-                DefaultButton = ContentDialogButton.Close,
-            };
-            await notice.ShowAsync();
-            return false;
-        }
+            return OnUi(queue, () => Ask("This host's key is revoked", host.Fingerprint, null, "Close"));
 
-        var changed = question is TrustQuestion.Changed;
-        var title = changed ? "This host's key has changed" : "Unrecognised host";
-        // The fingerprint is the body: the consequence is not the button, so
-        // it is the one thing that must be on screen.
-        var message = host.Fingerprint;
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = root,
-            Title = title,
-            Content = message,
-            CloseButtonText = "Reject",
-            PrimaryButtonText = "Trust",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-        var result = await dialog.ShowAsync();
-        return result == ContentDialogResult.Primary;
+        var title = question is TrustQuestion.Changed
+            ? "This host's key has changed"
+            : "Unrecognised host";
+        return OnUi(queue, () => Ask(title, host.Fingerprint, "Trust", "Reject"));
     }
 
-    /// <summary>
-    /// Asks the questions a server asked. <see cref="AuthPrompt.Echo"/> false
-    /// means a password or one-time code — honour it.
-    /// </summary>
-    /// <returns>One answer per prompt, or empty for declined.</returns>
-    public static async Task<IReadOnlyList<string>> PromptsAsync(
-        XamlRoot root, string instruction, IReadOnlyList<AuthPrompt> prompts)
+    public static Task<IReadOnlyList<string>> PromptsAsync(
+        DispatcherQueue queue, string instruction, IReadOnlyList<AuthPrompt> prompts)
     {
-        if (prompts.Count == 0) return Array.Empty<string>();
+        if (prompts.Count == 0) return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        return OnUi(queue, () => AskPrompts(instruction, prompts));
+    }
 
-        var title = TitleFor(prompts[0]);
-        var message = instruction.Length == 0 || instruction == title ? null : instruction;
-
-        var panel = new StackPanel { Spacing = 8 };
-        if (message is not null)
+    private static async Task<bool> Ask(string title, string body, string? primary, string close)
+    {
+        var done = new TaskCompletionSource<bool>();
+        var window = NewDialog(title, 420, 200);
+        var panel = new StackPanel { Spacing = 12, Padding = new Thickness(16) };
+        panel.Children.Add(new TextBlock { Text = title, FontSize = 16, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock
         {
-            panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+            Text = body,
+            FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+        });
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        if (primary is not null)
+        {
+            var yes = new Button { Content = primary };
+            yes.Click += (_, _) => { done.TrySetResult(true); window.Close(); };
+            buttons.Children.Add(yes);
         }
+        var no = new Button { Content = close };
+        no.Click += (_, _) => { done.TrySetResult(false); window.Close(); };
+        buttons.Children.Add(no);
+        panel.Children.Add(buttons);
+        window.Content = panel;
+        window.Closed += (_, _) => done.TrySetResult(false);
+        window.Activate();
+        return await done.Task;
+    }
 
-        var boxes = new List<PasswordBox>();
-        var plains = new List<TextBox>();
-        foreach (var prompt in prompts)
+    private static async Task<IReadOnlyList<string>> AskPrompts(
+        string instruction, IReadOnlyList<AuthPrompt> prompts)
+    {
+        var title = TitleFor(prompts[0]);
+        var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var window = NewDialog(title, 440, 320);
+        var layout = new Grid
         {
-            panel.Children.Add(new TextBlock { Text = prompt.Text, TextWrapping = TextWrapping.Wrap });
-            if (prompt.Echo)
+            Padding = new Thickness(24),
+            RowSpacing = 20,
+            RequestedTheme = Appearance.RequestedTheme,
+            Background = (Brush)Application.Current.Resources["ChromeWindowBrush"],
+        };
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var heading = new TextBlock
+        {
+            Text = title, FontSize = 20,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        layout.Children.Add(heading);
+        var panel = new StackPanel { Spacing = 16 };
+        if (instruction.Length > 0 && instruction != title)
+            panel.Children.Add(new TextBlock { Text = instruction, TextWrapping = TextWrapping.Wrap });
+
+        var boxes = new PasswordBox[prompts.Count];
+        var plains = new TextBox[prompts.Count];
+        for (var i = 0; i < prompts.Count; i++)
+        {
+            var field = new StackPanel { Spacing = 6 };
+            field.Children.Add(new TextBlock { Text = prompts[i].Text.Trim(), TextWrapping = TextWrapping.Wrap });
+            if (prompts[i].Echo)
             {
-                var plain = new TextBox { PlaceholderText = "" };
-                plains.Add(plain);
-                boxes.Add(null!);
-                panel.Children.Add(plain);
+                plains[i] = new TextBox { MinHeight = 36 };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(plains[i], prompts[i].Text);
+                field.Children.Add(plains[i]);
             }
             else
             {
-                var secure = new PasswordBox();
-                boxes.Add(secure);
-                plains.Add(null!);
-                panel.Children.Add(secure);
+                boxes[i] = new PasswordBox { MinHeight = 36 };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(boxes[i], prompts[i].Text);
+                field.Children.Add(boxes[i]);
             }
+            panel.Children.Add(field);
         }
 
-        var dialog = new ContentDialog
+        var row = new StackPanel
         {
-            XamlRoot = root,
-            Title = title,
-            Content = panel,
-            CloseButtonText = "Cancel",
-            PrimaryButtonText = "Continue",
-            DefaultButton = ContentDialogButton.Primary,
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
         };
-        var result = await dialog.ShowAsync();
-        if (result != ContentDialogResult.Primary) return Array.Empty<string>();
-
-        var answers = new string[prompts.Count];
-        for (var i = 0; i < prompts.Count; i++)
+        var ok = new Button
         {
-            answers[i] = prompts[i].Echo ? plains[i].Text : boxes[i].Password;
+            Content = "Continue", MinWidth = 100,
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+        };
+        ok.Click += (_, _) =>
+        {
+            var answers = new string[prompts.Count];
+            for (var i = 0; i < prompts.Count; i++)
+                answers[i] = prompts[i].Echo ? plains[i].Text : boxes[i].Password;
+            done.TrySetResult(answers);
+            window.Close();
+        };
+        var cancel = new Button { Content = "Cancel", MinWidth = 100 };
+        cancel.Click += (_, _) => { done.TrySetResult(Array.Empty<string>()); window.Close(); };
+        row.Children.Add(cancel);
+        row.Children.Add(ok);
+        var scroll = new ScrollViewer
+        {
+            Content = panel,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetRow(scroll, 1);
+        Grid.SetRow(row, 2);
+        layout.Children.Add(scroll);
+        layout.Children.Add(row);
+        layout.Loaded += (_, _) =>
+        {
+            var scale = layout.XamlRoot.RasterizationScale;
+            var area = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+            var width = Math.Min(440, Math.Max(1, area.Width / scale - 32));
+            var contentWidth = Math.Max(1, width - 48);
+            heading.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
+            panel.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
+            row.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
+            var desired = 48 + 40 + heading.DesiredSize.Height + panel.DesiredSize.Height + row.DesiredSize.Height;
+            var height = Math.Min(Math.Max(260, desired), Math.Max(1, area.Height / scale - 64));
+            window.AppWindow.ResizeClient(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
+            WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
+            Control first = prompts[0].Echo ? plains[0] : boxes[0];
+            first.Focus(FocusState.Programmatic);
+        };
+        window.Content = layout;
+        window.Closed += (_, _) => done.TrySetResult(Array.Empty<string>());
+        window.Activate();
+        return await done.Task;
+    }
+
+    private static Window NewDialog(string title, int width, int height)
+    {
+        var window = new Window { Title = title };
+        var presenter = OverlappedPresenter.CreateForDialog();
+        presenter.SetBorderAndTitleBar(true, false);
+        presenter.IsResizable = false;
+        presenter.IsMinimizable = false;
+        presenter.IsMaximizable = false;
+        window.AppWindow.SetPresenter(presenter);
+        window.AppWindow.Resize(new SizeInt32(width, height));
+        WindowPlacement.Center(window, width, height);
+        WindowPlacement.Own(window);
+        return window;
+    }
+
+    private static async Task<T> OnUi<T>(DispatcherQueue queue, Func<Task<T>> work)
+    {
+        // The caller captures this queue on the UI thread. Even reading
+        // XamlRoot.Content here would access XAML from the UniFFI worker.
+        if (queue.HasThreadAccess) return await work();
+
+        var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!queue.TryEnqueue(async () =>
+            {
+                try { done.TrySetResult(await work()); }
+                catch (Exception ex) { done.TrySetException(ex); }
+            }))
+        {
+            throw new InvalidOperationException("Could not reach the window to ask.");
         }
-        return answers;
+        return await done.Task;
     }
 
     private static string TitleFor(AuthPrompt prompt)
@@ -128,4 +225,62 @@ public static class Alerts
             _ => text.Length > 24 ? text[..24] : text,
         };
     }
+}
+
+static class WindowPlacement
+{
+    public static void Own(Window popup)
+    {
+        var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
+        if (owner == 0) return;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(popup);
+        SetWindowLongPtr(hwnd, -8 /* GWLP_HWNDPARENT */, owner);
+        // Above the terminal's child window, which otherwise takes the click
+        // the person aimed at this list.
+        SetWindowPos(hwnd, -1 /* HWND_TOPMOST */, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
+    }
+
+    public static void Center(Window popup, int width, int height)
+    {
+        var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
+        if (owner == 0 || !GetWindowRect(owner, out var rect)) return;
+        var x = rect.Left + Math.Max(0, (rect.Right - rect.Left - width) / 2);
+        var y = rect.Top + Math.Max(0, (rect.Bottom - rect.Top - height) / 2);
+        popup.AppWindow.Move(new PointInt32(x, y));
+    }
+
+    /// <summary>Puts <paramref name="popup"/> just above <paramref name="anchor"/>, in screen pixels.</summary>
+    public static void Above(Window owner, FrameworkElement anchor, Window popup, int width, int height)
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(owner);
+        var scale = anchor.XamlRoot?.RasterizationScale ?? 1;
+        var origin = anchor.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+        var pt = new POINT
+        {
+            X = (int)Math.Round(origin.X * scale),
+            Y = (int)Math.Round(origin.Y * scale),
+        };
+        ClientToScreen(hwnd, ref pt);
+        var y = pt.Y - height;
+        if (y < 0) y = pt.Y + (int)Math.Round(anchor.ActualHeight * scale);
+        popup.AppWindow.MoveAndResize(new RectInt32(pt.X, y, width, height));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(nint hWnd, ref POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 }

@@ -38,6 +38,23 @@ struct SSHConfig: Equatable {
     var identityFile: String?
   }
 
+  /// One machine visited before the destination. `user` and `identityFile`
+  /// are what the hop's own stanza says, not the destination's.
+  struct Jump: Equatable {
+    var hostName: String
+    var port: UInt16
+    var user: String?
+    var identityFile: String?
+  }
+
+  enum JumpError: Error, Equatable {
+    /// `name` appeared again while its own jump was still being expanded.
+    case cycle(String)
+    case tooLong
+    /// A hop token was not `[user@]host[:port]`.
+    case malformed(String)
+  }
+
   /// A `Host` stanza: its patterns and where it sits in the file.
   private struct Block {
     var patterns: [String]
@@ -192,11 +209,109 @@ struct SSHConfig: Equatable {
       for index in block.start + 1..<block.end {
         guard let directive = directive(lines[index]), directive.keyword != "host" else { continue }
         guard settings[directive.keyword] == nil else { continue }
+        // `ProxyJump bastion, edge` is one value. Taking the first word
+        // would keep `bastion,` and drop the rest of the chain.
+        if directive.keyword == "proxyjump" {
+          let value = directive.value.trimmingCharacters(in: .whitespaces)
+          if !value.isEmpty { settings[directive.keyword] = value }
+          continue
+        }
         guard let first = tokens(directive.value).first else { continue }
         settings[directive.keyword] = first
       }
     }
     return settings
+  }
+
+  /// The hops `ssh` would visit before connecting to `alias`, nearest last.
+  ///
+  /// A hop's own `ProxyJump` is expanded first, which is the order OpenSSH
+  /// dials. `none` is an empty chain and overrides a wildcard that named
+  /// one, because first-match already kept `none`. A cycle — bastion jumps
+  /// to the machine that jumps to bastion — is an error rather than a dial
+  /// that never arrives.
+  func jumps(for alias: String) -> Result<[Jump], JumpError> {
+    var chain: [Jump] = []
+    var visiting: [String] = []
+    do {
+      try expand(alias, visiting: &visiting, into: &chain)
+      return .success(chain)
+    } catch let error as JumpError {
+      return .failure(error)
+    } catch {
+      return .failure(.malformed(alias))
+    }
+  }
+
+  private func expand(_ alias: String, visiting: inout [String], into chain: inout [Jump]) throws {
+    if visiting.contains(alias) { throw JumpError.cycle(alias) }
+    if chain.count > 16 { throw JumpError.tooLong }
+    visiting.append(alias)
+    defer { visiting.removeLast() }
+
+    guard let raw = resolved(alias: alias, in: blocks)["proxyjump"],
+      raw.caseInsensitiveCompare("none") != .orderedSame
+    else { return }
+
+    for token in raw.split(separator: ",") {
+      let trimmed = token.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.isEmpty else { continue }
+      let spec = try JumpSpec(trimmed)
+      try expand(spec.host, visiting: &visiting, into: &chain)
+      let settings = resolved(alias: spec.host, in: blocks)
+      let port = spec.port ?? settings["port"].flatMap(UInt16.init) ?? 22
+      chain.append(Jump(
+        hostName: settings["hostname"] ?? spec.host,
+        port: port,
+        user: spec.user ?? settings["user"],
+        identityFile: settings["identityfile"]))
+      if chain.count > 16 { throw JumpError.tooLong }
+    }
+  }
+}
+
+/// `[user@]host[:port]`, or `user@[ipv6]:port`. The host is the name config
+/// is searched under, before `HostName` replaces it.
+private struct JumpSpec {
+  var user: String?
+  var host: String
+  var port: UInt16?
+
+  init(_ token: String) throws {
+    var rest = token
+    user = nil
+    if let at = rest.firstIndex(of: "@") {
+      let name = String(rest[..<at])
+      guard !name.isEmpty else { throw SSHConfig.JumpError.malformed(token) }
+      user = name
+      rest = String(rest[rest.index(after: at)...])
+    }
+
+    if rest.hasPrefix("[") {
+      guard let end = rest.firstIndex(of: "]") else { throw SSHConfig.JumpError.malformed(token) }
+      host = String(rest[rest.index(after: rest.startIndex)..<end])
+      let after = rest[rest.index(after: end)...]
+      if after.isEmpty {
+        port = nil
+      } else if after.hasPrefix(":"), let parsed = UInt16(after.dropFirst()) {
+        port = parsed
+      } else {
+        throw SSHConfig.JumpError.malformed(token)
+      }
+      return
+    }
+
+    if let colon = rest.lastIndex(of: ":"),
+      rest.index(after: colon) != rest.endIndex,
+      let parsed = UInt16(rest[rest.index(after: colon)...])
+    {
+      host = String(rest[..<colon])
+      port = parsed
+    } else {
+      host = rest
+      port = nil
+    }
+    guard !host.isEmpty else { throw SSHConfig.JumpError.malformed(token) }
   }
 }
 
@@ -332,8 +447,15 @@ func identityFiles(
   for host: Host,
   readable: (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) }
 ) -> [String] {
-  if host.offersConfiguredKey, let path = host.keyPath {
-    return [path]
+  identityFiles(keyPath: host.offersConfiguredKey ? host.keyPath : nil, readable: readable)
+}
+
+func identityFiles(
+  keyPath: String?,
+  readable: (String) -> Bool = { FileManager.default.isReadableFile(atPath: $0) }
+) -> [String] {
+  if let keyPath, !keyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    return [keyPath]
   }
   return defaultIdentityFiles.filter { readable(expandingTilde($0)) }
 }

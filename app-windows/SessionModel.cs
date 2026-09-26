@@ -24,6 +24,16 @@ public sealed class SessionModel : IAsyncDisposable
     public event Action<ScreenFrame>? FrameChanged;
 
     public Palette Palette => _palette;
+    public bool IsRemote { get; private set; }
+
+    /// <summary>The local profile is WSL: paths the shell understands are Linux paths.</summary>
+    public bool IsWsl =>
+        Path.GetFileNameWithoutExtension(LocalProfile).Equals("wsl", StringComparison.OrdinalIgnoreCase);
+    public string LocalProfile { get; private set; } = "pwsh";
+    public event Action? SessionChanged;
+    public string? WorkingDirectory => _session?.WorkingDirectory();
+    public Task<RemoteFiles> OpenFilesAsync(CancellationToken token) =>
+        _session?.OpenFilesAsync(token) ?? throw new InvalidOperationException("No live session.");
 
     public ScreenFrame? CurrentFrame
     {
@@ -45,6 +55,7 @@ public sealed class SessionModel : IAsyncDisposable
         XamlRoot root,
         Destination destination,
         Secret[] secrets,
+        IReadOnlyList<Tether.Jump>? jumps = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -53,8 +64,10 @@ public sealed class SessionModel : IAsyncDisposable
                 destination,
                 new TrustDialog(root),
                 secrets,
+                jumps ?? Array.Empty<Tether.Jump>(),
                 cancellationToken).ConfigureAwait(true);
 
+            IsRemote = true;
             Adopt(session);
             Status = "Connected";
             return true;
@@ -82,7 +95,9 @@ public sealed class SessionModel : IAsyncDisposable
         try
         {
             var session = await TerminalSession.OpenLocalAsync(
-                shell: shell).ConfigureAwait(true);
+                shell: AppSettings.ResolveShellProgram(shell ?? AppSettings.Current.Shell)).ConfigureAwait(true);
+            IsRemote = false;
+            LocalProfile = shell ?? AppSettings.Current.Shell;
             Adopt(session);
             Status = "Connected";
             return true;
@@ -103,6 +118,14 @@ public sealed class SessionModel : IAsyncDisposable
     /// <summary>Why the last thing failed, when it did.</summary>
     public string? LastError { get; private set; }
 
+    /// <summary>A refusal before a handshake, such as a <c>ProxyJump</c> that cycles.</summary>
+    public void Fail(string message)
+    {
+        Status = "Disconnected";
+        LastError = message;
+        SessionChanged?.Invoke();
+    }
+
     /// <summary>
     /// Takes a live session and starts drawing it. One place decides which
     /// palette (Decision 0011): the surface draws with this and the session
@@ -112,7 +135,14 @@ public sealed class SessionModel : IAsyncDisposable
     private void Adopt(TerminalSession session)
     {
         session.SetPalette(_palette.RemoteForm());
+        // The control may already have measured its grid for the previous
+        // shell. A new SSH session still starts at its default 80 x 24.
+        session.Resize(_columns, _rows);
+        var previous = _session;
         _session = session;
+        previous?.Dispose();
+        LastError = null;
+        SessionChanged?.Invoke();
         Publish(session.Frame());
         _ = PumpAsync(session);
     }
@@ -124,9 +154,11 @@ public sealed class SessionModel : IAsyncDisposable
         {
             while (await session.AwaitChangeAsync().ConfigureAwait(false))
             {
+                if (!ReferenceEquals(_session, session)) return;
                 Publish(session.Frame());
             }
             // The final frame is announced before the ending; draw it.
+            if (!ReferenceEquals(_session, session)) return;
             Publish(session.Frame());
             _ = session.Ending();
         }
@@ -135,6 +167,7 @@ public sealed class SessionModel : IAsyncDisposable
             // A disconnected session is a row that leaves, not a crash
             // (law: display only).
         }
+        catch (Exception) when (!ReferenceEquals(_session, session)) { }
     }
 
     /// <summary>Switches the theme. Re-sets the palette mid-session (0011).</summary>
@@ -174,8 +207,9 @@ public sealed class SessionModel : IAsyncDisposable
 
     public void Close()
     {
-        _session?.Close();
+        var previous = _session;
         _session = null;
+        previous?.Dispose();
     }
 
     public ValueTask DisposeAsync()
@@ -197,6 +231,7 @@ public sealed class SessionModel : IAsyncDisposable
     /// </summary>
     private sealed class TrustDialog(XamlRoot root) : IHostTrust
     {
+        private readonly Microsoft.UI.Dispatching.DispatcherQueue _queue = root.Content.DispatcherQueue;
         private readonly KnownHosts _known = new();
 
         public async Task<bool> TrustsAsync(HostIdentity host, CancellationToken cancellationToken)
@@ -206,7 +241,7 @@ public sealed class SessionModel : IAsyncDisposable
 
             // A revoked key is never remembered and never accepted, even if
             // the person presses every button on the notice.
-            var ok = await Alerts.TrustAsync(root, host, question).ConfigureAwait(true);
+            var ok = await Alerts.TrustAsync(_queue, host, question).ConfigureAwait(true);
             if (ok && question is not TrustQuestion.Revoked) _known.Remember(host);
             return ok;
         }
@@ -218,9 +253,11 @@ public sealed class SessionModel : IAsyncDisposable
     /// <summary>Keyboard-interactive as a dialog. Echo is honoured (spec §10).</summary>
     public sealed class PromptDialog(XamlRoot root) : IAuthPrompter
     {
+        private readonly Microsoft.UI.Dispatching.DispatcherQueue _queue = root.Content.DispatcherQueue;
+
         public Task<IReadOnlyList<string>> AnswerAsync(
             string instruction, IReadOnlyList<AuthPrompt> prompts, CancellationToken cancellationToken)
-            => Alerts.PromptsAsync(root, instruction, prompts);
+            => Alerts.PromptsAsync(_queue, instruction, prompts);
 
         public Task<IReadOnlyList<string>> AnswerAsync(
             string instruction, IReadOnlyList<AuthPrompt> prompts)

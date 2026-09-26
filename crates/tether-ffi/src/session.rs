@@ -108,6 +108,19 @@ pub enum Secret {
     },
 }
 
+/// One hop in front of [`Destination`], authenticated on its own.
+///
+/// First to last is the order OpenSSH visits a `ProxyJump` list: each hop
+/// is logged into before a channel to the next is opened. Its secrets are
+/// not the destination's.
+#[derive(uniffi::Record)]
+pub struct Jump {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub secrets: Vec<Secret>,
+}
+
 /// Where to connect and as whom.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Destination {
@@ -138,17 +151,16 @@ pub async fn connect(
     destination: Destination,
     trust: Arc<dyn HostTrust>,
     secrets: Vec<Secret>,
+    jumps: Vec<Jump>,
 ) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(destination.columns, destination.rows);
-
-    let credentials = secrets
+    let verifier = Arc::new(ForeignVerifier(trust));
+    let through = jumps
         .into_iter()
-        .map(|secret| match secret {
-            Secret::Password { password } => Credential::Password(password),
-            Secret::PrivateKey { pem, passphrase } => Credential::PrivateKey { pem, passphrase },
-            Secret::Interactive { prompter } => {
-                Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
-            }
+        .map(|jump| tether_core::Jump {
+            endpoint: tether_core::ssh::Endpoint::new(jump.host, jump.port),
+            user: jump.user,
+            credentials: jump.secrets.into_iter().map(credential).collect(),
         })
         .collect();
 
@@ -156,11 +168,12 @@ pub async fn connect(
         tether_core::ssh::Endpoint::new(destination.host, destination.port),
         destination.user,
     )
-    .verifier(Arc::new(ForeignVerifier(trust)))
+    .verifier(verifier)
+    .through(through)
     .term(destination.term)
     .size(size)
     .options(Options { scrollback_lines: destination.scrollback_lines as usize })
-    .connect(credentials)
+    .connect(secrets.into_iter().map(credential).collect())
     .await?;
 
     Ok(Arc::new(Session { inner: session }))
@@ -172,12 +185,23 @@ pub async fn connect_cancellable(
     destination: Destination,
     trust: Arc<dyn HostTrust>,
     secrets: Vec<Secret>,
+    jumps: Vec<Jump>,
     cancellation: Arc<crate::CancellationToken>,
 ) -> Result<Arc<Session>, TetherError> {
     tokio::select! {
         biased;
         _ = cancellation.inner.cancelled() => Err(TetherError::Cancelled),
-        result = connect(destination, trust, secrets) => result,
+        result = connect(destination, trust, secrets, jumps) => result,
+    }
+}
+
+fn credential(secret: Secret) -> Credential {
+    match secret {
+        Secret::Password { password } => Credential::Password(password),
+        Secret::PrivateKey { pem, passphrase } => Credential::PrivateKey { pem, passphrase },
+        Secret::Interactive { prompter } => {
+            Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
+        }
     }
 }
 

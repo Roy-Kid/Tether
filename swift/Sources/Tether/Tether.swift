@@ -63,10 +63,10 @@ public enum TetherError: Error, Equatable, Sendable, LocalizedError {
             return "Cancelled."
         case .timedOut(let millis):
             return "Timed out after \(millis)ms."
-        case .unreachable(_, let cause):
-            return "Could not reach the host. \(cause)"
-        case .hostRejected:
-            return "The host key was not trusted."
+        case .unreachable(let endpoint, let cause):
+            return "Could not reach \(endpoint). \(cause)"
+        case .hostRejected(let endpoint):
+            return "The host key for \(endpoint) was not trusted."
         case .authenticationFailed(let remaining):
             return remaining.isEmpty
                 ? "Authentication failed."

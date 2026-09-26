@@ -140,7 +140,31 @@ final class SessionTab: Identifiable {
   /// that is how it is written down in an ssh config; expanding it is this
   /// side's job, at the moment of opening the file.
   private func keyCredentials() -> [Credential] {
-    identityFiles(for: host).compactMap { path in
+    keys(at: identityFiles(for: host))
+  }
+
+  /// Each hop is a separate login. Its key is not the destination's, and the
+  /// password typed for the destination is not offered here — a prompt is,
+  /// because a bastion that wants a passphrase has to be able to ask.
+  private func jumpCredentials() throws -> [Jump] {
+    try host.jumps.map { hop in
+      let paths = identityFiles(keyPath: hop.keyPath)
+      let keys = keys(at: paths)
+      if let path = hop.keyPath, !path.isEmpty, keys.isEmpty {
+        throw NSError(
+          domain: "Tether", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: "Could not read the key at \(path)."])
+      }
+      return Jump(
+        host: hop.hostname,
+        port: hop.port,
+        user: hop.username,
+        credentials: keys + [.interactive(Prompter(tab: self))])
+    }
+  }
+
+  private func keys(at paths: [String]) -> [Credential] {
+    paths.compactMap { path in
       guard let pem = try? String(contentsOfFile: expandingTilde(path), encoding: .utf8) else {
         return nil
       }
@@ -171,6 +195,11 @@ final class SessionTab: Identifiable {
       return
     }
 
+    if let problem = host.jumpProblem {
+      fail(described: problem)
+      return
+    }
+
     let destination = Destination(
       host: host.hostname,
       port: host.port,
@@ -180,12 +209,15 @@ final class SessionTab: Identifiable {
 
     let keys = keyCredentials()
     if let path = host.keyPath, !path.isEmpty, keys.isEmpty {
-      let failure = NSError(
-        domain: "Tether", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Could not read the key at \(path)."])
-      stage = .failed(failure.localizedDescription)
-      ready.forEach { $0.resume(throwing: failure) }
-      ready.removeAll()
+      fail(described: "Could not read the key at \(path).")
+      return
+    }
+
+    let jumps: [Jump]
+    do {
+      jumps = try jumpCredentials()
+    } catch {
+      fail(error)
       return
     }
 
@@ -208,7 +240,8 @@ final class SessionTab: Identifiable {
       let session = try await TerminalSession.connect(
         to: destination,
         trusting: Trust(tab: self),
-        offering: credentials)
+        offering: credentials,
+        through: jumps)
 
       adopt(session)
     } catch {
@@ -264,6 +297,10 @@ final class SessionTab: Identifiable {
     stage = .connected
     frame = session.frame()
     startPumping(session)
+  }
+
+  private func fail(described message: String) {
+    fail(NSError(domain: "Tether", code: 1, userInfo: [NSLocalizedDescriptionKey: message]))
   }
 
   private func fail(_ error: Error) {

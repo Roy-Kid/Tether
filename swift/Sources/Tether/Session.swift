@@ -177,6 +177,22 @@ public enum Credential: Sendable {
   case interactive(any AuthPrompter)
 }
 
+/// One hop in front of a destination. Its credentials are not the
+/// destination's: a password typed for the far machine is not offered here.
+public struct Jump: Sendable {
+  public var host: String
+  public var port: UInt16
+  public var user: String
+  public var credentials: [Credential]
+
+  public init(host: String, port: UInt16 = 22, user: String, credentials: [Credential]) {
+    self.host = host
+    self.port = port
+    self.user = user
+    self.credentials = credentials
+  }
+}
+
 /// Where to connect and as whom.
 public struct Destination: Sendable {
   public var host: String
@@ -271,7 +287,8 @@ public final class TerminalSession: Sendable {
   public static func connect(
     to destination: Destination,
     trusting trust: any HostTrust,
-    offering credentials: [Credential]
+    offering credentials: [Credential],
+    through jumps: [Jump] = []
   ) async throws -> TerminalSession {
     let token = TetherFFIBindings.CancellationToken()
     return try await withTaskCancellationHandler {
@@ -287,7 +304,9 @@ public final class TerminalSession: Sendable {
             rows: destination.rows,
             scrollbackLines: destination.scrollbackLines),
           trust: HostTrustBridge(trust),
-          secrets: credentials.map(secret), cancellation: token)
+          secrets: credentials.map(secret),
+          jumps: jumps.map(ffiJump),
+          cancellation: token)
       }
       if Task.isCancelled {
         session.close()
@@ -481,6 +500,14 @@ public final class TerminalSession: Sendable {
 }
 
 // MARK: - The seam
+
+private func ffiJump(_ jump: Jump) -> TetherFFIBindings.Jump {
+  TetherFFIBindings.Jump(
+    host: jump.host,
+    port: jump.port,
+    user: jump.user,
+    secrets: jump.credentials.map(secret))
+}
 
 private func secret(_ credential: Credential) -> TetherFFIBindings.Secret {
   switch credential {

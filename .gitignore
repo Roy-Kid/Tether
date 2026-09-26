@@ -28,6 +28,8 @@ swift/Artifacts/
 .vs/
 /app-windows/bin/
 /dotnet/**/bin/
+/tests/**/bin/
 /app-windows/obj/
 /dotnet/**/obj/
+/tests/**/obj/
 /dotnet/Tether/runtimes/

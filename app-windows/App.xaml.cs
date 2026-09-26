@@ -6,6 +6,9 @@ public partial class App : Application
 {
     private Window? _window;
 
+    /// <summary>Every extension this process loaded. The window draws the list; this is the line that names one.</summary>
+    public static Plugins.PluginRegistry Plugins { get; private set; } = new();
+
     public App() => InitializeComponent();
 
     /// <summary>
@@ -18,6 +21,11 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        AppSettings.Load();
+        Plugins = new Plugins.PluginRegistry(
+            AppSettings.Current.DisabledPlugins,
+            disabled => (AppSettings.Current with { DisabledPlugins = disabled.ToArray() }).Save());
+        Plugins.Register(new Plugins.FilesPlugin());
         _window = new MainWindow();
         _window.Activate();
     }

@@ -43,6 +43,14 @@ struct Host: Identifiable, Hashable {
   /// connecting rather than keeping a copy (spec §18).
   var keyPath: String?
 
+  /// Hops visited before this machine, first to last. Empty when `ssh` would
+  /// dial it directly.
+  var jumps: [JumpTarget] = []
+
+  /// Set when `ProxyJump` cannot be followed — a cycle, a token that is not
+  /// a host. Connecting anyway would reach a different machine than `ssh`.
+  var jumpProblem: String? = nil
+
   /// An `IdentityFile` in the ssh config is already a credential, so a
   /// password is not required to start the handshake. `ssh host` would not
   /// ask for one either.
@@ -99,6 +107,15 @@ extension Host {
   }
 
   var isLocal: Bool { id == Host.localID }
+}
+
+/// One hop in front of a saved host. The username is already resolved,
+/// including the account name `ssh` would use when the stanza names none.
+struct JumpTarget: Hashable {
+  var hostname: String
+  var port: UInt16
+  var username: String
+  var keyPath: String?
 }
 
 extension Host {
@@ -318,14 +335,45 @@ final class HostStore {
 
     let remembered = Set((try? secrets.saved())?.map(\.id) ?? [])
     hosts = config.entries.map { entry in
-      Host(
+      let route = route(for: entry.alias)
+      return Host(
         id: Host.id(forAlias: entry.alias),
         label: entry.alias,
         hostname: entry.hostName,
         port: entry.port ?? 22,
         username: entry.user ?? defaultUserName(),
         remembersPassword: remembered.contains(Host.id(forAlias: entry.alias)),
-        keyPath: entry.identityFile)
+        keyPath: entry.identityFile,
+        jumps: route.hops,
+        jumpProblem: route.problem)
+    }
+  }
+
+  /// The hops in front of `alias`, or why they cannot be followed.
+  private func route(for alias: String) -> (hops: [JumpTarget], problem: String?) {
+    switch config.jumps(for: alias) {
+    case .success(let hops):
+      let targets = hops.map { hop in
+        JumpTarget(
+          hostname: hop.hostName,
+          port: hop.port,
+          username: hop.user ?? defaultUserName(),
+          keyPath: hop.identityFile)
+      }
+      return (targets, nil)
+    case .failure(let error):
+      return ([], message(for: error, alias: alias))
+    }
+  }
+
+  private func message(for error: SSHConfig.JumpError, alias: String) -> String {
+    switch error {
+    case .cycle(let name):
+      return "ProxyJump for \(alias) cycles through \(name)."
+    case .tooLong:
+      return "ProxyJump for \(alias) is too long."
+    case .malformed(let token):
+      return "ProxyJump for \(alias) has an unreadable hop (\(token))."
     }
   }
 

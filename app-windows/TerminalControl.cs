@@ -14,6 +14,7 @@
 // reporting is on.
 
 using System.Diagnostics;
+using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -27,6 +28,7 @@ namespace TetherApp;
 
 public sealed class TerminalControl : Control
 {
+    private readonly DispatcherQueue _uiQueue;
     private SessionModel? _model;
     private TerminalSurface? _surface;
     private ChildHwnd? _child;
@@ -55,14 +57,11 @@ public sealed class TerminalControl : Control
 
     public TerminalControl()
     {
+        // Capture on the UI thread: FrameChanged also runs on the session
+        // worker, where reading properties of this control is not safe.
+        _uiQueue = DispatcherQueue;
         IsTabStop = true;
-        // The page is a terminal: the background is the palette's, not
-        // WinUI's, so an unpainted frame reads as a terminal and not as a
-        // missing control. `Palette.dark`'s background is #12141A — this is
-        // that number, not a theme brush, because a theme brush is how a
-        // terminal becomes a white window (Decision 0011: the consumer owns
-        // the palette).
-        Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x12, 0x14, 0x1A));
+        Background = Appearance.Background(Palette.Dark);
 
         _autoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _autoScroll.Tick += OnAutoScrollTick;
@@ -77,11 +76,30 @@ public sealed class TerminalControl : Control
         PointerMoved += OnPointerMoved;
         PointerReleased += OnPointerReleased;
         RightTapped += OnRightTapped;
+        AllowDrop = true;
+        DragOver += OnDragOver;
+        Drop += OnDrop;
     }
+
+    /// <summary>
+    /// A plugin's answer to "does this exist?", or null when none has one.
+    /// The terminal finds the shape; something with a lease is what can check it.
+    /// </summary>
+    public Func<TerminalLink, Task<bool?>>? QueryLink { get; set; }
+
+    /// <summary>A plugin opened it. False leaves the local opener to try.</summary>
+    public Func<TerminalLink, bool>? TryOpenLink { get; set; }
+
+    /// <summary>Menu items a plugin adds for a link, beside Open and Copy.</summary>
+    public Func<TerminalLink, IReadOnlyList<(string Title, Action Run)>>? LinkCommands { get; set; }
+
+    /// <summary>Files dropped on the terminal. The host decides what a path means here.</summary>
+    public Func<IReadOnlyList<string>, Task>? ReceiveDrop { get; set; }
 
     public async Task BindAsync(SessionModel model)
     {
         _model = model;
+        SetPalette(model.Palette);
         // Frames arrive on the session's thread; the surface and the
         // pointer state are this control's, so drawing happens here.
         model.FrameChanged += _ => RequestRedraw();
@@ -92,6 +110,42 @@ public sealed class TerminalControl : Control
         }
     }
 
+    public void SetPalette(Palette palette)
+    {
+        Background = Appearance.Background(palette);
+        if (_model?.Palette != palette) _model?.SetPalette(palette);
+        RequestRedraw();
+    }
+
+    private bool _overlayVisible;
+    private int _covers;
+
+    public void SetOverlayVisible(bool visible)
+    {
+        _overlayVisible = visible;
+        // Native child HWNDs otherwise cover XAML ContentDialogs (airspace).
+        ApplyCover();
+    }
+
+    /// <summary>Hides the GPU child while a XAML popup is open over it. Nested.</summary>
+    public void PushCover()
+    {
+        _covers++;
+        ApplyCover();
+    }
+
+    public void PopCover()
+    {
+        if (_covers > 0) _covers--;
+        ApplyCover();
+    }
+
+    private void ApplyCover()
+    {
+        if (_overlayVisible || _covers > 0) _child?.Hide();
+        else if (_ready) { _child?.Show(); Redraw(); }
+    }
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         _ready = true;
@@ -100,7 +154,7 @@ public sealed class TerminalControl : Control
             // A tab coming back: its child was hidden while another tab
             // was selected.
             _child.Fit(this);
-            _child.Show();
+            if (!_overlayVisible && _covers == 0) _child.Show();
         }
         await EnsureSurfaceAsync();
         Redraw();
@@ -120,7 +174,7 @@ public sealed class TerminalControl : Control
     /// </summary>
     public void FocusTerminal()
     {
-        DispatcherQueue.TryEnqueue(() =>
+        _uiQueue.TryEnqueue(() =>
         {
             if (_ready) _child?.Focus();
         });
@@ -167,11 +221,11 @@ public sealed class TerminalControl : Control
     private void RequestRedraw()
     {
         if (Interlocked.Exchange(ref _redrawQueued, 1) == 1) return;
-        DispatcherQueue.TryEnqueue(() =>
+        if (!_uiQueue.TryEnqueue(() =>
         {
             Interlocked.Exchange(ref _redrawQueued, 0);
             Redraw();
-        });
+        })) Interlocked.Exchange(ref _redrawQueued, 0);
     }
 
     private void Redraw()
@@ -539,7 +593,8 @@ public sealed class TerminalControl : Control
     /// </summary>
     private async Task ConfirmLinkAsync(TerminalLink link)
     {
-        var exists = await Task.Run(() => LinkExists(link));
+        var answered = QueryLink is null ? null : await QueryLink(link);
+        var exists = answered ?? await Task.Run(() => LinkExists(link));
         if (_hovered?.Text == link.Text)
         {
             _hoveredConfirmed = exists;
@@ -560,8 +615,9 @@ public sealed class TerminalControl : Control
             ? path
             : System.IO.Path.Combine(Environment.CurrentDirectory, path);
 
-    private static void OpenLink(TerminalLink link)
+    private void OpenLink(TerminalLink link)
     {
+        if (TryOpenLink?.Invoke(link) == true) return;
         try
         {
             switch (link.Kind)
@@ -606,6 +662,13 @@ public sealed class TerminalControl : Control
             open.Click += (_, _) => OpenLink(link);
             menu.Items.Add(open);
 
+            foreach (var command in LinkCommands?.Invoke(link) ?? [])
+            {
+                var item = new MenuFlyoutItem { Text = command.Title };
+                item.Click += (_, _) => command.Run();
+                menu.Items.Add(item);
+            }
+
             var copyLink = new MenuFlyoutItem { Text = "Copy link" };
             copyLink.Click += (_, _) => CopyText(LinkText(link));
             menu.Items.Add(copyLink);
@@ -620,6 +683,28 @@ public sealed class TerminalControl : Control
 
         menu.ShowAt(this, e.GetPosition(this));
         e.Handled = true;
+    }
+
+    private void OnDragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.Copy;
+            e.Handled = true;
+        }
+    }
+
+    private async void OnDrop(object sender, DragEventArgs e)
+    {
+        if (ReceiveDrop is null || !e.DataView.Contains(StandardDataFormats.StorageItems)) return;
+        var deferral = e.GetDeferral();
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var paths = items.Select(item => item.Path).Where(path => path.Length > 0).ToArray();
+            if (paths.Length > 0) await ReceiveDrop(paths);
+        }
+        finally { deferral.Complete(); }
     }
 
     private static string LinkText(TerminalLink link) => link.Kind switch

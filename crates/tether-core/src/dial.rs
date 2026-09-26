@@ -75,6 +75,28 @@ pub enum DialError {
 /// A builder because the required parts (where, who) and the tuning (what
 /// `$TERM` claims, how much scrollback) have very different lifetimes in a
 /// consumer's code.
+/// One authenticated hop in front of the destination.
+///
+/// A `ProxyJump` chain is these, first to last: each is logged into before
+/// the next channel is opened. Credentials stay here, with the hop they
+/// belong to, so a password typed for the destination is never offered to a
+/// bastion.
+pub struct Jump {
+    pub endpoint: Endpoint,
+    pub user: String,
+    pub credentials: Vec<Credential>,
+}
+
+impl std::fmt::Debug for Jump {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Jump")
+            .field("endpoint", &self.endpoint)
+            .field("user", &self.user)
+            .field("credentials", &self.credentials.len())
+            .finish()
+    }
+}
+
 pub struct Dial {
     endpoint: Endpoint,
     user: String,
@@ -83,6 +105,7 @@ pub struct Dial {
     term: String,
     size: ScreenSize,
     options: Options,
+    jumps: Vec<Jump>,
 }
 
 impl Dial {
@@ -103,7 +126,17 @@ impl Dial {
             term: "xterm-256color".to_owned(),
             size: ScreenSize::new(80, 24),
             options: Options::default(),
+            jumps: Vec::new(),
         }
+    }
+
+    /// Reach the destination through these hops, first to last.
+    ///
+    /// An empty list dials directly. Each hop is a separate login: its own
+    /// host key, its own credentials, then a forwarded channel to the next.
+    pub fn through(mut self, jumps: Vec<Jump>) -> Self {
+        self.jumps = jumps;
+        self
     }
 
     pub fn verifier(mut self, verifier: Arc<dyn HostVerifier>) -> Self {
@@ -157,41 +190,58 @@ impl Dial {
             return Err(DialError::NothingToOffer);
         }
 
-        let mut connection = Connection::connect(
-            self.endpoint,
-            Arc::clone(&self.verifier),
-            Arc::clone(&self.config),
-        )
-        .await?;
-
-        let mut refused = Vec::new();
-        let mut offered = credentials.into_iter().peekable();
-
-        let session = loop {
-            let Some(credential) = offered.next() else {
-                // Out of credentials. Which error depends on how the last
-                // attempt went, and that distinction is the difference
-                // between "your password is wrong" and "now your code".
-                return Err(DialError::Refused { remaining: refused });
+        let mut via: Option<tether_ssh::Session> = None;
+        for jump in self.jumps {
+            let endpoint = jump.endpoint.clone();
+            let connection = match via.take() {
+                Some(previous) => {
+                    Connection::connect_through(
+                        previous,
+                        endpoint.clone(),
+                        Arc::clone(&self.verifier),
+                        Arc::clone(&self.config),
+                    )
+                    .await?
+                }
+                None => {
+                    Connection::connect(
+                        endpoint.clone(),
+                        Arc::clone(&self.verifier),
+                        Arc::clone(&self.config),
+                    )
+                    .await?
+                }
             };
+            via = Some(
+                login(connection, &jump.user, jump.credentials)
+                    .await
+                    .map_err(|error| attribute(&endpoint, error))?,
+            );
+        }
 
-            match attempt(connection, &self.user, credential).await? {
-                Step::Authenticated(session) => break session,
-                Step::AnotherFactor { remaining, next } => {
-                    let remaining = names(&remaining);
-                    if offered.peek().is_none() {
-                        return Err(DialError::MoreFactorsNeeded { remaining });
-                    }
-                    refused = remaining;
-                    connection = next;
-                }
-                Step::Rejected { remaining, retry } => {
-                    refused = names(&remaining);
-                    connection = retry;
-                }
+        let connection = match via.take() {
+            Some(previous) => {
+                Connection::connect_through(
+                    previous,
+                    self.endpoint.clone(),
+                    Arc::clone(&self.verifier),
+                    Arc::clone(&self.config),
+                )
+                .await?
+            }
+            None => {
+                Connection::connect(
+                    self.endpoint.clone(),
+                    Arc::clone(&self.verifier),
+                    Arc::clone(&self.config),
+                )
+                .await?
             }
         };
 
+        // The destination's own failure is not attributed to a hop. A person
+        // who typed the wrong password is already looking at that machine.
+        let session = login(connection, &self.user, credentials).await?;
         Ok(Arc::new(session))
     }
 }
@@ -201,9 +251,58 @@ impl std::fmt::Debug for Dial {
         f.debug_struct("Dial")
             .field("endpoint", &self.endpoint)
             .field("user", &self.user)
+            .field("jumps", &self.jumps)
             .field("term", &self.term)
             .field("size", &self.size)
             .finish_non_exhaustive()
+    }
+}
+
+/// The credential loop, apart from how the connection was reached.
+async fn login(
+    mut connection: Connection,
+    user: &str,
+    credentials: Vec<Credential>,
+) -> Result<tether_ssh::Session, DialError> {
+    if credentials.is_empty() {
+        return Err(DialError::NothingToOffer);
+    }
+
+    let mut refused = Vec::new();
+    let mut offered = credentials.into_iter().peekable();
+
+    loop {
+        let Some(credential) = offered.next() else {
+            return Err(DialError::Refused { remaining: refused });
+        };
+
+        match attempt(connection, user, credential).await? {
+            Step::Authenticated(session) => return Ok(session),
+            Step::AnotherFactor { remaining, next } => {
+                let remaining = names(&remaining);
+                if offered.peek().is_none() {
+                    return Err(DialError::MoreFactorsNeeded { remaining });
+                }
+                refused = remaining;
+                connection = next;
+            }
+            Step::Rejected { remaining, retry } => {
+                refused = names(&remaining);
+                connection = retry;
+            }
+        }
+    }
+}
+
+/// A hop's failure has to name the hop. "Authentication failed" on its own
+/// sends a person to the machine they meant to reach, which accepted nothing
+/// because it was never contacted.
+fn attribute(endpoint: &Endpoint, error: DialError) -> DialError {
+    match error {
+        DialError::Ssh(inner) => DialError::Ssh(inner),
+        other => {
+            DialError::Ssh(tether_ssh::SshError::Protocol { cause: format!("{endpoint}: {other}") })
+        }
     }
 }
 

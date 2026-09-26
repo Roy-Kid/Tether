@@ -75,17 +75,28 @@ pub struct Observed {
     pub received: Vec<u8>,
 }
 
-#[derive(Clone)]
 pub struct FakeHost {
     pub observed: Arc<Mutex<Observed>>,
     /// Which round of the interactive exchange we are in.
     round: u32,
     policy: Policy,
+    /// When set, a `direct-tcpip` channel is spliced onto this stream instead
+    /// of being refused. That is a jump host: the next handshake runs here.
+    forward_to: Option<tokio::io::DuplexStream>,
+    /// Channels whose bytes are a forwarded stream. Echoing them would mix a
+    /// shell's behaviour into someone else's handshake.
+    forwarded: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
 impl FakeHost {
     pub fn new(policy: Policy) -> Self {
-        Self { observed: Arc::new(Mutex::new(Observed::default())), round: 0, policy }
+        Self {
+            observed: Arc::new(Mutex::new(Observed::default())),
+            round: 0,
+            policy,
+            forward_to: None,
+            forwarded: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        }
     }
 }
 
@@ -224,6 +235,33 @@ impl Handler for FakeHost {
         Ok(())
     }
 
+    /// A jump host. The channel is a TCP connection to whatever
+    /// [`Self::forward_to`] was pointed at, which in tests is another SSH
+    /// server on an in-memory pipe. Refusing — by not accepting — is what a
+    /// server with `AllowTcpForwarding no` does, and what this one does when
+    /// it was not asked to be a jump.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        _: &str,
+        _: u32,
+        _: &str,
+        _: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Some(mut peer) = self.forward_to.take() else {
+            return Ok(());
+        };
+        self.forwarded.lock().unwrap().insert(channel.id());
+        reply.accept().await;
+        let mut stream = channel.into_stream();
+        tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut peer).await;
+        });
+        Ok(())
+    }
+
     async fn pty_request(
         &mut self,
         channel: ChannelId,
@@ -291,6 +329,9 @@ impl Handler for FakeHost {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.forwarded.lock().unwrap().contains(&channel) {
+            return Ok(());
+        }
         self.observed.lock().unwrap().received.extend_from_slice(data);
         // Echo, the way a line-disciplined shell would.
         session.data(channel, bytes::Bytes::copy_from_slice(data))?;
@@ -317,7 +358,21 @@ impl Handler for FakeHost {
 /// Starts the fake host on one end of an in-memory pipe and hands back the
 /// other end, plus what the server sees.
 pub fn start(policy: Policy) -> (tokio::io::DuplexStream, Arc<Mutex<Observed>>) {
-    let host = FakeHost::new(policy);
+    start_host(FakeHost::new(policy))
+}
+
+/// A jump: `direct-tcpip` on this host is spliced onto `to`, which is the
+/// client end of another [`start`].
+pub fn start_forwarding(
+    policy: Policy,
+    to: tokio::io::DuplexStream,
+) -> (tokio::io::DuplexStream, Arc<Mutex<Observed>>) {
+    let mut host = FakeHost::new(policy);
+    host.forward_to = Some(to);
+    start_host(host)
+}
+
+fn start_host(host: FakeHost) -> (tokio::io::DuplexStream, Arc<Mutex<Observed>>) {
     let observed = Arc::clone(&host.observed);
     let (client_side, server_side) = tokio::io::duplex(64 * 1024);
 

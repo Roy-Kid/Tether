@@ -342,3 +342,103 @@ async fn a_second_shell_opens_on_the_authenticated_session() {
     assert_eq!(read_text(&mut first).await, "one\n");
     assert_eq!(read_text(&mut second).await, "two\n");
 }
+
+async fn login(connection: Connection) -> tether_ssh::Session {
+    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
+    match connection.interactive(USER, &prompter).await.expect("login") {
+        Step::Authenticated(session) => session,
+        other => panic!("expected authentication, got {other:?}"),
+    }
+}
+
+async fn handshake(stream: tokio::io::DuplexStream, host: &str) -> Connection {
+    Connection::connect_over(
+        Endpoint::new(host, 22),
+        stream,
+        Arc::new(support::TrustAndRecord::new()),
+        support::client_config(),
+    )
+    .await
+    .expect("handshake")
+}
+
+/// `ProxyJump`: the destination's handshake runs on a channel the jump
+/// opened, and the shell that comes back is the destination's. The jump is
+/// authenticated on its own and never sees a shell.
+#[tokio::test]
+async fn a_jump_forwards_the_next_handshake_to_the_destination() {
+    let (destination, destination_seen) = support::start(Policy::default());
+    let (jump_stream, jump_seen) = support::start_forwarding(Policy::default(), destination);
+
+    let jump = login(handshake(jump_stream, "bastion.example").await).await;
+    let connection = Connection::connect_through(
+        jump,
+        Endpoint::new("lab.example", 22),
+        Arc::new(support::TrustAndRecord::new()),
+        support::client_config(),
+    )
+    .await
+    .expect("forwarded handshake");
+
+    let session = login(connection).await;
+    let mut shell = session.shell("xterm-256color", WindowSize::default()).await.expect("shell");
+    assert_eq!(read_text(&mut shell).await, BANNER);
+    assert!(jump_seen.lock().unwrap().pty_term.is_none(), "the jump must not have opened a shell");
+    assert_eq!(destination_seen.lock().unwrap().pty_term.as_deref(), Some("xterm-256color"));
+}
+
+/// Two hops, nearest last in the config and first on the wire: outer, then
+/// inner, then the machine the shell actually runs on.
+#[tokio::test]
+async fn two_jumps_are_authenticated_before_the_destination() {
+    let (destination, destination_seen) = support::start(Policy::default());
+    let (inner, _) = support::start_forwarding(Policy::default(), destination);
+    let (outer, _) = support::start_forwarding(Policy::default(), inner);
+
+    let outer = login(handshake(outer, "edge.example").await).await;
+    let inner = Connection::connect_through(
+        outer,
+        Endpoint::new("bastion.example", 22),
+        Arc::new(support::TrustAndRecord::new()),
+        support::client_config(),
+    )
+    .await
+    .expect("inner hop");
+    let inner = login(inner).await;
+    let destination = Connection::connect_through(
+        inner,
+        Endpoint::new("lab.example", 22),
+        Arc::new(support::TrustAndRecord::new()),
+        support::client_config(),
+    )
+    .await
+    .expect("destination");
+
+    let session = login(destination).await;
+    let mut shell = session.shell("xterm-256color", WindowSize::default()).await.expect("shell");
+    assert_eq!(read_text(&mut shell).await, BANNER);
+    assert_eq!(destination_seen.lock().unwrap().pty_term.as_deref(), Some("xterm-256color"));
+}
+
+/// A server that does not forward is a refused channel, not a rejected
+/// password. The two want different words in front of a person.
+#[tokio::test]
+async fn a_jump_that_will_not_forward_says_so() {
+    let (jump_stream, _) = support::start(Policy::default());
+    let jump = login(handshake(jump_stream, "bastion.example").await).await;
+
+    match Connection::connect_through(
+        jump,
+        Endpoint::new("lab.example", 22),
+        Arc::new(support::TrustAndRecord::new()),
+        support::client_config(),
+    )
+    .await
+    {
+        Err(SshError::Unreachable { endpoint, cause }) => {
+            assert!(endpoint.contains("lab.example"), "{endpoint}");
+            assert!(cause.contains("refused to forward"), "{cause}");
+        }
+        other => panic!("expected a refused forward, got {other:?}"),
+    }
+}

@@ -139,6 +139,12 @@ public abstract record SessionEnding
     public sealed record Lost(string Cause) : SessionEnding;
 }
 
+/// <summary>
+/// One hop in front of a <see cref="Destination"/>. Authenticated on its own,
+/// with its own secrets — a password for the destination is not offered here.
+/// </summary>
+public sealed record Jump(string Host, ushort Port, string User, IReadOnlyList<Secret> Secrets);
+
 /// <summary>Where a shell is going.</summary>
 public sealed record Destination(
     string Host,

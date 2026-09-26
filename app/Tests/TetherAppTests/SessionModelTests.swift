@@ -46,7 +46,7 @@ struct SessionModelTests {
     #expect(message(for: TetherError.cancelled) == "Cancelled.")
     #expect(
       message(for: TetherError.hostRejected(endpoint: "10.0.0.4:22"))
-        == "The host key was not trusted.")
+        == "The host key for 10.0.0.4:22 was not trusted.")
     #expect(message(for: TetherError.timedOut(millis: 10_000)).contains("10000"))
 
     #expect(message(for: TetherError.authenticationFailed(remaining: [])) == "Authentication failed.")

@@ -1,68 +1,48 @@
-<Window
-    x:Class="TetherApp.SettingsWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Settings">
-
-    <!--
-      Two panes, not a row of tabs (AppSettings.swift): a sidebar is the
-      same shape as the rest of the app, so the window a person already
-      knows how to read does not change its rules when they open
-      preferences. 680×420 is the Mac's ideal; the sidebar is 180.
-    -->
-    <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="180" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-
-        <!-- Sidebar. 180pt, the Mac's navigationSplitViewColumnWidth ideal. -->
-        <Grid Grid.Column="0" Background="{ThemeResource ChromeSidebarBrush}">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-
-            <ListView x:Name="SectionList"
-                      Grid.Row="0"
-                      SelectionMode="Single"
-                      SelectedIndex="0"
-                      IsItemClickEnabled="True"
-                      ItemClick="Section_Click"
-                      Padding="8,8"
-                      Background="Transparent">
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <Setter Property="MinHeight" Value="32" />
-                        <Setter Property="Padding" Value="10,0" />
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        <Setter Property="CornerRadius" Value="4" />
-                    </Style>
-                </ListView.ItemContainerStyle>
-                <ListView.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <FontIcon Glyph="{Binding Glyph}" FontSize="14"
-                                      Foreground="{ThemeResource ChromeSubtleBrush}"
-                                      VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding Title}" FontSize="13"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-
-            <Button x:Name="DoneButton"
-                    Grid.Row="1"
-                    Margin="8"
-                    HorizontalAlignment="Stretch"
-                    Click="Done_Click"
-                    Content="Done" />
-        </Grid>
-
-        <!-- Detail. The pane the sidebar selected. -->
-        <ScrollViewer Grid.Column="1" Padding="24,16">
-            <StackPanel x:Name="Pane" Spacing="16" />
-        </ScrollViewer>
-    </Grid>
+<Window x:Class="TetherApp.SettingsWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Settings">
+ <NavigationView x:Name="SettingsRoot" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed"
+  IsSettingsVisible="False" IsPaneToggleButtonVisible="False" OpenPaneLength="220"
+  Background="{ThemeResource ChromeWindowBrush}" SelectionChanged="Section_Changed">
+  <NavigationView.MenuItems>
+   <NavigationViewItem Content="Startup" Tag="startup" Icon="Play" IsSelected="True" />
+   <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
+   <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
+  </NavigationView.MenuItems>
+  <ScrollViewer Padding="{StaticResource SettingsPageInset}">
+   <StackPanel Spacing="{StaticResource SpaceSection}" MaxWidth="640" HorizontalAlignment="Stretch">
+    <TextBlock x:Name="PageHeading" Text="Startup" Style="{StaticResource SubtitleTextBlockStyle}" />
+    <Border x:Name="StartupPane" Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
+     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+     <StackPanel Spacing="{StaticResource SpaceGroup}">
+      <TextBlock Text="Default profile" Style="{StaticResource BodyStrongTextBlockStyle}" />
+      <TextBlock Text="Choose the shell to open when Tether starts or you open a new tab."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <ComboBox x:Name="ShellPicker" HorizontalAlignment="Stretch"
+       AutomationProperties.Name="Default profile" SelectionChanged="Shell_Changed" />
+      <TextBlock Text="WSL opens your default Linux distribution. PowerShell uses PowerShell 7 when available."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+     </StackPanel>
+    </Border>
+    <Border x:Name="AppearancePane" Visibility="Collapsed"
+     Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
+     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+     <StackPanel Spacing="{StaticResource SpaceGroup}">
+      <TextBlock Text="Application theme" Style="{StaticResource BodyStrongTextBlockStyle}" />
+      <TextBlock Text="Apply a theme to the window and terminal. Changes take effect immediately."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <ComboBox x:Name="ThemePicker" HorizontalAlignment="Stretch"
+       AutomationProperties.Name="Application theme" SelectionChanged="Theme_Changed">
+       <ComboBoxItem Content="Use system theme" Tag="system" />
+       <ComboBoxItem Content="Dark" Tag="dark" />
+       <ComboBoxItem Content="Light" Tag="light" />
+      </ComboBox>
+     </StackPanel>
+    </Border>
+    <StackPanel x:Name="ExtensionsPane" Visibility="Collapsed" Spacing="{StaticResource SpaceGroup}" />
+    <TextBlock x:Name="SaveProblem" Foreground="{ThemeResource ChromeSubtleBrush}"
+     TextWrapping="Wrap" Visibility="Collapsed" />
+   </StackPanel>
+  </ScrollViewer>
+ </NavigationView>
 </Window>

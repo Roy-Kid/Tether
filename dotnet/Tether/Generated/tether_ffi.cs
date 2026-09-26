@@ -1749,7 +1749,7 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
-     ulong uniffi_tether_ffi_fn_func_connect(RustBuffer @destination,ulong @trust,RustBuffer @secrets
+     ulong uniffi_tether_ffi_fn_func_connect(RustBuffer @destination,ulong @trust,RustBuffer @secrets,RustBuffer @jumps
     );
 
     #if NET8_0_OR_GREATER
@@ -1760,7 +1760,7 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
-     ulong uniffi_tether_ffi_fn_func_connect_cancellable(RustBuffer @destination,ulong @trust,RustBuffer @secrets,ulong @cancellation
+     ulong uniffi_tether_ffi_fn_func_connect_cancellable(RustBuffer @destination,ulong @trust,RustBuffer @secrets,RustBuffer @jumps,ulong @cancellation
     );
 
     #if NET8_0_OR_GREATER
@@ -3090,14 +3090,14 @@ static class _UniFFILib {
         }
         {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_connect();
-            if (checksum != 49467) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_connect` checksum `49467`, library returned `{checksum}`");
+            if (checksum != 34402) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_connect` checksum `34402`, library returned `{checksum}`");
             }
         }
         {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_connect_cancellable();
-            if (checksum != 17419) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_connect_cancellable` checksum `17419`, library returned `{checksum}`");
+            if (checksum != 29409) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_connect_cancellable` checksum `29409`, library returned `{checksum}`");
             }
         }
         {
@@ -6719,6 +6719,58 @@ class FfiConverterTypeHostIdentity: FfiConverterRustBuffer<HostIdentity> {
 
 
 /// <summary>
+/// One hop in front of [`Destination`], authenticated on its own.
+///
+/// First to last is the order OpenSSH visits a `ProxyJump` list: each hop
+/// is logged into before a channel to the next is opened. Its secrets are
+/// not the destination's.
+/// </summary>
+internal record Jump (
+    string Host, 
+    ushort Port, 
+    string User, 
+    Secret[] Secrets
+) : IDisposable {
+    public void Dispose() {
+    FFIObjectUtil.DisposeAll(
+            this.Host,
+            this.Port,
+            this.User,
+            this.Secrets);
+    }
+}
+
+class FfiConverterTypeJump: FfiConverterRustBuffer<Jump> {
+    public static FfiConverterTypeJump INSTANCE = new FfiConverterTypeJump();
+
+    public override Jump Read(BigEndianStream stream) {
+        return new Jump(
+            Host: FfiConverterString.INSTANCE.Read(stream),
+            Port: FfiConverterUInt16.INSTANCE.Read(stream),
+            User: FfiConverterString.INSTANCE.Read(stream),
+            Secrets: FfiConverterSequenceTypeSecret.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(Jump value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.Host)
+            + FfiConverterUInt16.INSTANCE.AllocationSize(value.Port)
+            + FfiConverterString.INSTANCE.AllocationSize(value.User)
+            + FfiConverterSequenceTypeSecret.INSTANCE.AllocationSize(value.Secrets);
+    }
+
+    public override void Write(Jump value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.Host, stream);
+            FfiConverterUInt16.INSTANCE.Write(value.Port, stream);
+            FfiConverterString.INSTANCE.Write(value.User, stream);
+            FfiConverterSequenceTypeSecret.INSTANCE.Write(value.Secrets, stream);
+    }
+}
+
+
+
+/// <summary>
 /// Which modifiers were held.
 ///
 /// No `command`: terminals do not send it, and a field that encoded to
@@ -10104,6 +10156,52 @@ class FfiConverterSequenceTypeFileEntry: FfiConverterRustBuffer<FileEntry[]> {
 
 
 
+class FfiConverterSequenceTypeJump: FfiConverterRustBuffer<Jump[]> {
+    public static FfiConverterSequenceTypeJump INSTANCE = new FfiConverterSequenceTypeJump();
+
+    public override Jump[]  Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        if (length == 0) {
+            return [];
+        }
+
+        var result = new Jump[length];
+        var readFn = FfiConverterTypeJump.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result[i] = readFn(stream);
+        }
+        return result;
+    }
+
+    public override int AllocationSize(Jump[]  value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeJump.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(Jump[] value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Length);
+        var writerFn = FfiConverterTypeJump.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
 class FfiConverterSequenceTypeLinkSpan: FfiConverterRustBuffer<LinkSpan[]> {
     public static FfiConverterSequenceTypeLinkSpan INSTANCE = new FfiConverterSequenceTypeLinkSpan();
 
@@ -10774,11 +10872,11 @@ internal static class TetherFfiMethods {
     /// forgetting it is a crash with no useful error.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> Connect(Destination @destination, HostTrust @trust, Secret[] @secrets) 
+   public static async Task<Session> Connect(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps) 
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
-        _UniFFILib.uniffi_tether_ffi_fn_func_connect(FfiConverterTypeDestination.INSTANCE.Lower(@destination), FfiConverterTypeHostTrust.INSTANCE.Lower(@trust), FfiConverterSequenceTypeSecret.INSTANCE.Lower(@secrets)),
+        _UniFFILib.uniffi_tether_ffi_fn_func_connect(FfiConverterTypeDestination.INSTANCE.Lower(@destination), FfiConverterTypeHostTrust.INSTANCE.Lower(@trust), FfiConverterSequenceTypeSecret.INSTANCE.Lower(@secrets), FfiConverterSequenceTypeJump.INSTANCE.Lower(@jumps)),
         // Poll
         (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_u64(future, continuation, data),
         // Complete
@@ -10797,11 +10895,11 @@ internal static class TetherFfiMethods {
     /// Cancellation-aware entry point; the original connect remains source compatible.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> ConnectCancellable(Destination @destination, HostTrust @trust, Secret[] @secrets, CancellationToken @cancellation) 
+   public static async Task<Session> ConnectCancellable(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps, CancellationToken @cancellation) 
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
-        _UniFFILib.uniffi_tether_ffi_fn_func_connect_cancellable(FfiConverterTypeDestination.INSTANCE.Lower(@destination), FfiConverterTypeHostTrust.INSTANCE.Lower(@trust), FfiConverterSequenceTypeSecret.INSTANCE.Lower(@secrets), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation)),
+        _UniFFILib.uniffi_tether_ffi_fn_func_connect_cancellable(FfiConverterTypeDestination.INSTANCE.Lower(@destination), FfiConverterTypeHostTrust.INSTANCE.Lower(@trust), FfiConverterSequenceTypeSecret.INSTANCE.Lower(@secrets), FfiConverterSequenceTypeJump.INSTANCE.Lower(@jumps), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation)),
         // Poll
         (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_u64(future, continuation, data),
         // Complete

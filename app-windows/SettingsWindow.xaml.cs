@@ -1,168 +1,134 @@
-// Settings, as two panes rather than a row of tabs.
-//
-// A tab strip puts every section on screen at once and then hides all but
-// one, which stops scaling the moment a third section exists. A sidebar is
-// the same shape as the rest of the app, so the window a person already
-// knows how to read does not change its rules when they open preferences.
-//
-// The Mac's `AppSettings` is `NavigationSplitView` with General /
-// Appearance / Security / Extensions. This is the same two columns: the
-// sidebar lists the sections a Windows host has something to put in.
-
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Tether;
+using TetherApp.Plugins;
 
 namespace TetherApp;
 
 public sealed partial class SettingsWindow : Window
 {
-    private sealed record Section(string Title, string Glyph, Action<StackPanel> Build);
+    private bool _loading = true;
+    private readonly PluginRegistry? _plugins;
 
-    private readonly IReadOnlyList<Section> _sections;
+    public SettingsWindow() : this(null) { }
 
-    public SettingsWindow()
+    public SettingsWindow(PluginRegistry? plugins)
     {
+        _plugins = plugins;
         InitializeComponent();
-
-        _sections = new List<Section>
-        {
-            new("General", "", BuildGeneral),
-            new("Appearance", "", BuildAppearance),
-        };
-        // Sections a platform has nothing to put in are not shown empty.
-        SectionList.ItemsSource = _sections.Select(s => s.Title)
-            .Select((title, i) => new { Title = title, Glyph = _sections[i].Glyph })
-            .ToList();
-
-        ExtendsContentIntoTitleBar = true;
-        SetTitleBar(null);
-
+        BuildExtensions();
+        foreach (var profile in AppSettings.KnownShells)
+            ShellPicker.Items.Add(new ComboBoxItem { Content = profile.Name, Tag = profile.Program });
+        // Preserve existing custom program preferences instead of silently replacing them.
+        if (!AppSettings.KnownShells.Any(profile => profile.Program == AppSettings.Current.Shell))
+            ShellPicker.Items.Add(new ComboBoxItem { Content = AppSettings.Current.Shell, Tag = AppSettings.Current.Shell });
+        ShellPicker.SelectedItem = ShellPicker.Items.Cast<ComboBoxItem>()
+            .First(item => (string)item.Tag == AppSettings.Current.Shell);
+        _loading = false;
+        AppSettings.Changed += ApplyAppearance;
+        SettingsRoot.ActualThemeChanged += (_, _) => UpdateTitleBar();
+        SettingsRoot.Loaded += (_, _) => UpdateTitleBar();
+        Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
+        ApplyAppearance();
         Activate();
-        ShowPane(0);
     }
 
-    private void Section_Click(object sender, ItemClickEventArgs e)
+    private void ApplyAppearance()
     {
-        var index = SectionList.Items.IndexOf(e.ClickedItem);
-        if (index >= 0) ShowPane(index);
+        _loading = true;
+        SettingsRoot.RequestedTheme = Appearance.RequestedTheme;
+        ThemePicker.SelectedItem = ThemePicker.Items.Cast<ComboBoxItem>()
+            .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.Appearance) ?? ThemePicker.Items[0];
+        _loading = false;
+        UpdateTitleBar();
     }
 
-    private void ShowPane(int index)
+    private void UpdateTitleBar()
     {
-        Pane.Children.Clear();
-        if (index >= 0 && index < _sections.Count) _sections[index].Build(Pane);
+        var background = ((SolidColorBrush)SettingsRoot.Background).Color;
+        var foreground = ((SolidColorBrush)PageHeading.Foreground).Color;
+        var titleBar = AppWindow.TitleBar;
+        titleBar.BackgroundColor = titleBar.InactiveBackgroundColor = background;
+        titleBar.ButtonBackgroundColor = titleBar.ButtonInactiveBackgroundColor = background;
+        titleBar.ForegroundColor = titleBar.ButtonForegroundColor = foreground;
+        titleBar.InactiveForegroundColor = titleBar.ButtonInactiveForegroundColor =
+            ((SolidColorBrush)SaveProblem.Foreground).Color;
     }
 
-    private void Done_Click(object sender, RoutedEventArgs e) => Close();
-
-    /// <summary>
-    /// What the app does on its own, before anyone has asked for anything.
-    /// `GeneralSettings` on the Mac — and the shell a local terminal opens,
-    /// which is this machine's question and no other's.
-    /// </summary>
-    private static void BuildGeneral(StackPanel pane)
+    private void Section_Changed(NavigationView sender, NavigationViewSelectionChangedEventArgs e)
     {
-        pane.Children.Add(Heading("General"));
-        pane.Children.Add(Group("At launch", contents =>
+        if (StartupPane is null || AppearancePane is null || ExtensionsPane is null) return;
+        var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
+        PageHeading.Text = tag switch { "appearance" => "Appearance", "extensions" => "Extensions", _ => "Startup" };
+        StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
+        AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
+        ExtensionsPane.Visibility = tag == "extensions" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void BuildExtensions()
+    {
+        ExtensionsPane.Children.Clear();
+        if (_plugins is null || _plugins.Plugins.Count == 0)
         {
-            var open = new CheckBox
+            ExtensionsPane.Children.Add(new TextBlock
             {
-                Content = "Open a terminal at launch",
-                IsChecked = AppSettings.Current.OpenLocalOnStart,
+                Text = "No extensions are installed.",
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return;
+        }
+        foreach (var plugin in _plugins.Plugins)
+        {
+            var toggle = new ToggleSwitch
+            {
+                Header = plugin.Metadata.Name,
+                IsOn = _plugins.IsEnabled(plugin.Metadata.Id),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
             };
-            open.Checked += (_, _) => Save(shell: null, open: true);
-            open.Unchecked += (_, _) => Save(shell: null, open: false);
-            contents.Children.Add(open);
-        }));
-
-        pane.Children.Add(Group("Shell", contents =>
-        {
-            var combo = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
-            var selected = 0;
-            for (var i = 0; i < AppSettings.KnownShells.Count; i++)
+            AutomationProperties.SetName(toggle, plugin.Metadata.Name);
+            var id = plugin.Metadata.Id;
+            toggle.Toggled += (_, _) =>
             {
-                var (program, name) = AppSettings.KnownShells[i];
-                combo.Items.Add(name);
-                if (program == AppSettings.Current.Shell) selected = i;
-            }
-            combo.SelectedIndex = selected;
-            combo.SelectionChanged += (_, _) =>
-            {
-                var i = combo.SelectedIndex;
-                if (i < 0 || i >= AppSettings.KnownShells.Count) return;
-                Save(shell: AppSettings.KnownShells[i].Program, open: null);
+                if (_loading) return;
+                _plugins.SetEnabled(id, toggle.IsOn);
             };
-            contents.Children.Add(combo);
-        }));
-    }
-
-    /// <summary>
-    /// How the window and the terminal look. `AppearanceSettings` on the
-    /// Mac: the window follows the system unless told otherwise, and the
-    /// terminal is its own question because a terminal is a palette.
-    /// </summary>
-    private static void BuildAppearance(StackPanel pane)
-    {
-        pane.Children.Add(Heading("Appearance"));
-        pane.Children.Add(Group("Appearance", contents =>
-        {
-            contents.Children.Add(Caption("Terminal"));
-            // The terminal is the palette's (Decision 0011). Until a theme
-            // picker lands, dark is what Palette.dark is and what every
-            // other terminal on this machine opens with.
-            var dark = new RadioButton { Content = "Dark", IsChecked = true, GroupName = "TerminalTheme" };
-            var light = new RadioButton { Content = "Light", GroupName = "TerminalTheme" };
-            contents.Children.Add(dark);
-            contents.Children.Add(light);
-        }));
-    }
-
-    private static void Save(string? shell, bool? open)
-    {
-        var current = AppSettings.Current;
-        var next = current with
-        {
-            Shell = shell ?? current.Shell,
-            OpenLocalOnStart = open ?? current.OpenLocalOnStart,
-        };
-        next.Save();
-    }
-
-    private static UIElement Heading(string text) => new TextBlock
-    {
-        Text = text,
-        FontSize = 20,
-        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-    };
-
-    private static TextBlock Caption(string text) => new()
-    {
-        Text = text,
-        FontSize = 12,
-        Opacity = 0.7,
-    };
-
-    /// <summary>A titled group, the Windows shape of a `Form` section.</summary>
-    private static UIElement Group(string title, Action<StackPanel> build)
-    {
-        var body = new StackPanel { Spacing = 8 };
-        build(body);
-        return new Border
-        {
-            Background = (SolidColorBrush)Application.Current.Resources["ChromeSidebarBrush"],
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(16),
-            Child = new StackPanel
+            var card = new StackPanel { Spacing = (double)Application.Current.Resources["SpaceGroup"] };
+            card.Children.Add(toggle);
+            card.Children.Add(new TextBlock
             {
-                Spacing = 10,
-                Children =
-                {
-                    new TextBlock { Text = title, FontSize = 12, Opacity = 0.7 },
-                    body,
-                },
-            },
-        };
+                Text = plugin.Metadata.Summary,
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+            ExtensionsPane.Children.Add(new Border
+            {
+                Background = (Brush)Application.Current.Resources["ChromeRaisedBrush"],
+                CornerRadius = (CornerRadius)Application.Current.Resources["RowRadius"],
+                Padding = (Thickness)Application.Current.Resources["SettingsCardInset"],
+                BorderThickness = new Thickness(1),
+                BorderBrush = (Brush)Application.Current.Resources["ChromeStrokeBrush"],
+                Child = card,
+            });
+        }
+    }
+
+    private void Theme_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ThemePicker.SelectedItem is not ComboBoxItem { Tag: string theme }) return;
+        ShowSaveResult((AppSettings.Current with { Appearance = theme }).Save());
+    }
+
+    private void Shell_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ShellPicker.SelectedItem is not ComboBoxItem { Tag: string program }) return;
+        ShowSaveResult((AppSettings.Current with { Shell = program }).Save());
+    }
+
+    private void ShowSaveResult(bool saved)
+    {
+        SaveProblem.Text = "Couldn't save settings. This selection applies until Tether closes.";
+        SaveProblem.Visibility = saved ? Visibility.Collapsed : Visibility.Visible;
     }
 }

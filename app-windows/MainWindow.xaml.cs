@@ -1,37 +1,56 @@
-// The macOS shape, in the same order and the same sizes
-// (`WorkspaceChrome.swift`, `Chrome.swift`):
-//
-//   WorkspaceTabBar  36   top,    sidebar surface, bottom divider
-//   canvas           *    middle, 12pt inset
-//   HostStatusBar    24   bottom, sidebar surface, top divider
-//
-// Terminal tabs carry no symbol and no global + or close: the close box
-// lives on the chip and appears under the pointer. New Terminal is Ctrl+N,
-// Close Tab is Ctrl+W — the menu equivalents of Cmd+N / Cmd+W.
-
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Shapes;
 using Tether;
+using TetherApp.Files;
+using TetherApp.Plugins;
 
 namespace TetherApp;
 
 public sealed partial class MainWindow : Window
 {
-    private const double TabHeight = 36;
-    private const double TabTitleWidth = 180;
-    private const double CloseWidth = 18;
-
+    private bool _refreshingTabs;
+    private bool _revealPending;
+    private bool _connecting;
+    private Window? _hostPicker;
     private readonly Workspace _workspace = new();
 
     public MainWindow()
     {
         InitializeComponent();
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(TitleBarDragArea);
+        WorkspaceRoot.Loaded += (_, _) =>
+        {
+            UpdateTitleBar();
+            WorkspaceRoot.XamlRoot.Changed += (_, _) => UpdateTitleBar();
+        };
+        WorkspaceRoot.ActualThemeChanged += (_, _) =>
+        {
+            UpdateTitleBar();
+            ApplyTerminalPalette();
+        };
+        AppWindow.Changed += (_, e) =>
+        {
+            if (e.DidSizeChange || e.DidPresenterChange) UpdateTitleBar();
+        };
+        TabStrip.SizeChanged += (_, _) => QueueSelectedTabReveal();
+        Closed += (_, _) => CompositionTarget.Rendering -= RevealSelectedTab;
+        Closed += async (_, _) => await _workspace.DisposeAsync();
+        BuildPluginButtons();
+        App.Plugins.Changed += OnPluginsChanged;
+        Closed += (_, _) => App.Plugins.Changed -= OnPluginsChanged;
+#if DEBUG
+        if (TryShowPreview()) return;
+#endif
         AppSettings.Load();
+        AppSettings.Changed += ApplyAppearance;
+        Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
+        ApplyAppearance();
         _workspace.Changed += OnWorkspaceChanged;
         Content.KeyDown += OnKeyDown;
         // Activation hands focus back to the XAML island; the terminal's
@@ -40,7 +59,8 @@ public sealed partial class MainWindow : Window
         {
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
-                _workspace.Active?.Surface.FocusTerminal();
+                if (!_connecting && _workspace.Active?.OpenInspector is null)
+                    _workspace.Active?.Surface.FocusTerminal();
             }
         };
         _ = OpenFirstTabAsync();
@@ -51,190 +71,473 @@ public sealed partial class MainWindow : Window
         await _workspace.AddAsync();
     }
 
-    /// <summary>
-    /// Rebuilds the tab strip and swaps the active surface in. The strip is
-    /// a row of chips (WorkspaceTabBar.tabChip): title, and a close box that
-    /// appears under the pointer or on the selected tab. The close space is
-    /// held whether or not the cross is drawn, so a tab does not grow under
-    /// the pointer and push the strip along.
-    /// </summary>
+    private void ApplyAppearance()
+    {
+        WorkspaceRoot.RequestedTheme = Appearance.RequestedTheme;
+        ApplyTerminalPalette();
+        UpdateTitleBar();
+    }
+
+    private void ApplyTerminalPalette()
+    {
+        var palette = WorkspaceRoot.ActualTheme == ElementTheme.Dark ? Palette.Dark : Palette.Light;
+        _workspace.CurrentPalette = palette;
+        Appearance.SetCanvas(palette);
+        foreach (var tab in _workspace.Tabs) tab.Surface.SetPalette(palette);
+    }
+
+    private void UpdateTitleBar()
+    {
+        var titleBar = AppWindow.TitleBar;
+        var scale = WorkspaceRoot.XamlRoot?.RasterizationScale ?? 1;
+        CaptionLeftInset.Width = new GridLength(titleBar.LeftInset / scale);
+        CaptionRightInset.Width = new GridLength(titleBar.RightInset / scale);
+        // Caption height alone clips the tab strip against the top edge.
+        WindowHeader.MinHeight = titleBar.Height / scale + 8;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonHoverBackgroundColor = ThemeColor("SubtleFillColorSecondaryBrush");
+        titleBar.ButtonPressedBackgroundColor = ThemeColor("SubtleFillColorTertiaryBrush");
+        // Resolve in the window's theme, including the offline light/dark preview.
+        var foreground = ((SolidColorBrush)HostName.Foreground).Color;
+        titleBar.ButtonForegroundColor = foreground;
+        titleBar.ButtonHoverForegroundColor = foreground;
+        titleBar.ButtonInactiveForegroundColor = ((SolidColorBrush)StatusText.Foreground).Color;
+    }
+
+    private static global::Windows.UI.Color ThemeColor(string key) =>
+        Application.Current.Resources[key] is SolidColorBrush brush
+            ? brush.Color
+            : ((SolidColorBrush)Application.Current.Resources["ChromeSubtleBrush"]).Color;
+
     private void OnWorkspaceChanged()
     {
-        TabStrip.Children.Clear();
-        for (var i = 0; i < _workspace.Tabs.Count; i++)
+        _refreshingTabs = true;
+        try
         {
-            TabStrip.Children.Add(BuildChip(_workspace.Tabs[i], i == _workspace.ActiveIndex, i));
+            // Retain native tab containers and keyboard focus when selection changes.
+            foreach (var removed in TabStrip.TabItems.OfType<TabViewItem>()
+                .Where(item => item.Tag is Tab tab && !_workspace.Tabs.Contains(tab)).ToList())
+                TabStrip.TabItems.Remove(removed);
+            foreach (var tab in _workspace.Tabs)
+            {
+                var item = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(item => item.Tag == tab);
+                if (item is null)
+                {
+                    item = CreateTab(tab.Title);
+                    item.Tag = tab;
+                    TabStrip.TabItems.Add(item);
+                }
+                ((TextBlock)item.Header).Text = tab.Title;
+                AutomationProperties.SetName(item, tab.Title);
+                ToolTipService.SetToolTip(item, tab.Title);
+            }
+            TabStrip.SelectedIndex = _workspace.ActiveIndex;
         }
-
-        if (_workspace.Active is { } current)
+        finally { _refreshingTabs = false; }
+        var current = _workspace.Active;
+        // A status/title refresh must not unload the active terminal and
+        // hide its native child window. Reparent only when switching tabs.
+        if (TerminalHostPlaceholder.Children.FirstOrDefault() != current?.Surface)
         {
             TerminalHostPlaceholder.Children.Clear();
-            TerminalHostPlaceholder.Children.Add(current.Surface);
+            if (current is not null) TerminalHostPlaceholder.Children.Add(current.Surface);
         }
-
+        if (current is not null)
+        {
+            Wire(current);
+        }
         RefreshStatusBar();
+        UpdateInspector();
     }
 
-    private UIElement BuildChip(Tab tab, bool selected, int index)
+    private void BuildPluginButtons()
     {
-        var title = new TextBlock
+        PluginButtons.Children.Clear();
+        foreach (var plugin in App.Plugins.Plugins.OfType<ITabPlugin>()
+            .Where(plugin => plugin.Accessory.Placement == AccessoryPlacement.Inspector && App.Plugins.IsEnabled(plugin.Metadata.Id)))
         {
-            Text = tab.Title,
-            FontSize = 12,
-            Foreground = BrushOf(selected ? "ChromeTextBrush" : "ChromeSubtleBrush"),
-            MaxWidth = TabTitleWidth,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
-        var close = new Button
-        {
-            Width = CloseWidth,
-            Height = TabHeight,
-            Padding = new Thickness(0),
-            Margin = new Thickness(0),
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Content = new FontIcon
+            var button = new ToggleButton
             {
-                Glyph = "",
-                FontSize = 10,
-                Foreground = BrushOf("ChromeSubtleBrush"),
-                VerticalAlignment = VerticalAlignment.Center,
-            },
-            Opacity = selected ? 1 : 0,
-            IsHitTestVisible = selected,
-        };
-        ToolTipService.SetToolTip(close, "Close tab");
-        AutomationProperties.SetName(close, "Close " + tab.Title);
-        var captured = index;
-        close.Click += async (_, _) =>
-        {
-            await _workspace.CloseAsync(captured);
-            if (_workspace.Tabs.Count == 0) await _workspace.AddAsync();
-        };
-
-        var row = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        row.Children.Add(title);
-        row.Children.Add(close);
-
-        var chip = new Grid
-        {
-            Height = TabHeight,
-            MinWidth = 0,
-            Padding = new Thickness(10, 0, 4, 0),
-            MaxWidth = TabTitleWidth + CloseWidth + 24,
-            Background = selected
-                ? BrushOf("ChromeRaisedBrush")
-                : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Stretch,
-        };
-        chip.Children.Add(row);
-
-        // The 2pt accent rule along the chip's bottom edge is how the
-        // selection reads without a second titlebar (WorkspaceTabBar).
-        if (selected)
-        {
-            chip.Children.Add(new Rectangle
-            {
-                Height = 2,
-                Fill = BrushOf("AccentBrush"),
-                VerticalAlignment = VerticalAlignment.Bottom,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            });
+                Style = (Style)Application.Current.Resources["ChromeIconToggleStyle"],
+                Content = plugin.Accessory.Glyph,
+                IsChecked = _workspace.Active?.OpenInspector == plugin.Metadata.Id,
+                Tag = plugin.Metadata.Id,
+            };
+            ToolTipService.SetToolTip(button, plugin.Accessory.Name);
+            AutomationProperties.SetName(button, plugin.Accessory.Name);
+            button.Click += (_, _) => ToggleInspector(plugin.Metadata.Id);
+            PluginButtons.Children.Add(button);
         }
-
-        ToolTipService.SetToolTip(chip, tab.Title);
-        chip.PointerEntered += (_, _) =>
-        {
-            close.Opacity = 1;
-            close.IsHitTestVisible = true;
-        };
-        chip.PointerExited += (_, _) =>
-        {
-            if (!selected)
-            {
-                close.Opacity = 0;
-                close.IsHitTestVisible = false;
-            }
-        };
-        var pick = index;
-        chip.PointerPressed += (_, _) => _workspace.Select(pick);
-        return chip;
     }
 
-    /// <summary>
-    /// The 24pt host switcher and connection status (HostStatusBar): the
-    /// host control leads, the status mark follows, settings is on the
-    /// trailing edge. Silence is the connected state.
-    /// </summary>
+    private void OnPluginsChanged()
+    {
+        foreach (var tab in _workspace.Tabs)
+        {
+            if (tab.OpenInspector is { } open && !App.Plugins.IsEnabled(open)) tab.OpenInspector = null;
+        }
+        BuildPluginButtons();
+        _ = DetachDisabledAsync();
+        UpdateInspector();
+    }
+
+    private async Task DetachDisabledAsync()
+    {
+        foreach (var tab in _workspace.Tabs)
+        {
+            foreach (var plugin in App.Plugins.Plugins.Where(plugin => !App.Plugins.IsEnabled(plugin.Metadata.Id)))
+                await tab.DetachAsync(plugin.Metadata.Id);
+        }
+    }
+
+    private void ToggleInspector(string id)
+    {
+#if DEBUG
+        if (_preview)
+        {
+            BuildPluginButtons();
+            return;
+        }
+#endif
+        if (_workspace.Active is not { } tab) return;
+        tab.OpenInspector = tab.OpenInspector == id ? null : id;
+        BuildPluginButtons();
+        UpdateInspector();
+    }
+
+    private void UpdateInspector()
+    {
+        InspectorHost.Child = null;
+        var plugin = InspectorPlugin();
+        var tab = _workspace.Active;
+        var visible = plugin is not null && tab is not null;
+        InspectorHost.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (!visible || tab is null || plugin is null) return;
+        var attachment = tab.Attach(plugin, Context(tab, plugin));
+        InspectorHost.Child = attachment.View;
+        _ = attachment.ShownAsync();
+    }
+
+    private ITabPlugin? InspectorPlugin() =>
+        _workspace.Active?.OpenInspector is not { } id ? null
+        : App.Plugins.Plugins.OfType<ITabPlugin>().FirstOrDefault(plugin =>
+            plugin.Metadata.Id == id && App.Plugins.IsEnabled(plugin.Metadata.Id)
+            && plugin.Accessory.Placement == AccessoryPlacement.Inspector);
+
+    private void HideInspector(Tab tab)
+    {
+        tab.OpenInspector = null;
+        if (_workspace.Active == tab)
+        {
+            BuildPluginButtons();
+            UpdateInspector();
+        }
+    }
+
+    private TabContext Context(Tab tab, ITabPlugin plugin) => new()
+    {
+        Model = tab.Model,
+        InsertText = text => tab.Model.Send(new TerminalInput.Paste(text)),
+        WorkingDirectory = () => tab.Model.WorkingDirectory,
+        Show = () =>
+        {
+            tab.OpenInspector = plugin.Metadata.Id;
+            if (_workspace.Active == tab)
+            {
+                BuildPluginButtons();
+                UpdateInspector();
+            }
+        },
+        Dismiss = () => HideInspector(tab),
+        WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
+        DialogRoot = () => WorkspaceRoot.XamlRoot,
+        Overlay = tab.Surface.SetOverlayVisible,
+    };
+
+    private void Wire(Tab tab)
+    {
+        tab.Surface.QueryLink = link => QueryLinkAsync(tab, link);
+        tab.Surface.TryOpenLink = link => TryOpenLink(tab, link);
+        tab.Surface.LinkCommands = link => LinkCommands(tab, link);
+        tab.Surface.ReceiveDrop = paths => ReceiveDropAsync(tab, paths);
+    }
+
+    private IEnumerable<ITabAttachment> Interested(Tab tab)
+    {
+        foreach (var plugin in App.Plugins.Plugins.OfType<ITabPlugin>())
+        {
+            if (!App.Plugins.IsEnabled(plugin.Metadata.Id)) continue;
+            yield return tab.Attach(plugin, Context(tab, plugin));
+        }
+    }
+
+    private async Task<bool?> QueryLinkAsync(Tab tab, TerminalLink link)
+    {
+        foreach (var attachment in Interested(tab))
+        {
+            if (attachment.ActionsFor(link)?.Exists is not { } exists) continue;
+            return await exists(CancellationToken.None);
+        }
+        return null;
+    }
+
+    private bool TryOpenLink(Tab tab, TerminalLink link)
+    {
+        foreach (var attachment in Interested(tab))
+        {
+            if (attachment.ActionsFor(link)?.Open is not { } open) continue;
+            _ = open(CancellationToken.None);
+            return true;
+        }
+        return false;
+    }
+
+    private IReadOnlyList<(string Title, Action Run)> LinkCommands(Tab tab, TerminalLink link)
+    {
+        var commands = new List<(string, Action)>();
+        foreach (var attachment in Interested(tab))
+        {
+            foreach (var command in attachment.ActionsFor(link)?.Commands ?? [])
+            {
+                var run = command.Run;
+                commands.Add((command.Title, () => _ = run(CancellationToken.None)));
+            }
+        }
+        return commands;
+    }
+
+    private async Task ReceiveDropAsync(Tab tab, IReadOnlyList<string> paths)
+    {
+        foreach (var attachment in Interested(tab))
+        {
+            if (attachment.Receive(paths)) return;
+        }
+        var style = FilesPaths.StyleFor(tab.Model.IsRemote, tab.Model.IsWsl, tab.Model.LocalProfile);
+        if (style == QuoteStyle.Cmd && paths.Any(FilesPaths.CmdUnsafe)) return;
+        tab.Model.Send(new TerminalInput.Paste(string.Join(" ", paths.Select(path => FilesPaths.Quote(path, style))) + " "));
+    }
+
+    private void InspectorResize_DragDelta(object sender, DragDeltaEventArgs e)
+    {
+        var minimum = (double)Application.Current.Resources["FilesPaneMinWidth"];
+        InspectorHost.Width = Math.Clamp(InspectorHost.ActualWidth - e.HorizontalChange, minimum, Math.Max(minimum, WorkspaceRoot.ActualWidth * 0.7));
+    }
+
+    private TabViewItem CreateTab(string title)
+    {
+        var item = new TabViewItem
+        {
+            Header = new TextBlock
+            {
+                Text = title,
+                FontSize = (double)Application.Current.Resources["TitleSize"],
+                MaxWidth = (double)Application.Current.Resources["TabTitleWidth"],
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            },
+        };
+        AutomationProperties.SetName(item, title);
+        ToolTipService.SetToolTip(item, title);
+        return item;
+    }
+
+    private void Tab_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        QueueSelectedTabReveal();
+        if (!_refreshingTabs && TabStrip.SelectedItem is TabViewItem { Tag: Tab tab })
+        {
+            var index = _workspace.Tabs.ToList().IndexOf(tab);
+            if (index >= 0 && index != _workspace.ActiveIndex) _workspace.Select(index);
+        }
+    }
+
+    private void QueueSelectedTabReveal()
+    {
+        if (_revealPending) return;
+        _revealPending = true;
+        // Initial window sizing can invalidate a scroll request made during Loaded.
+        CompositionTarget.Rendering += RevealSelectedTab;
+    }
+
+    private void RevealSelectedTab(object? sender, object e)
+    {
+        CompositionTarget.Rendering -= RevealSelectedTab;
+        _revealPending = false;
+        if (TabStrip.SelectedItem is TabViewItem selected)
+            RevealTab(TabStrip, selected);
+    }
+
+    private static bool RevealTab(DependencyObject parent, TabViewItem selected)
+    {
+        if (parent is ListView list)
+        {
+            list.ScrollIntoView(selected);
+            return true;
+        }
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            if (RevealTab(VisualTreeHelper.GetChild(parent, i), selected)) return true;
+        return false;
+    }
+
+    private async void Tab_CloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs e)
+    {
+        // WinUI raises this for the close button, middle click and Ctrl+F4.
+#if DEBUG
+        if (_preview) { TabStrip.TabItems.Remove(e.Tab); return; }
+#endif
+        if (e.Tab.Tag is not Tab tab) return;
+        await CloseTabAsync(tab);
+    }
+
+    private async void Tab_AddRequested(TabView sender, object args)
+    {
+#if DEBUG
+        if (_preview) { TabStrip.TabItems.Add(CreateTab("PowerShell")); return; }
+#endif
+        await _workspace.AddAsync();
+    }
+
     private void RefreshStatusBar()
     {
         var model = _workspace.Active?.Model;
-        var title = _workspace.Active?.Title ?? "localhost";
-        var hasHost = title.Length > 0 && title != "localhost";
-        HostName.Text = hasHost ? title : "Choose host";
-        ToolTipService.SetToolTip(
-            HostButton,
-            model?.LastError is { } err && err.Length > 0 ? err : HostName.Text);
-
-        var live = model?.CurrentFrame is not null;
-        StatusDot.Fill = BrushOf(live ? "AccentBrush" : "ChromeSubtleBrush");
-
-        StatusMark.Children.Clear();
+        HostName.Text = _workspace.Active?.Title ?? "Choose host";
+        var live = model?.Status == "Connected";
+        StatusDot.Fill = (Brush)Application.Current.Resources[live ? "SuccessBrush" : "ChromeSubtleBrush"];
+        // The host name is the label. A generic "Disconnected" beside it says
+        // nothing the dot does not; a real failure still has its own sentence.
+        StatusText.Text = model?.LastError ?? "";
+        AutomationProperties.SetName(HostButton, "Host, " + HostName.Text);
+        AutomationProperties.SetHelpText(HostButton, HostName.Text);
+        ToolTipService.SetToolTip(HostButton, model?.LastError ?? HostName.Text);
     }
 
-    /// <summary>
-    /// A theme brush. `Resources[key]` does not walk `ThemeDictionaries`, so
-    /// a lookup that way returns null and every colour falls back to
-    /// transparent — which is how a dark terminal becomes a white window.
-    /// </summary>
-    private static SolidColorBrush BrushOf(string key)
-    {
-        var themed = (ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"];
-        return themed[key] as SolidColorBrush
-            ?? new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-    }
+    private void Connect_Click(object sender, RoutedEventArgs e) => ShowHostPicker();
 
     /// <summary>
-    /// The host control is the picker (HostStatusBar → HostPicker). The
-    /// list is `~/.ssh/config` and nothing else (Decisions/0009).
+    /// A separate window, not a flyout. A flyout is painted in this window's
+    /// XAML island, under the terminal's child HWND, and hiding that child
+    /// to reveal it blanks the shell and shifts it.
     /// </summary>
-    private void Connect_Click(object sender, RoutedEventArgs e)
+    private void ShowHostPicker()
     {
-        if (HostPickerPanel.Visibility == Visibility.Visible)
+        if (_hostPicker is not null)
         {
-            HostPickerPanel.Visibility = Visibility.Collapsed;
+            _hostPicker.Close();
             return;
         }
-        HostPickerPanel.Visibility = Visibility.Visible;
-        ReloadHostPicker();
-        HostQuery.Focus(FocusState.Programmatic);
+
+        var query = new TextBox { PlaceholderText = "Find a host…" };
+        var problem = new TextBlock
+        {
+            Text = "No matching hosts.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            Visibility = Visibility.Collapsed,
+        };
+        var list = new ListView
+        {
+            MaxHeight = (double)Application.Current.Resources["PickerListHeight"],
+            SelectionMode = ListViewSelectionMode.Single,
+            IsItemClickEnabled = true,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+        };
+
+        void Reload()
+        {
+            IReadOnlyList<HostEntry> all;
+#if DEBUG
+            if (_preview) all = PreviewHosts;
+            else
+#endif
+            try { all = SshConfig.Load(); }
+            catch (Exception ex)
+            {
+                problem.Text = ex.Message;
+                problem.Visibility = Visibility.Visible;
+                list.Items.Clear();
+                list.Visibility = Visibility.Collapsed;
+                return;
+            }
+            problem.Text = "No matching hosts.";
+            list.Items.Clear();
+            foreach (var host in SshConfig.Filter(all, query.Text))
+                list.Items.Add(new HostRow(host));
+            var any = list.Items.Count > 0;
+            problem.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+            list.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        query.TextChanged += (_, _) => Reload();
+        query.KeyDown += async (_, e) =>
+        {
+            if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up)
+            {
+                if (list.Items.Count > 0)
+                {
+                    var step = e.Key == Windows.System.VirtualKey.Down ? 1 : -1;
+                    list.SelectedIndex = Math.Clamp(list.SelectedIndex + step, 0, list.Items.Count - 1);
+                    list.ScrollIntoView(list.SelectedItem);
+                }
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Enter && RowHost(list.SelectedItem) is { } selected)
+            {
+                e.Handled = true;
+                await ChooseHostAsync(selected);
+            }
+        };
+        list.ItemClick += async (_, e) =>
+        {
+            if (RowHost(e.ClickedItem) is { } host) await ChooseHostAsync(host);
+        };
+        list.Tapped += async (_, _) =>
+        {
+            if (RowHost(list.SelectedItem) is { } host) await ChooseHostAsync(host);
+        };
+
+        var panel = new StackPanel { Spacing = 8, Padding = new Thickness(12) };
+        panel.Children.Add(query);
+        panel.Children.Add(problem);
+        panel.Children.Add(list);
+
+        var window = new Window { Title = "Hosts", Content = panel };
+        var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForDialog();
+        presenter.SetBorderAndTitleBar(true, false);
+        presenter.IsResizable = false;
+        presenter.IsMinimizable = false;
+        presenter.IsMaximizable = false;
+        window.AppWindow.SetPresenter(presenter);
+        const int width = 320, height = 420;
+        window.AppWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
+        WindowPlacement.Above(this, HostButton, window, width, height);
+        WindowPlacement.Own(window);
+        window.Closed += (_, _) => { if (_hostPicker == window) _hostPicker = null; };
+        _hostPicker = window;
+        Reload();
+        window.Activate();
+        query.Focus(FocusState.Programmatic);
     }
 
-    private void HostQuery_Changed(object sender, TextChangedEventArgs e) => ReloadHostPicker();
-
-    private void ReloadHostPicker()
+    /// <summary>The row a click lands on. A <see cref="ListView"/> wraps whatever was added, so the host is not the clicked object itself.</summary>
+    private static HostEntry? RowHost(object? item) => item switch
     {
-        var all = SshConfig.Load();
-        var matches = SshConfig.Filter(all, HostQuery.Text);
-        HostList.ItemsSource = matches;
-        HostProblem.Visibility = matches.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        HostProblem.Text = all.Count == 0
-            ? "No hosts in ~/.ssh/config."
-            : "No matching hosts.";
+        HostRow row => row.Host,
+        ListViewItem { Content: HostRow row } => row.Host,
+        _ => null,
+    };
+
+    private sealed class HostRow(HostEntry host)
+    {
+        public HostEntry Host { get; } = host;
+        public override string ToString() => host.Label;
     }
 
-    private async void Host_Click(object sender, ItemClickEventArgs e)
+    private async Task ChooseHostAsync(HostEntry host)
     {
-        if (e.ClickedItem is not HostEntry host) return;
-        HostPickerPanel.Visibility = Visibility.Collapsed;
+        _hostPicker?.Close();
+#if DEBUG
+        if (_preview) { HostName.Text = host.Label; return; }
+#endif
         await OpenHostAsync(host);
     }
 
@@ -245,40 +548,67 @@ public sealed partial class MainWindow : Window
         tab.Title = host.Alias;
         OnWorkspaceChanged();
 
+        if (host.JumpError is { } problem)
+        {
+            tab.Model.Fail(problem);
+            OnWorkspaceChanged();
+            return;
+        }
+
         var prompter = new SessionModel.PromptDialog(Content.XamlRoot);
         var destination = new Destination(
             host.HostName,
             host.Port ?? 22,
             host.User ?? Environment.UserName);
-        // An `IdentityFile` in the ssh config is already a credential, so a
-        // password is not required to start the handshake — the same thing
-        // `ssh host` does (HostStore.swift).
-        var secrets = host.IdentityFile is { Length: > 0 } key
-            ? new Secret[] { new Secret.PrivateKey(File.ReadAllText(key)), new Secret.Interactive(prompter) }
-            : new Secret[] { new Secret.Interactive(prompter) };
-
-        var ok = await tab.Model.ConnectAsync(Content.XamlRoot, destination, secrets);
-        if (!ok) tab.Title = "localhost";
+        // Don't focus the shell while a trust or password window is up; that
+        // dismisses it. The shell itself stays on screen.
+        _connecting = true;
+        try
+        {
+            // An `IdentityFile` in the ssh config is already a credential, so a
+            // password is not required to start the handshake — the same thing
+            // `ssh host` does (HostStore.swift). Each hop logs in as itself.
+            var secrets = Credentials(host.IdentityFile, prompter);
+            var jumps = host.Route.Select(hop => new Tether.Jump(
+                hop.HostName,
+                hop.Port,
+                hop.User ?? Environment.UserName,
+                Credentials(hop.IdentityFile, prompter))).ToArray();
+            await tab.Model.ConnectAsync(Content.XamlRoot, destination, secrets, jumps);
+        }
+        catch (IOException ex)
+        {
+            tab.Model.Fail(ex.Message);
+        }
+        finally
+        {
+            _connecting = false;
+        }
         OnWorkspaceChanged();
+        if (_workspace.Active == tab && tab.OpenInspector is null) tab.Surface.FocusTerminal();
     }
 
-    private void AddHost_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// A configured key, then a prompt. The prompt is how a hop that wants a
+    /// passphrase can ask; the destination's password is not sent along.
+    /// </summary>
+    private static Secret[] Credentials(string? identityFile, SessionModel.PromptDialog prompter)
     {
-        // `HostStore` on the Mac edits `~/.ssh/config` in place. The editor
-        // is the next step; the button is the same control and the same
-        // place it is on that picker.
-    }
-
-    private void ManageHosts_Click(object sender, RoutedEventArgs e)
-    {
-        HostPickerPanel.Visibility = Visibility.Collapsed;
+        if (identityFile is not { Length: > 0 } key) return [new Secret.Interactive(prompter)];
+        var path = SshConfig.ExpandHome(key);
+        if (!File.Exists(path))
+            throw new IOException($"Could not read the key at {key}.");
+        return [new Secret.PrivateKey(File.ReadAllText(path)), new Secret.Interactive(prompter)];
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
+#if DEBUG
+        if (_preview) return;
+#endif
         // The same control as on macOS: it opens preferences. A window with
         // a sidebar is the Windows shape of `NavigationSplitView`.
-        _ = new SettingsWindow();
+        _ = new SettingsWindow(App.Plugins);
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
@@ -302,7 +632,29 @@ public sealed partial class MainWindow : Window
 
     private async Task CloseSelectedAsync()
     {
-        await _workspace.CloseAsync(_workspace.ActiveIndex);
-        if (_workspace.Tabs.Count == 0) await _workspace.AddAsync();
+        if (_workspace.Active is { } tab) await CloseTabAsync(tab);
+    }
+
+    private async Task CloseTabAsync(Tab tab)
+    {
+        var index = _workspace.Tabs.ToList().IndexOf(tab);
+        if (index < 0) return;
+        var note = tab.Attachments.Select(attachment => attachment.CloseNote).FirstOrDefault(note => note is not null);
+        if (note is not null)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = WorkspaceRoot.XamlRoot,
+                RequestedTheme = WorkspaceRoot.ActualTheme,
+                Title = "Close this tab?",
+                Content = note,
+                PrimaryButtonText = "Close",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+        await _workspace.CloseAsync(index);
+        if (_workspace.Tabs.Count == 0) Close();
     }
 }

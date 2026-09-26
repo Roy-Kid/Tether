@@ -2021,9 +2021,10 @@ public func FfiConverterTypeRemoteFiles_lower(_ value: RemoteFiles) -> UInt64 {
 public protocol RenderSurfaceProtocol: AnyObject, Sendable {
     
     /**
-     * Draws one frame with the consumer's palette.
+     * Draws one frame with the consumer's palette and whatever the pointer
+     * is doing (selection, link underlines — spec §14, Decisions/0015).
      */
-    func draw(frame: ScreenFrame, palette: PaletteDto) throws 
+    func draw(frame: ScreenFrame, palette: PaletteDto, overlay: OverlayDto?) throws 
     
     /**
      * Measures the monospaced face this surface will draw with.
@@ -2117,13 +2118,15 @@ public static func fromHwnd(hwnd: UInt64, width: UInt32, height: UInt32)async th
 
     
     /**
-     * Draws one frame with the consumer's palette.
+     * Draws one frame with the consumer's palette and whatever the pointer
+     * is doing (selection, link underlines — spec §14, Decisions/0015).
      */
-open func draw(frame: ScreenFrame, palette: PaletteDto)throws   {try rustCallWithError(FfiConverterTypeRenderFailure_lift) {
+open func draw(frame: ScreenFrame, palette: PaletteDto, overlay: OverlayDto?)throws   {try rustCallWithError(FfiConverterTypeRenderFailure_lift) {
     uniffi_tether_ffi_fn_method_rendersurface_draw(
             self.uniffiCloneHandle(),
         FfiConverterTypeScreenFrame_lower(frame),
-        FfiConverterTypePaletteDto_lower(palette),$0
+        FfiConverterTypePaletteDto_lower(palette),
+        FfiConverterOptionTypeOverlayDto.lower(overlay),$0
     )
 }
 }
@@ -3490,6 +3493,75 @@ public func FfiConverterTypeHostIdentity_lower(_ value: HostIdentity) -> RustBuf
 
 
 /**
+ * One hop in front of [`Destination`], authenticated on its own.
+ *
+ * First to last is the order OpenSSH visits a `ProxyJump` list: each hop
+ * is logged into before a channel to the next is opened. Its secrets are
+ * not the destination's.
+ */
+public struct Jump {
+    public let host: String
+    public let port: UInt16
+    public let user: String
+    public let secrets: [Secret]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(host: String, port: UInt16, user: String, secrets: [Secret]) {
+        self.host = host
+        self.port = port
+        self.user = user
+        self.secrets = secrets
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Jump: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeJump: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Jump {
+        return
+            try Jump(
+                host: FfiConverterString.read(from: &buf), 
+                port: FfiConverterUInt16.read(from: &buf), 
+                user: FfiConverterString.read(from: &buf), 
+                secrets: FfiConverterSequenceTypeSecret.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Jump, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.port, into: &buf)
+        FfiConverterString.write(value.user, into: &buf)
+        FfiConverterSequenceTypeSecret.write(value.secrets, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJump_lift(_ buf: RustBuffer) throws -> Jump {
+    return try FfiConverterTypeJump.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeJump_lower(_ value: Jump) -> RustBuffer {
+    return FfiConverterTypeJump.lower(value)
+}
+
+
+/**
  * Which modifiers were held.
  *
  * No `command`: terminals do not send it, and a field that encoded to
@@ -3629,6 +3701,90 @@ public func FfiConverterTypeLinkSpan_lower(_ value: LinkSpan) -> RustBuffer {
 
 
 /**
+ * One underline under a hovered link. A wrapped link is several of these
+ * (Decisions/0015).
+ */
+public struct LinkUnderlineDto: Equatable, Hashable {
+    public let row: UInt32
+    /**
+     * First column, inclusive.
+     */
+    public let start: UInt32
+    /**
+     * One past the last column.
+     */
+    public let end: UInt32
+    /**
+     * Solid once the host says the thing exists; dotted while it asks.
+     */
+    public let confirmed: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(row: UInt32, 
+        /**
+         * First column, inclusive.
+         */start: UInt32, 
+        /**
+         * One past the last column.
+         */end: UInt32, 
+        /**
+         * Solid once the host says the thing exists; dotted while it asks.
+         */confirmed: Bool) {
+        self.row = row
+        self.start = start
+        self.end = end
+        self.confirmed = confirmed
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension LinkUnderlineDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLinkUnderlineDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkUnderlineDto {
+        return
+            try LinkUnderlineDto(
+                row: FfiConverterUInt32.read(from: &buf), 
+                start: FfiConverterUInt32.read(from: &buf), 
+                end: FfiConverterUInt32.read(from: &buf), 
+                confirmed: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LinkUnderlineDto, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.row, into: &buf)
+        FfiConverterUInt32.write(value.start, into: &buf)
+        FfiConverterUInt32.write(value.end, into: &buf)
+        FfiConverterBool.write(value.confirmed, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkUnderlineDto_lift(_ buf: RustBuffer) throws -> LinkUnderlineDto {
+    return try FfiConverterTypeLinkUnderlineDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkUnderlineDto_lower(_ value: LinkUnderlineDto) -> RustBuffer {
+    return FfiConverterTypeLinkUnderlineDto.lower(value)
+}
+
+
+/**
  * Where a shell on this machine starts, and what it should believe it is
  * running on.
  *
@@ -3652,6 +3808,15 @@ public struct LocalShell: Equatable, Hashable {
     public let columns: UInt16
     public let rows: UInt16
     public let scrollbackLines: UInt32
+    /**
+     * The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
+     * else on this machine's `PATH`.
+     *
+     * `None` is the platform default: the person's login shell on Unix,
+     * `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
+     * fills this in; the SDK does not know which one a consumer offers.
+     */
+    public let shell: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3664,12 +3829,21 @@ public struct LocalShell: Equatable, Hashable {
          * What the shell will see in `$TERM`. It decides which sequences
          * programs emit, so it must describe what this frontend can actually
          * draw.
-         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32) {
+         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, 
+        /**
+         * The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
+         * else on this machine's `PATH`.
+         *
+         * `None` is the platform default: the person's login shell on Unix,
+         * `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
+         * fills this in; the SDK does not know which one a consumer offers.
+         */shell: String?) {
         self.directory = directory
         self.term = term
         self.columns = columns
         self.rows = rows
         self.scrollbackLines = scrollbackLines
+        self.shell = shell
     }
 
     
@@ -3692,7 +3866,8 @@ public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
                 term: FfiConverterString.read(from: &buf), 
                 columns: FfiConverterUInt16.read(from: &buf), 
                 rows: FfiConverterUInt16.read(from: &buf), 
-                scrollbackLines: FfiConverterUInt32.read(from: &buf)
+                scrollbackLines: FfiConverterUInt32.read(from: &buf), 
+                shell: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -3702,6 +3877,7 @@ public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
         FfiConverterUInt16.write(value.columns, into: &buf)
         FfiConverterUInt16.write(value.rows, into: &buf)
         FfiConverterUInt32.write(value.scrollbackLines, into: &buf)
+        FfiConverterOptionString.write(value.shell, into: &buf)
     }
 }
 
@@ -3718,6 +3894,90 @@ public func FfiConverterTypeLocalShell_lift(_ buf: RustBuffer) throws -> LocalSh
 #endif
 public func FfiConverterTypeLocalShell_lower(_ value: LocalShell) -> RustBuffer {
     return FfiConverterTypeLocalShell.lower(value)
+}
+
+
+/**
+ * What the pointer is doing, in the shape the frontend contract already
+ * carries (spec §14: selection) plus the link underlines of Decisions/0015.
+ */
+public struct OverlayDto: Equatable, Hashable {
+    /**
+     * Anchor and focus of a drag, as `(column, row)` pairs.
+     */
+    public let selection: SelectionDto?
+    public let linkUnderlines: [LinkUnderlineDto]
+    /**
+     * What to tint a selected cell with. `TetherUI` uses accent at 0.12.
+     */
+    public let selectionColor: RgbaDto
+    /**
+     * What to underline a link with.
+     */
+    public let linkColor: RgbaDto
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Anchor and focus of a drag, as `(column, row)` pairs.
+         */selection: SelectionDto?, linkUnderlines: [LinkUnderlineDto], 
+        /**
+         * What to tint a selected cell with. `TetherUI` uses accent at 0.12.
+         */selectionColor: RgbaDto, 
+        /**
+         * What to underline a link with.
+         */linkColor: RgbaDto) {
+        self.selection = selection
+        self.linkUnderlines = linkUnderlines
+        self.selectionColor = selectionColor
+        self.linkColor = linkColor
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OverlayDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOverlayDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OverlayDto {
+        return
+            try OverlayDto(
+                selection: FfiConverterOptionTypeSelectionDto.read(from: &buf), 
+                linkUnderlines: FfiConverterSequenceTypeLinkUnderlineDto.read(from: &buf), 
+                selectionColor: FfiConverterTypeRgbaDto.read(from: &buf), 
+                linkColor: FfiConverterTypeRgbaDto.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OverlayDto, into buf: inout [UInt8]) {
+        FfiConverterOptionTypeSelectionDto.write(value.selection, into: &buf)
+        FfiConverterSequenceTypeLinkUnderlineDto.write(value.linkUnderlines, into: &buf)
+        FfiConverterTypeRgbaDto.write(value.selectionColor, into: &buf)
+        FfiConverterTypeRgbaDto.write(value.linkColor, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOverlayDto_lift(_ buf: RustBuffer) throws -> OverlayDto {
+    return try FfiConverterTypeOverlayDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOverlayDto_lower(_ value: OverlayDto) -> RustBuffer {
+    return FfiConverterTypeOverlayDto.lower(value)
 }
 
 
@@ -4014,6 +4274,68 @@ public func FfiConverterTypeScreenRow_lift(_ buf: RustBuffer) throws -> ScreenRo
 #endif
 public func FfiConverterTypeScreenRow_lower(_ value: ScreenRow) -> RustBuffer {
     return FfiConverterTypeScreenRow.lower(value)
+}
+
+
+public struct SelectionDto: Equatable, Hashable {
+    public let anchorColumn: UInt32
+    public let anchorRow: UInt32
+    public let focusColumn: UInt32
+    public let focusRow: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(anchorColumn: UInt32, anchorRow: UInt32, focusColumn: UInt32, focusRow: UInt32) {
+        self.anchorColumn = anchorColumn
+        self.anchorRow = anchorRow
+        self.focusColumn = focusColumn
+        self.focusRow = focusRow
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SelectionDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSelectionDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SelectionDto {
+        return
+            try SelectionDto(
+                anchorColumn: FfiConverterUInt32.read(from: &buf), 
+                anchorRow: FfiConverterUInt32.read(from: &buf), 
+                focusColumn: FfiConverterUInt32.read(from: &buf), 
+                focusRow: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SelectionDto, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.anchorColumn, into: &buf)
+        FfiConverterUInt32.write(value.anchorRow, into: &buf)
+        FfiConverterUInt32.write(value.focusColumn, into: &buf)
+        FfiConverterUInt32.write(value.focusRow, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSelectionDto_lift(_ buf: RustBuffer) throws -> SelectionDto {
+    return try FfiConverterTypeSelectionDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSelectionDto_lower(_ value: SelectionDto) -> RustBuffer {
+    return FfiConverterTypeSelectionDto.lower(value)
 }
 
 
@@ -6499,6 +6821,54 @@ fileprivate struct FfiConverterOptionTypeTransferProgress: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeOverlayDto: FfiConverterRustBuffer {
+    typealias SwiftType = OverlayDto?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeOverlayDto.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeOverlayDto.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSelectionDto: FfiConverterRustBuffer {
+    typealias SwiftType = SelectionDto?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSelectionDto.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSelectionDto.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeTerminalLink: FfiConverterRustBuffer {
     typealias SwiftType = TerminalLink?
 
@@ -6695,6 +7065,31 @@ fileprivate struct FfiConverterSequenceTypeFileEntry: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeJump: FfiConverterRustBuffer {
+    typealias SwiftType = [Jump]
+
+    public static func write(_ value: [Jump], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeJump.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Jump] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Jump]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeJump.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeLinkSpan: FfiConverterRustBuffer {
     typealias SwiftType = [LinkSpan]
 
@@ -6712,6 +7107,31 @@ fileprivate struct FfiConverterSequenceTypeLinkSpan: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeLinkSpan.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeLinkUnderlineDto: FfiConverterRustBuffer {
+    typealias SwiftType = [LinkUnderlineDto]
+
+    public static func write(_ value: [LinkUnderlineDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeLinkUnderlineDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [LinkUnderlineDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [LinkUnderlineDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeLinkUnderlineDto.read(from: &buf))
         }
         return seq
     }
@@ -7122,11 +7542,11 @@ public func runInteractiveExchange(prompter: InteractivePrompter)async throws  -
  * running". It reaches a consumer as an opaque `rustPanic`, so the cost of
  * forgetting it is a crash with no useful error.
  */
-public func connect(destination: Destination, trust: HostTrust, secrets: [Secret])async throws  -> Session  {
+public func connect(destination: Destination, trust: HostTrust, secrets: [Secret], jumps: [Jump])async throws  -> Session  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tether_ffi_fn_func_connect(FfiConverterTypeDestination_lower(destination),FfiConverterTypeHostTrust_lower(trust),FfiConverterSequenceTypeSecret.lower(secrets)
+                uniffi_tether_ffi_fn_func_connect(FfiConverterTypeDestination_lower(destination),FfiConverterTypeHostTrust_lower(trust),FfiConverterSequenceTypeSecret.lower(secrets),FfiConverterSequenceTypeJump.lower(jumps)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -7139,11 +7559,11 @@ public func connect(destination: Destination, trust: HostTrust, secrets: [Secret
 /**
  * Cancellation-aware entry point; the original connect remains source compatible.
  */
-public func connectCancellable(destination: Destination, trust: HostTrust, secrets: [Secret], cancellation: CancellationToken)async throws  -> Session  {
+public func connectCancellable(destination: Destination, trust: HostTrust, secrets: [Secret], jumps: [Jump], cancellation: CancellationToken)async throws  -> Session  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_tether_ffi_fn_func_connect_cancellable(FfiConverterTypeDestination_lower(destination),FfiConverterTypeHostTrust_lower(trust),FfiConverterSequenceTypeSecret.lower(secrets),FfiConverterTypeCancellationToken_lower(cancellation)
+                uniffi_tether_ffi_fn_func_connect_cancellable(FfiConverterTypeDestination_lower(destination),FfiConverterTypeHostTrust_lower(trust),FfiConverterSequenceTypeSecret.lower(secrets),FfiConverterSequenceTypeJump.lower(jumps),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -7272,10 +7692,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_func_run_interactive_exchange() != 1377) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect() != 49467) {
+    if (uniffi_tether_ffi_checksum_func_connect() != 34402) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_connect_cancellable() != 17419) {
+    if (uniffi_tether_ffi_checksum_func_connect_cancellable() != 29409) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_func_connect_over_ssh_client() != 1805) {
@@ -7344,7 +7764,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55166) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_rendersurface_draw() != 12594) {
+    if (uniffi_tether_ffi_checksum_method_rendersurface_draw() != 61329) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_rendersurface_measure() != 52593) {

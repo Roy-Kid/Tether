@@ -46,6 +46,9 @@ impl russh::client::Handler for ClientHandler {
 pub struct Connection {
     handle: russh::client::Handle<ClientHandler>,
     endpoint: Endpoint,
+    /// Hops this connection was reached through. They have to outlive the
+    /// forwarded channel: dropping one closes every hop beyond it.
+    jumps: Vec<Session>,
 }
 
 /// What an authentication attempt produced.
@@ -84,7 +87,36 @@ impl Connection {
                 .await
                 .map_err(|error| classify_connect(error, &endpoint, &host_refused))?;
 
-        Ok(Self { handle, endpoint })
+        Ok(Self { handle, endpoint, jumps: Vec::new() })
+    }
+
+    /// Reaches `endpoint` through an authenticated `jump`.
+    ///
+    /// The jump opens a `direct-tcpip` channel to the endpoint and the next
+    /// handshake runs on that channel, which is what OpenSSH does for
+    /// `ProxyJump`. The jump session is kept: the channel dies with it.
+    /// Host verification still happens, against the endpoint being reached,
+    /// before any credential for it is sent.
+    pub async fn connect_through(
+        jump: Session,
+        endpoint: Endpoint,
+        verifier: Arc<dyn HostVerifier>,
+        config: Arc<russh::client::Config>,
+    ) -> Result<Self, SshError> {
+        let via = jump.endpoint.to_string();
+        let channel = jump
+            .handle
+            .channel_open_direct_tcpip(&endpoint.host, u32::from(endpoint.port), "127.0.0.1", 0)
+            .await
+            .map_err(|error| SshError::Unreachable {
+                endpoint: endpoint.to_string(),
+                cause: format!("{via} refused to forward: {error}"),
+            })?;
+
+        let mut connection =
+            Self::connect_over(endpoint, channel.into_stream(), verifier, config).await?;
+        connection.jumps.push(jump);
+        Ok(connection)
     }
 
     /// Connects over an existing stream rather than dialling.
@@ -112,7 +144,7 @@ impl Connection {
             .await
             .map_err(|error| classify_connect(error, &endpoint, &host_refused))?;
 
-        Ok(Self { handle, endpoint })
+        Ok(Self { handle, endpoint, jumps: Vec::new() })
     }
 
     pub fn endpoint(&self) -> &Endpoint {
@@ -173,10 +205,7 @@ impl Connection {
         loop {
             match response {
                 Response::Success => {
-                    return Ok(Step::Authenticated(Session {
-                        handle: self.handle,
-                        endpoint: self.endpoint,
-                    }));
+                    return Ok(Step::Authenticated(self.into_session()));
                 }
                 Response::Failure { remaining_methods, partial_success } => {
                     return Ok(self.step_from(russh::client::AuthResult::Failure {
@@ -221,11 +250,13 @@ impl Connection {
         }
     }
 
+    fn into_session(self) -> Session {
+        Session { handle: self.handle, endpoint: self.endpoint, jumps: self.jumps }
+    }
+
     fn step_from(self, result: russh::client::AuthResult) -> Step {
         match result {
-            russh::client::AuthResult::Success => {
-                Step::Authenticated(Session { handle: self.handle, endpoint: self.endpoint })
-            }
+            russh::client::AuthResult::Success => Step::Authenticated(self.into_session()),
             russh::client::AuthResult::Failure { remaining_methods, partial_success } => {
                 let remaining = remaining_methods.iter().map(|m| Method(String::from(m))).collect();
                 if partial_success {
@@ -248,6 +279,9 @@ impl std::fmt::Debug for Connection {
 pub struct Session {
     handle: russh::client::Handle<ClientHandler>,
     endpoint: Endpoint,
+    /// Authenticated hops this session was reached through, nearest last.
+    /// Dropping the session drops them, which closes the forwarded channels.
+    jumps: Vec<Session>,
 }
 
 impl Session {
@@ -310,7 +344,10 @@ impl Session {
 
 impl std::fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session").field("endpoint", &self.endpoint).finish()
+        f.debug_struct("Session")
+            .field("endpoint", &self.endpoint)
+            .field("jumps", &self.jumps.len())
+            .finish()
     }
 }
 

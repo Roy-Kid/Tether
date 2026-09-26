@@ -269,4 +269,120 @@ struct SSHConfigTests {
     #expect(entries.count == 1)
     #expect(entries.first?.user == nil, "the Match block's user is not the lab's")
   }
+
+  /// A name in the file has to mean the route `ssh` would take, not a direct
+  /// dial to the address written under it.
+  @Test("ProxyJump is the hops in front of a host, nested ones first")
+  func proxyJumpExpandsNestedHopsFirst() {
+    let config = SSHConfig(
+      """
+      Host lab
+        HostName lab.internal
+        ProxyJump bastion
+
+      Host bastion
+        HostName bastion.example
+        User jump
+        ProxyJump edge
+
+      Host edge
+        HostName edge.example
+        Port 2222
+        IdentityFile ~/.ssh/id_edge
+      """
+    )
+
+    let hops = try! config.jumps(for: "lab").get()
+    #expect(hops.map(\.hostName) == ["edge.example", "bastion.example"])
+    #expect(hops[0].port == 2222)
+    #expect(hops[0].identityFile == "~/.ssh/id_edge")
+    #expect(hops[1].user == "jump")
+    #expect(hops[1].port == 22)
+  }
+
+  @Test("a comma-separated ProxyJump is visited in order")
+  func proxyJumpList() {
+    let hops = try! SSHConfig(
+      """
+      Host lab
+        ProxyJump me@10.0.0.1:2222, edge
+
+      Host edge
+        HostName edge.example
+      """
+    ).jumps(for: "lab").get()
+
+    #expect(hops.count == 2)
+    #expect(hops[0].hostName == "10.0.0.1")
+    #expect(hops[0].port == 2222)
+    #expect(hops[0].user == "me")
+    #expect(hops[1].hostName == "edge.example")
+  }
+
+  @Test("ProxyJump none means there is no jump, even under Host *")
+  func proxyJumpNone() {
+    let hops = try! SSHConfig(
+      """
+      Host lab
+        HostName lab.internal
+        ProxyJump none
+
+      Host *
+        ProxyJump bastion
+      """
+    ).jumps(for: "lab").get()
+
+    #expect(hops.isEmpty)
+  }
+
+  @Test("Host * can supply the jump a host does not name")
+  func proxyJumpIsInherited() {
+    // `none` on the bastion is what stops the wildcard jump applying to the
+    // bastion itself. Without it the bastion would jump through itself.
+    let hops = try! SSHConfig(
+      """
+      Host lab
+        HostName lab.internal
+
+      Host bastion
+        HostName bastion.example
+        ProxyJump none
+
+      Host *
+        ProxyJump bastion
+        User ada
+      """
+    ).jumps(for: "lab").get()
+
+    #expect(hops.map(\.hostName) == ["bastion.example"])
+    #expect(hops[0].user == "ada")
+  }
+
+  @Test("a ProxyJump cycle is an error")
+  func proxyJumpCycle() {
+    let result = SSHConfig(
+      """
+      Host a
+        ProxyJump b
+      Host b
+        ProxyJump a
+      """
+    ).jumps(for: "a")
+
+    #expect(result == .failure(.cycle("a")))
+  }
+
+  @Test("an IPv6 jump keeps the address inside the brackets")
+  func proxyJumpIPv6() {
+    let hops = try! SSHConfig(
+      """
+      Host lab
+        ProxyJump me@[2001:db8::1]:2222
+      """
+    ).jumps(for: "lab").get()
+
+    #expect(hops[0].hostName == "2001:db8::1")
+    #expect(hops[0].port == 2222)
+    #expect(hops[0].user == "me")
+  }
 }

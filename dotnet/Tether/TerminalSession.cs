@@ -36,16 +36,41 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         Destination destination,
         IHostTrust trust,
         IReadOnlyList<Secret> secrets,
+        IReadOnlyList<Jump>? jumps = null,
         CancellationToken cancellationToken = default)
     {
         using var cancellation = new CancellationTokenAdapter(cancellationToken);
-        var inner = await Gen.TetherFfiMethods.ConnectCancellable(
-            Lower(destination),
-            new HostTrustAdapter(trust),
-            secrets.Select(Lower).ToArray(),
-            cancellation.Ffi).ConfigureAwait(false);
-        return new TerminalSession(inner);
+        try
+        {
+            var inner = await Gen.TetherFfiMethods.ConnectCancellable(
+                Lower(destination),
+                new HostTrustAdapter(trust),
+                secrets.Select(Lower).ToArray(),
+                (jumps ?? Array.Empty<Jump>()).Select(Lower).ToArray(),
+                cancellation.Ffi).ConfigureAwait(false);
+            return new TerminalSession(inner);
+        }
+        catch (Gen.TetherException ex) { throw LiftError(ex); }
     }
+
+    // Generated exception messages stringify arrays as "System.String[]".
+    // Preserve the variant and its data at the public SDK boundary.
+    private static TetherException LiftError(Gen.TetherException error) => error switch
+    {
+        Gen.TetherException.Cancelled => new TetherException.Cancelled(),
+        Gen.TetherException.TimedOut e => new TetherException.TimedOut(e.millis),
+        Gen.TetherException.Unreachable e => new TetherException.Unreachable(e.endpoint, e.cause),
+        Gen.TetherException.HostRejected e => new TetherException.HostRejected(e.endpoint),
+        Gen.TetherException.AuthenticationFailed e => new TetherException.AuthenticationFailed(e.remaining),
+        Gen.TetherException.MoreFactorsNeeded e => new TetherException.MoreFactorsNeeded(e.remaining),
+        Gen.TetherException.NothingToOffer => new TetherException.NothingToOffer(),
+        Gen.TetherException.ShellRefused e => new TetherException.ShellRefused(e.cause),
+        Gen.TetherException.Unsupported e => new TetherException.Unsupported(e.what),
+        Gen.TetherException.Disconnected e => new TetherException.Disconnected(e.cause),
+        Gen.TetherException.SessionEnded => new TetherException.SessionEnded(),
+        Gen.TetherException.Protocol e => new TetherException.Protocol(e.cause),
+        _ => new TetherException.Protocol(error.Message),
+    };
 
     /// <summary>
     /// Opens a shell on this machine. <paramref name="shell"/> names the
@@ -108,6 +133,17 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     /// <summary>The directory the shell last reported, if it reports one.</summary>
     public string? WorkingDirectory() => _inner.WorkingDirectory();
 
+    /// <summary>Opens SFTP on this session's authenticated connection.</summary>
+    public async Task<RemoteFiles> OpenFilesAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = _inner.Connection()
+            ?? throw new InvalidOperationException("This session has no live connection.");
+        using var cancellation = new CancellationTokenAdapter(cancellationToken);
+        try { return new RemoteFiles(await connection.Files(cancellation.Ffi).ConfigureAwait(false)); }
+        catch (Gen.TetherException.Cancelled) { throw new OperationCanceledException(cancellationToken); }
+        catch (Gen.TetherException ex) { throw new IOException("Could not open SFTP: " + ex.Message, ex); }
+    }
+
     /// <summary>
     /// What the text at a cell names, if anything, and where it is drawn.
     /// Asked when a person points, not every frame (Decisions/0015).
@@ -137,6 +173,9 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 
     private static Gen.Destination Lower(Destination d) =>
         new(d.Host, d.Port, d.User, d.Term, d.Columns, d.Rows, d.ScrollbackLines);
+
+    private static Gen.Jump Lower(Jump jump) =>
+        new(jump.Host, jump.Port, jump.User, jump.Secrets.Select(Lower).ToArray());
 
     private static Gen.Secret Lower(Secret s) => s switch
     {

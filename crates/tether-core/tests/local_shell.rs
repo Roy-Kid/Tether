@@ -8,9 +8,9 @@
 //! Every platform, because Windows is where ConPTY and the DSR question
 //! actually bit.
 
+use tether_core::Local;
 use tether_core::local_shell::Command;
 use tether_core::terminal::{Options, ScreenSize};
-use tether_core::Local;
 
 #[tokio::test]
 async fn a_local_shell_runs_and_is_answered() {

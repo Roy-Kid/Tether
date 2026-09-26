@@ -10,8 +10,8 @@
 use std::sync::{Arc, Mutex};
 
 use tether_render::{
-    prepare_with_overlay, Cell, CellSpan, DrawList, FontMetrics, Frame, LinkUnderline, Overlay,
-    Palette, RenderError, Rgba, SurfaceSize, TerminalRenderer,
+    Cell, CellSpan, DrawList, FontMetrics, Frame, LinkUnderline, Overlay, Palette, RenderError,
+    Rgba, SurfaceSize, TerminalRenderer, prepare_with_overlay,
 };
 
 use crate::screen::ScreenFrame;
@@ -64,11 +64,7 @@ impl RenderSurface {
     /// The window must outlive this surface. `hwnd` is what a WinUI host gets
     /// from `WindowNative.GetWindowHandle`; it is not a toolkit type here.
     #[uniffi::constructor]
-    pub async fn from_hwnd(
-        hwnd: u64,
-        width: u32,
-        height: u32,
-    ) -> Result<Arc<Self>, RenderFailure> {
+    pub async fn from_hwnd(hwnd: u64, width: u32, height: u32) -> Result<Arc<Self>, RenderFailure> {
         let instance = wgpu_instance();
         let size = SurfaceSize { width, height };
         // SAFETY: the caller keeps the window alive for the surface's life.
@@ -201,8 +197,8 @@ pub struct RgbaDto {
 
 fn wgpu_instance() -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = wgpu::Backends::from_env()
-        .unwrap_or(wgpu::Backends::VULKAN | wgpu::Backends::GL);
+    descriptor.backends =
+        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::VULKAN | wgpu::Backends::GL);
     wgpu::Instance::new(descriptor)
 }
 
@@ -259,9 +255,7 @@ fn paint(color: crate::screen::CellColor) -> tether_render::Paint {
     match color {
         CellColor::Named { name } => tether_render::Paint::Named(name_of(name)),
         CellColor::Indexed { index } => tether_render::Paint::Indexed(index),
-        CellColor::Rgb { red, green, blue } => {
-            tether_render::Paint::Rgb { red, green, blue }
-        }
+        CellColor::Rgb { red, green, blue } => tether_render::Paint::Rgb { red, green, blue },
     }
 }
 
