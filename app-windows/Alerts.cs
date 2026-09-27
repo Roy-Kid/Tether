@@ -24,25 +24,84 @@ namespace TetherApp;
 
 public static class Alerts
 {
-    public static Task<bool> TrustAsync(DispatcherQueue queue, HostIdentity host, TrustQuestion question)
+    public static async Task<ContentDialogResult> ContentAsync(
+        string title, object content, string primary, string? secondary,
+        ElementTheme theme, Action<Window?> active)
+    {
+        var done = new TaskCompletionSource<ContentDialogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var window = NewDialog(title, 480, 340);
+        var panel = new StackPanel
+        {
+            Spacing = 16, Padding = new Thickness(24), RequestedTheme = theme,
+            Background = (Brush)Application.Current.Resources["ChromeWindowBrush"],
+        };
+        panel.Children.Add(new TextBlock { Text = title, FontSize = 20, TextWrapping = TextWrapping.Wrap });
+        var body = content as UIElement ?? new TextBlock { Text = content.ToString(), TextWrapping = TextWrapping.Wrap };
+        panel.Children.Add(new ScrollViewer
+        {
+            Content = body, MaxHeight = 240,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        Button Add(string label, ContentDialogResult result)
+        {
+            var button = new Button { Content = label, MinWidth = 80 };
+            button.Click += (_, _) => { done.TrySetResult(result); window.Close(); };
+            buttons.Children.Add(button);
+            return button;
+        }
+        var cancel = Add("Cancel", ContentDialogResult.None);
+        if (secondary is not null) Add(secondary, ContentDialogResult.Secondary);
+        Add(primary, ContentDialogResult.Primary);
+        panel.Children.Add(buttons);
+        panel.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; window.Close(); }
+        };
+        panel.Loaded += (_, _) =>
+        {
+            var scale = panel.XamlRoot.RasterizationScale;
+            panel.Measure(new Windows.Foundation.Size(480, double.PositiveInfinity));
+            window.AppWindow.ResizeClient(new SizeInt32((int)(480 * scale), (int)(Math.Max(180, panel.DesiredSize.Height) * scale)));
+            WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
+            if (body is not TextBox) cancel.Focus(FocusState.Programmatic);
+        };
+        window.Content = panel;
+        window.Closed += (_, _) => done.TrySetResult(ContentDialogResult.None);
+        active(window);
+        try { window.Activate(); return await done.Task; }
+        finally { active(null); }
+    }
+
+    public static Task<bool> ConfirmPasteAsync(DispatcherQueue queue, int length) =>
+        OnUi(queue, () => Ask("Paste into terminal?", $"{length:N0} characters; line breaks may execute commands.", "Paste", "Cancel"));
+
+    public static Task<bool> ClipboardErrorAsync(DispatcherQueue queue, string detail) =>
+        OnUi(queue, () => Ask("Clipboard unavailable", detail, null, "Close"));
+
+    public static Task<bool> TrustAsync(
+        DispatcherQueue queue, HostIdentity host, TrustQuestion question, CancellationToken cancellationToken = default)
     {
         if (question is TrustQuestion.Revoked)
-            return OnUi(queue, () => Ask("This host's key is revoked", host.Fingerprint, null, "Close"));
+            return OnUi(queue, () => Ask("This host's key is revoked", host.Fingerprint, null, "Close", cancellationToken));
 
         var title = question is TrustQuestion.Changed
             ? "This host's key has changed"
             : "Unrecognised host";
-        return OnUi(queue, () => Ask(title, host.Fingerprint, "Trust", "Reject"));
+        return OnUi(queue, () => Ask(title, host.Fingerprint, "Trust", "Reject", cancellationToken));
     }
 
     public static Task<IReadOnlyList<string>> PromptsAsync(
-        DispatcherQueue queue, string instruction, IReadOnlyList<AuthPrompt> prompts)
+        DispatcherQueue queue, string instruction, IReadOnlyList<AuthPrompt> prompts,
+        CancellationToken cancellationToken = default)
     {
         if (prompts.Count == 0) return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
-        return OnUi(queue, () => AskPrompts(instruction, prompts));
+        return OnUi(queue, () => AskPrompts(instruction, prompts, cancellationToken));
     }
 
-    private static async Task<bool> Ask(string title, string body, string? primary, string close)
+    private static async Task<bool> Ask(
+        string title, string body, string? primary, string close, CancellationToken cancellationToken = default)
     {
         var done = new TaskCompletionSource<bool>();
         var window = NewDialog(title, 420, 200);
@@ -68,17 +127,19 @@ public static class Alerts
             buttons.Children.Add(yes);
         }
         var no = new Button { Content = close };
+        no.Loaded += (_, _) => no.Focus(FocusState.Programmatic);
         no.Click += (_, _) => { done.TrySetResult(false); window.Close(); };
         buttons.Children.Add(no);
         panel.Children.Add(buttons);
         window.Content = panel;
         window.Closed += (_, _) => done.TrySetResult(false);
+        CloseWhen(window, cancellationToken);
         window.Activate();
         return await done.Task;
     }
 
     private static async Task<IReadOnlyList<string>> AskPrompts(
-        string instruction, IReadOnlyList<AuthPrompt> prompts)
+        string instruction, IReadOnlyList<AuthPrompt> prompts, CancellationToken cancellationToken = default)
     {
         var title = TitleFor(prompts[0]);
         var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -177,8 +238,21 @@ public static class Alerts
         };
         window.Content = layout;
         window.Closed += (_, _) => done.TrySetResult(Array.Empty<string>());
+        CloseWhen(window, cancellationToken);
         window.Activate();
         return await done.Task;
+    }
+
+    /// <summary>Cancel or the connect deadline closes the question. The handshake is parked until the window goes.</summary>
+    private static void CloseWhen(Window window, CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.CanBeCanceled) return;
+        var registration = cancellationToken.Register(() =>
+        {
+            if (window.DispatcherQueue.HasThreadAccess) window.Close();
+            else window.DispatcherQueue.TryEnqueue(window.Close);
+        });
+        window.Closed += (_, _) => registration.Dispose();
     }
 
     private static Window NewDialog(string title, int width, int height)

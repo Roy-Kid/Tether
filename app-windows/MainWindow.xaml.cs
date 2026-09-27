@@ -51,7 +51,7 @@ public sealed partial class MainWindow : Window
         AppSettings.Changed += ApplyAppearance;
         Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
         ApplyAppearance();
-        _workspace.Changed += OnWorkspaceChanged;
+        _workspace.Changed += () => DispatcherQueue.TryEnqueue(OnWorkspaceChanged);
         Content.KeyDown += OnKeyDown;
         // Activation hands focus back to the XAML island; the terminal's
         // input window is where typing goes.
@@ -90,10 +90,15 @@ public sealed partial class MainWindow : Window
     {
         var titleBar = AppWindow.TitleBar;
         var scale = WorkspaceRoot.XamlRoot?.RasterizationScale ?? 1;
-        CaptionLeftInset.Width = new GridLength(titleBar.LeftInset / scale);
-        CaptionRightInset.Width = new GridLength(titleBar.RightInset / scale);
-        // Caption height alone clips the tab strip against the top edge.
-        WindowHeader.MinHeight = titleBar.Height / scale + 8;
+        if (scale <= 0) scale = 1;
+        // Insets are physical pixels. Writing a new value on every size
+        // change — even the same one — lays the terminal out again, and at
+        // 150% or 200% the height flutters by a pixel. The window shakes.
+        SetInset(CaptionLeftInset, titleBar.LeftInset / scale);
+        SetInset(CaptionRightInset, titleBar.RightInset / scale);
+        var header = Math.Ceiling(titleBar.Height / scale) + 8;
+        if (Math.Abs(WindowHeader.MinHeight - header) >= 1)
+            WindowHeader.MinHeight = header;
         titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
         titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
         titleBar.ButtonHoverBackgroundColor = ThemeColor("SubtleFillColorSecondaryBrush");
@@ -103,6 +108,15 @@ public sealed partial class MainWindow : Window
         titleBar.ButtonForegroundColor = foreground;
         titleBar.ButtonHoverForegroundColor = foreground;
         titleBar.ButtonInactiveForegroundColor = ((SolidColorBrush)StatusText.Foreground).Color;
+    }
+
+    /// <summary>Caption insets are physical pixels. Skip a write that does not change the DIP width, or the terminal is laid out again and shakes.</summary>
+    private static void SetInset(ColumnDefinition column, double dips)
+    {
+        var next = new GridLength(Math.Max(0, dips));
+        if (column.Width.GridUnitType == GridUnitType.Pixel && Math.Abs(column.Width.Value - next.Value) < 0.5)
+            return;
+        column.Width = next;
     }
 
     private static global::Windows.UI.Color ThemeColor(string key) =>
@@ -401,11 +415,18 @@ public sealed partial class MainWindow : Window
     {
         var model = _workspace.Active?.Model;
         HostName.Text = _workspace.Active?.Title ?? "Choose host";
-        var live = model?.Status == "Connected";
+        var bar = model?.Bar ?? RemoteBar.Idle();
+        var live = bar.Phase == RemotePhase.Connected;
         StatusDot.Fill = (Brush)Application.Current.Resources[live ? "SuccessBrush" : "ChromeSubtleBrush"];
-        // The host name is the label. A generic "Disconnected" beside it says
-        // nothing the dot does not; a real failure still has its own sentence.
-        StatusText.Text = model?.LastError ?? "";
+        StatusText.Text = live ? "" : bar.Status;
+        var spoken = model?.LastError ?? model?.Status ?? "Not connected";
+        ToolTipService.SetToolTip(StatusText, spoken);
+        AutomationProperties.SetName(StatusText, spoken);
+        ConnectProgress.IsActive = bar.ShowsProgress;
+        ConnectProgress.Visibility = bar.ShowsProgress ? Visibility.Visible : Visibility.Collapsed;
+        AuthMark.Visibility = bar.ShowsAuth ? Visibility.Visible : Visibility.Collapsed;
+        CancelConnectButton.Visibility = bar.ShowsCancel ? Visibility.Visible : Visibility.Collapsed;
+        ReconnectButton.Visibility = model?.CanReconnect == true ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetName(HostButton, "Host, " + HostName.Text);
         AutomationProperties.SetHelpText(HostButton, HostName.Text);
         ToolTipService.SetToolTip(HostButton, model?.LastError ?? HostName.Text);
@@ -546,6 +567,7 @@ public sealed partial class MainWindow : Window
         if (_workspace.Active is not { } tab) return;
 
         tab.Title = host.Alias;
+        tab.Model.Keep(host);
         OnWorkspaceChanged();
 
         if (host.JumpError is { } problem)
@@ -555,21 +577,47 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var prompter = new SessionModel.PromptDialog(Content.XamlRoot);
-        var destination = new Destination(
-            host.HostName,
-            host.Port ?? 22,
-            host.User ?? Environment.UserName);
+        var plan = RemoteLink.Plan(host, Environment.UserName);
+        tab.Model.Begin(host);
+        OnWorkspaceChanged();
+
+        // A live ControlMaster already spent the verification code. The alias
+        // is what `ssh -O check` is keyed on, not the resolved hostname.
+        // A master that then fails to attach is a failed attach, not a reason
+        // to start a second login and ask for the code again.
+        _connecting = true;
+        var mastered = false;
+        try
+        {
+            if (await TerminalSession.SshMasterRunningAsync(host.Alias))
+            {
+                mastered = true;
+                await tab.Model.AttachMasterAsync(host.Alias);
+            }
+        }
+        finally
+        {
+            if (mastered || tab.Model.IsLive)
+            {
+                _connecting = false;
+                OnWorkspaceChanged();
+                if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null)
+                    tab.Surface.FocusTerminal();
+            }
+        }
+        if (mastered || tab.Model.IsLive) return;
+
+        var prompter = new SessionModel.PromptDialog(Content.XamlRoot, tab.Model);
+        var destination = new Destination(plan.Host, plan.Port, plan.User);
         // Don't focus the shell while a trust or password window is up; that
         // dismisses it. The shell itself stays on screen.
-        _connecting = true;
         try
         {
             // An `IdentityFile` in the ssh config is already a credential, so a
             // password is not required to start the handshake — the same thing
             // `ssh host` does (HostStore.swift). Each hop logs in as itself.
-            var secrets = Credentials(host.IdentityFile, prompter);
-            var jumps = host.Route.Select(hop => new Tether.Jump(
+            var secrets = Credentials(plan.IdentityFile, prompter);
+            var jumps = plan.Hops.Select(hop => new Tether.Jump(
                 hop.HostName,
                 hop.Port,
                 hop.User ?? Environment.UserName,
@@ -585,7 +633,9 @@ public sealed partial class MainWindow : Window
             _connecting = false;
         }
         OnWorkspaceChanged();
-        if (_workspace.Active == tab && tab.OpenInspector is null) tab.Surface.FocusTerminal();
+        // A late success must not pull the keyboard back if this tab is no longer the one on screen.
+        if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null)
+            tab.Surface.FocusTerminal();
     }
 
     /// <summary>
@@ -599,6 +649,16 @@ public sealed partial class MainWindow : Window
         if (!File.Exists(path))
             throw new IOException($"Could not read the key at {key}.");
         return [new Secret.PrivateKey(File.ReadAllText(path)), new Secret.Interactive(prompter)];
+    }
+
+    private void CancelConnect_Click(object sender, RoutedEventArgs e) =>
+        _workspace.Active?.Model.CancelDial();
+
+    private async void Reconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var model = _workspace.Active?.Model;
+        if (model?.RemoteHost is not { } host || !model.CanReconnect) return;
+        await OpenHostAsync(host);
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)

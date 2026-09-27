@@ -2033,6 +2033,8 @@ public protocol RenderSurfaceProtocol: AnyObject, Sendable {
     
     func resize(width: UInt32, height: UInt32) 
     
+    func setFonts(primary: String, wide: String) 
+    
 }
 /**
  * A GPU terminal surface.
@@ -2148,6 +2150,15 @@ open func resize(width: UInt32, height: UInt32)  {try! rustCall() {
             self.uniffiCloneHandle(),
         FfiConverterUInt32.lower(width),
         FfiConverterUInt32.lower(height),$0
+    )
+}
+}
+    
+open func setFonts(primary: String, wide: String)  {try! rustCall() {
+    uniffi_tether_ffi_fn_method_rendersurface_set_fonts(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(primary),
+        FfiConverterString.lower(wide),$0
     )
 }
 }
@@ -2272,6 +2283,12 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * same question being asked again. `None` goes back to saying nothing.
      */
     func setPalette(palette: TerminalPalette?) throws 
+    
+    /**
+     * Routes wheel notches to the remote mouse protocol or local scrollback.
+     * Positive lines scroll down; local forces scrollback even in mouse mode.
+     */
+    func wheel(lines: Int32, row: UInt16, column: UInt16, local: Bool) throws 
     
     /**
      * The directory the shell last reported, if it reports one.
@@ -2469,6 +2486,21 @@ open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(F
     uniffi_tether_ffi_fn_method_session_set_palette(
             self.uniffiCloneHandle(),
         FfiConverterOptionTypeTerminalPalette.lower(palette),$0
+    )
+}
+}
+    
+    /**
+     * Routes wheel notches to the remote mouse protocol or local scrollback.
+     * Positive lines scroll down; local forces scrollback even in mouse mode.
+     */
+open func wheel(lines: Int32, row: UInt16, column: UInt16, local: Bool)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
+    uniffi_tether_ffi_fn_method_session_wheel(
+            self.uniffiCloneHandle(),
+        FfiConverterInt32.lower(lines),
+        FfiConverterUInt16.lower(row),
+        FfiConverterUInt16.lower(column),
+        FfiConverterBool.lower(local),$0
     )
 }
 }
@@ -7531,6 +7563,15 @@ public func runInteractiveExchange(prompter: InteractivePrompter)async throws  -
         )
 }
 /**
+ * Installed family names, as seen by the same shaper that draws the terminal.
+ */
+public func renderFontFamilies() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_tether_ffi_fn_func_render_font_families($0
+    )
+})
+}
+/**
  * Connects, authenticates and opens a shell.
  *
  * Async all the way: a handshake is network-bound and a prompt is
@@ -7692,6 +7733,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_func_run_interactive_exchange() != 1377) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_func_render_font_families() != 14860) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_func_connect() != 34402) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7773,6 +7817,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_rendersurface_resize() != 36122) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_rendersurface_set_fonts() != 45006) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_hosttrust_trusts() != 28272) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7804,6 +7851,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_set_palette() != 52819) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_wheel() != 15577) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_working_directory() != 43738) {

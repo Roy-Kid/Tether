@@ -10,6 +10,8 @@
 //! `Buffer::set_monospace_width` forces every grapheme to the column pitch we
 //! measured, which is the GPU equivalent of `FontMetrics::tracking`.
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -42,18 +44,26 @@ pub enum RenderError {
 /// already knows the numbers can use [`FontMetrics::from_advances`] and skip
 /// this entirely.
 pub fn measure_monospace(fonts: &mut FontSystem, size: f32) -> FontMetrics {
+    measure_font(fonts, size, "", "")
+}
+
+fn family(name: &str) -> Family<'_> {
+    if name.is_empty() { Family::Monospace } else { Family::Name(name) }
+}
+
+fn measure_font(fonts: &mut FontSystem, size: f32, primary: &str, wide_family: &str) -> FontMetrics {
     let metrics = Metrics::new(size, size * 1.2);
 
-    let measure = |fonts: &mut FontSystem, text: &str| -> f32 {
+    let measure = |fonts: &mut FontSystem, text: &str, name: &str| -> f32 {
         let mut buffer = Buffer::new(fonts, metrics);
-        let attrs = Attrs::new().family(Family::Monospace);
+        let attrs = Attrs::new().family(family(name));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(fonts, false);
         buffer.layout_runs().next().map(|run| run.line_w).unwrap_or(size * 0.6)
     };
 
-    let narrow = measure(fonts, "M");
-    let wide = measure(fonts, "中");
+    let narrow = measure(fonts, "M", primary);
+    let wide = measure(fonts, "中", if wide_family.is_empty() { primary } else { wide_family });
     FontMetrics::from_advances(size, narrow, wide, size * 1.2)
 }
 
@@ -251,6 +261,11 @@ pub struct TerminalRenderer {
     viewport: Viewport,
     quads: QuadPipeline,
     buffers: Vec<Buffer>,
+    /// What each cached buffer was shaped from. A keystroke changes one run;
+    /// reshaping the rest of the screen on the UI thread is how typing stalls.
+    buffer_keys: Vec<BufferKey>,
+    font_family: String,
+    wide_font_family: String,
     size: SurfaceSize,
 }
 
@@ -353,6 +368,8 @@ impl TerminalRenderer {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
+            // Fifo, not mailbox. Mailbox is a flip-model present; on the GL
+            // fallback a child window presents that to nowhere.
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
             alpha_mode: capabilities.alpha_modes[0],
@@ -373,12 +390,15 @@ impl TerminalRenderer {
             surface,
             config,
             fonts: FontSystem::new(),
+            font_family: String::new(),
+            wide_font_family: String::new(),
             swash: SwashCache::new(),
             atlas,
             text,
             viewport,
             quads,
             buffers: Vec::new(),
+            buffer_keys: Vec::new(),
             size,
         })
     }
@@ -421,14 +441,9 @@ impl TerminalRenderer {
                 .push_rect(rect.x, rect.y, rect.width, rect.height, rect.color, screen);
         }
 
-        // Glyphs. One `Buffer` per run, rebuilt each frame; the run is placed
-        // by `left`/`top` and spaced by `set_monospace_width` so a character
-        // lands on exactly the column pitch we measured.
-        self.buffers.clear();
-        self.buffers.reserve(list.texts.len());
-        for run in &list.texts {
-            self.buffers.push(build_buffer(&mut self.fonts, run));
-        }
+        // Glyphs. One `Buffer` per run, placed by `left`/`top`. Unchanged
+        // runs keep the buffer shaped last frame.
+        self.sync_buffers(&list.texts);
 
         let areas: Vec<TextArea<'_>> = list
             .texts
@@ -536,19 +551,97 @@ impl TerminalRenderer {
         self.queue.present(frame);
         Ok(())
     }
+
+    pub fn set_fonts(&mut self, primary: String, wide: String) {
+        if self.font_family == primary && self.wide_font_family == wide { return; }
+        self.font_family = primary;
+        self.wide_font_family = wide;
+        self.buffers.clear();
+        self.buffer_keys.clear();
+    }
+
+    pub fn measure(&mut self, size: f32) -> FontMetrics {
+        measure_font(&mut self.fonts, size, &self.font_family, &self.wide_font_family)
+    }
+
+    /// Shapes only the runs whose text or metrics changed.
+    fn sync_buffers(&mut self, runs: &[TextRun]) {
+        if self.buffers.len() > runs.len() {
+            self.buffers.truncate(runs.len());
+            self.buffer_keys.truncate(runs.len());
+        }
+        for (index, run) in runs.iter().enumerate() {
+            if self.buffer_keys.get(index).is_some_and(|key| key.matches(run)) {
+                continue;
+            }
+            let key = BufferKey::of(run);
+            let buffer = build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family);
+            if index < self.buffers.len() {
+                self.buffers[index] = buffer;
+                self.buffer_keys[index] = key;
+            } else {
+                self.buffers.push(buffer);
+                self.buffer_keys.push(key);
+            }
+        }
+    }
+}
+
+/// The parts of a run that decide how it is shaped. Position does not: the
+/// same buffer is placed at a new `left`/`top` when a row only scrolls.
+#[derive(PartialEq)]
+struct BufferKey {
+    font_size: f32,
+    cell_width: f32,
+    text: String,
+    width: f32,
+    height: f32,
+    color: [u8; 4],
+    bold: bool,
+    italic: bool,
+}
+
+impl BufferKey {
+    fn matches(&self, run: &TextRun) -> bool {
+        self.font_size == run.font_size && self.cell_width == run.cell_width && self.text == run.text
+            && self.width == run.width
+            && self.height == run.height
+            && self.color == run.color.to_bytes()
+            && self.bold == run.bold
+            && self.italic == run.italic
+    }
+
+    fn of(run: &TextRun) -> Self {
+        Self {
+            font_size: run.font_size,
+            cell_width: run.cell_width,
+            text: run.text.clone(),
+            width: run.width,
+            height: run.height,
+            color: run.color.to_bytes(),
+            bold: run.bold,
+            italic: run.italic,
+        }
+    }
 }
 
 /// One run shaped into a buffer, spaced to the grid.
-fn build_buffer(fonts: &mut FontSystem, run: &TextRun) -> Buffer {
-    let metrics = Metrics::new(run.height * 0.75, run.height);
+fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str) -> Buffer {
+    // Draw at exactly the size used to measure the cell grid.
+    let font_size = run.font_size;
+    let metrics = Metrics::new(font_size, run.height);
     let mut buffer = Buffer::new(fonts, metrics);
-    let characters = run.text.chars().count().max(1) as f32;
-    // Every grapheme advances `width / characters`, which is the column pitch
-    // for this run: one cell for narrow text, two for wide. This is the GPU
-    // half of `FontMetrics::tracking` — the font's own advance is not asked.
-    buffer.set_monospace_width(Some(run.width / characters));
+    let characters = run.text.graphemes(true).count().max(1) as f32;
+    let pitch = run.width / characters;
+    // cosmic-text 0.19 stores this as an em width: layout divides it by the
+    // font size and snaps each glyph's pixel advance to that quotient.
+    // Passing the pixel pitch snaps to `pitch / font_size` (a fraction of a
+    // pixel). A prompt of twenty characters then ends two cells short of the
+    // cursor, which is drawn on the cell grid. Multiplying back by the font
+    // size makes the snap grid one column.
+    buffer.set_monospace_width(Some(pitch * font_size));
 
-    let mut attrs = Attrs::new().family(Family::Monospace).color(glyph_color(run.color));
+    let mut attrs = Attrs::new().family(family(if pitch > run.cell_width * 1.5 && !wide.is_empty() { wide } else { primary })).color(glyph_color(run.color));
     if run.bold {
         attrs = attrs.weight(Weight::BOLD);
     }
@@ -559,6 +652,55 @@ fn build_buffer(fonts: &mut FontSystem, run: &TextRun) -> Buffer {
     buffer.set_text(&run.text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fonts, false);
     buffer
+}
+
+#[cfg(test)]
+fn glyph_xs(text: &str, pitch: f32, height: f32) -> Vec<f32> {
+    let mut fonts = FontSystem::new();
+    let run = TextRun {
+        font_size: height / 1.2,
+        cell_width: pitch,
+        x: 0.0,
+        y: 0.0,
+        width: pitch * text.chars().count() as f32,
+        height,
+        text: text.to_owned(),
+        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+        tracking: 0.0,
+        bold: false,
+        italic: false,
+        underline: false,
+        underline_color: None,
+        strikethrough: false,
+    };
+    let buffer = build_buffer(&mut fonts, &run, "", "");
+    let mut xs = Vec::new();
+    for layout in buffer.layout_runs() {
+        for glyph in layout.glyphs {
+            xs.push(glyph.x);
+        }
+    }
+    xs
+}
+
+#[test]
+fn shaped_glyphs_stay_on_the_cell_pitch() {
+    let height = 13.0 * 1.2;
+    let pitch = 8.0;
+    let xs = glyph_xs("PS C:\\Users\\Roy> hello", pitch, height);
+    for (i, x) in xs.iter().enumerate() {
+        let expect = i as f32 * pitch;
+        assert!(
+            (x - expect).abs() < 0.51,
+            "glyph {i} at {x} expected {expect}"
+        );
+    }
+    let wide = glyph_xs("你好", pitch * 2.0, height);
+    assert_eq!(wide.len(), 2, "wide xs {wide:?}");
+    for (i, x) in wide.iter().enumerate() {
+        let expect = i as f32 * pitch * 2.0;
+        assert!((x - expect).abs() < 0.51, "wide glyph {i} at {x} expected {expect}");
+    }
 }
 
 /// The module that registered `hwnd`'s class — what raw-window-handle calls
@@ -577,4 +719,67 @@ fn window_instance(hwnd: isize) -> Option<std::num::NonZeroIsize> {
 #[cfg(not(windows))]
 fn window_instance(_hwnd: isize) -> Option<std::num::NonZeroIsize> {
     None
+}
+
+/// Families available to the shaping engine, including user-installed fonts.
+pub fn font_families() -> Vec<String> {
+    let fonts = FontSystem::new();
+    let mut names: Vec<String> = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[test]
+#[cfg(windows)]
+fn selected_fonts_and_measured_size_reach_the_shaper() {
+    let mut fonts = FontSystem::new();
+    let primary = "Consolas";
+    let wide = "Microsoft YaHei UI";
+    let measured = measure_font(&mut fonts, 26.0, primary, wide);
+    let mut pixels = vec![250u8; 1200 * 150 * 3];
+    let mut cache = SwashCache::new();
+    for (row, text, columns_per_character, expected_family) in [
+        (0, "User answered Claude's questions: 0123456789", 1.0, primary),
+        (1, "中文字体测试：终端网格、复制粘贴、字体设置。", 2.0, wide),
+        (2, "operator_config  molab.config  API keys  ->", 1.0, primary),
+    ] {
+        let run = TextRun {
+            font_size: measured.size, cell_width: measured.cell_width,
+            x: 16.0, y: 12.0 + row as f32 * 40.0,
+            width: text.graphemes(true).count() as f32 * columns_per_character * measured.cell_width,
+            height: measured.line_height, text: text.into(), color: Rgba::new(0.12, 0.13, 0.15, 1.0),
+            tracking: 0.0, bold: false, italic: false, underline: false, underline_color: None,
+            strikethrough: false,
+        };
+        let mut buffer = build_buffer(&mut fonts, &run, primary, wide);
+        assert_eq!(buffer.metrics().font_size, measured.size, "drawing must not shrink the measured font");
+        let installed = fonts.db().faces().any(|face| face.families.iter().any(|(name, _)| name == expected_family));
+        if installed {
+            for layout in buffer.layout_runs() {
+                for glyph in layout.glyphs {
+                    let face = fonts.db().face(glyph.font_id).expect("shaped font");
+                    assert!(face.families.iter().any(|(name, _)| name == expected_family), "unexpected fallback: {:?}", face.families);
+                }
+            }
+        }
+        #[allow(deprecated)]
+        buffer.draw(&mut fonts, &mut cache, Color::rgb(30, 33, 38), |x, y, w, h, color| {
+            let [r, g, b, a] = color.as_rgba();
+            for py in 0..h { for px in 0..w {
+                let x = x + px as i32 + run.x as i32;
+                let y = y + py as i32 + run.y as i32;
+                if !(0..1200).contains(&x) || !(0..150).contains(&y) { continue; }
+                let index = (y as usize * 1200 + x as usize) * 3;
+                for (channel, value) in [r, g, b].into_iter().enumerate() {
+                    pixels[index + channel] = ((value as u32 * a as u32 + pixels[index + channel] as u32 * (255 - a as u32)) / 255) as u8;
+                }
+            }}
+        });
+    }
+    if let Ok(path) = std::env::var("TETHER_FONT_PREVIEW") {
+        let mut image = b"P6\n1200 150\n255\n".to_vec();
+        image.extend(pixels);
+        std::fs::write(path, image).expect("font preview");
+    }
 }

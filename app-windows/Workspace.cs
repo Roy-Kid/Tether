@@ -75,6 +75,7 @@ public sealed class Workspace : IAsyncDisposable
     {
         var tab = new Tab();
         tab.Model.SetPalette(CurrentPalette);
+        tab.Model.SessionChanged += NotifySessionChanged;
         _tabs.Add(tab);
         _active = _tabs.Count - 1;
         await tab.BindAsync();
@@ -86,12 +87,15 @@ public sealed class Workspace : IAsyncDisposable
     {
         if (index < 0 || index >= _tabs.Count) return;
         var tab = _tabs[index];
+        tab.Model.SessionChanged -= NotifySessionChanged;
         _tabs.RemoveAt(index);
         if (index < _active) _active--;
         if (_active >= _tabs.Count) _active = _tabs.Count - 1;
         await tab.DisposeAsync();
         Changed?.Invoke();
     }
+
+    private void NotifySessionChanged() => Changed?.Invoke();
 
     public void Select(int index)
     {

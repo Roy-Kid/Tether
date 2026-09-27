@@ -5,28 +5,8 @@
   <Grid.RowDefinitions>
    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
-  <Grid>
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <TextBlock Text="Files" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="{StaticResource InputSize}"/>
-   <StackPanel Grid.Column="1" Orientation="Horizontal">
-    <Button Content="&#xE72B;" Style="{StaticResource ChromeIconButtonStyle}" Click="Back_Click" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
-    <Button Content="&#xE74A;" Style="{StaticResource ChromeIconButtonStyle}" Click="Up_Click" ToolTipService.ToolTip="Up" AutomationProperties.Name="Up"/>
-    <Button Content="&#xE72C;" Style="{StaticResource ChromeIconButtonStyle}" Click="Refresh_Click" ToolTipService.ToolTip="Refresh" AutomationProperties.Name="Refresh"/>
-    <Button Content="&#xE712;" Style="{StaticResource ChromeIconButtonStyle}" ToolTipService.ToolTip="File actions" AutomationProperties.Name="File actions">
-     <Button.Flyout><MenuFlyout>
-      <MenuFlyoutItem Text="Home" Click="Home_Click"/>
-      <MenuFlyoutItem Text="Go to Terminal Directory" Click="TerminalDirectory_Click"/>
-      <MenuFlyoutItem Text="New Folder" Click="NewFolder_Click"/>
-      <MenuFlyoutSeparator/>
-      <MenuFlyoutItem Text="Upload Files…" Click="Upload_Click"/>
-      <MenuFlyoutItem Text="Upload Folder…" Click="UploadFolder_Click"/>
-      <ToggleMenuFlyoutItem x:Name="HiddenToggle" Text="Show Hidden Files" Click="Hidden_Click"/>
-     </MenuFlyout></Button.Flyout>
-    </Button>
-    <Button Content="&#xE711;" Style="{StaticResource ChromeIconButtonStyle}" Click="Close_Click" ToolTipService.ToolTip="Hide Files" AutomationProperties.Name="Hide Files"/>
-   </StackPanel>
-  </Grid>
-  <TextBox x:Name="Address" Grid.Row="1" KeyDown="Address_KeyDown" AutomationProperties.Name="Directory" FontSize="{StaticResource InputSize}"/>
+  <TextBox x:Name="Address" Grid.Row="0" KeyDown="Address_KeyDown" AutomationProperties.Name="Directory" FontSize="{StaticResource InputSize}"/>
+  <TextBox x:Name="Filter" Grid.Row="1" Visibility="Collapsed" PlaceholderText="Filter names…" TextChanged="Filter_Changed" KeyDown="Filter_KeyDown" AutomationProperties.Name="Filter file names" ToolTipService.ToolTip="Filter this folder by name (Ctrl+F); Esc to close"/>
   <Grid Grid.Row="2">
    <ListView x:Name="Entries" SelectionMode="Extended" DoubleTapped="Entries_DoubleTapped" KeyDown="Entries_KeyDown"
     AllowDrop="True" DragOver="Entries_DragOver" Drop="Entries_Drop" RightTapped="Entries_RightTapped" AutomationProperties.Name="Files">
@@ -49,11 +29,23 @@
      <MenuFlyoutItem Text="Rename…" Click="Rename_Click"/>
      <MenuFlyoutItem Text="Move To…" Click="Move_Click"/>
      <MenuFlyoutItem Text="Delete…" Click="Delete_Click"/>
+     <MenuFlyoutSeparator/>
+     <MenuFlyoutItem Text="Back" Click="Back_Click"/>
+     <MenuFlyoutItem Text="Forward" Click="Forward_Click"/>
+     <MenuFlyoutItem Text="Up" Click="Up_Click"/>
+     <MenuFlyoutItem Text="Home" Click="Home_Click"/>
+     <MenuFlyoutItem Text="Refresh" Click="Refresh_Click"/>
+     <MenuFlyoutItem Text="Go to Terminal Directory" Click="TerminalDirectory_Click"/>
+     <MenuFlyoutItem Text="New Folder" Click="NewFolder_Click"/>
+     <MenuFlyoutItem Text="Upload Files…" Click="Upload_Click"/>
+     <MenuFlyoutItem Text="Upload Folder…" Click="UploadFolder_Click"/>
+     <ToggleMenuFlyoutItem x:Name="HiddenToggle" Text="Show Hidden Files" Click="Hidden_Click"/>
     </MenuFlyout></ListView.ContextFlyout>
    </ListView>
    <TextBlock x:Name="Empty" Text="This folder is empty." IsHitTestVisible="False" HorizontalAlignment="Center" VerticalAlignment="Center" Style="{StaticResource DetailTextStyle}" Visibility="Collapsed"/>
   </Grid>
   <StackPanel Grid.Row="3" Spacing="{StaticResource SpaceGroup}">
+   <TextBlock x:Name="ItemCount" Style="{StaticResource DetailTextStyle}" AutomationProperties.LiveSetting="Polite"/>
    <TextBlock x:Name="Problem" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" AutomationProperties.LiveSetting="Polite"/>
    <ProgressBar x:Name="ProgressBar" Visibility="Collapsed" IsIndeterminate="True"/>
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

@@ -283,6 +283,28 @@ impl TerminalSession {
         self.write(bytes)
     }
 
+    /// Send wheel events to mouse-aware applications, or scroll local history.
+    pub fn wheel(
+        &self,
+        lines: i32,
+        row: u16,
+        column: u16,
+        local: bool,
+    ) -> Result<(), SessionError> {
+        let bytes = {
+            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            let bytes = if local { None } else { terminal.encode_wheel(lines, row, column) };
+            if bytes.is_none() {
+                terminal.scroll(Scroll::Lines(lines.saturating_neg()));
+            }
+            bytes
+        };
+        match bytes {
+            Some(bytes) if !bytes.is_empty() => self.write(bytes),
+            _ => Ok(()),
+        }
+    }
+
     /// Sends bytes as they are, for a consumer that has its own encoding.
     pub fn write(&self, bytes: Vec<u8>) -> Result<(), SessionError> {
         self.commands.send(Command::Write(bytes)).map_err(|_| SessionError::Ended)

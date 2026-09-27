@@ -458,6 +458,12 @@ impl Session {
         }
     }
 
+    /// Routes wheel notches to the remote mouse protocol or local scrollback.
+    /// Positive lines scroll down; local forces scrollback even in mouse mode.
+    pub fn wheel(&self, lines: i32, row: u16, column: u16, local: bool) -> Result<(), TetherError> {
+        self.inner.wheel(lines, row, column, local).map_err(Into::into)
+    }
+
     /// Moves the viewport over the scrollback.
     ///
     /// Nothing to report: the engine clamps at both ends, so a wheel at the

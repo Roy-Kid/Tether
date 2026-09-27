@@ -34,6 +34,8 @@ public sealed class TerminalControl : Control
     private ChildHwnd? _child;
     private FontMetrics _metrics = FontMetrics.FromAdvances(13, 8, 16, 16);
     private bool _ready;
+    private double _fontSize = AppSettings.Current.Terminal.FontSize;
+    private bool _pasting;
     private Selection? _selection;
     private bool _selecting;
     private double _scrollRemainder;
@@ -49,7 +51,12 @@ public sealed class TerminalControl : Control
     // Auto-scroll while a drag runs off the edge. A stationary pointer
     // outside the control still gets no move events, so this ticks.
     private readonly DispatcherTimer _autoScroll;
+    private readonly DispatcherTimer _gridResize;
     private int _autoScrollDelta;
+    /// <summary>A drag is in progress. Drawing now would rebuild the swap chain on every pixel, which is the shake.</summary>
+    private bool _holdPaint;
+    private int _backedWidth;
+    private int _backedHeight;
 
     private static readonly Rgba SelectionTint = new(0.3f, 0.55f, 1f, 0.12f);
     private static readonly Rgba LinkTint = new(0.3f, 0.55f, 1f, 1f);
@@ -65,6 +72,11 @@ public sealed class TerminalControl : Control
 
         _autoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _autoScroll.Tick += OnAutoScrollTick;
+        // The shell reflows when the grid changes. Doing that on every pixel
+        // of a drag is the text jumping under the cursor. Wait until the
+        // drag pauses, then tell it once.
+        _gridResize = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+        _gridResize.Tick += (_, _) => CommitSize();
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -149,6 +161,8 @@ public sealed class TerminalControl : Control
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         _ready = true;
+        AppSettings.Changed += ApplyPreferences;
+        ApplyPreferences();
         if (_child is not null)
         {
             // A tab coming back: its child was hidden while another tab
@@ -164,6 +178,8 @@ public sealed class TerminalControl : Control
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         _ready = false;
+        AppSettings.Changed -= ApplyPreferences;
+        _autoScroll.Stop();
         _child?.Hide();
     }
 
@@ -201,14 +217,17 @@ public sealed class TerminalControl : Control
 
     private async Task CreateSurfaceAsync(nint parent)
     {
-        _child ??= ChildHwnd.Create(parent, this, SendText, HandleKey);
+        _child ??= ChildHwnd.Create(parent, this, SendText, HandleKey, OnChildPointer);
         _child.Fit(this);
         var (width, height) = _child.Size;
+        _backedWidth = width;
+        _backedHeight = height;
         _surface = await TerminalSurface.FromHwndAsync(_child.Handle, (uint)width, (uint)height);
         // The surface is in physical pixels. Measuring at a DIP size on a 4K
         // display gives half-sized glyphs and a cursor that stands beside the
         // character it is on — the grid is in the wrong units.
-        _metrics = _surface.Measure((float)(13 * DpiScale));
+        _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
+        _metrics = _surface.Measure((float)(_fontSize * DpiScale));
         ApplyResize();
     }
 
@@ -230,7 +249,7 @@ public sealed class TerminalControl : Control
 
     private void Redraw()
     {
-        if (_surface is null) return;
+        if (_surface is null || _holdPaint) return;
         // Before a session exists there is still a terminal: paint one empty
         // frame with the palette's background. A light window is a missing
         // control; a dark page is a terminal with nothing in it (law
@@ -296,11 +315,29 @@ public sealed class TerminalControl : Control
             FocusTerminal();
             return;
         }
+        // Follow the control now, but do not rebuild the swap chain or ask
+        // the shell to reflow until the drag pauses. Both of those on every
+        // pixel are what shakes a high-DPI window.
+        _holdPaint = true;
         _child?.Fit(this);
-        if (_child is not null)
+        _gridResize.Stop();
+        _gridResize.Start();
+    }
+
+    /// <summary>The drag paused. One swap-chain resize, one grid, one paint.</summary>
+    private void CommitSize()
+    {
+        _gridResize.Stop();
+        _holdPaint = false;
+        if (_surface is not null && _child is not null)
         {
             var (width, height) = _child.Size;
-            _surface.Resize((uint)width, (uint)height);
+            if (width != _backedWidth || height != _backedHeight)
+            {
+                _surface.Resize((uint)width, (uint)height);
+                _backedWidth = width;
+                _backedHeight = height;
+            }
         }
         ApplyResize();
         Redraw();
@@ -314,20 +351,20 @@ public sealed class TerminalControl : Control
     /// </summary>
     private void ApplyResize()
     {
-        if (_surface is null || _model is null) return;
-        var columns = _metrics.ColumnsFitting(ActualWidth * DpiScale);
-        var rows = _metrics.RowsFitting(ActualHeight * DpiScale);
+        if (_surface is null || _model is null || _child is null) return;
+        var (width, height) = _child.Size;
+        var columns = _metrics.ColumnsFitting(width);
+        var rows = _metrics.RowsFitting(height);
         _model.Resize(columns, rows);
     }
 
     // ---- input: keys, not bytes ----
     //
-    // The HWND is the input window: `WM_CHAR` and `WM_KEYDOWN` arrive in
-    // `ChildHwnd`'s WndProc and are handed here. XAML's `CharacterReceived`
-    // never fires for a control under an HWND, which is how a terminal ends
-    // up with a prompt nobody can type at. The XAML events stay as the path
-    // for when the island holds focus; both go through `HandleKey` and
-    // `SendText`, so a key is never sent twice.
+    // The HWND is the input window: keys and the pointer arrive in
+    // `ChildHwnd`'s WndProc and are handed here. XAML never sees either for
+    // a control sitting under that window. The XAML events stay as the path
+    // for when the island holds the pointer; both go through the same
+    // handlers, so a key or a click is never taken twice.
     //
     // A key press is decided from the virtual key when it is a named key or
     // a chord; plain text waits for the character message, which carries
@@ -345,15 +382,28 @@ public sealed class TerminalControl : Control
         var alt = IsDown(VirtualKey.Menu);
         var control = IsDown(VirtualKey.Control);
 
-        // Copy / paste before anything reaches the remote. Ctrl+C is the
-        // terminal's interrupt when nothing is selected; with a selection it
-        // is copy, which is what every terminal on Windows does.
-        if (control && !alt && key == VirtualKey.C && _selection is { } selected && !selected.IsEmpty())
+        var pressed = new Shortcut(key, shift, control, alt);
+        foreach (var (name, chordText) in AppSettings.Current.Terminal.Bindings)
         {
-            CopySelection(selected);
+            if (!Shortcut.TryParse(chordText, out var shortcut) || shortcut != pressed) continue;
+            switch (name)
+            {
+                case "Copy":
+                    if (_selection is { } selected && !selected.IsEmpty()) CopySelection(selected);
+                    else if (control && !shift && key == VirtualKey.C) break;
+                    return true;
+                case "Paste": _ = PasteAsync(); return true;
+                case "Zoom in": Zoom(1); return true;
+                case "Zoom out": Zoom(-1); return true;
+                case "Reset zoom": Zoom(0); return true;
+            }
+        }
+        if (control && !shift && !alt && key == VirtualKey.C && _selection is { } selection && !selection.IsEmpty())
+        {
+            CopySelection(selection);
             return true;
         }
-        if (control && !alt && key == VirtualKey.V)
+        if (control && !shift && !alt && key == VirtualKey.V)
         {
             _ = PasteAsync();
             return true;
@@ -406,15 +456,18 @@ public sealed class TerminalControl : Control
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (HandleKey(e.Key)) e.Handled = true;
+        _xamlKeyTaken = HandleKey(e.Key);
+        if (_xamlKeyTaken) e.Handled = true;
     }
 
     private char _highSurrogate;
+    private bool _xamlKeyTaken;
 
     private void OnCharacterReceived(object sender, CharacterReceivedRoutedEventArgs e)
     {
         var ch = e.Character;
         e.Handled = true;
+        if (_xamlKeyTaken) return;
         if (char.IsHighSurrogate(ch))
         {
             _highSurrogate = ch;
@@ -435,32 +488,79 @@ public sealed class TerminalControl : Control
     protected override void OnPointerWheelChanged(PointerRoutedEventArgs e)
     {
         if (_model is null) return;
-        var delta = e.GetCurrentPoint(this).Properties.MouseWheelDelta;
+        var point = e.GetCurrentPoint(this);
+        var delta = point.Properties.MouseWheelDelta;
+        HandleWheel(delta, point.Position);
+        e.Handled = true;
+        base.OnPointerWheelChanged(e);
+    }
+
+    /// <summary>
+    /// Pointer input from the render window, whose client pixels cover this
+    /// control. XAML never sees those events: the window is in front of the island.
+    /// </summary>
+    private void OnChildPointer(ChildPointer message)
+    {
+        var scale = DpiScale;
+        if (scale <= 0) scale = 1;
+        var position = new Windows.Foundation.Point(message.X / scale, message.Y / scale);
+        switch (message.Kind)
+        {
+            case ChildPointerKind.Wheel:
+                HandleWheel(message.Delta, position);
+                break;
+            case ChildPointerKind.LeftDown:
+                PressAt(position);
+                break;
+            case ChildPointerKind.Move:
+                MoveAt(position);
+                break;
+            case ChildPointerKind.LeftUp:
+                ReleaseAt();
+                break;
+            case ChildPointerKind.RightUp:
+                ShowMenu(position);
+                break;
+        }
+    }
+
+    private void HandleWheel(int delta, Windows.Foundation.Point position)
+    {
+        if (_model is null) return;
         _scrollRemainder += -delta / 120.0;
         var lines = (int)_scrollRemainder;
         if (lines != 0)
         {
             _scrollRemainder -= lines;
-            _model.Scroll(ScrollTo.Lines(lines));
+            var cell = CellAt(position);
+            var shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            _model.Wheel(lines, (ushort)Math.Max(0, cell.Row), (ushort)Math.Max(0, cell.Column), shift);
         }
-        e.Handled = true;
-        base.OnPointerWheelChanged(e);
     }
 
     // ---- selection ----
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        FocusTerminal();
         var point = e.GetCurrentPoint(this);
-        var cell = CellAt(point.Position);
+        if (point.Properties.IsRightButtonPressed) return;
+        PressAt(point.Position);
+        CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    /// <summary>Starts a selection at <paramref name="position"/>, or opens a link on Ctrl+click.</summary>
+    private void PressAt(Windows.Foundation.Point position)
+    {
+        FocusTerminal();
+        var cell = CellAt(position);
 
         // Ctrl+click opens a link. A plain click stays the remote's when
         // mouse reporting is on (Decisions/0015).
         if (IsDown(VirtualKey.Control) && LinkAt(cell) is { } link)
         {
             OpenLink(link);
-            e.Handled = true;
             return;
         }
 
@@ -480,32 +580,30 @@ public sealed class TerminalControl : Control
             {
                 _selection = word;
                 _selecting = true;
-                CapturePointer(e.Pointer);
                 Redraw();
-                e.Handled = true;
                 return;
             }
             if (_clickCount >= 3)
             {
                 _selection = SelectionText.LineAt(frame, cell);
                 _selecting = true;
-                CapturePointer(e.Pointer);
                 Redraw();
-                e.Handled = true;
                 return;
             }
         }
 
         _selection = new Selection(cell, cell);
         _selecting = true;
-        CapturePointer(e.Pointer);
         Redraw();
-        e.Handled = true;
     }
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
-        var raw = e.GetCurrentPoint(this).Position;
+        MoveAt(e.GetCurrentPoint(this).Position);
+    }
+
+    private void MoveAt(Windows.Foundation.Point raw)
+    {
         var cell = CellAt(raw);
 
         if (_selecting && _selection is { } current)
@@ -544,10 +642,15 @@ public sealed class TerminalControl : Control
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        ReleaseAt();
+        ReleasePointerCapture(e.Pointer);
+    }
+
+    private void ReleaseAt()
+    {
         _selecting = false;
         _autoScroll.Stop();
         _autoScrollDelta = 0;
-        ReleasePointerCapture(e.Pointer);
         if (_selection is { } s && s.IsEmpty()) _selection = null;
         Redraw();
     }
@@ -645,44 +748,40 @@ public sealed class TerminalControl : Control
 
     private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
-        var cell = CellAt(e.GetPosition(this));
+        ShowMenu(e.GetPosition(this));
+        e.Handled = true;
+    }
+
+    private void ShowMenu(Windows.Foundation.Point position)
+    {
+        var cell = CellAt(position);
         var link = LinkAt(cell);
-        var menu = new MenuFlyout();
-
+        var commands = new List<(string Title, Action Run)>();
         if (_selection is { } selected && !selected.IsEmpty())
-        {
-            var copy = new MenuFlyoutItem { Text = "Copy" };
-            copy.Click += (_, _) => CopySelection(selected);
-            menu.Items.Add(copy);
-        }
-
+            commands.Add(("Copy", () => CopySelection(selected)));
         if (link is not null)
         {
-            var open = new MenuFlyoutItem { Text = "Open" };
-            open.Click += (_, _) => OpenLink(link);
-            menu.Items.Add(open);
-
-            foreach (var command in LinkCommands?.Invoke(link) ?? [])
+            commands.Add(("Open", () => OpenLink(link)));
+            commands.AddRange(LinkCommands?.Invoke(link) ?? []);
+            commands.Add(("Copy link", () => CopyText(LinkText(link))));
+        }
+        commands.Add(("Paste", () => _ = PasteAsync()));
+        if (_child is not null)
+        {
+            NativeContextMenu.Show(_child.Handle, (int)Math.Round(position.X * DpiScale),
+                (int)Math.Round(position.Y * DpiScale), commands);
+        }
+        else
+        {
+            var menu = new MenuFlyout();
+            foreach (var command in commands)
             {
                 var item = new MenuFlyoutItem { Text = command.Title };
                 item.Click += (_, _) => command.Run();
                 menu.Items.Add(item);
             }
-
-            var copyLink = new MenuFlyoutItem { Text = "Copy link" };
-            copyLink.Click += (_, _) => CopyText(LinkText(link));
-            menu.Items.Add(copyLink);
+            menu.ShowAt(this, position);
         }
-
-        if (menu.Items.Count == 0)
-        {
-            var paste = new MenuFlyoutItem { Text = "Paste" };
-            paste.Click += (_, _) => _ = PasteAsync();
-            menu.Items.Add(paste);
-        }
-
-        menu.ShowAt(this, e.GetPosition(this));
-        e.Handled = true;
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -739,20 +838,57 @@ public sealed class TerminalControl : Control
         if (text.Length == 0) return;
         var package = new DataPackage();
         package.SetText(text);
-        Clipboard.SetContent(package);
-        Clipboard.Flush();
+        try
+        {
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+        }
+        catch (Exception ex)
+        {
+            _ = Alerts.ClipboardErrorAsync(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread(), ex.Message);
+        }
     }
 
     private async Task PasteAsync()
     {
-        if (_model is null) return;
-        var package = Clipboard.GetContent();
-        if (!package.Contains(StandardDataFormats.Text)) return;
-        var text = await package.GetTextAsync();
-        if (!string.IsNullOrEmpty(text))
+        if (_pasting || _model is not { IsLive: true }) return;
+        _pasting = true;
+        var model = _model;
+        var generation = model.Generation;
+        try
         {
-            _model.Send(KeyInput.Paste(text));
+            var package = Clipboard.GetContent();
+            if (!package.Contains(StandardDataFormats.Text)) return;
+            var text = await package.GetTextAsync();
+            if (string.IsNullOrEmpty(text)) return;
+            if (AppSettings.Current.Terminal.ConfirmPaste(text) &&
+                !await Alerts.ConfirmPasteAsync(_uiQueue, text.Length)) return;
+            if (_ready && ReferenceEquals(model, _model) && model.Generation == generation && model.IsLive)
+            {
+                _selection = null;
+                model.Send(KeyInput.Paste(text));
+                RequestRedraw();
+            }
         }
+        catch (Exception ex) { await Alerts.ClipboardErrorAsync(_uiQueue, ex.Message); }
+        finally { _pasting = false; FocusTerminal(); }
+    }
+
+    private void Zoom(int delta)
+    {
+        var size = delta == 0 ? 13 : Math.Clamp(_fontSize + delta, 10, 32);
+        (AppSettings.Current with { Terminal = AppSettings.Current.Terminal with { FontSize = size } }).Save();
+    }
+
+    private void ApplyPreferences()
+    {
+        _fontSize = AppSettings.Current.Terminal.FontSize;
+        if (_surface is null) return;
+        _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
+        _metrics = _surface.Measure((float)(_fontSize * DpiScale));
+        _selection = null;
+        ApplyResize();
+        RequestRedraw();
     }
 
     private static bool IsDown(VirtualKey key) =>

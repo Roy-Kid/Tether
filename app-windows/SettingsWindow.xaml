@@ -7,6 +7,7 @@
   <NavigationView.MenuItems>
    <NavigationViewItem Content="Startup" Tag="startup" Icon="Play" IsSelected="True" />
    <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
+   <NavigationViewItem Content="Terminal" Tag="terminal" Icon="Keyboard" />
    <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
   </NavigationView.MenuItems>
   <ScrollViewer Padding="{StaticResource SettingsPageInset}">
@@ -24,6 +25,28 @@
        Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
      </StackPanel>
     </Border>
+    <Border Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
+     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+     <StackPanel Spacing="{StaticResource SpaceGroup}">
+      <TextBlock Text="SSH client" Style="{StaticResource BodyStrongTextBlockStyle}" />
+      <TextBlock Text="ssh.exe used when a connection can be reused. Windows OpenSSH is the default."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <ComboBox x:Name="SshPicker" HorizontalAlignment="Stretch"
+       AutomationProperties.Name="SSH client" SelectionChanged="Ssh_Changed" />
+      <Grid ColumnSpacing="8">
+       <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+       </Grid.ColumnDefinitions>
+       <TextBox x:Name="SshPathBox" Header="Path" AutomationProperties.Name="SSH client path"
+        LostFocus="SshPath_LostFocus" />
+       <Button Grid.Column="1" Content="Browse" VerticalAlignment="Bottom" Click="SshBrowse_Click"
+        AutomationProperties.Name="Browse for ssh.exe" />
+      </Grid>
+      <TextBlock x:Name="SshPathProblem" Foreground="{ThemeResource ChromeSubtleBrush}"
+       TextWrapping="Wrap" Visibility="Collapsed" />
+     </StackPanel>
+    </Border>
     <Border x:Name="AppearancePane" Visibility="Collapsed"
      Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
      Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
@@ -39,6 +62,7 @@
       </ComboBox>
      </StackPanel>
     </Border>
+    <StackPanel x:Name="TerminalPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="ExtensionsPane" Visibility="Collapsed" Spacing="{StaticResource SpaceGroup}" />
     <TextBlock x:Name="SaveProblem" Foreground="{ThemeResource ChromeSubtleBrush}"
      TextWrapping="Wrap" Visibility="Collapsed" />

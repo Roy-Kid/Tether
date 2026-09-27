@@ -917,6 +917,12 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -1309,6 +1315,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     void uniffi_tether_ffi_fn_method_rendersurface_set_fonts(ulong @ptr,RustBuffer @primary,RustBuffer @wide,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ulong uniffi_tether_ffi_fn_clone_hosttrust(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
     );
 
@@ -1475,6 +1492,17 @@ static class _UniFFILib {
     public static extern
 #endif
      void uniffi_tether_ffi_fn_method_session_set_palette(ulong @ptr,RustBuffer @palette,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_session_wheel(ulong @ptr,int @lines,ushort @row,ushort @column,sbyte @local,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -1739,6 +1767,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ulong uniffi_tether_ffi_fn_func_run_interactive_exchange(ulong @prompter
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_func_render_font_families(ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -2431,6 +2470,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_func_render_font_families(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_func_connect(
     );
 
@@ -2728,6 +2778,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_rendersurface_set_fonts(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_hosttrust_trusts(
     );
 
@@ -2839,6 +2900,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_method_session_set_palette(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_wheel(
     );
 
     #if NET8_0_OR_GREATER
@@ -3089,6 +3161,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_render_font_families();
+            if (checksum != 14860) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_render_font_families` checksum `14860`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_connect();
             if (checksum != 34402) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_connect` checksum `34402`, library returned `{checksum}`");
@@ -3251,6 +3329,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_set_fonts();
+            if (checksum != 45006) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_fonts` checksum `45006`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_hosttrust_trusts();
             if (checksum != 28272) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_hosttrust_trusts` checksum `28272`, library returned `{checksum}`");
@@ -3314,6 +3398,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_set_palette();
             if (checksum != 52819) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_set_palette` checksum `52819`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_wheel();
+            if (checksum != 15577) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_wheel` checksum `15577`, library returned `{checksum}`");
             }
         }
         {
@@ -5358,6 +5448,7 @@ internal interface IRenderSurface {
     /// </summary>
     FontMetricsDto Measure(float @size);
     void Resize(uint @width, uint @height);
+    void SetFonts(string @primary, string @wide);
 }
 /// <summary>
 /// A GPU terminal surface.
@@ -5489,6 +5580,15 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     
     
     
+    public void SetFonts(string @primary, string @wide) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_set_fonts(thisPtr, FfiConverterString.INSTANCE.Lower(@primary), FfiConverterString.INSTANCE.Lower(@wide), ref _status)
+));
+    }
+    
+    
+    
 
     
     /// <summary>
@@ -5611,6 +5711,12 @@ internal interface ISession {
     /// </summary>
     /// <exception cref="TetherException"></exception>
     void SetPalette(TerminalPalette? @palette);
+    /// <summary>
+    /// Routes wheel notches to the remote mouse protocol or local scrollback.
+    /// Positive lines scroll down; local forces scrollback even in mouse mode.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    void Wheel(int @lines, ushort @row, ushort @column, bool @local);
     /// <summary>
     /// The directory the shell last reported, if it reports one.
     /// </summary>
@@ -5851,6 +5957,20 @@ internal class Session : ISession, IDisposable {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCallWithError(FfiConverterTypeTetherError.INSTANCE, (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_session_set_palette(thisPtr, FfiConverterOptionalTypeTerminalPalette.INSTANCE.Lower(@palette), ref _status)
+));
+    }
+    
+    
+    
+    /// <summary>
+    /// Routes wheel notches to the remote mouse protocol or local scrollback.
+    /// Positive lines scroll down; local forces scrollback even in mouse mode.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    public void Wheel(int @lines, ushort @row, ushort @column, bool @local) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeTetherError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_wheel(thisPtr, FfiConverterInt32.INSTANCE.Lower(@lines), FfiConverterUInt16.INSTANCE.Lower(@row), FfiConverterUInt16.INSTANCE.Lower(@column), FfiConverterBoolean.INSTANCE.Lower(@local), ref _status)
 ));
     }
     
@@ -10859,6 +10979,17 @@ internal static class TetherFfiMethods {
         FfiConverterTypeTetherError.INSTANCE
     );
    }
+    /// <summary>
+    /// Installed family names, as seen by the same shaper that draws the terminal.
+    /// </summary>
+    public static string[] RenderFontFamilies() {
+        return FfiConverterSequenceString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_func_render_font_families( ref _status)
+));
+    }
+
+
     /// <summary>
     /// Connects, authenticates and opens a shell.
     ///

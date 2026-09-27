@@ -32,15 +32,8 @@ struct SessionView: View {
           "Could Not Connect",
           systemImage: "network.slash",
           description: Text(reason))
-      case .ended(let reason):
-        if let reason, !reason.isEmpty {
-          ContentUnavailableView(
-            "Session Ended",
-            systemImage: "stop.circle",
-            description: Text(reason))
-        } else {
-          ContentUnavailableView("Session Ended", systemImage: "stop.circle")
-        }
+      case .ended:
+        terminal
       }
     }
     // The far side is told what this window draws with, and told again when

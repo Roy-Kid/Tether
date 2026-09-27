@@ -218,7 +218,7 @@ struct HostStatusBar: View {
     case .connecting: return "Connecting"
     case .asking: return "Needs authentication"
     case .failed: return "Disconnected"
-    case .ended: return "Ended"
+    case .ended(let reason): return reason ?? "Ended"
     case .connected: return "Connected"
     }
   }
@@ -251,8 +251,12 @@ struct HostStatusBar: View {
           mark("key.fill", "Needs authentication")
         case .failed:
           mark("bolt.slash", "Disconnected")
-        case .ended:
-          mark("stop.circle", "Ended")
+        case .ended(let reason):
+          HStack(spacing: 4) {
+            mark("stop.circle", reason ?? "Ended")
+            Text(reason ?? "Ended").font(.caption).lineLimit(1)
+              .help(reason ?? "Ended")
+          }
         default:
           EmptyView()
         }

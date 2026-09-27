@@ -18,7 +18,7 @@ pub use tmux::*;
 
 #[cfg(feature = "render")]
 pub use render::{
-    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
+    render_font_families, FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
     RgbaDto, SelectionDto,
 };
 

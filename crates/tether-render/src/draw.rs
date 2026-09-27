@@ -50,6 +50,8 @@ pub struct BgRect {
 /// is what keeps the eightieth column where the cursor is.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRun {
+    pub font_size: f32,
+    pub cell_width: f32,
     pub x: f32,
     pub y: f32,
     pub width: f32,

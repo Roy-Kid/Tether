@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 import Tether
 import TetherPluginKit
 import TetherUI
@@ -45,6 +48,9 @@ struct AppSettings: View {
     case general
     case appearance
     case security
+    #if os(macOS)
+    case terminal
+    #endif
     case extensions
 
     var id: String { rawValue }
@@ -53,6 +59,9 @@ struct AppSettings: View {
       switch self {
       case .general: "General"
       case .appearance: "Appearance"
+      #if os(macOS)
+      case .terminal: "Terminal"
+      #endif
       case .security: "Security"
       case .extensions: "Extensions"
       }
@@ -62,6 +71,9 @@ struct AppSettings: View {
       switch self {
       case .general: "gearshape"
       case .appearance: "paintpalette"
+      #if os(macOS)
+      case .terminal: "keyboard"
+      #endif
       case .security: "lock.shield"
       case .extensions: "puzzlepiece.extension"
       }
@@ -103,6 +115,9 @@ struct AppSettings: View {
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
     switch section {
+    #if os(macOS)
+    case .terminal: TerminalPreferencesEditor()
+    #endif
     case .general: GeneralSettings()
     case .appearance: AppearanceSettings()
     case .security: SecuritySettings(known: known, store: store, secrets: secrets)
@@ -130,6 +145,11 @@ private struct AppearanceSettings: View {
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
+  #if os(macOS)
+  @AppStorage("terminalFontFamily") private var fontFamily = ""
+  @AppStorage("terminalWideFontFamily") private var wideFontFamily = ""
+  private let families = NSFontManager.shared.availableFontFamilies.sorted()
+  #endif
 
   var body: some View {
     Form {
@@ -144,7 +164,21 @@ private struct AppearanceSettings: View {
           Text("Light").tag("light")
           Text("Dark").tag("dark")
         }
-        Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
+        #if os(macOS)
+        Picker("Terminal font", selection: $fontFamily) {
+          Text("System monospace").tag("")
+          ForEach(families, id: \.self) { Text($0).tag($0) }
+        }
+        Picker("CJK / wide-character font", selection: $wideFontFamily) {
+          Text("Automatic fallback").tag("")
+          ForEach(families, id: \.self) { Text($0).tag($0) }
+        }
+        HStack {
+          Text("AaBb 0123 → ┌─┐").font(fontFamily.isEmpty ? .system(size: fontSize, design: .monospaced) : .custom(fontFamily, fixedSize: fontSize))
+          Text("中文测试 日本語 한글").font(wideFontFamily.isEmpty ? .system(size: fontSize) : .custom(wideFontFamily, fixedSize: fontSize))
+        }
+        #endif
+        Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 10...32)
       }
     }
     .formStyle(.grouped)

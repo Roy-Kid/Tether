@@ -21,6 +21,8 @@ public struct TerminalSurface: View {
   @State private var confirmed = false
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @AppStorage("terminalFontFamily") private var fontFamily = ""
+  @AppStorage("terminalWideFontFamily") private var wideFontFamily = ""
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalAppearance") private var appearance = "system"
 
@@ -42,7 +44,7 @@ public struct TerminalSurface: View {
     self.links = links
   }
   public var body: some View {
-    let metrics = FontMetrics(size: min(24, max(10, fontSize)))
+    let metrics = FontMetrics(size: min(32, max(10, fontSize)), family: fontFamily, wideFamily: wideFontFamily)
     let palette = Palette.chosen(setting: appearance, scheme: scheme)
     GeometryReader { geometry in
       ZStack(alignment: .topLeading) {
@@ -55,7 +57,7 @@ public struct TerminalSurface: View {
         KeyCapture(
           onInput: onInput, active: active, lineHeight: metrics.lineHeight,
           onFocus: onFocus, onScroll: { onScroll(.lines($0)) },
-          links: links, geometry: cells, onHover: hover
+          links: links, geometry: cells, frame: frame, onHover: hover
         )
         // Filled on purpose. A bare `NSView` has no intrinsic size, so
         // without this it lays out at zero — and a zero-sized view still
@@ -85,6 +87,8 @@ public struct TerminalSurface: View {
       .clipped()
       .onAppear { fit(geometry.size, metrics) }
       .onChange(of: geometry.size) { _, size in fit(size, metrics) }
+      .onChange(of: fontFamily) { _, _ in fit(geometry.size, metrics) }
+      .onChange(of: wideFontFamily) { _, _ in fit(geometry.size, metrics) }
       .onChange(of: fontSize) { _, _ in fit(geometry.size, metrics) }
     }
   }

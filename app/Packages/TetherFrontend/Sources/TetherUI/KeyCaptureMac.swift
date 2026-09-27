@@ -22,6 +22,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var lineHeight: CGFloat = 17
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
+  var frame: ScreenFrame?
   var onHover: (TerminalLink?) -> Void = { _ in }
 
   func makeNSView(context: Context) -> KeyCaptureView {
@@ -44,6 +45,7 @@ struct MacKeyCapture: NSViewRepresentable {
     view.wantsFocus = active
     view.links = links
     view.geometry = geometry
+    view.screenFrame = frame
     view.onHover = onHover
   }
 }
@@ -67,7 +69,78 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// A force click opens once per press, not once per pressure change.
   private var forced = false
 
+  var screenFrame: ScreenFrame? {
+    didSet {
+      if oldValue?.columns != screenFrame?.columns || oldValue?.lines != screenFrame?.lines {
+        selectionAnchor = nil
+        selectionFocus = nil
+      }
+      needsDisplay = true
+    }
+  }
+  private var selectionAnchor: Int?
+  private var selectionFocus: Int?
+  private var pastePending = false
+  override var isFlipped: Bool { true }
   override var acceptsFirstResponder: Bool { true }
+
+  private var selectionRange: ClosedRange<Int>? {
+    guard let a = selectionAnchor, let b = selectionFocus, a != b else { return nil }
+    return min(a, b)...max(a, b)
+  }
+
+  private func cellIndex(_ event: NSEvent) -> Int? {
+    guard geometry.columns > 0, geometry.rows > 0 else { return nil }
+    let point = convert(event.locationInWindow, from: nil)
+    let column = min(Int(geometry.columns) - 1, max(0, Int((point.x - geometry.inset) / geometry.cellWidth)))
+    let row = min(Int(geometry.rows) - 1, max(0, Int((point.y - geometry.inset) / geometry.lineHeight)))
+    return row * Int(geometry.columns) + column
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    guard selectionAnchor != nil else { return }
+    selectionFocus = cellIndex(event)
+    needsDisplay = true
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    guard let range = selectionRange, geometry.columns > 0 else { return }
+    let columns = Int(geometry.columns)
+    NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3).setFill()
+    for row in (range.lowerBound / columns)...(range.upperBound / columns) {
+      let start = max(0, range.lowerBound - row * columns)
+      let end = min(columns - 1, range.upperBound - row * columns)
+      NSRect(x: geometry.inset + CGFloat(start) * geometry.cellWidth,
+        y: geometry.inset + CGFloat(row) * geometry.lineHeight,
+        width: CGFloat(end - start + 1) * geometry.cellWidth, height: geometry.lineHeight).fill()
+    }
+  }
+
+  @objc func copy(_ sender: Any?) {
+    guard let range = selectionRange, let frame = screenFrame, geometry.columns > 0 else { return }
+    let text = TerminalSelection.text(frame: frame, range: range)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  private func shortcut(_ event: NSEvent) -> Bool {
+    guard wantsFocus, !hasMarkedText(), window?.firstResponder === self else { return false }
+    let bindings = TerminalShortcuts.current
+    for action in TerminalAction.allCases {
+      guard let chord = TerminalShortcut(bindings[action.rawValue] ?? action.defaultChord), chord.matches(event) else { continue }
+      switch action {
+      case .copy: copy(nil)
+      case .paste: paste(nil)
+      case .zoomIn, .zoomOut, .zoomReset:
+        let defaults = UserDefaults.standard
+        let size = (defaults.object(forKey: "terminalFontSize") as? Double) ?? 13
+        let next = action == .zoomReset ? 13 : size + (action == .zoomIn ? 1 : -1)
+        defaults.set(min(32, max(10, next)), forKey: "terminalFontSize")
+      }
+      return true
+    }
+    return false
+  }
 
   // MARK: - Pointing at links
   //
@@ -111,14 +184,19 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
-    guard let link = link(at: event.locationInWindow), let menu = links.menu(link),
-      !menu.items.isEmpty
-    else { return nil }
     let built = NSMenu()
-    for item in menu.items {
-      let entry = ClosureMenuItem(title: item.title, action: item.action)
-      entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
-      built.addItem(entry)
+    let copyItem = ClosureMenuItem(title: "Copy", action: { [weak self] in self?.copy(nil) })
+    copyItem.isEnabled = selectionRange != nil
+    built.autoenablesItems = false
+    built.addItem(copyItem)
+    built.addItem(ClosureMenuItem(title: "Paste", action: { [weak self] in self?.paste(nil) }))
+    if let link = link(at: event.locationInWindow), let menu = links.menu(link) {
+      built.addItem(.separator())
+      for item in menu.items {
+        let entry = ClosureMenuItem(title: item.title, action: item.action)
+        entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
+        built.addItem(entry)
+      }
     }
     return built
   }
@@ -148,6 +226,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// Without this, Tab moves focus to the next control and an arrow scrolls
   /// a parent — a terminal that cannot send Tab is not a terminal.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if shortcut(event) { return true }
     // Command chords are the application's: ⌘Q, ⌘V and the rest must keep
     // working, and a terminal has nothing to send for them anyway.
     guard !hasMarkedText(), window?.firstResponder === self, !event.modifierFlags.contains(.command)
@@ -197,10 +276,19 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     onFocus?()
     if event.modifierFlags.contains(.command), let link = link(at: event.locationInWindow) {
       links.open(link)
+      selectionAnchor = nil
+    } else {
+      selectionAnchor = cellIndex(event)
     }
+    selectionFocus = selectionAnchor
+    needsDisplay = true
   }
 
   override func keyDown(with event: NSEvent) {
+    if shortcut(event) { return }
+    selectionAnchor = nil
+    selectionFocus = nil
+    needsDisplay = true
     if event.modifierFlags.contains(.command) {
       super.keyDown(with: event)
       return
@@ -218,7 +306,23 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     }
   }
   @objc func paste(_ sender: Any?) {
-    if let text = NSPasteboard.general.string(forType: .string) { onInput?(.paste(text)) }
+    guard !pastePending, wantsFocus, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+    pastePending = true
+    defer { pastePending = false }
+    let threshold = UserDefaults.standard.object(forKey: "terminalPasteThreshold") as? Int ?? 4096
+    if TerminalPastePolicy.requiresConfirmation(text, threshold: threshold) {
+      let alert = NSAlert()
+      alert.messageText = "Paste into terminal?"
+      alert.informativeText = "\(text.utf16.count) characters; line breaks may execute commands."
+      alert.addButton(withTitle: "Cancel")
+      alert.addButton(withTitle: "Paste")
+      guard alert.runModal() == .alertSecondButtonReturn else { return }
+    }
+    guard wantsFocus, window != nil else { return }
+    selectionAnchor = nil
+    selectionFocus = nil
+    needsDisplay = true
+    onInput?(.paste(text))
   }
   func insertText(_ string: Any, replacementRange: NSRange) {
     let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
@@ -244,7 +348,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   func characterIndex(for point: NSPoint) -> Int { 0 }
   func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
     window?.convertToScreen(
-      convert(NSRect(x: 8, y: bounds.height - 24, width: 1, height: 20), to: nil)) ?? .zero
+      convert(NSRect(x: 8, y: 8, width: 1, height: 20), to: nil)) ?? .zero
   }
   override func doCommand(by selector: Selector) {}
 

@@ -98,6 +98,36 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     /// </summary>
     public static bool LocalShellAvailable => Gen.TetherFfiMethods.LocalShellAvailable();
 
+    /// <summary>
+    /// Whether an OpenSSH multiplexing master is already running for
+    /// <paramref name="alias"/>. The alias is the config stanza name, which
+    /// is what the ControlPath was keyed on.
+    /// </summary>
+    public static Task<bool> SshMasterRunningAsync(string alias) =>
+        Gen.TetherFfiMethods.SshMasterRunning(alias);
+
+    /// <summary>
+    /// Opens a shell on an existing OpenSSH master. No credential is offered:
+    /// the handshake was spent when the master was created.
+    /// </summary>
+    public static async Task<TerminalSession> ConnectOverSshAsync(
+        string alias,
+        ushort columns = 80,
+        ushort rows = 24,
+        uint scrollbackLines = 10_000,
+        CancellationToken cancellationToken = default)
+    {
+        using var cancellation = new CancellationTokenAdapter(cancellationToken);
+        var shell = new Gen.LocalShell(null, "xterm-256color", columns, rows, scrollbackLines, null);
+        try
+        {
+            var inner = await Gen.TetherFfiMethods.ConnectOverSshClientCancellable(
+                alias, shell, cancellation.Ffi).ConfigureAwait(false);
+            return new TerminalSession(inner);
+        }
+        catch (Gen.TetherException ex) { throw LiftError(ex); }
+    }
+
     /// <summary>Everything needed to draw the screen once.</summary>
     public ScreenFrame Frame() => Lift(_inner.Frame());
 
@@ -119,6 +149,9 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 
     /// <summary>Moves the viewport over the scrollback. Clamped at both ends.</summary>
     public void Scroll(ScrollTo to) => _inner.Scroll(Lower(to));
+
+    public void Wheel(int lines, ushort row, ushort column, bool local = false) =>
+        _inner.Wheel(lines, row, column, local);
 
     /// <summary>
     /// Tells the engine what this consumer draws with, so that a program

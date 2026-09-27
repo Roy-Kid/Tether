@@ -33,3 +33,6 @@ swift/Artifacts/
 /dotnet/**/obj/
 /tests/**/obj/
 /dotnet/Tether/runtimes/
+
+# Isolated font-fix application build used while the main executable is open.
+/artifacts/font-preview/

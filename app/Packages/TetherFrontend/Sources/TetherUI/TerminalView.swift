@@ -100,7 +100,7 @@ public struct TerminalView: View {
     // stopped standing over the character it is on. Spacing each character
     // to exactly one cell puts the two back together.
     var text = Text(run.text)
-      .font(metrics.font(bold: run.style.bold, italic: run.style.italic))
+      .font(metrics.font(bold: run.style.bold, italic: run.style.italic, wide: Int(run.columns) > run.text.count))
       .tracking(metrics.tracking(cells: Int(run.columns), characters: run.text.count))
       .foregroundColor(run.style.dim ? foreground.opacity(0.6) : foreground)
 
@@ -159,29 +159,38 @@ public struct FontMetrics: Equatable, Sendable {
   /// doubled: CJK comes from a fallback face whose advance is its own, and
   /// assuming twice the Latin one misplaces every character after the first.
   private let wideAdvance: CGFloat
+  private let primaryFontName: String
+  private let wideFontName: String
 
   /// Measures the advance of a single character rather than assuming one.
   /// A monospaced face still differs between sizes and weights, and a
   /// hard-coded ratio would misalign box drawing at some sizes and not
   /// others — the kind of bug that looks like a rendering glitch.
-  public init(size: CGFloat) {
+  public init(size: CGFloat, family: String = "", wideFamily: String = "") {
     // `NSFont` and `UIFont` are different types with the same metrics and the
     // same selectors, so the measurement is written once against whichever
     // one this platform has rather than twice against both.
     #if os(macOS)
-      let font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+      let font = family.isEmpty ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        : NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: family]), size: size)
+          ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+      let wideFont = wideFamily.isEmpty ? font
+        : NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: wideFamily]), size: size) ?? font
     #else
-      let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+      let font = UIFont(name: family, size: size) ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+      let wideFont = UIFont(name: wideFamily, size: size) ?? font
     #endif
 
     let advance = NSString(string: "M").size(withAttributes: [.font: font]).width
     self.size = size
+    self.primaryFontName = font.fontName
+    self.wideFontName = wideFont.fontName
     self.narrowAdvance = advance
-    self.wideAdvance = NSString(string: "\u{4e2d}").size(withAttributes: [.font: font]).width
+    self.wideAdvance = NSString(string: "\u{4e2d}").size(withAttributes: [.font: wideFont]).width
     // Nearest, not up: rounding up added most of a point per column at 13pt,
     // and the text then had to be stretched by that much to keep up.
     self.cellWidth = max(1, advance.rounded())
-    self.lineHeight = ceil(font.ascender - font.descender + font.leading)
+    self.lineHeight = ceil(max(font.ascender, wideFont.ascender) - min(font.descender, wideFont.descender) + max(font.leading, wideFont.leading))
   }
 
   /// The extra advance that makes `characters` characters cover exactly
@@ -197,8 +206,9 @@ public struct FontMetrics: Equatable, Sendable {
     return columns * cellWidth - advance
   }
 
-  func font(bold: Bool, italic: Bool) -> Font {
-    var font = Font.system(size: size, weight: bold ? .bold : .regular, design: .monospaced)
+  func font(bold: Bool, italic: Bool, wide: Bool = false) -> Font {
+    var font = Font.custom(wide ? wideFontName : primaryFontName, fixedSize: size)
+    if bold { font = font.bold() }
     if italic { font = font.italic() }
     return font
   }

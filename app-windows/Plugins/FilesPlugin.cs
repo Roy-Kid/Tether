@@ -33,7 +33,6 @@ sealed class FilesAttachment : ITabAttachment
         _tab = tab;
         _pane = new Files.FilesPane(tab.Model);
         _pane.HideRequested += tab.Dismiss;
-        _pane.OverlayChanged += tab.Overlay;
         _pane.DialogRoot = tab.DialogRoot;
         _pane.WindowHandle = tab.WindowHandle();
     }
@@ -106,7 +105,6 @@ sealed class FilesAttachment : ITabAttachment
     public async ValueTask DisposeAsync()
     {
         _pane.HideRequested -= _tab.Dismiss;
-        _pane.OverlayChanged -= _tab.Overlay;
         await _pane.DisposeAsync();
     }
 }

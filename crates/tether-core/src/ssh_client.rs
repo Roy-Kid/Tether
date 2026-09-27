@@ -338,16 +338,40 @@ fn local_host_names() -> Vec<String> {
 }
 
 fn default_ssh() -> String {
-    if cfg!(target_os = "macos") && std::path::Path::new("/usr/bin/ssh").exists() {
-        "/usr/bin/ssh".to_owned()
-    } else {
-        "ssh".to_owned()
+    // The application sets this to the ssh.exe a person chose. The same
+    // binary has to do the master check and the attach: a socket one OpenSSH
+    // created is not readable by another.
+    if let Some(path) = chosen_ssh() {
+        return path;
     }
+    if cfg!(target_os = "macos") && std::path::Path::new("/usr/bin/ssh").exists() {
+        return "/usr/bin/ssh".to_owned();
+    }
+    "ssh".to_owned()
+}
+
+/// `TETHER_SSH`, when it names a program. Blank is the platform default.
+fn chosen_ssh() -> Option<String> {
+    chosen_ssh_from(&std::env::var("TETHER_SSH").unwrap_or_default())
+}
+
+fn chosen_ssh_from(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_ssh_setting_is_not_a_program() {
+        assert_eq!(chosen_ssh_from("  "), None);
+        assert_eq!(
+            chosen_ssh_from(r"  C:\Windows\System32\OpenSSH\ssh.exe  ").as_deref(),
+            Some(r"C:\Windows\System32\OpenSSH\ssh.exe")
+        );
+    }
 
     #[test]
     fn percent_c_matches_openssh() {

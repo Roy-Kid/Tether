@@ -328,7 +328,7 @@ final class SessionTab: Identifiable {
       // One last repaint. The final frame is announced before the
       // ending is, so stopping here would leave a program's last line
       // undrawn.
-      guard let self else { return }
+      guard let self, !Task.isCancelled else { return }
       await MainActor.run {
         self.frame = session.frame()
         self.finish(session.ending())
@@ -339,16 +339,16 @@ final class SessionTab: Identifiable {
   private func finish(_ ending: SessionEnding?) {
     let reason: String? =
       switch ending {
-      case .lost(let cause): cause
-      case .exited(let status) where status != 0:
-        "The shell exited with status \(status)."
-      default: nil
+      case .lost(let cause): "Connection lost: \(cause)"
+      case .exited(let status): "Exited (\(status))"
+      case .closed: "Closed"
+      case nil: "Ended"
       }
     stage = .ended(reason)
-    session = nil
   }
 
   func send(_ input: TerminalInput) {
+    guard isLive else { return }
     // Shift-Page Up reads the history; Page Up on its own goes to the far
     // side, because a pager expects it. This is the split every terminal
     // makes, and making it here keeps the engine free of a keyboard

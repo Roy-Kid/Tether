@@ -411,6 +411,39 @@ impl Terminal {
         crate::input::encode(input, self.read_modes())
     }
 
+    /// Wheel notches: positive scrolls down. None means local scrollback.
+    pub fn encode_wheel(&self, lines: i32, row: u16, column: u16) -> Option<Vec<u8>> {
+        let mode = self.inner.mode();
+        if !mode.intersects(TermMode::MOUSE_MODE) {
+            return None;
+        }
+        let button = if lines < 0 { 64 } else { 65 };
+        let size = self.size();
+        let x = u32::from(column.min(size.columns - 1)) + 1;
+        let y = u32::from(row.min(size.rows - 1)) + 1;
+        let event = if mode.contains(TermMode::SGR_MOUSE) {
+            format!("\x1b[<{button};{x};{y}M").into_bytes()
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            format!(
+                "\x1b[M{}{}{}",
+                char::from_u32(button + 32).unwrap(),
+                char::from_u32(x.min(2015) + 32).unwrap(),
+                char::from_u32(y.min(2015) + 32).unwrap()
+            )
+            .into_bytes()
+        } else {
+            vec![
+                27,
+                b'[',
+                b'M',
+                (button + 32) as u8,
+                (x.min(223) + 32) as u8,
+                (y.min(223) + 32) as u8,
+            ]
+        };
+        Some(event.repeat(lines.unsigned_abs().min(120) as usize))
+    }
+
     /// Where the viewport is, and how much history is behind it.
     pub fn viewport(&self) -> Viewport {
         Viewport { offset: self.inner.grid().display_offset(), history: self.history_lines() }

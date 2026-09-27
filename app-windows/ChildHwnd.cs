@@ -6,18 +6,25 @@
 // the next refinement; this is the one that works with the Vulkan/GLES
 // backends Decisions/0017 ships while `dx12` is out.
 //
-// The child paints *and* receives keys: a real terminal's render window is
-// its input window. XAML's `CharacterReceived` never fires for a control
-// sitting under an HWND, so the keys come through here and are handed to
-// the session. The mouse is the other way round: the child is transparent
-// to it, so the XAML control underneath keeps selection, the wheel, links
-// and the context menu.
+// The child paints and receives keys and the pointer. XAML's
+// `CharacterReceived` never fires for a control sitting under an HWND, and
+// neither do its pointer events: WinUI turns the mouse into pointer
+// messages, which are delivered to the window that hit-tests as the client.
+// Returning HTTRANSPARENT dropped the wheel and the drag on the floor —
+// the island underneath never saw them. The child handles both and hands
+// them to the session.
 
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Windows.System;
 
 namespace TetherApp;
+
+/// <summary>What the pointer did, in the child window's client pixels.</summary>
+public enum ChildPointerKind { LeftDown, Move, LeftUp, RightUp, Wheel }
+
+/// <summary>One pointer message from the render window. <see cref="X"/> and <see cref="Y"/> are client pixels; <see cref="Delta"/> is the wheel notch in the units Windows reports (usually ±120).</summary>
+public readonly record struct ChildPointer(ChildPointerKind Kind, int X, int Y, int Delta);
 
 /// <summary>A Win32 child window sized to a XAML element.</summary>
 public sealed class ChildHwnd : IDisposable
@@ -26,15 +33,22 @@ public sealed class ChildHwnd : IDisposable
     private const int WS_VISIBLE = 0x1000_0000;
     private const int WS_CLIPSIBLINGS = 0x0400_0000;
     private const int WS_CLIPCHILDREN = 0x0200_0000;
-    private const int CS_HREDRAW = 0x0002;
-    private const int CS_VREDRAW = 0x0001;
-    private const int WM_NCHITTEST = 0x0084;
+    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_RBUTTONUP = 0x0205;
+    private const int WM_MOUSEWHEEL = 0x020A;
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_CHAR = 0x0102;
     private const int WM_SYSKEYDOWN = 0x0104;
     private const int WM_SYSCHAR = 0x0106;
-    private const int HTTRANSPARENT = -1;
+    private const int WM_POINTERUPDATE = 0x0245;
+    private const int WM_POINTERDOWN = 0x0246;
+    private const int WM_POINTERUP = 0x0247;
+    private const int WM_POINTERWHEEL = 0x024E;
+    private const int POINTER_FLAG_SECONDBUTTON = 0x0020;
     private const int SW_HIDE = 0;
+    private static readonly nint IDC_IBEAM = 32513;
     private const int SW_SHOWNA = 8;
 
     // Filled with the palette background so an unpainted frame is a
@@ -52,15 +66,20 @@ public sealed class ChildHwnd : IDisposable
     private static readonly Dictionary<nint, ChildHwnd> Live = [];
 
     private nint _hwnd;
+    private int _x = int.MinValue, _y, _w, _h;
     private readonly Action<string> _onText;
     private readonly Func<VirtualKey, bool> _onKey;
+    private Action<ChildPointer>? _onPointer;
+    /// <summary>WinUI delivers the mouse as pointer messages and suppresses the mouse ones. Once a pointer message has arrived, the mouse copies are ignored so a click is not counted twice.</summary>
+    private bool _pointerInput;
     private char _highSurrogate;
     private bool _keyTaken;
 
-    private ChildHwnd(Action<string> onText, Func<VirtualKey, bool> onKey)
+    private ChildHwnd(Action<string> onText, Func<VirtualKey, bool> onKey, Action<ChildPointer>? onPointer)
     {
         _onText = onText;
         _onKey = onKey;
+        _onPointer = onPointer;
     }
 
     /// <summary>The handle to hand to the renderer. Zero until the child exists.</summary>
@@ -78,11 +97,15 @@ public sealed class ChildHwnd : IDisposable
         nint parent,
         FrameworkElement host,
         Action<string> onText,
-        Func<VirtualKey, bool> onKey)
+        Func<VirtualKey, bool> onKey,
+        Action<ChildPointer>? onPointer = null)
     {
         RegisterClass();
-        var child = new ChildHwnd(onText, onKey);
+        var child = new ChildHwnd(onText, onKey, onPointer);
         child._hwnd = CreateWindowEx(
+            // Not WS_EX_NOREDIRECTIONBITMAP. This host draws with Vulkan or
+            // GL, and that style makes those presents go nowhere — a live
+            // shell with a blank window.
             0,
             "TetherTerminal",
             "",
@@ -108,13 +131,29 @@ public sealed class ChildHwnd : IDisposable
     {
         if (_hwnd == 0) return;
         var scale = GetScale(host);
-        var transform = host.TransformToVisual(null);
-        var origin = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-        var x = (int)Math.Round(origin.X * scale);
-        var y = (int)Math.Round(origin.Y * scale);
-        var w = Math.Max(1, (int)Math.Round(host.ActualWidth * scale));
-        var h = Math.Max(1, (int)Math.Round(host.ActualHeight * scale));
-        MoveWindow(_hwnd, x, y, w, h, true);
+        if (scale <= 0) scale = 1;
+        var origin = host.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(0, 0));
+        // Snap the edges, not the width. Rounding width and origin separately
+        // at 150% or 175% makes the rectangle flip by a pixel every layout,
+        // which reads as the terminal shaking inside the frame.
+        int Snap(double dip) => (int)Math.Round(dip * scale, MidpointRounding.AwayFromZero);
+        var x = Snap(origin.X);
+        var y = Snap(origin.Y);
+        var w = Math.Max(1, Snap(origin.X + host.ActualWidth) - x);
+        var h = Math.Max(1, Snap(origin.Y + host.ActualHeight) - y);
+        // A one-pixel flip at 150% or 200% is the terminal shaking inside the
+        // frame. A real drag moves by more than that between messages.
+        if (_x != int.MinValue
+            && Math.Abs(x - _x) <= 1 && Math.Abs(y - _y) <= 1
+            && Math.Abs(w - _w) <= 1 && Math.Abs(h - _h) <= 1)
+            return;
+        if (x == _x && y == _y && w == _w && h == _h) return;
+        _x = x;
+        _y = y;
+        _w = w;
+        _h = h;
+        SetWindowPos(_hwnd, 0, x, y, w, h,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOCOPYBITS);
     }
 
     /// <summary>
@@ -174,9 +213,12 @@ public sealed class ChildHwnd : IDisposable
         _proc = WindowProc;
         var wc = new WndClass
         {
-            style = CS_HREDRAW | CS_VREDRAW,
+            // Not CS_HREDRAW | CS_VREDRAW: those invalidate the whole window
+            // on every pixel of a drag, which is the flicker under the swap chain.
+            style = 0,
             lpfnWndProc = Marshal.GetFunctionPointerForDelegate<WndProc>(_proc),
             hInstance = _module,
+            hCursor = LoadCursor(0, IDC_IBEAM),
             hbrBackground = TerminalBrush,
             lpszClassName = "TetherTerminal",
         };
@@ -203,9 +245,47 @@ public sealed class ChildHwnd : IDisposable
 
         switch (msg)
         {
-            case WM_NCHITTEST:
-                // The pointer belongs to the XAML control underneath.
-                return HTTRANSPARENT;
+            case WM_POINTERWHEEL:
+                child._pointerInput = true;
+                child.DispatchPointer(hWnd, ChildPointerKind.Wheel, lParam, screenPoint: true, (short)(wParam >> 16));
+                return 0;
+            case WM_POINTERDOWN:
+                child._pointerInput = true;
+                // The right button opens the menu on release, the same moment
+                // XAML's RightTapped fires. A down must not also start a drag.
+                if (PointerButton(wParam) == PointerButtonKind.Right) return 0;
+                SetCapture(hWnd);
+                child.DispatchPointer(hWnd, ChildPointerKind.LeftDown, lParam, screenPoint: true);
+                return 0;
+            case WM_POINTERUP:
+                child._pointerInput = true;
+                var up = PointerButton(wParam) == PointerButtonKind.Right
+                    ? ChildPointerKind.RightUp
+                    : ChildPointerKind.LeftUp;
+                if (up == ChildPointerKind.LeftUp) ReleaseCapture();
+                child.DispatchPointer(hWnd, up, lParam, screenPoint: true);
+                return 0;
+            case WM_POINTERUPDATE:
+                child._pointerInput = true;
+                child.DispatchPointer(hWnd, ChildPointerKind.Move, lParam, screenPoint: true);
+                return 0;
+            case WM_MOUSEWHEEL when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.Wheel, lParam, screenPoint: true, (short)(wParam >> 16));
+                return 0;
+            case WM_LBUTTONDOWN when !child._pointerInput:
+                SetCapture(hWnd);
+                child.DispatchPointer(hWnd, ChildPointerKind.LeftDown, lParam, screenPoint: false);
+                return 0;
+            case WM_LBUTTONUP when !child._pointerInput:
+                ReleaseCapture();
+                child.DispatchPointer(hWnd, ChildPointerKind.LeftUp, lParam, screenPoint: false);
+                return 0;
+            case WM_MOUSEMOVE when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.Move, lParam, screenPoint: false);
+                return 0;
+            case WM_RBUTTONUP when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.RightUp, lParam, screenPoint: false);
+                return 0;
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
                 child._keyTaken = child._onKey((VirtualKey)(int)(wParam & 0xFFFF));
@@ -222,6 +302,26 @@ public sealed class ChildHwnd : IDisposable
         }
         return DefWindowProc(hWnd, msg, wParam, lParam);
     }
+
+    private void DispatchPointer(nint hwnd, ChildPointerKind kind, nint lParam, bool screenPoint, int delta = 0)
+    {
+        var point = new Point
+        {
+            X = (short)(lParam & 0xffff),
+            Y = (short)((lParam >> 16) & 0xffff),
+        };
+        if (screenPoint) ScreenToClient(hwnd, ref point);
+        _onPointer?.Invoke(new ChildPointer(kind, point.X, point.Y, delta));
+    }
+
+    /// <summary>Which button a pointer message names. The wheel's high word is a delta, not these flags.</summary>
+    private static PointerButtonKind PointerButton(nint wParam)
+    {
+        var flags = (int)((wParam >> 16) & 0xffff);
+        return (flags & POINTER_FLAG_SECONDBUTTON) != 0 ? PointerButtonKind.Right : PointerButtonKind.Left;
+    }
+
+    private enum PointerButtonKind { Left, Right }
 
     /// <summary>
     /// One UTF-16 unit of typed text. A control character whose key press
@@ -243,7 +343,7 @@ public sealed class ChildHwnd : IDisposable
             return;
         }
         _highSurrogate = '\0';
-        if ((ch < ' ' || ch == '\x7F') && _keyTaken) return;
+        if (_keyTaken) return;
         _onText(ch.ToString());
     }
 
@@ -270,6 +370,11 @@ public sealed class ChildHwnd : IDisposable
         public int Left, Top, Right, Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
+    [DllImport("user32.dll")]
+    private static extern bool ScreenToClient(nint hwnd, ref Point point);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern ushort RegisterClass(ref WndClass lpWndClass);
 
@@ -278,9 +383,6 @@ public sealed class ChildHwnd : IDisposable
         int dwExStyle, string lpClassName, string lpWindowName, int dwStyle,
         int x, int y, int nWidth, int nHeight,
         nint hWndParent, nint hMenu, nint hInstance, nint lpParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool MoveWindow(nint hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyWindow(nint hWnd);
@@ -295,6 +397,15 @@ public sealed class ChildHwnd : IDisposable
     private static extern nint SetFocus(nint hWnd);
 
     [DllImport("user32.dll")]
+    private static extern nint LoadCursor(nint hInstance, nint lpCursorName);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetCapture(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(nint hWnd, int nCmdShow);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -303,7 +414,10 @@ public sealed class ChildHwnd : IDisposable
     private static readonly nint HWND_TOP = 0;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOREDRAW = 0x0008;
     private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_NOCOPYBITS = 0x0100;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);

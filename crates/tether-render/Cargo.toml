@@ -21,3 +21,5 @@ bytemuck = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 raw-window-handle = "0.6"
+
+unicode-segmentation = "1.12"

@@ -25,7 +25,7 @@ pub use frame::{Caret, Frame, Name, Paint, Row, Run, RunStyle, Underline};
 pub use layout::{prepare, prepare_with_overlay};
 pub use metrics::FontMetrics;
 pub use palette::Palette;
-pub use renderer::{measure_monospace, RenderError, SurfaceSize, TerminalRenderer};
+pub use renderer::{font_families, measure_monospace, RenderError, SurfaceSize, TerminalRenderer};
 
 /// The byte-stream boundary in executable form, restated for the
 /// presentation layer.

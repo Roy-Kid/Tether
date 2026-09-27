@@ -77,6 +77,12 @@ impl RenderSurface {
         }))
     }
 
+    pub fn set_fonts(&self, primary: String, wide: String) {
+        if let Ok(mut guard) = self.inner.lock() {
+            if let Some(renderer) = guard.as_mut() { renderer.set_fonts(primary, wide); }
+        }
+    }
+
     pub fn resize(&self, width: u32, height: u32) {
         if let Ok(mut guard) = self.inner.lock() {
             if let Some(renderer) = guard.as_mut() {
@@ -92,7 +98,7 @@ impl RenderSurface {
         }
         let mut guard = self.inner.lock().expect("renderer lock");
         let renderer = guard.as_mut().expect("renderer alive");
-        let metrics = tether_render::measure_monospace(renderer.fonts(), size);
+        let metrics = renderer.measure(size);
         let (narrow, wide) = metrics.advances();
         FontMetricsDto {
             size: metrics.size,
@@ -115,7 +121,7 @@ impl RenderSurface {
         let renderer = guard.as_mut().expect("renderer alive");
         let size = self.font_size.lock().map(|size| *size).unwrap_or(DEFAULT_FONT_SIZE);
         let metrics = {
-            let measured = tether_render::measure_monospace(renderer.fonts(), size);
+            let measured = renderer.measure(size);
             FontMetrics::from_advances(
                 measured.size,
                 measured.advances().0,
@@ -343,4 +349,10 @@ impl From<OverlayDto> for Overlay {
 
 fn rgba(value: RgbaDto) -> Rgba {
     Rgba::new(value.red, value.green, value.blue, value.alpha)
+}
+
+/// Installed family names, as seen by the same shaper that draws the terminal.
+#[uniffi::export]
+pub fn render_font_families() -> Vec<String> {
+    tether_render::font_families()
 }

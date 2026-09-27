@@ -24,7 +24,8 @@ public sealed record HostEntry(
     ushort? Port,
     string? IdentityFile,
     IReadOnlyList<Jump>? Jumps = null,
-    string? JumpError = null)
+    string? JumpError = null,
+    int? ConnectTimeoutSeconds = null)
 {
     /// <summary>What the picker shows: the alias, which is the name a person types.</summary>
     public string Label => Alias;
@@ -133,6 +134,11 @@ public static class SshConfig
                     var alias = block.Patterns[0];
                     var settings = Resolve(alias);
                     var (jumps, error) = Jumps(alias);
+                    int? timeout = null;
+                    if (settings.TryGetValue("connecttimeout", out var timeoutText)
+                        && int.TryParse(timeoutText, out var seconds)
+                        && seconds > 0)
+                        timeout = seconds;
                     entries.Add(new HostEntry(
                         alias,
                         settings.GetValueOrDefault("hostname") ?? alias,
@@ -140,7 +146,8 @@ public static class SshConfig
                         settings.TryGetValue("port", out var port) && ushort.TryParse(port, out var parsed) ? parsed : null,
                         settings.GetValueOrDefault("identityfile"),
                         jumps,
-                        error));
+                        error,
+                        timeout));
                 }
                 return entries;
             }

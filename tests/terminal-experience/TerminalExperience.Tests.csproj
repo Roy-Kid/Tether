@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../dotnet/Tether/Tether.csproj" />
+    <Compile Include="../../app-windows/TerminalPreferences.cs" Link="TerminalPreferences.cs" />
+    <Compile Include="../../app-windows/Selection.cs" Link="Selection.cs" />
+    <Compile Include="../../app-windows/Settings.cs" Link="Settings.cs" />
+    <Compile Include="../../app-windows/SessionStatus.cs" Link="SessionStatus.cs" />
+  </ItemGroup>
+</Project>

@@ -40,6 +40,10 @@ public sealed class TerminalSurface : IAsyncDisposable, IDisposable
             dto.Size, dto.NarrowAdvance, dto.WideAdvance, dto.LineHeight);
     }
 
+    public static string[] FontFamilies() => Gen.TetherFfiMethods.RenderFontFamilies();
+
+    public void SetFonts(string primary, string wide) => _inner.SetFonts(primary, wide);
+
     public void Resize(uint width, uint height) => _inner.Resize(width, height);
 
     /// <summary>Draws one frame with the consumer's palette and pointer marks.</summary>

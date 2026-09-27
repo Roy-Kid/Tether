@@ -52,8 +52,28 @@
       <FontIcon Glyph="&#xE70D;" FontSize="{StaticResource HeaderSize}" Foreground="{ThemeResource ChromeSubtleBrush}" />
      </StackPanel>
     </Button>
-    <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource DetailTextStyle}"
-     VerticalAlignment="Center" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+    <Grid Grid.Column="1" VerticalAlignment="Center" ColumnSpacing="{StaticResource SpaceSmall}">
+     <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="*" />
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="Auto" />
+     </Grid.ColumnDefinitions>
+     <ProgressRing x:Name="ConnectProgress" Width="14" Height="14" IsActive="False" Visibility="Collapsed"
+      AutomationProperties.Name="Connecting" />
+     <FontIcon x:Name="AuthMark" Grid.Column="1" Glyph="&#xE192;" FontSize="{StaticResource SymbolSize}"
+      Foreground="{ThemeResource ChromeSubtleBrush}" Visibility="Collapsed"
+      AutomationProperties.Name="Needs authentication" ToolTipService.ToolTip="Needs authentication" />
+     <TextBlock x:Name="StatusText" Grid.Column="2" Style="{StaticResource DetailTextStyle}"
+      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+     <Button x:Name="CancelConnectButton" Grid.Column="3" Style="{StaticResource ChromeIconButtonStyle}"
+      Content="&#xE711;" Visibility="Collapsed" Click="CancelConnect_Click"
+      ToolTipService.ToolTip="Cancel" AutomationProperties.Name="Cancel" />
+     <Button x:Name="ReconnectButton" Grid.Column="4" Style="{StaticResource ChromeIconButtonStyle}"
+      Content="&#xE72C;" Visibility="Collapsed" Click="Reconnect_Click"
+      ToolTipService.ToolTip="Reconnect" AutomationProperties.Name="Reconnect" />
+    </Grid>
     <StackPanel x:Name="PluginButtons" Grid.Column="2" Orientation="Horizontal" />
     <Button x:Name="SettingsButton" Grid.Column="3" Style="{StaticResource ChromeIconButtonStyle}"
      Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings" Content="&#xE713;" />

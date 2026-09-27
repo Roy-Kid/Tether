@@ -6,6 +6,21 @@ fn terminal() -> Terminal {
     Terminal::new(ScreenSize::new(80, 24))
 }
 
+#[test]
+fn wheel_follows_mouse_modes_and_uses_one_based_coordinates() {
+    let mut term = terminal();
+    assert_eq!(term.encode_wheel(-1, 2, 4), None);
+    term.feed(b"\x1b[?1000h\x1b[?1006h");
+    assert_eq!(term.encode_wheel(-1, 2, 4).unwrap(), b"\x1b[<64;5;3M");
+    assert_eq!(term.encode_wheel(2, 2, 4).unwrap(), b"\x1b[<65;5;3M\x1b[<65;5;3M");
+    assert_eq!(term.encode_wheel(0, 0, 0).unwrap(), b"");
+    assert_eq!(term.encode_wheel(-1, u16::MAX, u16::MAX).unwrap(), b"\x1b[<64;80;24M");
+    term.feed(b"\x1b[?1006l");
+    assert_eq!(term.encode_wheel(-1, 2, 4).unwrap(), vec![27, b'[', b'M', 96, 37, 35]);
+    term.feed(b"\x1b[?1000l");
+    assert_eq!(term.encode_wheel(-1, 2, 4), None);
+}
+
 fn encoded(input: Input) -> Vec<u8> {
     terminal().encode(&input)
 }

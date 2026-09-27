@@ -14,12 +14,10 @@ public static class SelectionText
     /// <summary>The text inside the selection, as the runs on the frame give it.</summary>
     public static string Text(this Selection selection, ScreenFrame frame)
     {
-        var start = new Cell(
-            Math.Min(selection.Anchor.Column, selection.Focus.Column),
-            Math.Min(selection.Anchor.Row, selection.Focus.Row));
-        var end = new Cell(
-            Math.Max(selection.Anchor.Column, selection.Focus.Column),
-            Math.Max(selection.Anchor.Row, selection.Focus.Row));
+        var forward = selection.Anchor.Row < selection.Focus.Row ||
+            (selection.Anchor.Row == selection.Focus.Row && selection.Anchor.Column <= selection.Focus.Column);
+        var start = forward ? selection.Anchor : selection.Focus;
+        var end = forward ? selection.Focus : selection.Anchor;
         if (start == end) return "";
 
         var lines = new List<string>();
@@ -113,7 +111,9 @@ public static class SelectionText
             if (runEnd < fromColumn || runStart > toColumn) continue;
 
             // Take the characters of the run that fall inside, by columns.
-            var chars = run.Text.EnumerateRunes().ToList();
+            var chars = new List<string>();
+            var elements = System.Globalization.StringInfo.GetTextElementEnumerator(run.Text);
+            while (elements.MoveNext()) chars.Add(elements.GetTextElement());
             if (chars.Count == 0) continue;
             var per = (double)run.Columns / chars.Count;
 

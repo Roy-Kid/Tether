@@ -72,6 +72,8 @@ pub fn prepare_with_overlay(
             if draws_text {
                 let characters = run.text.chars().count();
                 list.texts.push(TextRun {
+                    font_size: metrics.size,
+                    cell_width: metrics.cell_width,
                     x,
                     y,
                     width,
@@ -120,6 +122,8 @@ pub fn prepare_with_overlay(
         // And as a glyph, so a backend whose quad path is not drawing still
         // shows the caret. The text pass is the one every backend has.
         list.texts.push(TextRun {
+                    font_size: metrics.size,
+                    cell_width: metrics.cell_width,
             x,
             y,
             width,
