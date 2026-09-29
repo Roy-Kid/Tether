@@ -19,7 +19,8 @@ pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
 pub use input::{KeyModifiers, KeyPress, Resolved, TerminalInput};
 pub use link::{LinkKind, LinkSpan, TerminalLink};
 pub use screen::{
-    CaretShape, CellColor, CellStyle, ColorName, ScreenFrame, ScreenRow, StyledRun, UnderlineStyle,
+    CaretShape, CellColor, CellStyle, ColorName, FrameUpdate, ScreenFrame, ScreenRow, StyledRun,
+    UnderlineStyle, UpdatedRow,
 };
 pub use session::{
     Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,

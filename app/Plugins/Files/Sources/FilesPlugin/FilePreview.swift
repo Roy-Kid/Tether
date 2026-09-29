@@ -39,7 +39,7 @@ struct FilePreview: View {
         textPreview(snippet)
       } else {
         Image(systemName: Names.symbol(for: name, kind: kind))
-          .font(.system(size: min(side / 4, 64)))
+          .font(.system(size: min(side / 4, UIStyle.Mark.hero)))
           .foregroundStyle(Theme.subtle)
           .padding(UIStyle.Space.section)
       }

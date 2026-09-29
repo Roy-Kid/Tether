@@ -27,17 +27,15 @@ struct SessionView: View {
         ProgressView()
       case .connected:
         terminal
-      case .failed(let reason):
-        ContentUnavailableView(
-          "Could Not Connect",
-          systemImage: "network.slash",
-          description: Text(reason))
+      case .failed:
+        // Told by a dialog that names the host and offers what to do next,
+        // not by a page that waits in the tab to be noticed.
+        EmptyView()
       case .ended(let reason):
-        if let reason, !reason.isEmpty {
-          ContentUnavailableView(
-            "Session Ended",
-            systemImage: "stop.circle",
-            description: Text(reason))
+        if tab.problem != nil {
+          EmptyView()
+        } else if let reason, !reason.isEmpty {
+          ContentUnavailableView("Session Ended", systemImage: "stop.circle", description: Text(reason))
         } else {
           ContentUnavailableView("Session Ended", systemImage: "stop.circle")
         }
@@ -54,6 +52,7 @@ struct SessionView: View {
     if let frame = tab.frame {
       TerminalSurface(
         frame: frame,
+        dirtyRows: tab.dirtyRows,
         onInput: { tab.send($0) },
         onResize: { tab.resize(columns: $0, rows: $1) },
         onScroll: { tab.scroll($0) },

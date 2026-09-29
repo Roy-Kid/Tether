@@ -119,7 +119,7 @@ struct LinkUnderline: View {
         line.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 1))
         context.stroke(
           line, with: .color(.accentColor),
-          style: StrokeStyle(lineWidth: 1, dash: confirmed ? [] : [2, 2]))
+          style: StrokeStyle(lineWidth: UIStyle.Mark.hairline, dash: confirmed ? [] : [UIStyle.Space.tight, UIStyle.Space.tight]))
       }
     }
     .allowsHitTesting(false)

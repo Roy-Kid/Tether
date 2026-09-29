@@ -22,6 +22,13 @@
     /// `measure` reports whole points.
     static let tolerance: CGFloat = 1
 
+    @Test("measuring a size twice is the same measurement")
+    func metricsAreStable() {
+      for size in [10.0, 13.0, 24.0] as [CGFloat] {
+        #expect(FontMetrics(size: size) == FontMetrics(size: size))
+      }
+    }
+
     @Test("a run of text is exactly as wide as the columns it covers")
     func narrowRunsKeepTheGrid() {
       for size in [10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 18.0, 24.0] as [CGFloat] {

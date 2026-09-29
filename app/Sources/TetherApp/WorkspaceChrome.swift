@@ -98,7 +98,7 @@ struct WorkspaceTabBar: View {
                 tab?.attachment(for: plugin.id)?.isShowing == true
                   || (selected && tabs.isShowingInspector(of: plugin.id))
                   ? Color.accentColor : Theme.subtle)
-              .frame(width: 20, height: Chrome.tab)
+              .frame(width: UIStyle.Mark.iconLarge, height: Chrome.tab)
           }
           .buttonStyle(ChromeButtonStyle())
           .disabled(tab?.canOpen(plugin.id) != true)
@@ -114,7 +114,7 @@ struct WorkspaceTabBar: View {
         Image(systemName: "xmark")
           .font(UIStyle.accessory)
           .foregroundStyle(Theme.subtle)
-          .frame(width: 18, height: Chrome.tab)
+          .frame(width: UIStyle.Mark.icon, height: Chrome.tab)
           .contentShape(Rectangle())
       }
       .buttonStyle(ChromeButtonStyle())
@@ -124,7 +124,7 @@ struct WorkspaceTabBar: View {
       .help("Close tab")
       .accessibilityLabel("Close \(title)")
     }
-    .padding(.leading, 10)
+    .padding(.leading, UIStyle.panelRadius)
     .padding(.trailing, UIStyle.Space.small)
     .frame(height: Chrome.tab)
     .background(selected ? Theme.raised.opacity(0.85) : .clear)
@@ -138,7 +138,7 @@ struct WorkspaceTabBar: View {
     .overlay(alignment: .bottom) {
       Rectangle()
         .fill(selected ? Color.accentColor : .clear)
-        .frame(height: 2)
+        .frame(height: UIStyle.Mark.rule)
     }
     .accessibilityAddTraits(selected ? .isSelected : [])
     .contextMenu {
@@ -216,6 +216,8 @@ struct HostStatusBar: View {
   @Bindable var tabs: TabSet
   let store: HostStore
   let pluginStatusItems: [PluginStatusBarItem]
+  var statusBarLabel: (String) -> AnyView? = { _ in nil }
+  var statusBarSettings: (String) -> (() -> Void)? = { _ in nil }
   let makeStatusWorkspace: (String) -> (any PluginWorkspace)?
 
   var body: some View {
@@ -231,7 +233,7 @@ struct HostStatusBar: View {
           } else {
             Circle()
               .fill(statusColor)
-              .frame(width: 7, height: 7)
+              .frame(width: UIStyle.Mark.presence, height: UIStyle.Mark.presence)
             Text(hostLabel)
               .font(UIStyle.detail)
               .foregroundStyle(Theme.text)
@@ -247,7 +249,11 @@ struct HostStatusBar: View {
       .accessibilityValue(statusDescription)
 
       ForEach(pluginStatusItems) { item in
-        PluginStatusRibbon(item: item) {
+        PluginStatusRibbon(
+          item: item,
+          label: statusBarLabel(item.id),
+          openSettings: statusBarSettings(item.id)
+        ) {
           makeStatusWorkspace(item.id)
         }
       }
@@ -335,7 +341,7 @@ struct HostStatusBar: View {
         Image(systemName: "gearshape")
           .font(UIStyle.symbol)
           .foregroundStyle(Theme.subtle)
-          .frame(width: 22, height: Chrome.status)
+          .frame(width: UIStyle.Mark.status, height: Chrome.status)
           .contentShape(Rectangle())
       }
       .buttonStyle(ChromeButtonStyle())
@@ -363,7 +369,7 @@ struct HostPicker: View {
         }
         .font(UIStyle.title)
         .padding(.horizontal, UIStyle.Space.group)
-        .padding(.vertical, 5)
+        .padding(.vertical, UIStyle.Space.inline)
         .background(Theme.raised, in: RoundedRectangle(cornerRadius: UIStyle.rowRadius))
 
       if let problem = store.problem {
@@ -513,7 +519,7 @@ struct HostPicker: View {
       HStack(alignment: .center, spacing: UIStyle.Space.group) {
         Circle()
           .fill(live ? Theme.success : .clear)
-          .frame(width: 7, height: 7)
+          .frame(width: UIStyle.Mark.presence, height: UIStyle.Mark.presence)
         Text(host.label.isEmpty ? host.hostname : host.label)
           .font(UIStyle.title)
           .foregroundStyle(Theme.text)
@@ -522,10 +528,10 @@ struct HostPicker: View {
         Image(systemName: "checkmark")
           .font(UIStyle.accessory)
           .foregroundStyle(current ? Theme.text : .clear)
-          .frame(width: 10)
+          .frame(width: UIStyle.Mark.disclosure)
       }
       .padding(.horizontal, UIStyle.Space.inline)
-      .padding(.vertical, 3)
+      .padding(.vertical, UIStyle.rowPadding)
       .frame(minHeight: UIStyle.rowHeight)
       .contentShape(Rectangle())
     }
@@ -534,6 +540,20 @@ struct HostPicker: View {
     .accessibilityAddTraits(current ? .isSelected : [])
     .accessibilityValue(live ? "Connected" : "Not connected")
     .help(tabs.workspaceCaption(for: host))
+  }
+}
+
+/// The host's row chrome behind a generic lamp. A plugin that draws its own
+/// ribbon is already the control, and a second fill behind it stretches the row.
+private struct RibbonButtonChrome: ViewModifier {
+  let plain: Bool
+
+  func body(content: Content) -> some View {
+    if plain {
+      content.buttonStyle(.plain)
+    } else {
+      content.buttonStyle(ChromeButtonStyle())
+    }
   }
 }
 
@@ -546,6 +566,8 @@ private struct StatusRibbonPopover: Identifiable {
 /// the Nerve menu-bar surface. Clicking it opens the plugin's job panel.
 private struct PluginStatusRibbon: View {
   let item: PluginStatusBarItem
+  var label: AnyView? = nil
+  var openSettings: (() -> Void)? = nil
   let makeWorkspace: () -> (any PluginWorkspace)?
   @Environment(\.colorScheme) private var colorScheme
   @State private var presentation: StatusRibbonPopover?
@@ -560,29 +582,37 @@ private struct PluginStatusRibbon: View {
         isPresented = true
       }
     } label: {
+      if let label {
+        label
+      } else {
       #if os(macOS)
       Image(nsImage: NerveRibbonRenderer.image(
         segments: item.segments.map {
           NerveRibbonSegment(color: $0.color, weight: CGFloat($0.weight))
         },
-        width: 76,
-        height: 22,
-        thickness: 9,
+        width: Chrome.swatchWidth,
+        height: Chrome.ribbonHeight,
+        thickness: Chrome.ribbonThickness,
         appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSAppearance(named: .aqua)!))
         .resizable()
         .interpolation(.high)
-        .frame(width: 76, height: 18)
+        .frame(width: Chrome.swatchWidth, height: Chrome.swatchHeight)
       #else
-      Image(systemName: "waveform.path").frame(width: 76, height: 18)
+      Image(systemName: "waveform.path").frame(width: Chrome.swatchWidth, height: Chrome.swatchHeight)
       #endif
+      }
     }
-    .buttonStyle(ChromeButtonStyle())
+    .modifier(RibbonButtonChrome(plain: label != nil))
+    .contextMenu {
+      if let openSettings {
+        Button("Settings…", action: openSettings)
+      }
+    }
     .accessibilityLabel(item.label)
     .help(item.label)
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
       if let presentation {
         presentation.workspace.content()
-          .frame(width: 380, height: 440)
       }
     }
     .onChange(of: isPresented) { _, shown in
@@ -639,28 +669,137 @@ struct EmptyWorkspace: View {
     }
   }
 
-  /// The opposite of `CompactTitlebar`: a real titlebar, with room for the
-  /// traffic lights and the sidebar toggle. Settings uses this so its
-  /// section list does not start under the window buttons.
-  struct StandardTitlebar: NSViewRepresentable {
+  /// Preferences window chrome: traffic lights only, content under a clear
+  /// titlebar. The page title lives in the detail pane, the way Nerve's
+  /// settings window does.
+  struct SettingsWindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { Hook() }
     func updateNSView(_ view: NSView, context: Context) { (view as? Hook)?.apply() }
 
     private final class Hook: NSView {
+      private var applying = false
+      private var scheduled = false
+      private var armedFrameMemory = false
+      /// AppKit's frame key for `setFrameAutosaveName`. Read before the name
+      /// is armed, so this launch's default size cannot replace the last one.
+      private static let frameName = "Tether.Settings"
+
+      deinit {
+        NotificationCenter.default.removeObserver(self)
+      }
+
       override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        if let window {
+          NotificationCenter.default.addObserver(
+            self, selector: #selector(windowChanged),
+            name: NSWindow.didUpdateNotification, object: window)
+        }
         apply()
+        schedule()
+        armFrameMemory()
+      }
+
+      /// Open at the size and place the window had when it last closed.
+      /// The first launch keeps the scene's default size.
+      private func armFrameMemory() {
+        guard !armedFrameMemory, let window else { return }
+        armedFrameMemory = true
+        let saved = UserDefaults.standard.string(forKey: "NSWindow Frame \(Self.frameName)")
+        DispatchQueue.main.async { [weak window] in
+          DispatchQueue.main.async {
+            guard let window else { return }
+            if let saved, let frame = Hook.frame(from: saved, for: window) {
+              window.setFrame(frame, display: true)
+            }
+            window.setFrameAutosaveName(Self.frameName)
+          }
+        }
+      }
+
+      /// `setFrameAutosaveName` stores `x y width height` plus the screen,
+      /// which `NSRectFromString` does not read.
+      private static func frame(from saved: String, for window: NSWindow) -> NSRect? {
+        let parts = saved.split(separator: " ").compactMap { Double($0) }
+        let parsed: NSRect
+        if parts.count >= 4 {
+          parsed = NSRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+        } else {
+          parsed = NSRectFromString(saved)
+        }
+        guard parsed.width >= 660, parsed.height >= 500,
+          parsed.width < 10_000, parsed.height < 10_000
+        else { return nil }
+        guard let screen = window.screen ?? NSScreen.main else { return parsed }
+        return window.constrainFrameRect(parsed, to: screen)
+      }
+
+      /// Sidebar selection makes the Settings scene show its title again.
+      /// The detail page already has one.
+      @objc private func windowChanged() {
+        guard !applying, let window, window.titleVisibility != .hidden else { return }
+        applying = true
+        apply()
+        applying = false
+      }
+
+      override func layout() {
+        super.layout()
+        guard !applying else { return }
+        applying = true
+        apply()
+        applying = false
+        schedule()
+      }
+
+      private func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in
+          guard let self else { return }
+          self.scheduled = false
+          self.apply()
+        }
       }
 
       func apply() {
         guard let window else { return }
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        window.titlebarSeparatorStyle = .automatic
-        window.styleMask.remove(.fullSizeContentView)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .none
+        window.styleMask.insert(.fullSizeContentView)
+        window.tabbingMode = .disallowed
+        window.styleMask.insert(.resizable)
+        window.minSize = NSSize(width: Chrome.settingsMinWidth, height: Chrome.settingsMinHeight)
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = false
+        for item in window.toolbar?.items ?? [] {
+          let label = item.label
+          let identifier = item.itemIdentifier.rawValue
+          if label.hasSuffix("Settings") || identifier.localizedCaseInsensitiveContains("title") {
+            item.isHidden = true
+          }
+        }
+        if let titlebar = window.standardWindowButton(.closeButton)?.superview {
+          hideSceneTitle(in: titlebar)
+        }
+      }
+
+      /// The Settings scene draws "Tether Settings" into the titlebar. The
+      /// detail page already has that title.
+      private func hideSceneTitle(in view: NSView) {
+        if let text = view as? NSTextField, text.stringValue.hasSuffix("Settings") {
+          text.isHidden = true
+        }
+        let label = view.accessibilityLabel() ?? ""
+        let value = view.accessibilityValue() as? String ?? ""
+        if view.subviews.isEmpty, label.hasSuffix("Settings") || value.hasSuffix("Settings") {
+          view.isHidden = true
+        }
+        for subview in view.subviews { hideSceneTitle(in: subview) }
       }
     }
   }

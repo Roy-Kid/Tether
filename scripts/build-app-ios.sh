@@ -31,6 +31,7 @@ while [[ $# -gt 0 ]]; do
       [[ -n "${2:-}" ]] || { echo "--device needs a value" >&2; usage >&2; exit 2; }
       DEVICE="$2"
       shift 2
+      continue
       ;;
     -h|--help) usage; exit 0 ;;
     *)

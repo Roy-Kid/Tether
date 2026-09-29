@@ -177,7 +177,7 @@ private struct FileRow: View {
       Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
         .font(UIStyle.symbol)
         .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
-        .frame(width: 16)
+        .frame(width: UIStyle.Mark.glyph)
       if model.renaming == entry.path {
         TextField("Name", text: $draft)
           .textFieldStyle(.plain)
@@ -254,12 +254,12 @@ private struct FileRow: View {
         .accessibilityLabel(model.isExpanded(entry) ? "Collapse" : "Expand")
         .accessibilityAddTraits(.isButton)
       } else {
-        Color.clear.frame(width: FileRow.chevron, height: 1)
+        Color.clear.frame(width: FileRow.chevron, height: UIStyle.Mark.hairline)
       }
     }
 
     static let indent: CGFloat = 12
-    static let chevron: CGFloat = 12
+    static let chevron = UIStyle.Mark.chevron
   #endif
 
   /// Size and date, for the tooltip and VoiceOver: the window itself shows
@@ -503,7 +503,7 @@ private struct PathMenu: View {
         url: entry.kind == .file ? model.cache.cached(entry) : nil,
         side: 240
       )
-      .frame(minWidth: 200, minHeight: 200)
+      .frame(minWidth: UIStyle.compactHeight, minHeight: UIStyle.compactHeight)
     }
   }
 
@@ -544,7 +544,7 @@ private struct TransferList: View {
             Text(item.name).font(UIStyle.detail).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: UIStyle.Space.small)
             if item.failure == nil {
-              ProgressView(value: item.fraction).frame(width: 60).controlSize(.mini)
+              ProgressView(value: item.fraction).frame(width: UIStyle.Mark.progress).controlSize(.mini)
             }
             Button(item.failure != nil ? "Dismiss" : "Stop", systemImage: "xmark") {
               transfers.cancel(item.id)
@@ -564,78 +564,63 @@ private struct TransferList: View {
 }
 
 /// The questions the browser asks: a title and a verb (law: app-ui-chrome).
+///
+/// One at a time, deletion first. Each answer settles its own question, and
+/// the next one — another name already taken — follows as its own dialog.
 private struct Confirmations: ViewModifier {
   @Bindable var model: FilesTab
 
+  /// Which question is open, as something that changes when it does.
+  private enum Question: Hashable {
+    case delete([String])
+    case conflict(UUID)
+    case download(String)
+  }
+
+  private var question: Question? {
+    if !model.pendingDeletion.isEmpty { return .delete(model.pendingDeletion.map(\.path)) }
+    if let conflict = model.conflicts.first { return .conflict(conflict.id) }
+    if let large = model.pendingLarge { return .download(large.path) }
+    return nil
+  }
+
   func body(content: Content) -> some View {
-    content
-      .alert(
-        alertTitle,
-        isPresented: Binding(
-          get: { hasAlert },
-          set: { if !$0 { dismissCurrentAlert() } })
-      ) {
-        if !model.pendingDeletion.isEmpty {
-          Button("Delete", role: .destructive) {
-            // The alert binding clears pendingDeletion as the alert closes.
-            // Capture the choice before SwiftUI runs that dismissal update.
-            let chosen = model.pendingDeletion
-            Task { await model.confirmDelete(chosen) }
-          }
-          Button("Cancel", role: .cancel) { model.pendingDeletion = [] }
-        } else if let conflict = model.conflicts.first {
-          Button("Replace", role: .destructive) {
-            Task { await model.resolve(conflict, .replace) }
-          }
-          Button("Keep Both") { Task { await model.resolve(conflict, .keepBoth) } }
-          Button("Skip", role: .cancel) { Task { await model.resolve(conflict, .skip) } }
-        } else if let large = model.pendingLarge {
-          Button("Download") {
-            model.pendingLarge = nil
-            Task { await model.preview([large], confirmed: true) }
-          }
-          Button("Cancel", role: .cancel) { model.pendingLarge = nil }
-        }
-      }
+    content.dialog(for: question) { _ in dialog }
   }
 
-  private var hasAlert: Bool {
-    !model.pendingDeletion.isEmpty || !model.conflicts.isEmpty || model.pendingLarge != nil
-  }
-
-  private var alertTitle: String {
-    if !model.pendingDeletion.isEmpty { return deletionTitle }
-    if !model.conflicts.isEmpty { return conflictTitle }
-    return largeTitle
-  }
-
-  private func dismissCurrentAlert() {
+  private var dialog: Dialog {
     if !model.pendingDeletion.isEmpty {
-      model.pendingDeletion = []
-    } else if let conflict = model.conflicts.first {
-      Task { await model.resolve(conflict, .skip) }
-    } else if model.pendingLarge != nil {
+      let doomed = model.pendingDeletion
+      return .confirm(
+        deletionTitle(doomed), verb: "Delete", role: .destructive, cancel: { model.pendingDeletion = [] }
+      ) {
+        model.pendingDeletion = []
+        Task { await model.confirmDelete(doomed) }
+      }
+    }
+    if let conflict = model.conflicts.first {
+      let settle = { (choice: Conflict.Choice) in Task { await model.resolve(conflict, choice) } }
+      return Dialog(
+        title: "Replace “\(Names.display(conflict.name))”?",
+        actions: [
+          Dialog.Action("Replace", role: .destructive) { _ in settle(.replace) },
+          Dialog.Action("Keep Both") { _ in settle(.keepBoth) },
+          .cancel("Skip") { settle(.skip) },
+        ])
+    }
+    let large = model.pendingLarge
+    let size = ByteCountFormatter.string(fromByteCount: Int64(large?.size ?? 0), countStyle: .file)
+    return .confirm("Download \(size)?", verb: "Download", cancel: { model.pendingLarge = nil }) {
       model.pendingLarge = nil
+      if let large { Task { await model.preview([large], confirmed: true) } }
     }
   }
 
-  private var deletionTitle: String {
-    let doomed = model.pendingDeletion
+  private func deletionTitle(_ doomed: [FileEntry]) -> String {
     if doomed.count == 1, let only = doomed.first {
       return "Delete “\(Names.display(only.name))”?"
     }
     return "Delete \(doomed.count) items?"
-  }
-
-  private var conflictTitle: String {
-    guard let conflict = model.conflicts.first else { return "" }
-    return "Replace “\(Names.display(conflict.name))”?"
-  }
-
-  private var largeTitle: String {
-    guard let large = model.pendingLarge else { return "" }
-    let size = ByteCountFormatter.string(fromByteCount: Int64(large.size), countStyle: .file)
-    return "Download \(size)?"
   }
 }
 

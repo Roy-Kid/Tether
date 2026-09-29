@@ -1,4 +1,5 @@
 import SwiftUI
+import TetherUI
 
 /// Security details live in settings and sheets, not in the terminal chrome.
 struct IdentitySettings: View {
@@ -22,7 +23,7 @@ struct IdentitySettings: View {
     }
     .sheet(item: $selected) { host in
       NavigationStack { HostIdentitySettings(store: store, id: host.id, connections: connections) }
-        .frame(minWidth: 400, minHeight: 420)
+        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
     }
   }
 }
@@ -165,7 +166,7 @@ struct DeviceSettings: View {
             .font(.caption).foregroundStyle(.secondary)
           Button("Check Approval Requests") { Task { await center.refresh() } }
           ForEach(center.requests) { request in
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: UIStyle.Space.group) {
               Text(center.peers.first(where: { $0.id == request.sender })?.card.name ?? "Unknown device").bold()
               Text("\(request.username)@\(request.hostname):\(request.port)")
               Text(request.hostFingerprint).font(.caption.monospaced()).textSelection(.enabled)

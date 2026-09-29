@@ -83,6 +83,28 @@ async fn what_a_local_shell_writes_reaches_the_screen() {
 }
 
 #[tokio::test]
+async fn paused_output_waits_until_the_session_resumes() {
+    let session = Local::running(Command::new("/bin/sh"))
+        .size(ScreenSize::new(80, 24))
+        .open()
+        .await
+        .expect("a local shell");
+    settle(&session, "a prompt", |text| !text.trim().is_empty()).await;
+
+    session.pause();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    session.write(b"printf 'paused-marker\\n'\n".to_vec()).expect("write");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !session.screen().text().contains("paused-marker"),
+        "paused reading must not copy output into the grid"
+    );
+
+    session.resume();
+    settle(&session, "the marker", |text| text.contains("paused-marker")).await;
+}
+
+#[tokio::test]
 async fn typing_reaches_the_shell_and_the_echo_reaches_the_screen() {
     // The full round trip through the composition: a `Key`, encoded by the
     // engine against the modes the *shell* set, written by the producer, read

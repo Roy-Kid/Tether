@@ -59,6 +59,13 @@ together. Read it before touching architecture.
   no sentences in the window; compact, not decorated
   (`.claude/notes/law.md`, app-ui-chrome). Native menus and the command
   palette still use words. Alerts are a title and a verb.
+- **One dialog path.** Every alert, confirmation and question — the app's,
+  a plugin's, a handshake's — is a TetherUI `Dialog` shown by
+  `DialogPresenter`: `.dialog(for:)` from a view, `DialogPresenter.ask` from
+  code that waits. Only `DialogSurface{Phone,Mac}.swift` touch
+  `UIAlertController` or `NSAlert`; grepping for `.alert(` is the test.
+  A failure a person has to act on is one of these, naming the host and the
+  reason — not a page left in a tab. Their own *no* ends quietly.
 
 ## Working here
 
@@ -115,8 +122,14 @@ artifact shape are decided and exercised by CI.
 
 Phase 2's acceptance is in place — recorded §12 workloads asserted against
 screen state, and `cargo-fuzz` over everything that reads remote bytes. Phase 4
-has a measurement and no renderer yet: an ordinary frame stays on the SwiftUI
-canvas until a measured frame blows the budget.
+draws with Metal on both platforms; the SwiftUI canvas stays as the fallback
+and a setting. The Metal path is tested by drawing off screen and reading the
+pixels back, since nothing else in CI would notice it drawing nothing.
+
+A login asks through dialogs, and reads a question that comes back as the
+answer before it refused. A refused saved password is never sent again, and a
+password is only offered to be kept once it has worked. The password asked
+before dialling is a dialog too, not a sheet.
 
 A session reads from a `Producer` rather than from SSH, so
 `tether-local` gives the same `TerminalSession` over a shell on this machine.
@@ -134,7 +147,9 @@ the file is edited rather than regenerated.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the
-attachment reports and never learns what a session is.
+attachment reports and never learns what a session is. A pane's history is
+kept and scrolled here: a control-mode client is sent a pane's output, never
+what tmux draws for copy mode.
 
 Files are SFTP over the same lease: the `sftp` subsystem
 on a remote session, `ssh -s` through a ControlMaster, and this machine's own

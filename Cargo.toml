@@ -34,3 +34,9 @@ tracing = "0.1"
 uniffi = "0.32"
 async-trait = "0.1"
 tokio-util = "0.7"
+
+# The xcframework is a release build. Thin LTO and stripped symbols are what
+# ship; debug builds stay unoptimised so tests stay quick.
+[profile.release]
+lto = "thin"
+strip = "symbols"

@@ -98,6 +98,20 @@ jobs:
           fi
           echo "clean: tmux and files are only registered, never named"
 
+      # One presentation path for every dialog (CLAUDE.md, "One dialog path"):
+      # a second one is how a question ends up behind a sheet, unanswered.
+      - name: one dialog path
+        run: |
+          leaks=$(grep -rnE '\.alert\(|\.confirmationDialog\(|UIAlertController|NSAlert\b' \
+            app/Sources app/Plugins/*/Sources app/Packages/TetherFrontend/Sources \
+            | grep -v 'TetherUI/DialogSurface' || true)
+          if [ -n "$leaks" ]; then
+            echo "::error::a dialog presented outside DialogPresenter (CLAUDE.md, One dialog path)"
+            echo "$leaks"
+            exit 1
+          fi
+          echo "clean: every dialog goes through DialogPresenter"
+
       # The spec mirrors this file byte-for-byte into molab-apple. A copy that
       # silently diverges is worse than no copy, so the hash is printed for a
       # reviewer to compare against the other repository.

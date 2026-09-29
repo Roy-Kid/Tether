@@ -169,12 +169,10 @@ impl RemoteConnection {
         if name.trim().is_empty() {
             return Err(error("Enter a session name"));
         }
-        let start_directory = directory
-            .map(|directory| tether_tmux::quote(&directory).map_err(error))
-            .transpose()?;
-        let directory_option = start_directory
-            .map(|directory| format!("-c {directory} "))
-            .unwrap_or_default();
+        let start_directory =
+            directory.map(|directory| tether_tmux::quote(&directory).map_err(error)).transpose()?;
+        let directory_option =
+            start_directory.map(|directory| format!("-c {directory} ")).unwrap_or_default();
         let command =
             format!("tmux new-session -d -P -F '#{{session_id}}' {directory_option}-s {quoted}");
         tokio::select! {
@@ -593,7 +591,7 @@ impl TmuxWorkspace {
         .map_err(error)
     }
     pub async fn scroll(&self, pane: u32, lines: i32) -> Result<(), TetherError> {
-        self.inner.scroll(pane, lines).await.map_err(error)
+        self.inner.scroll(pane, lines).map_err(error)
     }
     pub async fn perform(&self, action: TmuxAction) -> Result<(), TetherError> {
         let action = match action {

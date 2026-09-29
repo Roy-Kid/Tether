@@ -23,57 +23,30 @@ struct TmuxPicker: View {
   var body: some View {
     layout
       .onAppear { model.refresh() }
-      .confirmationDialog(
-        "End this session?",
-        isPresented: Binding(
-          get: { model.sessionToEnd != nil },
-          set: { if !$0 { model.sessionToEnd = nil } })
-      ) {
-        Button("End", role: .destructive) {
-          guard let session = model.sessionToEnd else { return }
+      .dialog(for: model.sessionToEnd) { session in
+        Dialog.confirm(
+          "End this session?", verb: "End", role: .destructive, cancel: { model.sessionToEnd = nil }
+        ) {
           model.sessionToEnd = nil
           if opened == session.id { opened = nil }
           model.endSession(session)
         }
       }
-      .confirmationDialog(
-        "End this window?",
-        isPresented: Binding(
-          get: { model.windowToEnd != nil },
-          set: { if !$0 { model.windowToEnd = nil } })
-      ) {
-        Button("End", role: .destructive) {
-          guard let window = model.windowToEnd else { return }
+      .dialog(for: model.windowToEnd) { window in
+        Dialog.confirm(
+          "End this window?", verb: "End", role: .destructive, cancel: { model.windowToEnd = nil }
+        ) {
           model.windowToEnd = nil
           model.endWindow(window)
         }
       }
-      .alert(
-        "Rename",
-        isPresented: Binding(
-          get: { model.renameWindow != nil || model.renameSession != nil },
-          set: {
-            if !$0 {
-              model.renameWindow = nil
-              model.renameSession = nil
-            }
-          })
-      ) {
-        TextField("Name", text: $model.renameText)
-        Button("Cancel", role: .cancel) {
-          model.renameWindow = nil
-          model.renameSession = nil
-        }
-        Button("Save") {
-          let name = model.renameText
-          if let window = model.renameWindow {
-            model.perform(.renameWindow(id: window.id, name: name))
-          }
-          if let session = model.renameSession {
-            model.renameSession(session, to: name)
-          }
-          model.renameWindow = nil
-          model.renameSession = nil
+      .dialog(for: model.renaming) { renaming in
+        Dialog.input(
+          "Rename", field: Dialog.Field("Name", initial: renaming.name), verb: "Save",
+          cancel: { model.renaming = nil }
+        ) { name in
+          model.renaming = nil
+          model.rename(renaming, to: name)
         }
       }
   }
@@ -124,11 +97,28 @@ struct TmuxPicker: View {
     VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
       header(model.tab.plugin.hostLabel)
 
-      row(
-        title: model.tab.plugin.shellLabel,
-        selected: !model.showing && model.shellSessionID == nil
-      ) {
-        model.showShell()
+      let shells = model.tab.shells()
+      if shells.count > 1 {
+        ForEach(shells) { shell in
+          row(title: shell.title, selected: shell.current && !model.showing) {
+            model.tab.openShell(shell.id)
+            model.tab.dismissAccessory()
+          }
+        }
+      }
+
+      if shells.count < 2 || model.showing {
+        row(
+          title: model.tab.plugin.shellLabel,
+          selected: !model.showing && model.shellSessionID == nil
+        ) {
+          model.showShell()
+        }
+      }
+
+      row(title: "New shell…", selected: false) {
+        model.tab.newShell()
+        model.tab.dismissAccessory()
       }
 
       Divider()
@@ -205,11 +195,7 @@ struct TmuxPicker: View {
         }
         .disabled(model.busy)
         .contextMenu {
-          Button("Rename…") {
-            model.renameWindow = TmuxWindowInfo(
-              id: window.id, name: window.name, active: window.active, width: 1, height: 1)
-            model.renameText = window.name
-          }
+          Button("Rename…") { model.renaming = .window(window) }
           if listed.count > 1 {
             Button("End window…", role: .destructive) { model.windowToEnd = window }
           }
@@ -247,10 +233,7 @@ struct TmuxPicker: View {
       }
     }
     .contextMenu {
-      Button("Rename…") {
-        model.renameSession = session
-        model.renameText = session.name
-      }
+      Button("Rename…") { model.renaming = .session(session) }
       if owned {
         Button("Detach session") {
           model.detachSession()
@@ -323,7 +306,7 @@ private struct TreeRow: View {
   @State private var hovering = false
 
   private static let mark: CGFloat = 10
-  private static let endSize: CGFloat = 16
+  private static let endSize = UIStyle.Mark.glyph
 
   private var showsEnd: Bool { hovering && end != nil }
 
@@ -342,7 +325,7 @@ private struct TreeRow: View {
         // Room for the ✕, only while it shows: a long title gives way to it
         // instead of running underneath.
         if showsEnd {
-          Color.clear.frame(width: Self.endSize, height: 1)
+          Color.clear.frame(width: Self.endSize, height: UIStyle.Mark.hairline)
         }
         if chevron {
           Image(systemName: "chevron.right")
@@ -448,7 +431,7 @@ struct CreateTmuxSheet: View {
       }
     }
     #if os(macOS)
-      .frame(minWidth: 340, minHeight: 180)
+      .frame(minWidth: UIStyle.menuWidth, minHeight: UIStyle.menuHeight)
     #endif
     .interactiveDismissDisabled(model.busy)
     .task {

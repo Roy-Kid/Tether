@@ -1,6 +1,16 @@
 import SwiftUI
 import Tether
 
+/// Which path draws the grid. Settings store the raw value.
+public enum TerminalDrawing: String {
+  case canvas
+  case metal
+
+  /// Metal on both. The canvas stays as the fallback where there is no
+  /// Metal device, and as a setting for comparing the two.
+  public static var platformDefault: String { TerminalDrawing.metal.rawValue }
+}
+
 #if os(macOS)
   import AppKit
 #endif
@@ -8,6 +18,8 @@ import Tether
 /// The same terminal surface is used for a shell and every plugin-owned pane.
 public struct TerminalSurface: View {
   let frame: ScreenFrame
+  /// `nil` redraws every row. An empty set redraws none of them.
+  let dirtyRows: Set<Int>?
   let active: Bool
   let inset: CGFloat
   let onInput: (TerminalInput) -> Void
@@ -19,13 +31,21 @@ public struct TerminalSurface: View {
   @State private var hovered: TerminalLink?
   /// Whether the hovered link is known to be there.
   @State private var confirmed = false
+  /// The size last given to the session. A keyboard animation changes height
+  /// on every frame; resizing on each of those is a SIGWINCH per frame.
+  @State private var fittedWidth: CGFloat = 0
+  @State private var pendingFit: Task<Void, Never>?
+  /// Shared with the phone's key row, so a lit Ctrl is the chord that is sent.
+  @State private var latch = Latch()
   @Environment(\.colorScheme) private var scheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalAppearance") private var appearance = "system"
+  @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
+  @State private var rowCache = RowPictureCache()
 
   public init(
-    frame: ScreenFrame, active: Bool = true, inset: CGFloat = 8,
+    frame: ScreenFrame, dirtyRows: Set<Int>? = nil, active: Bool = true, inset: CGFloat = 8,
     onInput: @escaping (TerminalInput) -> Void,
     onResize: @escaping (UInt16, UInt16) -> Void = { _, _ in },
     onFocus: @escaping () -> Void = {},
@@ -33,6 +53,7 @@ public struct TerminalSurface: View {
     links: TerminalLinks = .none
   ) {
     self.frame = frame
+    self.dirtyRows = dirtyRows
     self.active = active
     self.inset = inset
     self.onInput = onInput
@@ -44,12 +65,21 @@ public struct TerminalSurface: View {
   public var body: some View {
     let metrics = FontMetrics(size: min(24, max(10, fontSize)))
     let palette = Palette.chosen(setting: appearance, scheme: scheme)
+    VStack(spacing: 0) {
+      grid(metrics: metrics, palette: palette)
+      #if os(iOS)
+        TerminalKeyBar(latch: latch, onInput: onInput)
+      #endif
+    }
+  }
+
+  private func grid(metrics: FontMetrics, palette: Palette) -> some View {
     GeometryReader { geometry in
       ZStack(alignment: .topLeading) {
         let cells = CellGeometry(
           cellWidth: metrics.cellWidth, lineHeight: metrics.lineHeight, inset: inset,
           columns: UInt16(frame.columns), rows: UInt16(frame.rows))
-        TerminalView(frame: frame, metrics: metrics, palette: palette)
+        terminal(metrics: metrics, palette: palette)
           .padding(inset)
         LinkUnderline(link: hovered, confirmed: confirmed, geometry: cells)
         KeyCapture(
@@ -60,7 +90,7 @@ public struct TerminalSurface: View {
             x: inset + CGFloat(frame.cursorColumn) * metrics.cellWidth,
             y: inset + CGFloat(frame.cursorRow) * metrics.lineHeight,
             width: metrics.cellWidth, height: metrics.lineHeight),
-          onHover: hover
+          onHover: hover, latch: latch
         )
         // Filled on purpose. A bare `NSView` has no intrinsic size, so
         // without this it lays out at zero — and a zero-sized view still
@@ -79,7 +109,7 @@ public struct TerminalSurface: View {
           }
           .buttonStyle(.borderedProminent)
           .controlSize(.small)
-          .padding(10)
+          .padding(UIStyle.panelRadius)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
           .transition(.opacity)
         }
@@ -88,11 +118,28 @@ public struct TerminalSurface: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background(palette.background)
       .clipped()
-      .onAppear { fit(geometry.size, metrics) }
-      .onChange(of: geometry.size) { _, size in fit(size, metrics) }
-      .onChange(of: fontSize) { _, _ in fit(geometry.size, metrics) }
+      .onAppear { applyFit(geometry.size, metrics) }
+      .onChange(of: geometry.size) { _, size in noteSize(size, metrics) }
+      .onChange(of: fontSize) { _, _ in
+        rowCache.clear()
+        applyFit(geometry.size, metrics)
+      }
+      .onChange(of: appearance) { _, _ in rowCache.clear() }
+      .onChange(of: scheme) { _, _ in rowCache.clear() }
+      .onDisappear { pendingFit?.cancel() }
     }
   }
+  @ViewBuilder
+  private func terminal(metrics: FontMetrics, palette: Palette) -> some View {
+    let useMetal = drawing == TerminalDrawing.metal.rawValue && MetalTerminal.isAvailable
+    if useMetal {
+      MetalTerminal(frame: frame, dirtyRows: dirtyRows, metrics: metrics, palette: palette)
+    } else {
+      TerminalView(
+        frame: frame, dirtyRows: dirtyRows, metrics: metrics, palette: palette, cache: rowCache)
+    }
+  }
+
   /// Underlines a hovered link at once, dotted, and asks whether it is
   /// there: solid if it is, gone if it is not. Text that only looks like a
   /// path is not left promising a file.
@@ -113,6 +160,34 @@ public struct TerminalSurface: View {
         #endif
       }
     }
+  }
+
+  /// Width changes — rotation, a split — resize immediately, because the
+  /// grid has to track the window. Height alone is what the software
+  /// keyboard does while it animates, so that one waits until it settles
+  /// and the session is told once.
+  private func noteSize(_ size: CGSize, _ metrics: FontMetrics) {
+    #if os(iOS)
+      let widthChanged = abs(size.width - fittedWidth) > 0.5
+      if widthChanged || fittedWidth == 0 {
+        applyFit(size, metrics)
+        return
+      }
+      pendingFit?.cancel()
+      pendingFit = Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled else { return }
+        applyFit(size, metrics)
+      }
+    #else
+      applyFit(size, metrics)
+    #endif
+  }
+
+  private func applyFit(_ size: CGSize, _ metrics: FontMetrics) {
+    pendingFit?.cancel()
+    fittedWidth = size.width
+    fit(size, metrics)
   }
 
   private func fit(_ size: CGSize, _ metrics: FontMetrics) {

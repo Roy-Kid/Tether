@@ -24,17 +24,21 @@ struct RootView: View {
   let registry: PluginRegistry
   let secrets: any SecretStore
   @State private var editing: Host?
-  @State private var connecting: Host?
+  /// Passwords to ask for before dialling, one at a time, in the order
+  /// they were needed. A queue rather than a slot: two tabs can need one at
+  /// once, and a question overwritten is a tab left waiting for nothing.
+  @State private var connectRequests: [ConnectRequest] = []
   @State private var visibility: NavigationSplitViewVisibility = .all
   @State private var showingSettings = false
-  @State private var renameDraft = ""
-  @State private var reconnectID: UUID?
-  @State private var reconnectAnswer: CheckedContinuation<String, Error>?
-  /// A keychain that refused. Rare, and silence would be the wrong answer:
-  /// a person who ticked "remember" would go on believing it was kept.
-  @State private var keychainProblem: String?
+  /// A plugin's reconnect waiting on its own password question, by request.
+  @State private var reconnectAnswers: [UUID: CheckedContinuation<String, Error>] = [:]
+  /// Something that already went wrong, told once: a keychain that refused
+  /// — silence would leave a person who ticked "remember" believing it was
+  /// kept — or a host that cannot be connected to as configured.
+  @State private var notice: WorkspaceNotice?
   @AppStorage("appearance") private var appearance = "system"
   @Environment(\.openURL) private var openURL
+  @Environment(\.scenePhase) private var phase
   #if !os(macOS)
     /// Whether there is room for two columns. A phone in portrait is compact;
     /// an iPad, and a phone turned sideways, are not.
@@ -47,8 +51,8 @@ struct RootView: View {
   private var terminalInputAllowed: Bool {
     tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
       && tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil
-      && !tabs.manageHosts && editing == nil && connecting == nil && !showingSettings
-      && keychainProblem == nil
+      && !tabs.manageHosts && editing == nil && connectRequests.isEmpty && !showingSettings
+      && notice == nil
   }
   var body: some View {
     windowChrome
@@ -85,7 +89,7 @@ struct RootView: View {
       ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
           if tabs.zen {
-            Color.clear.frame(height: 28).background { WindowDragArea() }
+            Color.clear.frame(height: Chrome.titlebar).background { WindowDragArea() }
           } else {
             WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestClose($0) })
           }
@@ -96,7 +100,7 @@ struct RootView: View {
             // row as the listing it controls (design 16-inspector).
             if showInspector {
               inspectorPane
-                .frame(minWidth: Chrome.inspectorMin, idealWidth: Chrome.inspectorIdeal, maxWidth: 480)
+                .frame(minWidth: Chrome.inspectorMin, idealWidth: Chrome.inspectorIdeal, maxWidth: Chrome.inspectorMax)
                 .frame(maxHeight: .infinity)
                 .background(Theme.sidebar)
             }
@@ -108,6 +112,12 @@ struct RootView: View {
               pluginStatusItems: registry.plugins
                 .filter { registry.isEnabled($0.metadata.id) }
                 .compactMap(\.statusBarItem),
+              statusBarLabel: { pluginID in
+                registry.plugins.first { $0.metadata.id == pluginID }?.statusBarLabel()
+              },
+              statusBarSettings: { pluginID in
+                registry.plugins.first { $0.metadata.id == pluginID }?.statusBarSettings()
+              },
               makeStatusWorkspace: { pluginID in
                 registry.plugins.first { $0.metadata.id == pluginID }?.statusBarWorkspace()
               })
@@ -118,8 +128,8 @@ struct RootView: View {
             .ignoresSafeArea()
             .onTapGesture { tabs.hostPicker = false }
           HostPicker(tabs: tabs, store: store)
-            .padding(.leading, 10)
-            .padding(.bottom, Chrome.status + 8)
+            .padding(.leading, UIStyle.panelRadius)
+            .padding(.bottom, Chrome.status + UIStyle.Space.group)
         }
       }
       .background(Theme.window)
@@ -153,8 +163,8 @@ struct RootView: View {
 
   /// Opens a host, asking for a password only where one could be used.
   ///
-  /// The sheet exists to collect a credential for a handshake. A shell on
-  /// this machine has neither, so presenting it would be asking a person to
+  /// The question exists to collect a credential for a handshake. A shell on
+  /// this machine has neither, so asking would be asking a person to
   /// dismiss a question about a stranger they are not talking to. A host
   /// that is already connected has spent that handshake; another terminal
   /// is another channel on the same lease. A host with an `IdentityFile`
@@ -169,7 +179,10 @@ struct RootView: View {
   }
 
   private func openRemote(_ host: Host) async {
-    if let issue = host.connectionProblem { keychainProblem = issue; return }
+    if let issue = host.connectionProblem {
+      notice = WorkspaceNotice(title: "Could Not Connect", message: issue)
+      return
+    }
     do {
       if let connection = try await tabs.lease(for: host) {
         tabs.open(host, on: connection)
@@ -178,16 +191,92 @@ struct RootView: View {
     } catch {
       // The in-flight handshake failed. Asking again is the remaining path.
     }
+    switch await passwordSource(for: host) {
+    case .none: tabs.open(host, password: "")
+    case .saved(let password): tabs.open(host, password: password)
+    case .ask: ask(ConnectRequest(host: host))
+    }
+  }
+
+  private func ask(_ request: ConnectRequest) {
+    if let tab = request.retrying, connectRequests.contains(where: { $0.retrying == tab }) { return }
+    connectRequests.append(request)
+  }
+
+  /// The host as it is now. A tab keeps the one it opened with; a password
+  /// kept or a label edited since belongs to this one.
+  private func latest(_ host: Host) -> Host {
+    store.hosts.first { $0.id == host.id } ?? host
+  }
+
+  /// Where a handshake's password comes from: nowhere, because a key, a
+  /// running master or this machine needs none; the keychain; or the person.
+  private enum PasswordSource {
+    case none
+    case saved(String)
+    case ask
+  }
+
+  /// A saved password comes first even for a host with a key: the key may
+  /// be refused, or the server may ask for the password as well, and a
+  /// password kept for that is one to use rather than to ask for again.
+  private func passwordSource(for host: Host) async -> PasswordSource {
+    if host.isLocal { return .none }
+    if let password = remembered(for: host), !password.isEmpty { return .saved(password) }
     let master = host.allowsMasterReuse ? await TerminalSession.sshMasterIsRunning(host.sshTarget) : false
-    if master || host.offersConfiguredKey {
-      tabs.open(host, password: "")
+    if master || host.offersConfiguredKey { return .none }
+    return .ask
+  }
+
+  /// Tries a tab again, in place, after the person asked to.
+  ///
+  /// After a refused login the person is asked, whatever is saved: sending
+  /// the same refused password again is the loop this exists to break.
+  private func retry(_ report: TabProblem) {
+    guard let tab = tabs.tabs.first(where: { $0.id == report.tab }) else { return }
+    tab.acknowledge()
+    let host = latest(report.host)
+    if report.problem.refusedLogin, !host.isLocal {
+      ask(ConnectRequest(host: host, retrying: tab.id))
       return
     }
-    if let password = remembered(for: host), !password.isEmpty {
-      tabs.open(host, password: password)
-      return
+    Task {
+      let source = await passwordSource(for: host)
+      // Closed while the keychain was being read: nothing to try again.
+      guard tabs.tabs.contains(where: { $0.id == tab.id }) else { return }
+      switch source {
+      case .none: tab.redial(host: host, password: "", typedNow: false)
+      case .saved(let password): tab.redial(host: host, password: password, typedNow: false)
+      case .ask: ask(ConnectRequest(host: host, retrying: tab.id))
+      }
     }
-    connecting = host
+  }
+
+  /// The password question, answered.
+  private func connect(_ request: ConnectRequest, password: String) {
+    connectRequests.removeAll { $0.id == request.id }
+    if let answer = reconnectAnswers.removeValue(forKey: request.id) {
+      answer.resume(returning: password)
+    } else if let id = request.retrying {
+      // A tab closed while its password was being asked for stays closed.
+      tabs.tabs.first { $0.id == id }?.redial(host: latest(request.host), password: password, typedNow: true)
+    } else {
+      tabs.open(latest(request.host), password: password, typedNow: true)
+    }
+  }
+
+  /// The password question, declined: nothing is dialled, and a failed tab
+  /// that was waiting on it closes.
+  private func cancelConnect(_ request: ConnectRequest) {
+    connectRequests.removeAll { $0.id == request.id }
+    reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
+    if let id = request.retrying { tabs.close(id) }
+  }
+
+  /// A password that worked, kept — or said why not.
+  private func keep(_ offer: TabPasswordOffer) {
+    keep(offer.offer.password, for: offer.host)
+    tabs.answer(offer, kept: true)
   }
 
   #if os(macOS)
@@ -246,6 +335,16 @@ struct RootView: View {
     Group {
       if tabs.tabs.isEmpty && tabs.extensions.isEmpty {
         ContentUnavailableView("No Open Terminals", systemImage: "terminal")
+      } else if tabs.extensions.isEmpty,
+        let tab = tabs.tabs.first(where: { $0.id == tabs.selected }) ?? tabs.visibleTabs.first
+      {
+        // Several terminals share the session menu. A tab bar under the keys
+        // was a second list of the same sessions.
+        phoneSession(tab)
+      } else if tabs.tabs.isEmpty, let entry = tabs.extensions.first {
+        entry.workspace.content().id(entry.id)
+          .terminalInputEnabled(terminalInputAllowed && tabs.selected == entry.id)
+          .padding(Chrome.margin)
       } else {
         TabView(selection: phoneTabSelection) {
           ForEach(tabs.tabs) { tab in
@@ -274,13 +373,21 @@ struct RootView: View {
     // in the sidebar already carries, on a screen with room for neither.
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
+        #if os(iOS)
+          Button {
+            guard let tab = tabs.current,
+              let picker = tabs.accessories.first(where: { $0.accessory.placement == .popover })
+            else { return }
+            tabs.toggleAccessory(picker.id, on: tab.id)
+          } label: {
+            Image(systemName: "plus.rectangle.on.rectangle")
+          }
+          .accessibilityLabel("Shell")
+          .disabled(tabs.current == nil)
+        #endif
         if let tab = tabs.current {
-          ForEach(tabs.accessories) { plugin in
-            Button(plugin.accessory.name, systemImage: plugin.accessory.symbol) {
-              tabs.toggleAccessory(plugin.id, on: tab.id)
-            }
-            .labelStyle(.iconOnly)
-            .disabled(!tab.canOpen(plugin.id))
+          ForEach(toolbarAccessories) { plugin in
+            accessoryButton(plugin, on: tab)
           }
         }
         if let workspace = extensionWorkspace {
@@ -329,6 +436,24 @@ struct RootView: View {
   }
 
   @ViewBuilder
+  /// On a phone the session picker opens from the shell button, so it is not
+  /// also a button of its own. An inspector accessory stays where it is.
+  private var toolbarAccessories: [PluginAccessory] {
+    #if os(iOS)
+      tabs.accessories.filter { $0.accessory.placement != .popover }
+    #else
+      tabs.accessories
+    #endif
+  }
+
+  private func accessoryButton(_ plugin: PluginAccessory, on tab: SessionTab) -> some View {
+    Button(plugin.accessory.name, systemImage: plugin.accessory.symbol) {
+      tabs.toggleAccessory(plugin.id, on: tab.id)
+    }
+    .labelStyle(.iconOnly)
+    .disabled(!tab.canOpen(plugin.id))
+  }
+
   private func phoneSession(_ tab: SessionTab) -> some View {
     Group {
       if let shown = tab.shown {
@@ -372,6 +497,9 @@ extension RootView {
       guard let pluginID = tabs.inspectorPlugin, let tab = tabs.current else { return }
       prepareAttachment(pluginID, on: tab)
     }
+    .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
+    .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
+    .onChange(of: phase) { _, _ in refreshFramePublishing() }
     .onChange(of: registry.disabled, initial: true) { _, _ in
       tabs.accessories = registry.plugins.compactMap { plugin in
         guard let plugin = plugin as? any TabPlugin, registry.isEnabled(plugin.metadata.id)
@@ -433,40 +561,20 @@ extension RootView {
         )
       }
       #if os(macOS)
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: UIStyle.panelWidth, minHeight: Chrome.editorHeight)
       #else
         .modifier(HostManagementNavigation())
       #endif
     }
-    .alert(
-      tabs.closeQuestion,
-      isPresented: Binding(
-        get: { tabs.pendingClose != nil },
-        set: { if !$0 { tabs.pendingClose = nil } }
-      )
-    ) {
-      Button("Cancel", role: .cancel) { tabs.pendingClose = nil }
-      Button("Close", role: .destructive) { tabs.confirmClose() }
-    } message: {
-      if let note = tabs.closeNote {
-        Text(note)
-      }
+    .dialog(for: tabs.pendingClose) { _ in
+      Dialog.confirm(
+        tabs.closeQuestion, message: tabs.closeNote, verb: "Close", role: .destructive,
+        cancel: { tabs.pendingClose = nil }, perform: { tabs.confirmClose() })
     }
-    .alert(
-      "Rename",
-      isPresented: Binding(
-        get: { tabs.renaming != nil },
-        set: { if !$0 { tabs.renaming = nil } }
-      )
-    ) {
-      TextField("Name", text: $renameDraft)
-      Button("Cancel", role: .cancel) { tabs.renaming = nil }
-      Button("Save") {
-        if let id = tabs.renaming { tabs.rename(id, to: renameDraft) }
-      }
-    }
-    .onChange(of: tabs.renaming) { _, id in
-      renameDraft = tabs.tabs.first { $0.id == id }?.name ?? ""
+    .dialog(for: tabs.renaming) { id in
+      Dialog.input(
+        "Rename", field: Dialog.Field("Name", initial: tabs.tabs.first { $0.id == id }?.name ?? ""),
+        verb: "Save", cancel: { tabs.renaming = nil }, perform: { tabs.rename(id, to: $0) })
     }
     #if !os(macOS)
       .sheet(isPresented: $showingSettings) {
@@ -480,23 +588,10 @@ extension RootView {
         }
       }
     #endif
-    .sheet(
-      item: $connecting,
-      onDismiss: {
-        reconnectAnswer?.resume(throwing: CancellationError())
-        reconnectAnswer = nil
-      }
-    ) { host in
-      ConnectSheet(host: host, remembered: remembered(for: host)) { password, remember in
-        keep(password, remember: remember, for: host)
-        if let answer = reconnectAnswer {
-          reconnectAnswer = nil
-          answer.resume(returning: password)
-        } else {
-          tabs.open(host, password: password)
-        }
-      }
-    }
+    .modifier(
+      ConnectionDialogs(
+        tabs: tabs, connecting: connectRequests.first, connect: connect, cancelConnect: cancelConnect,
+        retry: retry, keep: keep, remembers: { latest($0).remembersPassword }))
     // Closing every session on the way out is not tidiness: each one holds a
     // socket and a task, and the far side is owed a disconnect rather than a
     // dropped connection. The notification is named differently on each
@@ -506,13 +601,8 @@ extension RootView {
       tabs.closeAll()
     }
     .onAppear { registry.onDisable = { id in tabs.closePlugin(id) } }
-    .alert(
-      "The password was not saved",
-      isPresented: Binding(get: { keychainProblem != nil }, set: { if !$0 { keychainProblem = nil } })
-    ) {
-      Button("OK", role: .cancel) { keychainProblem = nil }
-    } message: {
-      Text(keychainProblem ?? "")
+    .dialog(for: notice) { shown in
+      Dialog.notice(shown.title, message: shown.message) { notice = nil }
     }
   }
 
@@ -576,9 +666,18 @@ extension RootView {
   /// What the keychain already has for this host, if the person asked for it
   /// to be kept. Read at the moment of connecting, not held in memory: a
   /// password sitting in a view model is a password in a crash report.
+  ///
+  /// A keychain that refuses is said so, before the person is asked to type
+  /// what it would not give: otherwise the question looks like a password
+  /// that was forgotten.
   private func remembered(for host: Host) -> String? {
     guard host.remembersPassword else { return nil }
-    return try? secrets.password(for: host.passwordID)
+    do {
+      return try secrets.password(for: host.passwordID)
+    } catch {
+      notice = WorkspaceNotice(title: "The Saved Password Could Not Be Read", message: message(for: error))
+      return nil
+    }
   }
 
   /// Records or clears what a person asked to be remembered.
@@ -586,31 +685,33 @@ extension RootView {
   /// The flag on the host and the item in the keychain are two facts that
   /// must agree: a host marked as remembering with nothing stored prefills
   /// an empty field for ever, so a keychain that refuses leaves the flag off.
-  private func keep(_ password: String, remember: Bool, for host: Host) {
-    if host.isManaged {
-      if !store.save(host, password: remember ? password : "") { keychainProblem = store.problem }
+  /// Keeps a password that has just worked. Only for a host that is still
+  /// in the list: a login can outlive the host it was for, and a deleted
+  /// host must not come back through its keychain item.
+  ///
+  /// A managed host keeps it through its record. A host from `ssh_config`
+  /// has no record to edit — the keychain is where its flag comes from.
+  private func keep(_ password: String, for host: Host) {
+    guard let host = store.hosts.first(where: { $0.id == host.id }) else {
+      notSaved("This host is no longer in the list.")
       return
     }
-    var updated = host
-    updated.remembersPassword = remember
-    do {
-      if remember {
-        try secrets.remember(password, for: host)
-      } else {
-        try secrets.forget(host.id)
-      }
-    } catch {
-      keychainProblem = error.localizedDescription
-      updated.remembersPassword = false
+    if host.isManaged {
+      if !store.save(host, password: password) { notSaved(store.problem) }
+      return
     }
-
-    // Only a host that is actually saved: this sheet also opens for a
-    // reconnect, and a host deleted in the meantime must not come back.
-    guard updated.remembersPassword != host.remembersPassword,
-      store.hosts.contains(where: { $0.id == host.id })
-    else { return }
-    store.save(updated)
+    do {
+      try secrets.remember(password, for: host)
+      store.reload()
+    } catch {
+      notSaved(message(for: error))
+    }
   }
+
+  private func notSaved(_ problem: String?) {
+    notice = WorkspaceNotice(title: "The Password Was Not Saved", message: problem ?? "")
+  }
+
   private func pluginContext(for tab: SessionTab) -> PluginContext {
     let shellLabel: String
     if tab.host.isLocal, let path = ProcessInfo.processInfo.environment["SHELL"], !path.isEmpty {
@@ -624,8 +725,26 @@ extension RootView {
       hostID: tab.host.id,
       shellLabel: shellLabel,
       openWorkspace: { _ in },
-      reconnect: { try await reconnect(host: tab.host) }
+      reconnect: { [weak tab] in
+        guard let tab else { throw CancellationError() }
+        return try await reconnect(host: tab.host)
+      }
     )
+  }
+
+  /// Only the tab in front copies a frame, and only while the app is in
+  /// front. The others stay subscribed, so the next time they are shown
+  /// the screen they copy is the current one.
+  private func refreshFramePublishing() {
+    let foreground = phase != .background
+    for tab in tabs.tabs {
+      tab.setPublishesFrames(foreground && tab.id == tabs.selected)
+      if foreground {
+        tab.resumeReading()
+      } else {
+        tab.pauseReading()
+      }
+    }
   }
 
   /// Makes the tab's attachment for this plugin the first time its
@@ -636,7 +755,6 @@ extension RootView {
       if let connection = tab.connection { attachment.connectionChanged(connection) }
       return
     }
-    guard tab.connection != nil else { return }
     guard let plugin = registry.plugins.first(where: { $0.metadata.id == pluginID }) as? any TabPlugin,
       registry.isEnabled(pluginID)
     else { return }
@@ -656,7 +774,12 @@ extension RootView {
       insertText: { [weak tab] text in tab?.send(.paste(text)) },
       workingDirectory: { [weak tab] in tab?.workingDirectory },
       showAccessory: { tabs.showAccessory(pluginID, on: id) },
-      linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } })
+      linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
+      shells: {
+        tabs.visibleTabs.map { ShellChoice(id: $0.id, title: $0.title, current: $0.id == tabs.selected) }
+      },
+      openShell: { tabs.select($0) },
+      newShell: { tabs.intent = .newTerminal })
   }
 
   /// What pointing at the terminal does on this tab: whatever its plugins
@@ -734,35 +857,35 @@ extension RootView {
   }
 
   private func reconnect(host: Host) async throws -> RemoteConnection {
+    let host = latest(host)
     if let connection = try? await tabs.lease(for: host) {
       return connection
     }
-    let requestID = UUID()
     let password: String
-    let master = host.allowsMasterReuse ? await TerminalSession.sshMasterIsRunning(host.sshTarget) : false
-    if host.isLocal || host.offersConfiguredKey || master {
-      password = ""
-    } else {
+    let typedNow: Bool
+    switch await passwordSource(for: host) {
+    case .none:
+      (password, typedNow) = ("", false)
+    case .saved(let saved):
+      (password, typedNow) = (saved, false)
+    case .ask:
+      typedNow = true
+      let request = ConnectRequest(host: host)
       password = try await withTaskCancellationHandler {
         try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { continuation in
-          reconnectAnswer?.resume(throwing: CancellationError())
-          reconnectID = requestID
-          reconnectAnswer = continuation
-          connecting = host
+          reconnectAnswers[request.id] = continuation
+          ask(request)
         }
       } onCancel: {
         Task { @MainActor in
-          if reconnectID == requestID {
-            reconnectAnswer?.resume(throwing: CancellationError())
-            reconnectAnswer = nil
-            connecting = nil
-          }
+          connectRequests.removeAll { $0.id == request.id }
+          reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
         }
       }
     }
     let selected = tabs.selected
-    tabs.open(host, password: password)
+    tabs.open(host, password: password, typedNow: typedNow)
     guard let tab = tabs.current else { throw CancellationError() }
     let connection = try await withTaskCancellationHandler {
       try await tab.connectionReady()
@@ -804,6 +927,13 @@ extension RootView {
   private var welcome: some View {
     EmptyWorkspace()
   }
+}
+
+/// Something the window tells a person once, with nothing to decide.
+struct WorkspaceNotice: Hashable {
+  let id = UUID()
+  let title: String
+  let message: String
 }
 
 /// Where a tab plugin's sheet opens.

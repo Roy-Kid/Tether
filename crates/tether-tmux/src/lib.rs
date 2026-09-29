@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tether_terminal::{Input, Link, Options, Position, Screen, ScreenSize, Terminal};
+use tether_terminal::{Input, Link, Options, Position, Screen, ScreenSize, Scroll, Terminal};
 use tmuxctl::{Event, Notification};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -89,8 +89,6 @@ pub enum Action {
     Resize(u16, u16),
     RenameSession(String),
     EndSession,
-    CopyMode(u32),
-    ScrollPane(u32, i32),
 }
 impl Action {
     fn command(&self) -> Result<String> {
@@ -113,12 +111,6 @@ impl Action {
             }
             Self::RenameSession(name) => format!("rename-session {}", quote(name)?),
             Self::EndSession => "kill-session".into(),
-            Self::CopyMode(id) => format!("copy-mode -e -t %{id}"),
-            Self::ScrollPane(id, lines) => {
-                let count = lines.unsigned_abs();
-                let direction = if *lines > 0 { "scroll-up" } else { "scroll-down" };
-                format!("send-keys -X -t %{id} -N {count} {direction}")
-            }
         })
     }
 }
@@ -212,16 +204,30 @@ impl Workspace {
         };
         self.write(pane, bytes)
     }
-    /// Scrolls a tmux pane through tmux's copy-mode commands. Control-mode
-    /// clients do not receive native mouse-wheel events from the terminal.
-    pub async fn scroll(&self, pane: u32, lines: i32) -> Result<()> {
-        if lines == 0 { return Ok(()); }
-        self.perform(Action::CopyMode(pane)).await?;
-        self.perform(Action::ScrollPane(pane, lines)).await
+    /// Moves `pane`'s viewport over the history kept here for it.
+    ///
+    /// Not tmux's copy mode. A control-mode client is sent the pane's
+    /// output, never what tmux draws for copy mode, so entering it changed
+    /// nothing on this screen — and with `-e` a scroll toward the present
+    /// left the mode on its first line, failing every repeat after with
+    /// "not in a mode". The history was captured on attach and grows with
+    /// the output; it is scrolled where it is, as a terminal of its own
+    /// would be. Positive goes back, negative comes forward, clamped.
+    pub fn scroll(&self, pane: u32, lines: i32) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let target = state.panes.get_mut(&pane).ok_or_else(|| Error("Pane closed".into()))?;
+        target.terminal.scroll(Scroll::Lines(lines));
+        Ok(())
     }
+    /// Sends bytes to `pane` — and returns it to the present first, the way
+    /// every terminal does: a keystroke whose echo lands off screen reads as
+    /// one that was ignored.
     pub fn write(&self, pane: u32, bytes: Vec<u8>) -> Result<()> {
         if bytes.len() > 1024 * 1024 {
             return Err(Error("Paste exceeds 1 MiB".into()));
+        }
+        if let Some(target) = self.state.lock().unwrap().panes.get_mut(&pane) {
+            target.terminal.scroll(Scroll::Live);
         }
         self.requests
             .try_send(Request::Input(pane, bytes))

@@ -298,3 +298,59 @@ async fn oversized_remote_line_fails_without_unbounded_buffering() {
         .unwrap();
     assert!(workspace.snapshot().ended.unwrap().contains("exceeds limit"));
 }
+
+/// A control-mode client is sent a pane's output, never what tmux draws for
+/// copy mode — so scrolling went through tmux and changed nothing on screen,
+/// and a scroll toward the present failed with "not in a mode". The pane's
+/// history is kept here; scrolling moves over it.
+#[tokio::test]
+async fn scrolling_a_pane_moves_its_own_history_and_typing_returns() {
+    if Command::new("tmux").arg("-V").output().is_err() {
+        assert!(std::env::var_os("TETHER_REQUIRE_TMUX").is_none(), "tmux is required");
+        eprintln!("tmux unavailable; integration test skipped");
+        return;
+    }
+    let server = Server(format!(
+        "tether-scroll-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    assert!(
+        server
+            .command(&[
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-s",
+                "test",
+                "-x",
+                "80",
+                "-y",
+                "10",
+                "sh"
+            ])
+            .status
+            .success()
+    );
+    let workspace = server.attach();
+    let pane = wait(&workspace, |s| s.panes.len() == 1).await.panes[0].info.id;
+    workspace.write(pane, b"seq 1 60\r".to_vec()).unwrap();
+    wait(&workspace, |s| s.panes[0].screen.text().lines().any(|line| line.trim() == "60")).await;
+
+    // Toward the present while already there: nothing to do, and no error.
+    workspace.scroll(pane, -3).unwrap();
+    assert_eq!(workspace.snapshot().panes[0].screen.viewport.offset, 0);
+
+    workspace.scroll(pane, 5).unwrap();
+    let back = workspace.snapshot();
+    assert_eq!(back.panes[0].screen.viewport.offset, 5, "back into the pane's own history");
+    assert!(!back.panes[0].screen.text().lines().any(|line| line.trim() == "60"));
+
+    workspace.write(pane, b"x".to_vec()).unwrap();
+    assert_eq!(
+        workspace.snapshot().panes[0].screen.viewport.offset,
+        0,
+        "typing returns to the present"
+    );
+}

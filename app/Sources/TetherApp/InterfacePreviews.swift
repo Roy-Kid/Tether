@@ -32,11 +32,6 @@ private enum InterfaceFixture {
     .preferredColorScheme(.dark)
 }
 
-#Preview("Connect · large text") {
-  ConnectSheet(host: InterfaceFixture.host, remembered: nil) { _, _ in }
-    .environment(\.dynamicTypeSize, .accessibility3)
-}
-
 #if os(macOS)
 #Preview("Mac · twenty tabs", traits: .fixedLayout(width: 860, height: 520)) {
   VStack(spacing: 0) {

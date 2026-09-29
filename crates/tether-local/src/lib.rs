@@ -30,6 +30,10 @@
 mod command;
 mod error;
 mod process;
+#[cfg(not(target_os = "ios"))]
+mod shell;
+#[cfg(target_os = "ios")]
+#[path = "shell_unavailable.rs"]
 mod shell;
 
 pub use command::Command;
@@ -53,7 +57,11 @@ pub fn is_available() -> bool {
 /// stack produced it. This is the only place `portable-pty` is spoken aloud
 /// on the public surface — its *types* still stop at this crate (§8).
 pub fn backend_description() -> String {
-    format!("portable-pty {PORTABLE_PTY_VERSION}")
+    if cfg!(target_os = "ios") {
+        "no pseudo-terminal".to_owned()
+    } else {
+        format!("portable-pty {PORTABLE_PTY_VERSION}")
+    }
 }
 
 /// `portable-pty` exposes no version constant of its own, so the pin in the
@@ -66,7 +74,11 @@ mod tests {
 
     #[test]
     fn the_backend_is_named() {
-        assert!(backend_description().starts_with("portable-pty"));
+        if cfg!(target_os = "ios") {
+            assert_eq!(backend_description(), "no pseudo-terminal");
+        } else {
+            assert!(backend_description().starts_with("portable-pty"));
+        }
     }
 
     #[test]

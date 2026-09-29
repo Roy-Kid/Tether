@@ -62,24 +62,33 @@ struct TmuxContent: View {
         }
       }
     }
-    .confirmationDialog(
-      endTitle,
-      isPresented: Binding(
-        get: { model.pendingDestruction != nil }, set: { if !$0 { model.pendingDestruction = nil } }
-      )
-    ) {
-      Button("End", role: .destructive) {
-        if let action = model.pendingDestruction { model.perform(action) }
+    .dialog(for: model.pendingDestruction) { action in
+      Dialog.confirm(
+        endTitle(action), verb: "End", role: .destructive, cancel: { model.pendingDestruction = nil }
+      ) {
         model.pendingDestruction = nil
+        model.perform(action)
       }
     }
   }
 
-  private var endTitle: String {
-    switch model.pendingDestruction {
-    case .closeWindow(id: _): return "End this window?"
-    case .closePane(id: _): return "End this pane?"
-    default: return "End this?"
+  /// A pane's history is scrolled by lines. The ends are as many lines as
+  /// there could be: the engine stops at either one.
+  static func lines(for scroll: ScrollTo, page: Int32) -> Int32 {
+    switch scroll {
+    case .lines(let count): count
+    case .pageUp: max(page - 1, 1)
+    case .pageDown: -max(page - 1, 1)
+    case .oldest: Int32(Int16.max)
+    case .live: -Int32(Int16.max)
+    }
+  }
+
+  private func endTitle(_ action: TmuxAction) -> String {
+    switch action {
+    case .closeWindow(id: _): "End this window?"
+    case .closePane(id: _): "End this pane?"
+    default: "End this?"
     }
   }
 
@@ -106,9 +115,7 @@ struct TmuxContent: View {
             frame: pane.frame, active: pane.active, inset: 0,
             onInput: { model.send(pane.id, $0) },
             onFocus: { if !pane.active { model.perform(.selectPane(id: pane.id)) } },
-            onScroll: { scroll in
-              if case .lines(let count) = scroll { model.scroll(pane.id, lines: count) }
-            },
+            onScroll: { model.scroll(pane.id, lines: Self.lines(for: $0, page: Int32(pane.height))) },
             links: model.links(for: pane.id)
           )
           .overlay(alignment: .topTrailing) {

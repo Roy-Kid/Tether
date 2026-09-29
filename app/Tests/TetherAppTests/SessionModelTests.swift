@@ -13,31 +13,6 @@ import struct TetherApp.Host
 @MainActor
 @Suite("Session model")
 struct SessionModelTests {
-  /// The handshake parks on a continuation until a question is answered. A
-  /// tab closed while one is on screen would otherwise leave that task
-  /// suspended for the life of the process, holding its connection open — a
-  /// leak with no symptom until there are enough of them.
-  @Test("declining a question answers it in the negative")
-  func decliningAnswers() async {
-    let prompts: [String] = await withCheckedContinuation { continuation in
-      let question = Question(
-        kind: .prompts(instruction: "Verification code", prompts: []) {
-          continuation.resume(returning: $0)
-        })
-      question.decline()
-    }
-    #expect(prompts.isEmpty)
-
-    let trusted: Bool = await withCheckedContinuation { continuation in
-      let identity = HostIdentity(
-        host: "10.0.0.4", port: 22, algorithm: "ssh-ed25519", fingerprint: "SHA256:aaa")
-      let question = Question(
-        kind: .trust(host: identity, why: .unknown) { continuation.resume(returning: $0) })
-      question.decline()
-    }
-    #expect(trusted == false, "a question nobody answered is not consent")
-  }
-
   /// These sentences are what a person reads when everything has gone wrong.
   /// They are asserted because a message nothing checks drifts back into the
   /// vocabulary of the thing that failed.
@@ -47,6 +22,7 @@ struct SessionModelTests {
     #expect(
       message(for: TetherError.hostRejected(endpoint: "10.0.0.4:22"))
         == "The host key was not trusted.")
+    #expect(message(for: IdentityError.hostKeyChanged).contains("Settings"), "where the old key is forgotten")
     #expect(message(for: TetherError.timedOut(millis: 10_000)).contains("10000"))
 
     #expect(message(for: TetherError.authenticationFailed(remaining: [])) == "Authentication failed.")
@@ -111,6 +87,12 @@ struct SessionModelTests {
     #expect(!isAccountPasswordPrompt(AuthPrompt(text: "Verification code:", echo: false)))
     #expect(!isAccountPasswordPrompt(AuthPrompt(text: "One-time password:", echo: false)))
     #expect(!isAccountPasswordPrompt(AuthPrompt(text: "One-time code: ", echo: true)))
+    // A forced change: the saved password is the old one.
+    #expect(!isAccountPasswordPrompt(AuthPrompt(text: "New password: ", echo: false)))
+    #expect(!isAccountPasswordPrompt(AuthPrompt(text: "Retype new password: ", echo: false)))
+    #expect(!isAccountPasswordPrompt(AuthPrompt(text: "Re-enter password:", echo: false)))
+    #expect(!isAccountPasswordPrompt(AuthPrompt(text: "Confirm password:", echo: false)))
+    #expect(isAccountPasswordPrompt(AuthPrompt(text: "Password for newton:", echo: false)), "a word, not a substring")
     #expect(promptDialogTitle(AuthPrompt(text: "Verification code: ", echo: true)) == "Verification code")
     #expect(promptDialogTitle(AuthPrompt(text: "Password: ", echo: false)) == "Password")
   }

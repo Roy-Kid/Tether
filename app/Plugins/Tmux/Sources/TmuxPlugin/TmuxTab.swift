@@ -27,9 +27,8 @@ public final class TmuxTab: TabAttachment {
   public var pendingDestruction: TmuxAction?
   public var sessionToEnd: TmuxSessionInfo?
   public var windowToEnd: TmuxListedWindow?
-  public var renameWindow: TmuxWindowInfo?
-  public var renameSession: TmuxSessionInfo?
-  public var renameText = ""
+  /// The name being edited, while the rename dialog is open.
+  public var renaming: TmuxRename?
   private var workspace: TmuxWorkspace?
   private var pump: Task<Void, Never>?
   private var operation: Task<Void, Never>?
@@ -307,6 +306,13 @@ public final class TmuxTab: TabAttachment {
     }
   }
 
+  public func rename(_ renamed: TmuxRename, to name: String) {
+    switch renamed {
+    case .session(let session): renameSession(session, to: name)
+    case .window(let window): perform(.renameWindow(id: window.id, name: name))
+    }
+  }
+
   public func renameSession(_ renamed: TmuxSessionInfo, to name: String) {
     run { [self] in
       let connection = try lease()
@@ -413,4 +419,17 @@ public final class TmuxTab: TabAttachment {
 enum TmuxTabError: LocalizedError {
   case noConnection
   var errorDescription: String? { "Not connected." }
+}
+
+/// Something in tmux with a name a person is editing.
+public enum TmuxRename: Hashable {
+  case session(TmuxSessionInfo)
+  case window(TmuxListedWindow)
+
+  public var name: String {
+    switch self {
+    case .session(let session): session.name
+    case .window(let window): window.name
+    }
+  }
 }

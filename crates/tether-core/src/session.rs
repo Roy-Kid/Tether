@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tether_terminal::{
-    Changes, Input, Link, Options, Palette, Position, Screen, ScreenSize, Scroll, Terminal,
-    Viewport,
+    Changes, FrameDelta, Input, Link, Options, Palette, Position, Screen, ScreenSize, Scroll,
+    Terminal, Viewport,
 };
 
 use crate::connection::Connection;
@@ -29,6 +29,10 @@ use crate::producer::{Output, Producer};
 enum Command {
     Write(Vec<u8>),
     Resize(ScreenSize),
+    /// Stop reading the producer. Bytes stay in the kernel buffer, which is
+    /// bounded, instead of being copied into the grid while nobody is looking.
+    Pause,
+    Resume,
     Close,
 }
 
@@ -195,6 +199,30 @@ impl TerminalSession {
     /// A snapshot of what the screen looks like now.
     pub fn screen(&self) -> Screen {
         self.shared.terminal.lock().expect("terminal lock poisoned").screen()
+    }
+
+    /// Damage since the last call, and only the rows that damage names.
+    pub fn take_frame_delta(&self) -> FrameDelta {
+        self.shared.terminal.lock().expect("terminal lock poisoned").take_frame_delta()
+    }
+
+    /// Drops scrollback above `keep` lines for the rest of the session.
+    pub fn release_history(&self, keep: usize) {
+        {
+            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            terminal.release_history(keep);
+        }
+        self.shared.announce();
+    }
+
+    /// Stops the pump reading until [`resume`](Self::resume). Close still ends it.
+    pub fn pause(&self) {
+        let _ = self.commands.send(Command::Pause);
+    }
+
+    /// Reads the producer again. Output that arrived while paused is delivered then.
+    pub fn resume(&self) {
+        let _ = self.commands.send(Command::Resume);
     }
 
     /// What changed since the last time this was called, and clears it.
@@ -392,6 +420,7 @@ async fn pump<P: Producer>(
     mut producer: P,
     mut inbox: tokio::sync::mpsc::UnboundedReceiver<Command>,
 ) {
+    let mut paused = false;
     loop {
         tokio::select! {
             // Biased so a queued keystroke is sent before we park on output
@@ -414,6 +443,8 @@ async fn pump<P: Producer>(
                             return;
                         }
                     }
+                    Some(Command::Pause) => paused = true,
+                    Some(Command::Resume) => paused = false,
                     Some(Command::Close) | None => {
                         producer.close().await;
                         shared.finish(Ending::Closed);
@@ -422,7 +453,7 @@ async fn pump<P: Producer>(
                 }
             }
 
-            output = producer.next_output() => {
+            output = producer.next_output(), if !paused => {
                 match output {
                     Some(Output::Bytes(bytes)) => {
                         let replies = {

@@ -27,7 +27,7 @@ pub use screen::{Cell, Cursor, CursorShape, Modes, Screen};
 pub use scroll::{Scroll, Viewport};
 pub use size::{Position, ScreenSize};
 pub use style::{Color, NamedColor, Style, Underline};
-pub use terminal::{Options, Terminal};
+pub use terminal::{FrameDelta, Options, Terminal};
 
 /// The byte-stream boundary in executable form.
 ///

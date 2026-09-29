@@ -40,12 +40,12 @@ struct Sidebar: View {
             selection = host.id
             onOpen(host)
           } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: UIStyle.panelRadius) {
               Image(systemName: "server.rack")
                 .font(.body.weight(.medium))
                 .foregroundStyle(Theme.tile(for: host.label))
-                .frame(width: 30, height: 34)
-              VStack(alignment: .leading, spacing: 3) {
+                .frame(width: UIStyle.Mark.tileWidth, height: UIStyle.Mark.tileHeight)
+              VStack(alignment: .leading, spacing: UIStyle.rowPadding) {
                 Text(host.label.isEmpty ? host.hostname : host.label).font(.body.weight(.medium))
                   .adaptiveRowText()
                   .foregroundStyle(.primary)
@@ -90,7 +90,7 @@ struct Sidebar: View {
     }
     .sheet(item: $identityHost) { host in
       NavigationStack { HostIdentitySettings(store: store, id: host.id) }
-        .frame(minWidth: 400, minHeight: 420)
+        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
     }
     .modifier(HostListStyle())
     // This list is also used in a sheet, where `.sidebar` search placement
@@ -178,6 +178,18 @@ private struct HostListStyle: ViewModifier {
 /// Settings is not here. On a Mac it sits on the workspace status bar,
 /// opposite the host control. A phone has no preferences window and no
 /// status bar, so the gear stays in the navigation bar and presents a sheet.
+/// The navigation bar draws a toolbar button's title next to its icon.
+/// A custom button style replaces that chrome, so only the icon remains.
+private struct IconOnlyButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.labelStyle(.iconOnly)
+  }
+}
+
+extension ButtonStyle where Self == IconOnlyButtonStyle {
+  fileprivate static var iconOnly: Self { Self() }
+}
+
 private struct SidebarActions: ViewModifier {
   let onNew: () -> Void
   let onSettings: () -> Void
@@ -208,8 +220,10 @@ private struct SidebarActions: ViewModifier {
             .labelStyle(.iconOnly)
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .labelStyle(.iconOnly)
+          Button(action: onNew) {
+            Label("Add host", systemImage: "plus")
+          }
+          .buttonStyle(.iconOnly)
         }
         if let onDone {
           ToolbarItem(placement: .confirmationAction) {

@@ -21,6 +21,8 @@ import TetherFFIBindings
 
 public typealias ScreenFrame = TetherFFIBindings.ScreenFrame
 public typealias ScreenRow = TetherFFIBindings.ScreenRow
+public typealias FrameUpdate = TetherFFIBindings.FrameUpdate
+public typealias UpdatedRow = TetherFFIBindings.UpdatedRow
 public typealias StyledRun = TetherFFIBindings.StyledRun
 public typealias CellStyle = TetherFFIBindings.CellStyle
 public typealias CellColor = TetherFFIBindings.CellColor
@@ -170,6 +172,19 @@ public enum Credential: Sendable {
   case interactive(any AuthPrompter)
 }
 
+/// Lines of history a new session keeps when the caller does not say.
+///
+/// Ten thousand lines is cheap on a Mac. On a phone, a handful of tabs at
+/// that size is enough to be jetsam-killed. Two thousand is the cap a tmux
+/// pane already uses.
+public let defaultScrollbackLines: UInt32 = {
+  #if os(iOS)
+    2_000
+  #else
+    10_000
+  #endif
+}()
+
 /// Where to connect and as whom.
 public struct Destination: Sendable {
   public var host: String
@@ -190,7 +205,7 @@ public struct Destination: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines
   ) {
     self.host = host
     self.port = port
@@ -226,7 +241,7 @@ public struct LocalShell: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines
   ) {
     self.directory = directory
     self.term = term
@@ -343,7 +358,7 @@ public final class TerminalSession: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines
   ) async throws -> TerminalSession {
     let token = TetherFFIBindings.CancellationToken()
     return try await withTaskCancellationHandler {
@@ -417,6 +432,26 @@ public final class TerminalSession: Sendable {
   /// Everything needed to draw the screen once.
   public func frame() -> ScreenFrame {
     inner.frame()
+  }
+
+  /// What changed since the last call. Unchanged rows are absent.
+  public func update() -> FrameUpdate {
+    inner.update()
+  }
+
+  /// Drops scrollback above `keep` lines and does not grow it back.
+  public func releaseHistory(keep: UInt32) {
+    inner.releaseHistory(keep: keep)
+  }
+
+  /// Stops reading the far side until `resume`. Closing still ends the session.
+  public func pause() {
+    inner.pause()
+  }
+
+  /// Reads the far side again. Output that arrived while paused is delivered then.
+  public func resume() {
+    inner.resume()
   }
 
   /// Waits until the screen changed, returning `false` once the session has

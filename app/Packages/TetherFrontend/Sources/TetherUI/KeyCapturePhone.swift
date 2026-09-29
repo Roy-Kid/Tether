@@ -31,6 +31,7 @@
     var onScroll: (Int32) -> Void = { _ in }
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
+    var latch = Latch()
 
     func makeUIView(context: Context) -> KeyCaptureView {
       let view = KeyCaptureView()
@@ -58,10 +59,11 @@
       view.wantsFocus = active
       view.links = links
       view.geometry = geometry
+      view.latch = latch
     }
   }
 
-  final class KeyCaptureView: UIView, UIKeyInput {
+  final class KeyCaptureView: UIView, UIKeyInput, UITextInputTraits {
     var wantsFocus = false
     var onFocus: (() -> Void)?
     var onInput: ((TerminalInput) -> Void)?
@@ -69,19 +71,19 @@
     var lineHeight: CGFloat = 17
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
+    var latch = Latch()
+    /// A terminal is not prose. The software keyboard's replacements —
+    /// capitals, smart quotes, the predictive bar — rewrite what was typed
+    /// and change the keyboard's height while they do it.
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
     /// The link the context menu in progress is about.
     fileprivate var pressed: TerminalLink?
 
-    /// Control and Option, waiting for the key they modify.
-    ///
-    /// A phone has no chord: two keys cannot be held at once when both are
-    /// taps. So the modifier is armed by its own key and spent by the next
-    /// one — the same bargain every terminal on this platform makes.
-    private var armed = KeyModifiers()
-    private lazy var bar = KeyBar(
-      onKey: { [weak self] key in self?.sendNamed(key) },
-      onModifier: { [weak self] modifier in self?.arm(modifier) },
-      onDismiss: { [weak self] in self?.resignFirstResponder() })
     /// Lines already sent for the drag in progress, so each update asks for
     /// the difference rather than the total.
     private var carried: Int32 = 0
@@ -108,12 +110,22 @@
 
     override var canBecomeFirstResponder: Bool { true }
 
-    /// The row of keys the software keyboard does not have.
-    override var inputAccessoryView: UIView? { bar }
-
     override func didMoveToWindow() {
       super.didMoveToWindow()
-      if wantsFocus { becomeFirstResponder() }
+      guard wantsFocus else { return }
+      // During the SwiftUI update that inserts this view, becoming first
+      // responder does not present the keyboard. The next turn does.
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.wantsFocus, self.window != nil else { return }
+        self.becomeFirstResponder()
+      }
+    }
+
+    @discardableResult
+    override func becomeFirstResponder() -> Bool {
+      let accepted = super.becomeFirstResponder()
+      if accepted { reloadInputViews() }
+      return accepted
     }
 
     @objc private func takeFocus() {
@@ -138,30 +150,6 @@
       }
     }
 
-    /// Arms a modifier for the next key, or disarms it.
-    private func arm(_ modifier: KeyBar.Modifier) {
-      switch modifier {
-      case .control: armed = KeyModifiers(shift: false, alt: armed.alt, control: !armed.control)
-      case .option: armed = KeyModifiers(shift: false, alt: !armed.alt, control: armed.control)
-      }
-      bar.show(armed)
-    }
-
-    /// Spends whatever was armed, so a modifier lasts exactly one key.
-    private func spend() -> KeyModifiers {
-      let modifiers = armed
-      if modifiers != .none {
-        armed = .none
-        bar.show(armed)
-      }
-      return modifiers
-    }
-
-    private func sendNamed(_ key: Key) {
-      becomeFirstResponder()
-      onInput?(.key(key, spend()))
-    }
-
     // MARK: - The software keyboard
 
     /// Always true. A terminal's content is the remote screen, not this
@@ -176,17 +164,17 @@
       // The return key arrives as a newline rather than as a key press, and a
       // terminal wants the carriage return its line editor is waiting for.
       if text == "\n" {
-        onInput?(.key(.enter, spend()))
+        onInput?(.key(.enter, latch.spend()))
         return
       }
       guard !text.isEmpty else { return }
       // Whatever the key bar armed is spent here: this is where Ctrl-B
       // becomes Ctrl-B rather than a `b`.
-      onInput?(.key(.text(text), spend()))
+      onInput?(.key(.text(text), latch.spend()))
     }
 
     func deleteBackward() {
-      onInput?(.key(.backspace, spend()))
+      onInput?(.key(.backspace, latch.spend()))
     }
 
     // MARK: - A hardware keyboard
@@ -272,6 +260,58 @@
   }
 
 
+  /// The shortcut row, in the layout under the terminal rather than floating
+  /// over its last line. An input accessory is positioned by the keyboard,
+  /// and with no keyboard on screen it was drawn on top of the prompt.
+  struct TerminalKeyBar: UIViewRepresentable {
+    var latch: Latch
+    var onInput: (TerminalInput) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> KeyBar {
+      context.coordinator.latch = latch
+      context.coordinator.onInput = onInput
+      let bar = KeyBar(
+        onKey: { [weak coordinator = context.coordinator] key in
+          guard let coordinator else { return }
+          coordinator.onInput(.key(key, coordinator.latch.spend()))
+        },
+        onModifier: { [weak coordinator = context.coordinator] modifier in
+          guard let coordinator else { return }
+          switch modifier {
+          case .control: coordinator.latch.toggle(control: true)
+          case .option: coordinator.latch.toggle(control: false)
+          }
+        },
+        onDismiss: {
+          UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        })
+      latch.onChange = { [weak bar] modifiers in bar?.show(modifiers) }
+      bar.show(latch.armed)
+      bar.setContentHuggingPriority(.required, for: .vertical)
+      bar.setContentCompressionResistancePriority(.required, for: .vertical)
+      return bar
+    }
+
+    func updateUIView(_ bar: KeyBar, context: Context) {
+      context.coordinator.latch = latch
+      context.coordinator.onInput = onInput
+      latch.onChange = { [weak bar] modifiers in bar?.show(modifiers) }
+      bar.show(latch.armed)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: KeyBar, context: Context) -> CGSize? {
+      CGSize(width: proposal.width ?? uiView.bounds.width, height: uiView.fittingHeight)
+    }
+
+    final class Coordinator {
+      var latch = Latch()
+      var onInput: (TerminalInput) -> Void = { _ in }
+    }
+  }
+
   /// The keys iOS will not put on a keyboard.
   ///
   /// Glyphs and three-letter names, not words: this is one row above a
@@ -281,18 +321,34 @@
   /// see what the next key will be.
   final class KeyBar: UIInputView {
     enum Modifier { case control, option }
-    private enum Metrics {
-      static let height: CGFloat = 52
-      static let gap: CGFloat = 4
-      static let target: CGFloat = 44
-      static let maxWidth: CGFloat = 608
-    }
+    /// The control height for this platform, scaled by the device's text size.
 
     private let onKey: (Key) -> Void
     private let onModifier: (Modifier) -> Void
     private let onDismiss: () -> Void
     private var control: UIButton?
     private var option: UIButton?
+    private var keys: [UIButton] = []
+    private var titles: [ObjectIdentifier: String] = [:]
+    private var symbols: [ObjectIdentifier: String] = [:]
+    private var widths: [NSLayoutConstraint] = []
+    private var stackSpacing: UIStackView?
+    private var sideInset: NSLayoutConstraint?
+    private var verticalInsets: [NSLayoutConstraint] = []
+
+    /// Height of one row on this device, from the text size it is using.
+    var fittingHeight: CGFloat { touch + gap * 2 }
+    private var touch: CGFloat {
+      UIFontMetrics(forTextStyle: .body).scaledValue(
+        for: UIStyle.controlHeight, compatibleWith: traitCollection)
+    }
+    private var gap: CGFloat {
+      UIFontMetrics(forTextStyle: .body).scaledValue(
+        for: UIStyle.Space.small, compatibleWith: traitCollection)
+    }
+    private var font: UIFont {
+      UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traitCollection)
+    }
 
     init(
       onKey: @escaping (Key) -> Void, onModifier: @escaping (Modifier) -> Void,
@@ -301,7 +357,7 @@
       self.onKey = onKey
       self.onModifier = onModifier
       self.onDismiss = onDismiss
-      super.init(frame: CGRect(x: 0, y: 0, width: 0, height: Metrics.height), inputViewStyle: .keyboard)
+      super.init(frame: .zero, inputViewStyle: .keyboard)
       autoresizingMask = .flexibleWidth
 
       let control = latch("ctrl", .control)
@@ -329,22 +385,31 @@
       addSubview(scroll)
       stack.axis = .horizontal
       stack.distribution = .fillEqually
-      stack.spacing = Metrics.gap
+      stack.spacing = gap
       stack.translatesAutoresizingMaskIntoConstraints = false
       scroll.addSubview(stack)
-      for button in stack.arrangedSubviews {
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.target).isActive = true
+      stackSpacing = stack
+      keys = stack.arrangedSubviews.compactMap { $0 as? UIButton }
+      widths = keys.map { button in
+        let width = button.widthAnchor.constraint(greaterThanOrEqualToConstant: touch)
+        width.isActive = true
+        return width
       }
       let fill = stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)
       fill.priority = .defaultHigh
       let availableWidth = scroll.widthAnchor.constraint(
-        equalTo: safeAreaLayoutGuide.widthAnchor, constant: -Metrics.gap * 2)
+        equalTo: safeAreaLayoutGuide.widthAnchor, constant: -gap * 2)
       availableWidth.priority = .defaultHigh
+      let top = scroll.topAnchor.constraint(equalTo: topAnchor, constant: gap)
+      let bottom = scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gap)
+      sideInset = availableWidth
+      verticalInsets = [top, bottom]
       NSLayoutConstraint.activate([
         scroll.centerXAnchor.constraint(equalTo: safeAreaLayoutGuide.centerXAnchor),
-        scroll.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxWidth),
-        scroll.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.gap),
-        scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.gap),
+        scroll.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor),
+        scroll.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor),
+        top,
+        bottom,
         stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
         stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
         stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
@@ -353,6 +418,45 @@
         fill,
         availableWidth,
       ])
+      restyle()
+    }
+
+    override var intrinsicContentSize: CGSize {
+      CGSize(width: UIView.noIntrinsicMetric, height: fittingHeight)
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+      super.traitCollectionDidChange(previousTraitCollection)
+      guard traitCollection.preferredContentSizeCategory
+        != previousTraitCollection?.preferredContentSizeCategory
+      else { return }
+      restyle()
+      invalidateIntrinsicContentSize()
+    }
+
+    private func restyle() {
+      stackSpacing?.spacing = gap
+      for constraint in widths { constraint.constant = touch }
+      sideInset?.constant = -gap * 2
+      for (index, constraint) in verticalInsets.enumerated() {
+        constraint.constant = index == 0 ? gap : -gap
+      }
+      let symbol = UIImage.SymbolConfiguration(font: font, scale: .medium)
+      for button in keys {
+        var configuration = button.configuration ?? .gray()
+        configuration.contentInsets = .init(top: gap, leading: gap, bottom: gap, trailing: gap)
+        let id = ObjectIdentifier(button)
+        if let title = titles[id] {
+          configuration.attributedTitle = AttributedString(
+            title, attributes: AttributeContainer([.font: font]))
+          configuration.image = nil
+        }
+        if let name = symbols[id] {
+          configuration.image = UIImage(systemName: name, withConfiguration: symbol)
+          configuration.attributedTitle = nil
+        }
+        button.configuration = configuration
+      }
     }
 
     @available(*, unavailable)
@@ -377,23 +481,12 @@
     ) -> UIButton {
       var configuration = UIButton.Configuration.gray()
       configuration.cornerStyle = .medium
-      configuration.contentInsets = .init(top: 4, leading: 4, bottom: 4, trailing: 4)
-      if let title {
-        configuration.attributedTitle = AttributedString(
-          title,
-          attributes: AttributeContainer([
-            .font: UIFont.systemFont(ofSize: 13, weight: .medium)
-          ]))
-      }
-      if let symbol {
-        configuration.image = UIImage(
-          systemName: symbol,
-          withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium))
-      }
       let button = UIButton(
         configuration: configuration,
         primaryAction: UIAction { _ in action() })
       button.accessibilityLabel = name
+      if let title { titles[ObjectIdentifier(button)] = title }
+      if let symbol { symbols[ObjectIdentifier(button)] = symbol }
       return button
     }
 

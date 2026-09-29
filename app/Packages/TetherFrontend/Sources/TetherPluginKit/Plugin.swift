@@ -102,6 +102,10 @@ public protocol TetherPlugin: AnyObject {
   var metadata: PluginMetadata { get }
   /// A data-only lamp shown beside the host selector, when the plugin has live status.
   var statusBarItem: PluginStatusBarItem? { get }
+  /// The lamp itself, when the plugin draws it. Otherwise the host paints `statusBarItem`.
+  func statusBarLabel() -> AnyView?
+  /// Right-click on the lamp. Nerve opens its own settings window from here.
+  func statusBarSettings() -> (() -> Void)?
   /// Status-bar-only plugins do not add a workspace command or tab.
   var isStatusBarOnly: Bool { get }
   /// A lightweight workspace presented when the status ribbon is clicked.
@@ -120,6 +124,8 @@ public protocol TetherPlugin: AnyObject {
 }
 extension TetherPlugin {
   public var statusBarItem: PluginStatusBarItem? { nil }
+  public func statusBarLabel() -> AnyView? { nil }
+  public func statusBarSettings() -> (() -> Void)? { nil }
   public var isStatusBarOnly: Bool { false }
   public func statusBarWorkspace() -> (any PluginWorkspace)? { nil }
   public var needsRemoteConnection: Bool { true }

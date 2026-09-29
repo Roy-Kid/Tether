@@ -1,6 +1,9 @@
 #if os(macOS)
   import NervePlugin
 #endif
+#if os(iOS)
+  import UIKit
+#endif
 import FilesPlugin
 import SwiftUI
 import Tether
@@ -39,12 +42,12 @@ struct TetherApp: App {
       // host list with nothing open in it.
       Window("Tether", id: "main") {
         root
-          .frame(minWidth: 760, minHeight: 460)
+          .frame(minWidth: Chrome.windowMinWidth, minHeight: Chrome.windowMinHeight)
       }
       // `.contentSize` would bind the window to the content's *ideal* size,
       // and a terminal has no ideal size — measured: the window opened
       // 44×89 points, off the bottom-left corner of the screen.
-      .defaultSize(width: 1100, height: 700)
+      .defaultSize(width: Chrome.windowWidth, height: Chrome.windowHeight)
       .windowResizability(.contentMinSize)
       .windowStyle(.hiddenTitleBar)
       .commands {
@@ -56,6 +59,8 @@ struct TetherApp: App {
       Settings {
         AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
       }
+      .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
+      .windowResizability(.contentMinSize)
     #else
       // A phone has no preferences window and no menu bar; settings are
       // reached from the sidebar and presented over the app.
@@ -91,6 +96,11 @@ struct TetherApp: App {
       .onChange(of: phase) { _, phase in
         if phase == .active { store.reload(); Task { await store.startSync(); await store.syncNow() } }
       }
+      #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+          for tab in tabs.tabs { tab.releaseHistory() }
+        }
+      #endif
   }
 }
 
@@ -99,9 +109,9 @@ extension TetherApp {
   ///
   /// The equivalent of typing `ssh lab`: someone who already knows which
   /// machine they want should not have to find it in a list. Only saved
-  /// hosts, and only ones with a key or an interactive server — there is
-  /// nowhere on a command line to put a password that would not end up in
-  /// a shell history.
+  /// hosts, and opened the way a click opens them — with the same password
+  /// question when one is needed, since there is nowhere on a command line
+  /// to put a password that would not end up in a shell history.
   @MainActor
   @discardableResult
   func openHostNamedOnCommandLine() -> Bool {
@@ -119,7 +129,7 @@ extension TetherApp {
       })
     else { return false }
 
-    tabs.open(host, password: "")
+    tabs.intent = .connect(host)
     return true
   }
 

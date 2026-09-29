@@ -79,11 +79,7 @@ struct HostEditor: View {
             #if os(iOS)
               .textContentType(.username)
             #endif
-          Picker("Authentication", selection: $authentication) {
-            Text("Password").tag(Authentication.password)
-            Text("Key").tag(Authentication.key)
-          }
-          .pickerStyle(.segmented)
+          authenticationChoice
 
           if let importProblem { Text(importProblem).foregroundStyle(.red) }
           if authentication == .password {
@@ -150,8 +146,36 @@ struct HostEditor: View {
       #endif
     }
     #if os(macOS)
-      .frame(minWidth: 440, minHeight: 480)
+      .frame(minWidth: Chrome.editorWidth, minHeight: Chrome.editorHeight)
     #endif
+  }
+
+  private var authenticationChoice: some View {
+    HStack(spacing: UIStyle.Space.section) {
+      method(.password, "Password", "lock")
+      method(.key, "Key", "key")
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Authentication")
+  }
+
+  private func method(_ kind: Authentication, _ title: String, _ symbol: String) -> some View {
+    let selected = authentication == kind
+    return Button {
+      authentication = kind
+    } label: {
+      VStack(spacing: UIStyle.Space.small) {
+        Label(title, systemImage: symbol)
+          .font(selected ? UIStyle.title : UIStyle.detail)
+          .foregroundStyle(selected ? Theme.text : Theme.subtle)
+        Rectangle()
+          .fill(selected ? Theme.text : Theme.stroke.opacity(0.35))
+          .frame(height: UIStyle.Mark.hairline)
+      }
+      .frame(maxWidth: .infinity)
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
   }
 
   private func commit() {
@@ -225,63 +249,6 @@ private extension View {
       self.textInputAutocapitalization(.never).autocorrectionDisabled()
     #else
       self
-    #endif
-  }
-}
-
-/// Asks for the credential, once, at the moment of connecting.
-///
-/// Hosts that already have a password in the keychain, or a key, skip this.
-struct ConnectSheet: View {
-  let host: Host
-  let remembered: String?
-  let onConnect: (_ password: String, _ remember: Bool) -> Void
-
-  @State private var password: String
-  @State private var remember: Bool
-  @Environment(\.dismiss) private var dismiss
-
-  init(host: Host, remembered: String? = nil, onConnect: @escaping (String, Bool) -> Void) {
-    self.host = host
-    self.remembered = remembered
-    self.onConnect = onConnect
-    _password = State(initialValue: remembered ?? "")
-    _remember = State(initialValue: remembered != nil)
-  }
-
-  var body: some View {
-    NavigationStack {
-      Form {
-        Section {
-          SecureField("Password", text: $password)
-            #if os(iOS)
-              .textContentType(.password)
-            #endif
-          Toggle("Remember password", isOn: $remember)
-            .disabled(password.isEmpty)
-        }
-      }
-      .formStyle(.grouped)
-      .navigationTitle(host.label.isEmpty ? host.hostname : host.label)
-      #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }
-            .keyboardShortcut(.cancelAction)
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Connect") {
-            onConnect(password, remember && !password.isEmpty)
-            dismiss()
-          }
-          .keyboardShortcut(.defaultAction)
-        }
-      }
-    }
-    #if os(macOS)
-      .frame(minWidth: 380, minHeight: 240)
     #endif
   }
 }

@@ -146,7 +146,12 @@ impl Dial {
         let shell =
             connection.shell(&term, WindowSize::new(size.columns as u32, size.rows as u32)).await?;
         Ok(TerminalSession::start_with(
-            shell, size, options, crate::Connection::Remote(connection), None, None,
+            shell,
+            size,
+            options,
+            crate::Connection::Remote(connection),
+            None,
+            None,
         ))
     }
 
@@ -219,7 +224,23 @@ async fn attempt(
         Credential::PrivateKey { pem, passphrase } => {
             connection.private_key(user, &pem, passphrase.as_deref()).await
         }
-        Credential::Interactive(prompter) => connection.interactive(user, prompter.as_ref()).await,
+        Credential::Interactive(prompter) => {
+            // A wrong code ends this round and leaves keyboard-interactive
+            // available. Ask again on the same connection instead of
+            // reporting the login as failed.
+            let mut connection = connection;
+            for _ in 0..4 {
+                match connection.interactive(user, prompter.as_ref()).await? {
+                    Step::Rejected { remaining, retry }
+                        if remaining.iter().any(|method| method.0 == "keyboard-interactive") =>
+                    {
+                        connection = retry;
+                    }
+                    other => return Ok(other),
+                }
+            }
+            connection.interactive(user, prompter.as_ref()).await
+        }
     }
 }
 

@@ -130,6 +130,23 @@ impl Default for Options {
     }
 }
 
+/// What a frontend needs in order to draw the next frame, and nothing else.
+///
+/// `full` replaces the screen. Otherwise `rows` is only the lines the damage
+/// named — empty when the grid did not change and only the cursor or the
+/// title did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameDelta {
+    /// The whole screen, when the damage was not a list of rows.
+    pub full: Option<Screen>,
+    pub rows: Vec<(u16, Vec<Cell>)>,
+    pub cursor: Cursor,
+    pub title: String,
+    pub viewport: Viewport,
+    pub modes: Modes,
+    pub size: ScreenSize,
+}
+
 /// A headless terminal.
 ///
 /// Feed it the bytes a remote shell produced; ask it what the screen looks
@@ -161,6 +178,12 @@ pub struct Terminal {
     /// occurred, so that is what we check, rather than trying to tell a
     /// spurious cursor span from a real one.
     dirty: bool,
+    /// How much history this terminal may keep. Lowered for the rest of the
+    /// session when memory is short, so a warning cannot grow back.
+    scrollback_limit: usize,
+    /// Set when the cap changed while the alternate screen — which does not
+    /// hold the history — was showing.
+    scrollback_needs_apply: bool,
 }
 
 impl Terminal {
@@ -188,6 +211,8 @@ impl Terminal {
             directory: DirectoryScanner::default(),
             // A terminal nobody has drawn yet needs a first full paint.
             dirty: true,
+            scrollback_limit: options.scrollback_lines,
+            scrollback_needs_apply: false,
         }
     }
 
@@ -213,6 +238,7 @@ impl Terminal {
         self.parser.advance(&mut self.inner, bytes);
         self.directory.feed(bytes);
         self.adopt_title();
+        self.apply_scrollback_limit();
     }
 
     /// The directory the far side's shell last reported, by `OSC 7` or
@@ -451,64 +477,122 @@ impl Terminal {
 
     /// A snapshot of the visible screen.
     pub fn screen(&self) -> Screen {
+        let rows = (0..self.size.rows).map(|row| self.cells_for_row(row)).collect();
+        Screen::new(self.size, self.read_cursor(), self.read_modes(), self.viewport(), rows)
+    }
+
+    /// One visible row, in the same cells [`screen`] reports.
+    ///
+    /// `Line(0)` is the top of the *live* screen and history is negative, so
+    /// the viewport is applied here. A damage span names this row, not the
+    /// line behind the viewport.
+    pub fn cells_for_row(&self, row: u16) -> Vec<Cell> {
         let grid = self.inner.grid();
-        let mut rows = Vec::with_capacity(self.size.rows as usize);
+        let line = row as i32 - grid.display_offset() as i32;
+        let mut cells = Vec::with_capacity(self.size.columns as usize);
+        for column in 0..self.size.columns as usize {
+            let cell = &grid[Line(line)][Column(column)];
 
-        // `Line(0)` is the top of the *live* screen and history is negative,
-        // so the viewport is applied here rather than assumed away. Reading
-        // `0..rows` regardless is how scrolling can move the engine's
-        // viewport and change nothing a consumer can see.
-        let offset = grid.display_offset() as i32;
-
-        for row in 0..self.size.rows as i32 {
-            let line = row - offset;
-            let mut cells = Vec::with_capacity(self.size.columns as usize);
-            for column in 0..self.size.columns as usize {
-                let cell = &grid[Line(line)][Column(column)];
-
-                // The engine marks the right half of a wide character with a
-                // spacer. That is its bookkeeping, not a cell a consumer
-                // should have to skip.
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            // The engine marks the right half of a wide character with a
+            // spacer. That is its bookkeeping, not a cell a consumer
+            // should have to skip.
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                    && column > 0
+                    && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
                 {
-                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                        && column > 0
-                        && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
-                    {
-                        continue;
-                    }
-                    // A wrap placeholder or an orphaned spacer still occupies
-                    // a column. Dropping it shifts every later cell away from
-                    // the column indices used by cursor and damage reports.
-                    cells.push(Cell { text: " ".into(), width: 1, style: style_of(cell) });
                     continue;
                 }
-
-                let mut text = String::from(cell.c);
-                if let Some(zerowidth) = cell.zerowidth() {
-                    text.extend(zerowidth);
-                }
-
-                // A wide character reports two columns only when the engine
-                // really did reserve the column to its right for it.
-                //
-                // Asking whether a column *index* remains is not the same
-                // question, and getting them confused overflows the row:
-                // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
-                // spacer is gone, with an ordinary cell beside it — measured
-                // by the fuzzer, a two-column row then claimed three. The
-                // spacer is the engine's own record of the reservation, so it
-                // is what gets asked.
-                let wide = cell.flags.contains(Flags::WIDE_CHAR)
-                    && (column + 1 < self.size.columns as usize)
-                    && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
-
-                cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
+                // A wrap placeholder or an orphaned spacer still occupies
+                // a column. Dropping it shifts every later cell away from
+                // the column indices used by cursor and damage reports.
+                cells.push(Cell { text: " ".into(), width: 1, style: style_of(cell) });
+                continue;
             }
-            rows.push(cells);
-        }
 
-        Screen::new(self.size, self.read_cursor(), self.read_modes(), self.viewport(), rows)
+            let mut text = String::from(cell.c);
+            if let Some(zerowidth) = cell.zerowidth() {
+                text.extend(zerowidth);
+            }
+
+            // A wide character reports two columns only when the engine
+            // really did reserve the column to its right for it.
+            //
+            // Asking whether a column *index* remains is not the same
+            // question, and getting them confused overflows the row:
+            // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
+            // spacer is gone, with an ordinary cell beside it — measured
+            // by the fuzzer, a two-column row then claimed three. The
+            // spacer is the engine's own record of the reservation, so it
+            // is what gets asked.
+            let wide = cell.flags.contains(Flags::WIDE_CHAR)
+                && (column + 1 < self.size.columns as usize)
+                && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
+
+            cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
+        }
+        cells
+    }
+
+    /// Damage since the last call, and the rows that damage names.
+    ///
+    /// One lock, one answer. A consumer that took the damage and then read
+    /// the screen would copy every row to find the few that changed.
+    pub fn take_frame_delta(&mut self) -> FrameDelta {
+        self.apply_scrollback_limit();
+        let changes = self.take_changes();
+        let full = matches!(changes.screen, ScreenDamage::Full);
+        if full {
+            return FrameDelta {
+                full: Some(self.screen()),
+                rows: Vec::new(),
+                cursor: self.read_cursor(),
+                title: self.title.clone(),
+                viewport: self.viewport(),
+                modes: self.read_modes(),
+                size: self.size,
+            };
+        }
+        let indexes: Vec<u16> = match changes.screen {
+            ScreenDamage::Rows(spans) => {
+                let mut rows: Vec<u16> = spans.into_iter().map(|span| span.row).collect();
+                rows.sort_unstable();
+                rows.dedup();
+                rows
+            }
+            ScreenDamage::None | ScreenDamage::Full => Vec::new(),
+        };
+        let rows = indexes.into_iter().map(|row| (row, self.cells_for_row(row))).collect();
+        FrameDelta {
+            full: None,
+            rows,
+            cursor: self.read_cursor(),
+            title: self.title.clone(),
+            viewport: self.viewport(),
+            modes: self.read_modes(),
+            size: self.size,
+        }
+    }
+
+    /// Drops history above `keep` lines and stops it growing back.
+    ///
+    /// The live screen stays. A viewport parked in the lines that went away
+    /// is clamped by the engine. The alternate screen's grid has no history
+    /// of its own; the primary grid is capped the next time it is showing.
+    pub fn release_history(&mut self, keep: usize) {
+        self.scrollback_limit = keep;
+        self.scrollback_needs_apply = true;
+        self.apply_scrollback_limit();
+        self.pending_full_damage = true;
+        self.dirty = true;
+    }
+
+    fn apply_scrollback_limit(&mut self) {
+        if !self.scrollback_needs_apply || self.inner.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        self.inner.grid_mut().update_history(self.scrollback_limit);
+        self.scrollback_needs_apply = false;
     }
 
     fn read_cursor(&self) -> Cursor {

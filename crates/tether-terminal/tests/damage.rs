@@ -75,6 +75,43 @@ fn an_edit_far_down_the_screen_damages_only_that_row() {
 }
 
 #[test]
+fn a_single_character_updates_only_its_row() {
+    let mut term = terminal();
+    term.feed(b"x");
+
+    let delta = term.take_frame_delta();
+    assert!(delta.full.is_none());
+    assert_eq!(delta.rows.iter().map(|(row, _)| *row).collect::<Vec<_>>(), vec![0]);
+
+    let again = term.take_frame_delta();
+    assert!(again.full.is_none());
+    assert!(again.rows.is_empty(), "a second ask with no bytes copies no rows");
+}
+
+#[test]
+fn a_resize_is_a_full_frame() {
+    let mut term = terminal();
+    term.resize(ScreenSize::new(40, 12));
+    assert!(term.take_frame_delta().full.is_some());
+}
+
+#[test]
+fn release_history_keeps_the_live_screen_and_caps_the_rest() {
+    use tether_terminal::Options;
+    let mut term =
+        Terminal::with_options(ScreenSize::new(40, 5), Options { scrollback_lines: 100 });
+    let _ = term.take_changes();
+    for index in 0..40 {
+        term.feed(format!("row-{index}\r\n").as_bytes());
+    }
+    assert!(term.history_lines() > 10, "the fixture has history to drop");
+    term.release_history(4);
+    assert!(term.history_lines() <= 4);
+    assert!(term.screen().text().contains("row-39"));
+    assert!(term.take_frame_delta().full.is_some());
+}
+
+#[test]
 fn damage_is_taken_not_repeated() {
     let mut term = terminal();
     term.feed(b"x");

@@ -78,7 +78,7 @@ impl Default for Command {
 /// database second, because that is the answer the system itself would give.
 /// `/bin/sh` last — not a good shell, but the one POSIX guarantees exists,
 /// and a plain prompt beats refusing to open a terminal at all.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 fn login_shell_path() -> String {
     if let Ok(shell) = std::env::var("SHELL")
         && !shell.is_empty()
@@ -88,9 +88,12 @@ fn login_shell_path() -> String {
     portable_pty::CommandBuilder::new_default_prog().get_shell()
 }
 
-#[cfg(not(unix))]
+#[cfg(any(not(unix), target_os = "ios"))]
 fn login_shell_path() -> String {
-    portable_pty::CommandBuilder::new_default_prog().get_shell()
+    std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(|| "/bin/sh".into())
 }
 
 #[cfg(test)]

@@ -103,6 +103,43 @@ pub struct ScreenRow {
     pub runs: Vec<StyledRun>,
 }
 
+/// One row of a partial update, named by its place on the visible screen.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UpdatedRow {
+    pub row: u32,
+    pub line: ScreenRow,
+}
+
+/// What changed since the frontend last drew.
+///
+/// `Full` replaces the screen. `Rows` replaces those lines and the cursor.
+/// `Idle` is a cursor or title change with no new cells.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FrameUpdate {
+    Full {
+        frame: ScreenFrame,
+    },
+    Rows {
+        rows: Vec<UpdatedRow>,
+        cursor_row: u32,
+        cursor_column: u32,
+        cursor_shape: CaretShape,
+        cursor_visible: bool,
+        title: String,
+        viewport_offset: u32,
+        history_lines: u32,
+    },
+    Idle {
+        cursor_row: u32,
+        cursor_column: u32,
+        cursor_shape: CaretShape,
+        cursor_visible: bool,
+        title: String,
+        viewport_offset: u32,
+        history_lines: u32,
+    },
+}
+
 /// One frame: everything a frontend needs to draw the screen once.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ScreenFrame {
@@ -143,6 +180,46 @@ impl ScreenFrame {
             history_lines: screen.viewport.history.min(u32::MAX as usize) as u32,
             title,
             lines: screen.rows().map(row_of).collect(),
+        }
+    }
+}
+
+impl FrameUpdate {
+    /// The next frame, copying only the rows the damage named.
+    pub fn from_delta(delta: &tether_core::terminal::FrameDelta) -> Self {
+        let cursor_row = delta.cursor.position.row as u32;
+        let cursor_column = delta.cursor.position.column as u32;
+        let cursor_shape = caret(delta.cursor.shape);
+        let cursor_visible = delta.cursor.visible;
+        let viewport_offset = delta.viewport.offset.min(u32::MAX as usize) as u32;
+        let history_lines = delta.viewport.history.min(u32::MAX as usize) as u32;
+        if let Some(screen) = &delta.full {
+            return FrameUpdate::Full { frame: ScreenFrame::of(screen, delta.title.clone()) };
+        }
+        if delta.rows.is_empty() {
+            return FrameUpdate::Idle {
+                cursor_row,
+                cursor_column,
+                cursor_shape,
+                cursor_visible,
+                title: delta.title.clone(),
+                viewport_offset,
+                history_lines,
+            };
+        }
+        FrameUpdate::Rows {
+            rows: delta
+                .rows
+                .iter()
+                .map(|(row, cells)| UpdatedRow { row: *row as u32, line: row_of(cells) })
+                .collect(),
+            cursor_row,
+            cursor_column,
+            cursor_shape,
+            cursor_visible,
+            title: delta.title.clone(),
+            viewport_offset,
+            history_lines,
         }
     }
 }

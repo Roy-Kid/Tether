@@ -84,13 +84,8 @@ const SETTLING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// is this?"; a consumer that wants to advertise itself can set these on the
 /// far side, having earned the claim. `TERM` is different and is set: it
 /// describes what can be *drawn*, which is a question this crate can answer.
-pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 5] = [
-    "TERM_PROGRAM",
-    "TERM_PROGRAM_VERSION",
-    "TERM_SESSION_ID",
-    "TMUX",
-    "TMUX_PANE",
-];
+pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 5] =
+    ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "TMUX", "TMUX_PANE"];
 
 /// Read the working directory of a live local shell process.
 #[cfg(target_os = "macos")]

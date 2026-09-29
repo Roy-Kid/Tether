@@ -37,7 +37,21 @@ enum Chrome {
   /// 280pt inspector and the old `inspectorColumnWidth` range.
   static let inspectorMin: CGFloat = 240
   static let inspectorIdeal: CGFloat = 280
-  static let inspectorMax: CGFloat = 360
+  static let inspectorMax: CGFloat = 480
   /// Height of the native titlebar the content draws under on a Mac.
   static let titlebar: CGFloat = 28
+  static let windowMinWidth: CGFloat = 760
+  static let windowMinHeight: CGFloat = 460
+  static let settingsMinWidth: CGFloat = 660
+  static let settingsMinHeight: CGFloat = 500
+  static let editorWidth: CGFloat = 440
+  static let editorHeight: CGFloat = 480
+  static let swatchWidth: CGFloat = 76
+  static let swatchHeight: CGFloat = 18
+  static let ribbonHeight: CGFloat = 22
+  static let ribbonThickness: CGFloat = 9
+  static let windowWidth: CGFloat = 1100
+  static let windowHeight: CGFloat = 700
+  static let settingsWidth: CGFloat = 700
+  static let settingsHeight: CGFloat = 540
 }

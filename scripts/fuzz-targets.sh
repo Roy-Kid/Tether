@@ -36,7 +36,11 @@ while [[ $# -gt 0 ]]; do
     --seconds)
       [[ -n "${2:-}" ]] || { echo "--seconds needs a value" >&2; usage >&2; exit 2; }
       seconds="$2"
+      # `continue`, not the `shift` below: that one would be a third, with
+      # nothing left to shift — and under `set -e` a failed shift ends the
+      # script with status 1 and not a word. Every CI fuzz run died so.
       shift 2
+      continue
       ;;
     -h|--help) usage; exit 0 ;;
     *)

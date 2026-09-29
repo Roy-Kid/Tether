@@ -55,6 +55,19 @@ public struct TabAccessory: Sendable {
   }
 }
 
+/// Another terminal on the same host, so a picker can list it beside its own rows.
+public struct ShellChoice: Identifiable, Equatable, Sendable {
+  public let id: UUID
+  public let title: String
+  public let current: Bool
+
+  public init(id: UUID, title: String, current: Bool) {
+    self.id = id
+    self.title = title
+    self.current = current
+  }
+}
+
 /// One terminal tab, as a plugin attached to it sees it.
 @MainActor
 public struct TabContext {
@@ -89,6 +102,12 @@ public struct TabContext {
   /// of its own — tmux's panes — so pointing there works as it does in the
   /// shell, without the plugin knowing who answers.
   public let linkActions: (PointedLink) -> LinkActions?
+  /// The host's other terminals on this machine. Empty when there is only this one.
+  public let shells: () -> [ShellChoice]
+  /// Brings one of those terminals to the front.
+  public let openShell: (UUID) -> Void
+  /// Opens another shell on this host.
+  public let newShell: () -> Void
 
   public init(
     id: UUID, plugin: PluginContext, terminalName: String? = nil,
@@ -97,7 +116,10 @@ public struct TabContext {
     insertText: @escaping (String) -> Void = { _ in },
     workingDirectory: @escaping () -> String? = { nil },
     showAccessory: @escaping () -> Void = {},
-    linkActions: @escaping (PointedLink) -> LinkActions? = { _ in nil }
+    linkActions: @escaping (PointedLink) -> LinkActions? = { _ in nil },
+    shells: @escaping () -> [ShellChoice] = { [] },
+    openShell: @escaping (UUID) -> Void = { _ in },
+    newShell: @escaping () -> Void = {}
   ) {
     self.id = id
     self.plugin = plugin
@@ -110,6 +132,9 @@ public struct TabContext {
     self.workingDirectory = workingDirectory
     self.showAccessory = showAccessory
     self.linkActions = linkActions
+    self.shells = shells
+    self.openShell = openShell
+    self.newShell = newShell
   }
 }
 

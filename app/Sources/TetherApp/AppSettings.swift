@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+  import AppKit
+#endif
 import Tether
 import TetherPluginKit
 import TetherUI
@@ -17,18 +20,15 @@ enum LaunchPreference {
   static let `default` = true
 }
 
-/// Settings, as two panes rather than a row of tabs.
+/// Settings, as a sidebar and a titled page.
 ///
-/// A tab strip puts every section on screen at once and then hides all but
-/// one of them, which stops scaling the moment a third section exists. A
-/// sidebar is the same shape as the rest of the app, so the window a person
-/// already knows how to read does not change its rules when they open
-/// preferences.
+/// The Mac window follows the same preferences shape as Nerve: a tinted
+/// icon in the sidebar, a title and a subtitle over a grouped form, and a
+/// titlebar that only keeps the traffic lights. A tab strip puts every
+/// section on screen at once and then hides all but one.
 ///
-/// A phone has no room for two columns and no window to size: the same
-/// sections are a list that pushes its pane, which is where a phone keeps
-/// settings anyway. The Mac's shape was being drawn there too — a 680pt
-/// split view inside a sheet, clipped to a column of half-words.
+/// A phone has no room for two columns. The same sections are a list that
+/// pushes its pane.
 struct AppSettings: View {
   let registry: PluginRegistry
   let known: KnownHosts
@@ -39,8 +39,9 @@ struct AppSettings: View {
   #if os(macOS)
     /// Which pane the split view is showing. A phone pushes instead.
     @State private var section: Section? = Section.available.first
-    @AppStorage("appearance") private var appearance = "system"
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
   #endif
+  @AppStorage("appearance") private var appearance = "system"
 
   private enum Section: String, Identifiable, CaseIterable {
     case general
@@ -63,11 +64,31 @@ struct AppSettings: View {
 
     var symbol: String {
       switch self {
-      case .general: "gearshape"
-      case .appearance: "paintpalette"
-      case .security: "lock.shield"
-      case .identities: "person.badge.key"
-      case .extensions: "puzzlepiece.extension"
+      case .general: "gearshape.fill"
+      case .appearance: "paintpalette.fill"
+      case .security: "lock.shield.fill"
+      case .identities: "person.badge.key.fill"
+      case .extensions: "puzzlepiece.extension.fill"
+      }
+    }
+
+    var subtitle: String {
+      switch self {
+      case .general: "What opens when Tether launches"
+      case .appearance: "Window, terminal, and drawing"
+      case .security: "Host keys and saved passwords"
+      case .identities: "Hosts, keys, and trusted devices"
+      case .extensions: "Accessories on a terminal tab"
+      }
+    }
+
+    var tint: Color {
+      switch self {
+      case .general: .gray
+      case .appearance: .indigo
+      case .security: .orange
+      case .identities: .teal
+      case .extensions: .purple
       }
     }
 
@@ -79,20 +100,25 @@ struct AppSettings: View {
 
   var body: some View {
     #if os(macOS)
-      HStack(spacing: 0) {
-        List(Section.available, selection: $section) { section in
-          Label(section.title, systemImage: section.symbol).tag(section)
+      NavigationSplitView(columnVisibility: $columnVisibility) {
+        List(Section.available, selection: $section) { item in
+          SettingsSidebarLabel(title: item.title, systemImage: item.symbol, tint: item.tint)
+            .tag(item)
+            .accessibilityLabel(item.title)
         }
         .listStyle(.sidebar)
-        .frame(width: 180)
-        Divider()
-        pane(section ?? .appearance)
+        .navigationSplitViewColumnWidth(min: 168, ideal: 184, max: 210)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          settingsFooter
+        }
+      } detail: {
+        pane(section ?? Section.available[0])
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      // Settings has permanent categories, not collapsible navigation. Let
-      // the native titlebar own its height instead of adding safe-area shims.
-      .frame(minWidth: 680, idealWidth: 720, minHeight: 460, idealHeight: 500)
-      .background { StandardTitlebar() }
+      .navigationSplitViewStyle(.balanced)
+      .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+      .frame(minWidth: Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
+      .background { SettingsWindowChrome() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
     #else
       // The caller already supplies the stack and its Done button, so this
@@ -101,16 +127,71 @@ struct AppSettings: View {
         NavigationLink {
           pane(section)
         } label: {
-          Label(section.title, systemImage: section.symbol)
+          SettingsSidebarLabel(title: section.title, systemImage: section.symbol, tint: section.tint)
         }
       }
       .navigationTitle("Settings")
       .navigationBarTitleDisplayMode(.inline)
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        settingsFooter
+      }
+      .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
     #endif
+  }
+
+  private var settingsFooter: some View {
+    VStack(spacing: 0) {
+      Divider()
+      HStack(spacing: UIStyle.Space.group) {
+        appMark
+          .frame(width: UIStyle.Mark.icon, height: UIStyle.Mark.icon)
+          .accessibilityHidden(true)
+
+        Text("Tether")
+          .font(.caption.weight(.medium))
+
+        Spacer(minLength: UIStyle.Space.small)
+
+        Text("v\(appVersion)")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+      .padding(.horizontal, UIStyle.Space.inset)
+      .padding(.vertical, UIStyle.panelRadius)
+    }
+    .background(.ultraThinMaterial)
+  }
+
+  @ViewBuilder
+  private var appMark: some View {
+    #if os(macOS)
+      Image(nsImage: NSApp.applicationIconImage)
+        .resizable()
+        .interpolation(.high)
+        .aspectRatio(contentMode: .fit)
+    #else
+      Image(systemName: "terminal.fill")
+        .font(UIStyle.symbol)
+        .foregroundStyle(Theme.subtle)
+    #endif
+  }
+
+  private var appVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
   }
 
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
+    SettingsPage(title: section.title, subtitle: section.subtitle) {
+      form(section)
+    }
+    #if os(iOS)
+      .navigationTitle(section.title)
+      .navigationBarTitleDisplayMode(.inline)
+    #endif
+  }
+
+  private func form(_ section: Section) -> some View {
     Form {
       switch section {
       case .identities:
@@ -123,7 +204,79 @@ struct AppSettings: View {
       }
     }
     .formStyle(.grouped)
-    .navigationTitle(section.title)
+    #if os(macOS)
+      .scrollContentBackground(.hidden)
+    #endif
+  }
+}
+
+private struct SettingsSidebarLabel: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+      Label {
+        Text(title)
+      } icon: {
+        ZStack {
+          RoundedRectangle(cornerRadius: UIStyle.badgeRadius, style: .continuous)
+            .fill(tint.gradient)
+            .frame(width: UIStyle.Mark.badge, height: UIStyle.Mark.badge)
+
+          Image(systemName: systemImage)
+            .font(UIStyle.symbol)
+            .foregroundStyle(.white)
+        }
+      }
+      .padding(.vertical, UIStyle.Space.tight)
+    }
+  }
+
+private struct SettingsPage<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: UIStyle.Space.small) {
+          Text(title)
+            .font(.title2.weight(.semibold))
+            .accessibilityAddTraits(.isHeader)
+
+          Text(subtitle)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, UIStyle.Space.wide)
+        .padding(.top, UIStyle.Space.page)
+        .padding(.bottom, UIStyle.panelRadius)
+
+        content
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      .background(Theme.window)
+    }
+  }
+
+private struct PreferenceToggleRow: View {
+  let title: String
+  let description: String
+  @Binding var isOn: Bool
+
+  var body: some View {
+    Toggle(isOn: $isOn) {
+      VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
+        Text(title)
+        Text(description)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .toggleStyle(.switch)
   }
 }
 
@@ -136,7 +289,10 @@ private struct GeneralSettings: View {
 
   var body: some View {
     SwiftUI.Section("On Launch") {
-      Toggle("Open Local Terminal", isOn: $openLocalAtLaunch)
+      PreferenceToggleRow(
+        title: "Open Local Terminal",
+        description: "Open a local shell instead of the host list.",
+        isOn: $openLocalAtLaunch)
     }
   }
 }
@@ -145,20 +301,28 @@ private struct AppearanceSettings: View {
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
+  @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
 
   var body: some View {
-    SwiftUI.Section("Appearance") {
-      Picker("Window", selection: $appearance) {
+    SwiftUI.Section("Window") {
+      Picker("Appearance", selection: $appearance) {
         Text("System").tag("system")
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
-      Picker("Terminal", selection: $terminalAppearance) {
+    }
+
+    SwiftUI.Section("Terminal") {
+      Picker("Theme", selection: $terminalAppearance) {
         Text("System").tag("system")
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
       Stepper("Font Size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
+      Picker("Drawing", selection: $drawing) {
+        Text("Canvas").tag(TerminalDrawing.canvas.rawValue)
+        Text("Metal").tag(TerminalDrawing.metal.rawValue)
+      }
     }
   }
 }
@@ -190,8 +354,15 @@ private struct ExtensionSettings: View {
             get: { registry.isEnabled(plugin.metadata.id) },
             set: { registry.setEnabled($0, id: plugin.metadata.id) })
         ) {
-          Label(plugin.metadata.name, systemImage: plugin.metadata.symbol)
+          VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
+            Label(plugin.metadata.name, systemImage: plugin.metadata.symbol)
+            Text(plugin.metadata.summary)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
+        .toggleStyle(.switch)
         .help(plugin.metadata.summary)
 
         // An extension's own settings are meaningless while it is off, and
@@ -281,18 +452,14 @@ private struct SecuritySettings: View {
     }
     }
     .onAppear(perform: reload)
-    .confirmationDialog(
-      "Forget this host key?",
-      isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
-      presenting: forgetting
-    ) { entry in
-      Button("Forget \(entry.endpoint)", role: .destructive) {
+    .dialog(for: forgetting) { entry in
+      Dialog.confirm(
+        "Forget \(entry.endpoint)?", message: "You’ll be asked to trust this host again when connecting.",
+        verb: "Forget", role: .destructive, cancel: { forgetting = nil }
+      ) {
         known.forget(entry.endpoint)
         forgetting = nil
       }
-      Button("Cancel", role: .cancel) { forgetting = nil }
-    } message: { _ in
-      Text("You’ll be asked to trust this host again when connecting.")
     }
   }
 

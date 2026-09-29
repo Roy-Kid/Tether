@@ -25,13 +25,13 @@ struct AuthenticationPolicyTests {
       username: profile.username, profile: profile, otpSecretID: secretID)
     var asked: [String] = []
     let coordinator = AuthenticationCoordinator(host: host, password: "", known: known, credentials: credentials,
-      ask: { question in
+      ask: { question, _ in
         switch question {
-        case .trust(_, _, let answer): asked.append("trust"); answer(true)
-        case .confirmation(_, _, let answer): asked.append("confirm"); answer(true)
-        case .prompts(_, _, let answer): asked.append("manual"); answer([])
+        case .trust: asked.append("trust"); return []
+        case .confirmation: asked.append("confirm"); return []
+        case .prompts: asked.append("manual"); return nil
         }
-      }, answered: {})
+      })
     let prompt = AuthPrompt(text: "Verification code:", echo: false)
     #expect(await coordinator.answer(instruction: "", prompts: [prompt]).isEmpty)
     #expect(asked.isEmpty)
@@ -43,7 +43,10 @@ struct AuthenticationPolicyTests {
     let code = await coordinator.answer(instruction: "", prompts: [prompt])
     #expect(code.count == 1)
     #expect(code.first?.count == 6)
+    // Asked again, the stored code was refused: it is not released twice,
+    // and the person is asked instead.
     #expect(await coordinator.answer(instruction: "", prompts: [prompt]).isEmpty)
+    #expect(asked.last == "manual")
     coordinator.cancel()
     #expect(await coordinator.answer(instruction: "", prompts: [prompt]).isEmpty)
   }
@@ -55,7 +58,7 @@ struct AuthenticationPolicyTests {
     known.remember(HostIdentity(host: "example.org", port: 22, algorithm: "ssh-ed25519", fingerprint: "original"))
     let coordinator = AuthenticationCoordinator(host: Host(label: "lab", hostname: "example.org", port: 22, username: "ada"),
       password: "", known: known, credentials: DeviceCredentialStore(secrets: MemorySecrets()),
-      ask: { _ in Issue.record("Changed pins must not offer a trust override during authentication") }, answered: {})
+      ask: { _, _ in Issue.record("Changed pins must not offer a trust override during authentication"); return nil })
     #expect(await !coordinator.verify(HostIdentity(host: "example.org", port: 22, algorithm: "ssh-ed25519", fingerprint: "changed")))
     #expect(known.entries.first?.fingerprint == "original")
   }

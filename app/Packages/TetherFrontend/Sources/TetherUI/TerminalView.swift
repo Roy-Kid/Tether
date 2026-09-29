@@ -22,8 +22,11 @@ import Tether
 /// cursor standing next to the character it is on rather than over it.
 public struct TerminalView: View {
   let frame: ScreenFrame
+  /// `nil` redraws every row. An empty set leaves the row pictures alone.
+  var dirtyRows: Set<Int>?
   let metrics: FontMetrics
   let palette: Palette
+  var cache: RowPictureCache?
 
   public var body: some View {
     Canvas(rendersAsynchronously: false) { context, size in
@@ -47,8 +50,21 @@ public struct TerminalView: View {
 
   public init(frame: ScreenFrame, metrics: FontMetrics, palette: Palette) {
     self.frame = frame
+    self.dirtyRows = nil
     self.metrics = metrics
     self.palette = palette
+    self.cache = nil
+  }
+
+  init(
+    frame: ScreenFrame, dirtyRows: Set<Int>?, metrics: FontMetrics, palette: Palette,
+    cache: RowPictureCache
+  ) {
+    self.frame = frame
+    self.dirtyRows = dirtyRows
+    self.metrics = metrics
+    self.palette = palette
+    self.cache = cache
   }
 
   private func draw(in context: inout GraphicsContext, size: CGSize) {
@@ -57,16 +73,26 @@ public struct TerminalView: View {
     let visibleColumns = max(0, Int(size.width / metrics.cellWidth) + 1)
     let visibleRows = min(frame.lines.count, max(0, Int(size.height / metrics.lineHeight) + 1))
 
+    let pictures = cache
     for index in 0..<visibleRows {
       let row = frame.lines[index]
       let y = metrics.lineHeight * CGFloat(index)
+      let rebuild = dirtyRows?.contains(index) ?? true
+      if let image = pictures?.image(
+        row: index, line: row, columns: frame.columns, metrics: metrics, palette: palette,
+        fresh: rebuild)
+      {
+        let rowWidth = metrics.cellWidth * CGFloat(frame.columns)
+        context.draw(
+          Image(decorative: image, scale: 1),
+          in: CGRect(x: 0, y: y, width: rowWidth, height: metrics.lineHeight))
+        continue
+      }
       var column = 0
-
       for run in row.runs {
         if column >= visibleColumns { break }
         let x = metrics.cellWidth * CGFloat(column)
         let width = metrics.cellWidth * CGFloat(run.columns)
-
         draw(run: run, at: CGPoint(x: x, y: y), width: width, in: &context)
         column += Int(run.columns)
       }
@@ -170,6 +196,10 @@ public struct FontMetrics: Equatable, Sendable {
   /// hard-coded ratio would misalign box drawing at some sizes and not
   /// others — the kind of bug that looks like a rendering glitch.
   public init(size: CGFloat) {
+    if let cached = FontMetricsCache.shared.metrics(for: size) {
+      self = cached
+      return
+    }
     // `NSFont` and `UIFont` are different types with the same metrics and the
     // same selectors, so the measurement is written once against whichever
     // one this platform has rather than twice against both.
@@ -187,6 +217,9 @@ public struct FontMetrics: Equatable, Sendable {
     // and the text then had to be stretched by that much to keep up.
     self.cellWidth = max(1, advance.rounded())
     self.lineHeight = ceil(font.ascender - font.descender + font.leading)
+    // Body evaluation asks for this on every frame. The numbers do not
+    // change until the size does, so the measurement is once per size.
+    FontMetricsCache.shared.store(self, for: size)
   }
 
   /// The extra advance that makes `characters` characters cover exactly
@@ -218,5 +251,65 @@ public struct FontMetrics: Equatable, Sendable {
 
   public func rows(fitting height: CGFloat) -> UInt16 {
     UInt16(min(500, max(1, height / lineHeight)))
+  }
+}
+
+/// Measurements keyed by font size. A frame asks for the same size again;
+/// measuring `"M"` and a wide character each time was work the grid does
+/// not depend on changing.
+/// Pictures of rows that have not changed. A keystroke rebuilds the rows
+/// the damage named; the rest are drawn from here.
+@MainActor
+final class RowPictureCache {
+  private var entries: [Int: (line: ScreenRow, image: CGImage)] = [:]
+
+  func clear() {
+    entries.removeAll()
+  }
+
+  func image(
+    row: Int, line: ScreenRow, columns: UInt32, metrics: FontMetrics, palette: Palette, fresh: Bool
+  ) -> CGImage? {
+    if !fresh, let cached = entries[row], cached.line == line {
+      return cached.image
+    }
+    guard let image = RowPictureCache.rasterize(line: line, columns: columns, metrics: metrics, palette: palette)
+    else { return entries[row]?.image }
+    entries[row] = (line, image)
+    return image
+  }
+
+  private static func rasterize(
+    line: ScreenRow, columns: UInt32, metrics: FontMetrics, palette: Palette
+  ) -> CGImage? {
+    let width = max(columns, 1)
+    let frame = ScreenFrame(
+      columns: width, rows: 1, cursorRow: 0, cursorColumn: 0, cursorShape: .hidden,
+      cursorVisible: false, alternateScreen: false, viewportOffset: 0, historyLines: 0,
+      title: "", lines: [line])
+    let view = TerminalView(frame: frame, metrics: metrics, palette: palette)
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 1
+    renderer.proposedSize = ProposedViewSize(
+      width: metrics.cellWidth * CGFloat(width), height: metrics.lineHeight)
+    return renderer.cgImage
+  }
+}
+
+private final class FontMetricsCache: @unchecked Sendable {
+  static let shared = FontMetricsCache()
+  private let lock = NSLock()
+  private var values: [CGFloat: FontMetrics] = [:]
+
+  func metrics(for size: CGFloat) -> FontMetrics? {
+    lock.lock()
+    defer { lock.unlock() }
+    return values[size]
+  }
+
+  func store(_ metrics: FontMetrics, for size: CGFloat) {
+    lock.lock()
+    values[size] = metrics
+    lock.unlock()
   }
 }

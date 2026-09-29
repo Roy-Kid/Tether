@@ -30,9 +30,35 @@ extension View {
 /// key event is, how an input method composes, whether there is a keyboard at
 /// all. They agree on this signature, which is the only part the rest of the
 /// app is allowed to know.
+/// Ctrl and Opt on a phone, shared by the key row and the text field.
+///
+/// A tap arms the modifier and the next key spends it. Both views have to
+/// see the same latch, or the row lights up for a chord the field never sends.
+final class Latch {
+  var armed = KeyModifiers()
+  var onChange: ((KeyModifiers) -> Void)?
+
+  func toggle(control: Bool) {
+    armed = control
+      ? KeyModifiers(shift: false, alt: armed.alt, control: !armed.control)
+      : KeyModifiers(shift: false, alt: !armed.alt, control: armed.control)
+    onChange?(armed)
+  }
+
+  func spend() -> KeyModifiers {
+    let current = armed
+    if current != .none {
+      armed = .none
+      onChange?(armed)
+    }
+    return current
+  }
+}
+
 public struct KeyCapture: View {
   @Environment(\.terminalInputEnabled) private var inputEnabled
   let onInput: (TerminalInput) -> Void
+  var latch: Latch
   var active: Bool
   var onFocus: () -> Void
   /// Lines to move the viewport; positive goes back into history.
@@ -49,11 +75,12 @@ public struct KeyCapture: View {
     onInput: @escaping (TerminalInput) -> Void, active: Bool, lineHeight: CGFloat,
     onFocus: @escaping () -> Void, onScroll: @escaping (Int32) -> Void,
     links: TerminalLinks, geometry: CellGeometry, cursorRect: CGRect,
-    onHover: @escaping (TerminalLink?) -> Void
+    onHover: @escaping (TerminalLink?) -> Void, latch: Latch = Latch()
   ) {
     self.init(
       onInput: onInput, active: active, lineHeight: lineHeight, onFocus: onFocus,
       onScroll: onScroll)
+    self.latch = latch
     self.links = links
     self.geometry = geometry
     self.cursorRect = cursorRect
@@ -72,6 +99,7 @@ public struct KeyCapture: View {
     self.onFocus = onFocus
     self.onScroll = onScroll
     self.onInput = onInput
+    self.latch = Latch()
   }
 
   public var body: some View {
@@ -87,7 +115,8 @@ public struct KeyCapture: View {
       // for the same reason the Mac's owns the wheel.
       PhoneKeyCapture(
         onInput: onInput, active: active && inputEnabled, lineHeight: lineHeight,
-        onFocus: onFocus, onScroll: onScroll, links: links, geometry: geometry)
+        onFocus: onFocus, onScroll: onScroll, links: links, geometry: geometry,
+        latch: latch)
     #endif
   }
 }

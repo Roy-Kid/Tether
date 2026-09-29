@@ -171,7 +171,7 @@ struct LinkPreview: View {
     VStack(spacing: UIStyle.Space.group) {
       if !looked {
         ProgressView()
-          .frame(minWidth: 240, minHeight: 200)
+          .frame(minWidth: UIStyle.compactWidth, minHeight: UIStyle.compactHeight)
       } else {
         FilePreview(
           name: entry?.name ?? Paths.name(printed.path),
@@ -186,7 +186,7 @@ struct LinkPreview: View {
         .truncationMode(.middle)
     }
     .padding(UIStyle.Space.section)
-    .frame(minWidth: 240, minHeight: 200)
+    .frame(minWidth: UIStyle.compactWidth, minHeight: UIStyle.compactHeight)
     .task {
       defer { looked = true }
       guard let model, let found = await model.resolve(printed) else { return }

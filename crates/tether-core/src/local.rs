@@ -79,7 +79,12 @@ impl Local {
         let terminal_name = shell.tty_name().map(str::to_owned);
         let process_id = shell.process_id();
         Ok(TerminalSession::start_with(
-            shell, self.size, self.options, crate::Connection::Local, terminal_name, process_id,
+            shell,
+            self.size,
+            self.options,
+            crate::Connection::Local,
+            terminal_name,
+            process_id,
         ))
     }
 }

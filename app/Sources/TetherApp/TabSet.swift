@@ -79,6 +79,9 @@ final class TabSet {
   /// person and their machine, not to one tab.
   var known = KnownHosts()
 
+  /// Hosts whose working password a person chose not to keep, this run.
+  private var keepDeclined: Set<UUID> = []
+
   private var lastByHost: [UUID: UUID] = [:]
   private var recents: [UUID] = []
   private var inspectorBeforeZen = false
@@ -109,9 +112,9 @@ final class TabSet {
 
   var recentHostIDs: [UUID] { recents }
 
-  func open(_ host: Host, password: String) {
+  func open(_ host: Host, password: String, typedNow: Bool = false) {
     show(host)
-    adopt(SessionTab(host: host, password: password, known: known, name: nextName(for: host)))
+    adopt(SessionTab(host: host, password: password, typedNow: typedNow, known: known, name: nextName(for: host)))
   }
 
   /// Opens a new terminal on a connection that is already authenticated.
@@ -146,8 +149,36 @@ final class TabSet {
 
   func adopt(_ tab: SessionTab) {
     show(tab.host)
+    tab.offersToSave = !keepDeclined.contains(tab.host.id)
+    // A person who declined a question the login asked has closed it.
+    let id = tab.id
+    tab.onDeclined = { [weak self] in self?.close(id) }
     tabs.append(tab)
     select(tab.id)
+  }
+
+  /// The first tab with something to tell the person.
+  var problem: TabProblem? {
+    tabs.lazy.compactMap { tab in
+      tab.problem.map { TabProblem(tab: tab.id, host: tab.host, problem: $0) }
+    }.first
+  }
+
+  /// The first password that worked and could be kept.
+  var passwordOffer: TabPasswordOffer? {
+    tabs.lazy.compactMap { tab in
+      tab.passwordOffer.map { TabPasswordOffer(tab: tab.id, host: tab.host, offer: $0) }
+    }.first
+  }
+
+  /// Settles an offer. A no holds for the host for the rest of this run, so
+  /// a person who keeps no passwords is asked once, not on every login.
+  func answer(_ offer: TabPasswordOffer, kept: Bool) {
+    if !kept {
+      keepDeclined.insert(offer.host.id)
+      for tab in tabs where tab.host.id == offer.host.id { tab.offersToSave = false }
+    }
+    tabs.first { $0.id == offer.tab }?.settlePasswordOffer()
   }
 
   /// Switch the window to this host, restoring its last tab. Does not connect.
@@ -393,11 +424,12 @@ final class TabSet {
     select(ids[next])
   }
 
+  /// Answers the rename question either way: an empty name keeps the old one.
   func rename(_ id: UUID, to name: String) {
+    if renaming == id { renaming = nil }
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, let tab = tabs.first(where: { $0.id == id }) else { return }
     tab.name = trimmed
-    renaming = nil
   }
 
   /// A word only when the green dot is not enough. Connected is the

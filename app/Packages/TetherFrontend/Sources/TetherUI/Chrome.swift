@@ -56,9 +56,35 @@ public enum UIStyle {
     public static let group: CGFloat = 8
     public static let inset: CGFloat = 12
     public static let section: CGFloat = 16
+    public static let page: CGFloat = 24
+    public static let wide: CGFloat = 28
   }
   public static let rowRadius: CGFloat = 4
+  public static let badgeRadius: CGFloat = 5
   public static let panelRadius: CGFloat = 10
+  /// Sizes of chrome marks. The number lives here; a view asks for the role.
+  public enum Mark {
+    public static let hairline: CGFloat = 1
+    public static let rule: CGFloat = 2
+    public static let presence: CGFloat = 7
+    public static let disclosure: CGFloat = 10
+    public static let chevron: CGFloat = 12
+    public static let glyph: CGFloat = 16
+    public static let icon: CGFloat = 18
+    public static let iconLarge: CGFloat = 20
+    public static let status: CGFloat = 22
+    public static let badge: CGFloat = 23
+    public static let tileWidth: CGFloat = 30
+    public static let tileHeight: CGFloat = 34
+    public static let progress: CGFloat = 60
+    public static let hero: CGFloat = 64
+  }
+  public static let sheetWidth: CGFloat = 400
+  public static let sheetHeight: CGFloat = 420
+  public static let compactWidth: CGFloat = 240
+  public static let compactHeight: CGFloat = 200
+  public static let menuWidth: CGFloat = 340
+  public static let menuHeight: CGFloat = 180
   public static let panelWidth: CGFloat = 420
   public static let pickerWidth: CGFloat = 280
   public static let treeWidth: CGFloat = 260
@@ -139,7 +165,7 @@ public struct ChromeButtonStyle: ButtonStyle {
         .overlay {
           if selected && contrast == .increased {
             RoundedRectangle(cornerRadius: UIStyle.rowRadius)
-              .strokeBorder(Theme.text, lineWidth: 1)
+              .strokeBorder(Theme.text, lineWidth: UIStyle.Mark.hairline)
           }
         }
         .opacity(enabled ? 1 : UIStyle.disabledOpacity)
@@ -169,7 +195,7 @@ private struct FloatingPanel: ViewModifier {
       }
       .overlay {
         RoundedRectangle(cornerRadius: UIStyle.panelRadius)
-          .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: 1)
+          .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: UIStyle.Mark.hairline)
           .allowsHitTesting(false)
       }
       .shadow(color: .black.opacity(UIStyle.shadowOpacity),

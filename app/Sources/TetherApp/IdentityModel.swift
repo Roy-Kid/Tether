@@ -146,6 +146,13 @@ struct SharedHostRecord: Codable, Sendable {
 
 enum IdentityError: LocalizedError {
   case invalidConfiguration, missingCredential, needsReview, unsupportedRoute, storage(String), expired, untrustedDevice
+  /// The server's key is not the one pinned for it. Not a question to answer
+  /// mid-login: someone rotating a key and someone in the middle look alike.
+  case hostKeyChanged
+  /// A question the login asked went unanswered for too long.
+  case unanswered
+  /// A question the login asked could not be put on screen.
+  case unshown
   var errorDescription: String? {
     switch self {
     case .invalidConfiguration: "Invalid authentication configuration."
@@ -155,6 +162,9 @@ enum IdentityError: LocalizedError {
     case .storage(let message): message
     case .expired: "The authentication request expired."
     case .untrustedDevice: "This device is not authorized for this operation."
+    case .hostKeyChanged: "This host’s key has changed. Forget the old key in Settings to trust the new one."
+    case .unanswered: "No answer in time."
+    case .unshown: "The login asked a question that could not be shown."
     }
   }
 }

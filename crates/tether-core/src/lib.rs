@@ -65,7 +65,11 @@ mod tests {
         let parts = composition();
         assert_eq!(parts.len(), 3);
         assert!(parts.iter().any(|p| p.starts_with("russh")));
-        assert!(parts.iter().any(|p| p.starts_with("portable-pty")));
+        if cfg!(target_os = "ios") {
+            assert!(parts.iter().any(|p| p == "no pseudo-terminal"));
+        } else {
+            assert!(parts.iter().any(|p| p.starts_with("portable-pty")));
+        }
         assert!(parts.iter().any(|p| p.contains("alacritty")));
     }
 }

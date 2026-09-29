@@ -2117,9 +2117,24 @@ public protocol SessionProtocol: AnyObject, Sendable {
     func linkAt(row: UInt16, column: UInt16)  -> TerminalLink?
     
     /**
+     * Stops reading the far side until [`resume`](Self::resume).
+     */
+    func pause() 
+    
+    /**
+     * Drops scrollback above `keep` lines for the rest of this session.
+     */
+    func releaseHistory(keep: UInt32) 
+    
+    /**
      * Tells both the engine and the far side that the window changed size.
      */
     func resize(columns: UInt16, rows: UInt16) throws 
+    
+    /**
+     * Reads the far side again.
+     */
+    func resume() 
     
     /**
      * Moves the viewport over the scrollback.
@@ -2152,6 +2167,11 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * The local shell's tty path, for matching tmux clients to this tab.
      */
     func terminalName()  -> String?
+    
+    /**
+     * What changed since the last call. Rows that did not change are absent.
+     */
+    func update()  -> FrameUpdate
     
     /**
      * The directory the shell last reported, if it reports one.
@@ -2313,6 +2333,29 @@ open func linkAt(row: UInt16, column: UInt16) -> TerminalLink?  {
 }
     
     /**
+     * Stops reading the far side until [`resume`](Self::resume).
+     */
+open func pause()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_pause(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Drops scrollback above `keep` lines for the rest of this session.
+     */
+open func releaseHistory(keep: UInt32)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_release_history(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(keep),uniffiCallStatus
+    )
+}
+}
+    
+    /**
      * Tells both the engine and the far side that the window changed size.
      */
 open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
@@ -2321,6 +2364,17 @@ open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(F
             self.uniffiCloneHandle(),
         FfiConverterUInt16.lower(columns),
         FfiConverterUInt16.lower(rows),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Reads the far side again.
+     */
+open func resume()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_resume(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -2380,6 +2434,18 @@ open func terminalName() -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_terminal_name(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * What changed since the last call. Rows that did not change are absent.
+     */
+open func update() -> FrameUpdate  {
+    return try!  FfiConverterTypeFrameUpdate_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_update(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -4359,6 +4425,63 @@ public func FfiConverterTypeTmuxWindowInfo_lower(_ value: TmuxWindowInfo) -> Rus
 }
 
 
+/**
+ * One row of a partial update, named by its place on the visible screen.
+ */
+public struct UpdatedRow: Equatable, Hashable {
+    public let row: UInt32
+    public let line: ScreenRow
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(row: UInt32, line: ScreenRow) {
+        self.row = row
+        self.line = line
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension UpdatedRow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUpdatedRow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UpdatedRow {
+        return
+            try UpdatedRow(
+                row: FfiConverterUInt32.read(from: &buf), 
+                line: FfiConverterTypeScreenRow.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UpdatedRow, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.row, into: &buf)
+        FfiConverterTypeScreenRow.write(value.line, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUpdatedRow_lift(_ buf: RustBuffer) throws -> UpdatedRow {
+    return try FfiConverterTypeUpdatedRow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUpdatedRow_lower(_ value: UpdatedRow) -> RustBuffer {
+    return FfiConverterTypeUpdatedRow.lower(value)
+}
+
+
 
 public enum CaretShape: Equatable, Hashable {
     
@@ -4931,6 +5054,107 @@ public func FfiConverterTypeFileKind_lift(_ buf: RustBuffer) throws -> FileKind 
 #endif
 public func FfiConverterTypeFileKind_lower(_ value: FileKind) -> RustBuffer {
     return FfiConverterTypeFileKind.lower(value)
+}
+
+
+
+/**
+ * What changed since the frontend last drew.
+ *
+ * `Full` replaces the screen. `Rows` replaces those lines and the cursor.
+ * `Idle` is a cursor or title change with no new cells.
+ */
+
+public enum FrameUpdate: Equatable, Hashable {
+    
+    case full(frame: ScreenFrame
+    )
+    case rows(rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    )
+    case idle(cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FrameUpdate: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
+    typealias SwiftType = FrameUpdate
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FrameUpdate {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .full(frame: try FfiConverterTypeScreenFrame.read(from: &buf)
+        )
+        
+        case 2: return .rows(rows: try FfiConverterSequenceTypeUpdatedRow.read(from: &buf), cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 3: return .idle(cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FrameUpdate, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .full(frame):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeScreenFrame.write(frame, into: &buf)
+            
+        
+        case let .rows(rows,cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+            writeInt(&buf, Int32(2))
+            FfiConverterSequenceTypeUpdatedRow.write(rows, into: &buf)
+            FfiConverterUInt32.write(cursorRow, into: &buf)
+            FfiConverterUInt32.write(cursorColumn, into: &buf)
+            FfiConverterTypeCaretShape.write(cursorShape, into: &buf)
+            FfiConverterBool.write(cursorVisible, into: &buf)
+            FfiConverterString.write(title, into: &buf)
+            FfiConverterUInt32.write(viewportOffset, into: &buf)
+            FfiConverterUInt32.write(historyLines, into: &buf)
+            
+        
+        case let .idle(cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+            writeInt(&buf, Int32(3))
+            FfiConverterUInt32.write(cursorRow, into: &buf)
+            FfiConverterUInt32.write(cursorColumn, into: &buf)
+            FfiConverterTypeCaretShape.write(cursorShape, into: &buf)
+            FfiConverterBool.write(cursorVisible, into: &buf)
+            FfiConverterString.write(title, into: &buf)
+            FfiConverterUInt32.write(viewportOffset, into: &buf)
+            FfiConverterUInt32.write(historyLines, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFrameUpdate_lift(_ buf: RustBuffer) throws -> FrameUpdate {
+    return try FfiConverterTypeFrameUpdate.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFrameUpdate_lower(_ value: FrameUpdate) -> RustBuffer {
+    return FfiConverterTypeFrameUpdate.lower(value)
 }
 
 
@@ -6573,6 +6797,31 @@ fileprivate struct FfiConverterSequenceTypeTmuxWindowInfo: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeUpdatedRow: FfiConverterRustBuffer {
+    typealias SwiftType = [UpdatedRow]
+
+    public static func write(_ value: [UpdatedRow], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeUpdatedRow.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UpdatedRow] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UpdatedRow]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeUpdatedRow.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSecret: FfiConverterRustBuffer {
     typealias SwiftType = [Secret]
 
@@ -6970,7 +7219,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_func_open_local() != 41710) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 21514) {
+    if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 39390) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_cancellationtoken_cancel() != 61232) {
@@ -7048,7 +7297,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_session_link_at() != 40864) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_session_pause() != 2740) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_release_history() != 5167) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_session_resize() != 15330) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_resume() != 20513) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_scroll() != 10531) {
@@ -7061,6 +7319,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_terminal_name() != 42426) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_update() != 40315) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_working_directory() != 14461) {

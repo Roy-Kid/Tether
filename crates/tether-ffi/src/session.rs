@@ -225,10 +225,13 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
 
     // A local shell starts in the user's home, regardless of the working
     // directory inherited by an app launched from Finder or the Dock.
-    let directory = shell.directory.filter(|path| !path.is_empty()).or_else(|| {
-        std::env::var("HOME").ok().filter(|path| path.starts_with('/'))
-    });
-    if let Some(directory) = directory { local = local.directory(directory); }
+    let directory = shell
+        .directory
+        .filter(|path| !path.is_empty())
+        .or_else(|| std::env::var("HOME").ok().filter(|path| path.starts_with('/')));
+    if let Some(directory) = directory {
+        local = local.directory(directory);
+    }
 
     Ok(Arc::new(Session { inner: local.open().await? }))
 }
@@ -385,6 +388,26 @@ impl Session {
     /// Everything needed to draw the screen once.
     pub fn frame(&self) -> ScreenFrame {
         ScreenFrame::of(&self.inner.screen(), self.inner.title())
+    }
+
+    /// What changed since the last call. Rows that did not change are absent.
+    pub fn update(&self) -> crate::FrameUpdate {
+        crate::FrameUpdate::from_delta(&self.inner.take_frame_delta())
+    }
+
+    /// Drops scrollback above `keep` lines for the rest of this session.
+    pub fn release_history(&self, keep: u32) {
+        self.inner.release_history(keep as usize);
+    }
+
+    /// Stops reading the far side until [`resume`](Self::resume).
+    pub fn pause(&self) {
+        self.inner.pause();
+    }
+
+    /// Reads the far side again.
+    pub fn resume(&self) {
+        self.inner.resume();
     }
 
     /// What the text at a cell names, if anything, and where it is drawn.

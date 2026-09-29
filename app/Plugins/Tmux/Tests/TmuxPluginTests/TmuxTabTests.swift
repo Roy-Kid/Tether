@@ -54,7 +54,7 @@ struct TmuxTabTests {
   }
 
   @Test("every tmux server has a $0: another host's is not this one")
-  func ownershipIsPerHost() throws {
+  func ownershipIsPerHost() async throws {
     let host = HostProbe()
     let plugin = TmuxPlugin()
     let local = try #require(plugin.attach(to: host.context()) as? TmuxTab)
@@ -64,7 +64,14 @@ struct TmuxTabTests {
     remote.choose(info("$0", "main"), windowID: nil)
 
     #expect(host.focused.isEmpty, "nothing else owns the remote $0")
-    #expect(remote.showing)
+    #expect(!local.showing, "the local $0 is not the one chosen")
+    // The remote tab attaches its own. It is shown once that attach has
+    // worked — never before, so a failed attach leaves the shell in front —
+    // and this probe has no connection for it to work with.
+    #expect(remote.busy, "the remote tab went to attach it itself")
+    for _ in 0..<50 where remote.busy { await Task.yield() }
+    #expect(remote.error == "Not connected.")
+    #expect(!remote.showing, "not shown before it is attached")
   }
 
   @Test("ending a session detaches the tab showing it, whichever tab asked")
@@ -168,5 +175,20 @@ struct TmuxPaneLinkTests {
     let pointed = try #require(asked.first)
     #expect(pointed.link == link)
     #expect(await pointed.directory() == nil, "no workspace and no lease: nowhere to ask")
+  }
+}
+
+/// What a pane does with each way of scrolling. "Jump to the present" and a
+/// page key were dropped before, and only a wheel or a drag moved a pane.
+@Suite("scrolling a pane")
+struct PaneScrollTests {
+  @Test("every request becomes lines of the pane's own history")
+  func everyRequestScrolls() {
+    #expect(TmuxContent.lines(for: .lines(3), page: 24) == 3)
+    #expect(TmuxContent.lines(for: .pageUp, page: 24) == 23)
+    #expect(TmuxContent.lines(for: .pageDown, page: 24) == -23)
+    #expect(TmuxContent.lines(for: .live, page: 24) < -10_000, "all the way back to the present")
+    #expect(TmuxContent.lines(for: .oldest, page: 24) > 10_000)
+    #expect(TmuxContent.lines(for: .pageUp, page: 1) == 1, "a one-row pane still moves")
   }
 }
