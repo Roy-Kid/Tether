@@ -10,26 +10,25 @@
 # consumer like any other (spec §4 — the components never name a consumer).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/signing.sh
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-app.sh [--config debug|release]
+Usage: ./scripts/build-app.sh [--config debug|release] [--team <TEAMID>]
 
 Assemble Tether.app from the app package into build/Tether.app.
 
 Options:
   --config debug|release   build configuration (default: debug)
-  --signing-identity <id>  signing identity (default: ad-hoc)
-  --entitlements <plist>  provisioned capabilities; requires a signing identity
-  --provisioning-profile <path>  embed the matching macOS profile
+  --team <TEAMID>          sign with this team's development profile, which is
+                           what turns on iCloud sync (or TETHER_TEAM; default:
+                           ad-hoc, no iCloud)
   -h, --help               show this help
 EOF
 }
 
 CONFIG=debug
-SIGNING_IDENTITY=-
-ENTITLEMENTS=
-PROVISIONING_PROFILE=
+TEAM="${TETHER_TEAM:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
@@ -38,9 +37,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       continue
       ;;
-    --signing-identity) SIGNING_IDENTITY="${2:?missing signing identity}"; shift 2; continue ;;
-    --entitlements) ENTITLEMENTS="${2:?missing entitlements path}"; shift 2; continue ;;
-    --provisioning-profile) PROVISIONING_PROFILE="${2:?missing provisioning profile}"; shift 2; continue ;;
+    --team) TEAM="${2:?--team needs a value}"; shift 2; continue ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "unknown option: $1" >&2
@@ -80,14 +77,14 @@ rm -f "$partial"
 
 # The xcframework is a static library, linked into the binary above, so there
 # is nothing further to embed — that is why the artifact is a static library.
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key><string>Tether</string>
     <key>CFBundleDisplayName</key><string>Tether</string>
-    <key>CFBundleIdentifier</key><string>dev.tether.app</string>
+    <key>CFBundleIdentifier</key><string>$TETHER_BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>TetherApp</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.0.0</string>
@@ -97,23 +94,23 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSUserNotificationsUsageDescription</key>
-    <string>Nerve tells you when an agent needs you.</string>
 </dict>
 </plist>
 PLIST
 
-# Ad-hoc signing: without any signature the bundle is killed on launch on
-# Apple Silicon. This is not distribution signing — it makes a local build
-# runnable, nothing more.
-signing_args=(--force --sign "$SIGNING_IDENTITY")
-if [[ -n "$ENTITLEMENTS" ]]; then
-  [[ "$SIGNING_IDENTITY" != - ]] || { echo "iCloud entitlements require a provisioned signing identity" >&2; exit 2; }
-  signing_args+=(--entitlements "$ENTITLEMENTS")
+# Without any signature the bundle is killed on launch on Apple Silicon, so a
+# build without a team is signed ad-hoc: runnable here, nothing more. With a
+# team it carries the profile and entitlements CloudKit checks for.
+if [[ -n "$TEAM" ]]; then
+  profile=$(signing_profile macos "$TEAM")
+  identity=$(signing_identity "$profile")
+  entitlements=$(mktemp)
+  signing_entitlements macos "$TEAM" "$entitlements"
+  cp "$profile" "$APP/Contents/embedded.provisionprofile"
+  codesign --force --sign "$identity" --entitlements "$entitlements" "$APP"
+  rm -f "$entitlements"
+else
+  codesign --force --sign - "$APP"
 fi
-if [[ -n "$PROVISIONING_PROFILE" ]]; then
-  cp "$PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
-fi
-codesign "${signing_args[@]}" "$APP"
 
 echo "wrote $APP"

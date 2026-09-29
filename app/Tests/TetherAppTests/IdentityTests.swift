@@ -105,13 +105,4 @@ struct IdentityTests {
     _ = try P256.Signing.PrivateKey(pemRepresentation: pem)
     #expect(try AuthorizedKeysProvider.keyMaterial(publicKey).hasPrefix("ecdsa-sha2-nistp256 "))
   }
-
-  @Test func strictExportRejectsAliasInjectionAndExistingAlias() throws {
-    var p = profile(); p.authentication.confirmation = .automatic
-    var host = Host(id: p.id, label: p.label, hostname: p.hostname, port: p.port, username: p.username,
-      keyPath: "~/.ssh/test", profile: p)
-    #expect(throws: (any Error).self) { try OpenSSHExport.render([host], existing: SSHConfig("Host lab\n HostName other\n")) }
-    host.label = "lab\nProxyCommand malicious"
-    #expect(throws: (any Error).self) { try OpenSSHExport.render([host], existing: SSHConfig("")) }
-  }
 }

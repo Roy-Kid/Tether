@@ -44,8 +44,31 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets
 
+      # Ubuntu ships tmux 3.4. #{bracket_paste_flag} arrived in 3.7; without
+      # it an attach restores the other modes and never reports bracketed
+      # paste, and attach_restores_full_screen_modes_and_unicode waits out
+      # its deadline. The assertion needs a tmux that can answer.
       - name: Install tmux and sftp-server for integration tests
-        run: sudo apt-get update && sudo apt-get install -y tmux openssh-sftp-server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-sftp-server libevent-dev libncurses-dev bison pkg-config build-essential
+          case "$(tmux -V 2>/dev/null || true)" in
+            "tmux 3.7"*|"tmux 3.8"*|"tmux 3.9"*)
+              tmux -V
+              ;;
+            *)
+              curl -fsSL -o /tmp/tmux.tar.gz https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz
+              tar -C /tmp -xzf /tmp/tmux.tar.gz
+              (cd /tmp/tmux-3.7c && ./configure --prefix=/usr/local && make -j"$(nproc)" && sudo make install)
+              ;;
+          esac
+          if [[ -x /usr/local/bin/tmux ]]; then
+            export PATH="/usr/local/bin:$PATH"
+          fi
+          echo /usr/local/bin >> "$GITHUB_PATH"
+          hash -r
+          tmux -V
+          tmux -V | grep -Eq '^tmux 3\.([7-9]|[1-9][0-9])'
 
       - name: Test
         run: cargo test --workspace
@@ -142,20 +165,16 @@ jobs:
       - name: Build Apple artifacts and generated bindings
         run: ./scripts/tether.sh --build-xcframework
 
-      # Tether itself, and nothing that plugs into it. The app package links
-      # whichever extensions a person has — including ones that live outside
-      # this repository — so building it here would make Tether's CI fail for
-      # reasons that have nothing to do with Tether. The app and its plugins
-      # are built and tested locally; what CI defends is the SDK.
-      - name: Swift facade and frontend tests
+      # Everything Swift the repository holds: the facade, the frontend, the
+      # built-in plugins — how the plugin seam is exercised by something real
+      # (Decisions/0012) — and the app, which links nothing from outside.
+      - name: Swift facade, frontend, plugin and app tests
         run: |
           swift test --package-path swift
           swift test --package-path app/Packages/TetherFrontend --skip RenderCost
-          # The built-in plugins are Tether's own and needs nothing from
-          # outside this repository, so it is defended here: it is how the
-          # plugin seam is exercised by something real (Decisions/0012).
           swift test --package-path app/Plugins/Tmux
           swift test --package-path app/Plugins/Files
+          swift test --package-path app
 
       # Performance budgets describe optimized shipping code. Keep this
       # separate from debug correctness tests and their allocation overhead.

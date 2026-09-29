@@ -48,7 +48,6 @@ enum Chrome {
   static let editorHeight: CGFloat = 480
   static let swatchWidth: CGFloat = 76
   static let swatchHeight: CGFloat = 18
-  static let ribbonHeight: CGFloat = 22
   static let ribbonThickness: CGFloat = 9
   static let windowWidth: CGFloat = 1100
   static let windowHeight: CGFloat = 700

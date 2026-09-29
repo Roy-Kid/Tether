@@ -20,13 +20,16 @@ struct HostEditor: View {
   @State private var picking = false
   @State private var importProblem: String?
   @State private var authentication: Authentication
+  /// A key picked in this sheet, held until Save. Written to the keychain
+  /// only then, so a sheet cancelled after picking leaves nothing behind.
+  @State private var pickedKey: String?
 
   private var isNew: Bool { host.hostname.isEmpty && host.label.isEmpty }
 
   private var canSave: Bool {
     !host.hostname.trimmingCharacters(in: .whitespaces).isEmpty
       && !host.username.trimmingCharacters(in: .whitespaces).isEmpty
-      && (authentication == .password || host.offersConfiguredKey)
+      && (authentication == .password || host.offersConfiguredKey || pickedKey != nil)
   }
 
   init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Bool) {
@@ -95,15 +98,19 @@ struct HostEditor: View {
               picking = true
             } label: {
               LabeledContent("Key") {
-                Text(host.credentialSecretID != nil ? "Stored on this device" : host.keyPath.map(shorten) ?? "Choose…")
+                Text(pickedKey != nil || host.credentialSecretID != nil ? "Stored on this device" : host.keyPath.map(shorten) ?? "Choose…")
                   .foregroundStyle(.secondary)
                   .adaptiveRowText()
                   .truncationMode(.head)
               }
             }
             .foregroundStyle(.primary)
-            if host.keyPath != nil {
-              Button("Clear Key", role: .destructive) { host.keyPath = nil }
+            if host.keyPath != nil || host.credentialSecretID != nil || pickedKey != nil {
+              Button("Clear Key", role: .destructive) {
+                host.keyPath = nil
+                host.credentialSecretID = nil
+                pickedKey = nil
+              }
             }
           }
         }
@@ -116,6 +123,7 @@ struct HostEditor: View {
         if value == .password {
           host.keyPath = nil
           host.credentialSecretID = nil
+          pickedKey = nil
         } else {
           password = ""
         }
@@ -178,6 +186,8 @@ struct HostEditor: View {
     .accessibilityAddTraits(selected ? [.isSelected] : [])
   }
 
+  /// A key picked here is written on Save and syncs with the host. A password
+  /// stays on this device.
   private func commit() {
     var saved = host
     if authentication == .password {
@@ -187,10 +197,25 @@ struct HostEditor: View {
     saved.label =
       host.label.trimmingCharacters(in: .whitespaces).isEmpty
       ? host.hostname : host.label
-    if authentication == .password {
-      saved.profile?.authentication.primary.purpose = .password
+    var written: UUID?
+    if authentication == .key, let pickedKey {
+      let id = UUID()
+      do {
+        try DeviceCredentialStore().write(pickedKey, id: id, label: saved.label)
+      } catch {
+        importProblem = error.localizedDescription
+        return
+      }
+      saved.credentialSecretID = id
+      saved.keyPath = nil
+      written = id
     }
-    if onSave(saved, authentication == .password ? password : "") { dismiss() }
+    if onSave(saved, authentication == .password ? password : "") {
+      dismiss()
+    } else if let written {
+      // Not saved, so nothing points at it.
+      try? DeviceCredentialStore().forget(written)
+    }
   }
 
   /// `~/.ssh/id_ed25519` reads better than the whole path, and the whole
@@ -206,9 +231,10 @@ struct HostEditor: View {
   /// picker is SwiftUI's `fileImporter` on both — one code path, and the one
   /// that already knows how to reach a document provider on a phone.
   ///
-  /// The path is stored, never the key. Reading happens at connect time, so a
-  /// key that moved or had its permissions tightened is noticed when there is
-  /// someone to tell (spec §18).
+  /// The key itself is kept, in this device's keychain, not the path: a file
+  /// picked here is reachable only for the moment the picker grants — always
+  /// so on a phone — and a path that reads fine now would fail at connect
+  /// time. Held until Save; `commit` writes it.
   func adoptKey(_ result: Result<[URL], Error>) {
     guard case .success(let urls) = result, let url = urls.first else { return }
 
@@ -219,11 +245,8 @@ struct HostEditor: View {
     defer { if reachable { url.stopAccessingSecurityScopedResource() } }
 
     do {
-      let pem = try String(contentsOf: url, encoding: .utf8)
-      let id = UUID()
-      try DeviceCredentialStore().write(pem, id: id, label: host.label)
-      host.credentialSecretID = id
-      host.keyPath = nil
+      pickedKey = try String(contentsOf: url, encoding: .utf8)
+      importProblem = nil
     } catch {
       importProblem = error.localizedDescription
     }

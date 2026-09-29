@@ -18,12 +18,14 @@
 mod auth;
 mod error;
 mod host;
+mod key;
 mod session;
 mod shell;
 
 pub use auth::{Challenge, KEYBOARD_INTERACTIVE_IS_GENERIC, Method, Prompt, Prompter};
 pub use error::SshError;
 pub use host::{Endpoint, HostKey, HostVerifier, RejectAll, Verdict};
+pub use key::{KeyDescription, KeyError, KeyUnlocker, PASSPHRASE_ATTEMPTS, PrivateKey};
 pub use session::{Connection, Session, Step};
 pub use shell::{Output, Shell, WindowSize};
 

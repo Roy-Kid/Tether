@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Tether
 import Testing
@@ -135,5 +136,85 @@ struct KnownHostsTests {
     #expect(known.entries.isEmpty)
     #expect(
       FileManager.default.fileExists(atPath: location.appendingPathExtension("unreadable").path))
+  }
+
+  // MARK: - System ssh's known_hosts
+
+  static let blob = Data("a host key".utf8)
+  static let other = Data("another host key".utf8)
+  static func system(_ text: String) -> SystemKnownHosts { SystemKnownHosts(text) }
+  static func seen(_ host: String = "lab.example", port: UInt16 = 22, key: Data = blob) -> HostIdentity {
+    HostIdentity(host: host, port: port, algorithm: "ssh-ed25519", fingerprint: SystemKnownHosts.fingerprint(key))
+  }
+
+  /// A host ssh has been reaching for years is not a stranger.
+  @Test("a key system ssh recorded is trusted")
+  func systemTrusted() {
+    let file = Self.system("lab.example,10.0.0.4 ssh-ed25519 \(Self.blob.base64EncodedString()) ada@mac\n")
+    #expect(file.verdict(for: Self.seen()) == .trusted)
+    #expect(file.verdict(for: Self.seen("10.0.0.4")) == .trusted)
+    #expect(file.verdict(for: Self.seen("elsewhere.example")) == nil)
+  }
+
+  /// `[host]:port` for anything but 22, hashed names, and wildcards.
+  @Test("ports, hashed names and patterns are read the way ssh writes them")
+  func systemForms() {
+    let key = Self.blob.base64EncodedString()
+    #expect(Self.system("[lab.example]:2222 ssh-ed25519 \(key)").verdict(for: Self.seen(port: 2222)) == .trusted)
+    #expect(Self.system("lab.example ssh-ed25519 \(key)").verdict(for: Self.seen(port: 2222)) == nil)
+    let salt = Data("0123456789abcdefghij".utf8)
+    let hash = Data(HMAC<Insecure.SHA1>.authenticationCode(for: Data("lab.example".utf8), using: SymmetricKey(data: salt)))
+    let hashed = "|1|\(salt.base64EncodedString())|\(hash.base64EncodedString()) ssh-ed25519 \(key)"
+    #expect(Self.system(hashed).verdict(for: Self.seen()) == .trusted)
+    #expect(Self.system(hashed).verdict(for: Self.seen("other.example")) == nil)
+    #expect(Self.system("*.example,!db.example ssh-ed25519 \(key)").verdict(for: Self.seen()) == .trusted)
+    #expect(Self.system("*.example,!db.example ssh-ed25519 \(key)").verdict(for: Self.seen("db.example")) == nil)
+  }
+
+  /// The same alarm ssh would raise, not a fresh first sighting.
+  @Test("a key that differs from ssh's record is a changed key")
+  func systemChanged() {
+    let file = Self.system("lab.example ssh-ed25519 \(Self.other.base64EncodedString())\n")
+    guard case .changed(let recorded)? = file.verdict(for: Self.seen()) else {
+      Issue.record("a different key of the same kind must be reported as changed")
+      return
+    }
+    #expect(recorded.source == "known_hosts")
+    #expect(recorded.fingerprint == SystemKnownHosts.fingerprint(Self.other))
+    #expect(Self.system("lab.example ssh-rsa \(Self.other.base64EncodedString())").verdict(for: Self.seen()) == nil,
+      "a key of another kind is not a contradiction; ssh would ask")
+    guard case .changed? = Self.system("@revoked lab.example ssh-ed25519 \(Self.blob.base64EncodedString())").verdict(for: Self.seen()) else {
+      Issue.record("a revoked key must never be trusted")
+      return
+    }
+  }
+
+  /// This app's own pin decides first; ssh's record only fills the gap.
+  @Test("the app's own pin outranks ssh's record")
+  func ownPinFirst() {
+    let location = temporaryFile("known_hosts.json")
+    defer { removeDirectory(of: location) }
+    let known = KnownHosts(location: location)
+    let file = Self.system("lab.example ssh-ed25519 \(Self.other.base64EncodedString())\n")
+    known.remember(Self.seen())
+    #expect(known.question(for: Self.seen(), system: file) == nil)
+    guard case .unknown? = known.question(for: Self.seen("fresh.example"), system: file) else {
+      Issue.record("an endpoint neither knows is unknown")
+      return
+    }
+  }
+
+  /// ssh treats a revoked key as revoked, whatever was accepted before.
+  @Test("a key ssh revoked outranks the app's own pin")
+  func revokedOutranksPin() {
+    let location = temporaryFile("known_hosts.json")
+    defer { removeDirectory(of: location) }
+    let known = KnownHosts(location: location)
+    known.remember(Self.seen())
+    let file = Self.system("@revoked lab.example ssh-ed25519 \(Self.blob.base64EncodedString())\n")
+    guard case .changed? = known.question(for: Self.seen(), system: file) else {
+      Issue.record("a revoked key must not be trusted")
+      return
+    }
   }
 }

@@ -147,16 +147,15 @@ final class ContinuityService {
     defer { preparing = false }
     do {
       let database = try await ready()
-      try await syncDeviceDirectory(database, local: local)
-      try await syncRevocations(database, local: local)
+      let records = try await everything(in: database)
+      try await syncDeviceDirectory(database, local: local, records: records)
+      try await syncRevocations(database, local: local, records: records)
       guard store?.snapshot.trust.localRevoked == false else { throw IdentityError.untrustedDevice }
-      let query = CKQuery(recordType: "TetherMessage", predicate: NSPredicate(format: "recipient == %@", local.id.uuidString))
-      let (records, _) = try await database.records(matching: query, inZoneWith: zone, resultsLimit: 100)
       var pending: [ApprovalRequest] = []
-      for (id, result) in records {
-        guard let record = try? result.get(), let data = record["envelope"] as? Data,
+      for record in records where record.recordType == "TetherMessage" && record["recipient"] as? String == local.id.uuidString {
+        guard let data = record["envelope"] as? Data,
           let envelope = try? JSONDecoder().decode(DeviceEnvelope.self, from: data) else { continue }
-        if envelope.header.expires <= Date() { _ = try? await database.deleteRecord(withID: id); continue }
+        if envelope.header.expires <= Date() { _ = try? await database.deleteRecord(withID: record.recordID); continue }
         guard envelope.header.kind == "otp-request", let sender = try? peer(envelope.header.sender),
           let request = try? envelope.open(ApprovalRequest.self, local: local, keys: keys(), peer: sender),
           request.id == envelope.header.id, request.sender == sender.id, request.recipient == local.id,
@@ -201,7 +200,22 @@ final class ContinuityService {
     } catch { problem = error.localizedDescription }
   }
 
-  private func syncDeviceDirectory(_ database: CKDatabase, local: DeviceCard) async throws {
+  /// Every record in the zone, read as changes since the beginning rather
+  /// than by query. A query needs an index on the field it filters and on
+  /// `recordName`, which a new container has only once someone adds them by
+  /// hand in the CloudKit console; a zone this small costs nothing to read whole.
+  private func everything(in database: CKDatabase) async throws -> [CKRecord] {
+    var token: CKServerChangeToken?
+    var records: [CKRecord] = []
+    while true {
+      let changes = try await database.recordZoneChanges(inZoneWith: zone, since: token)
+      records += changes.modificationResultsByID.values.compactMap { try? $0.get().record }
+      token = changes.changeToken
+      if !changes.moreComing { return records }
+    }
+  }
+
+  private func syncDeviceDirectory(_ database: CKDatabase, local: DeviceCard, records: [CKRecord]) async throws {
     let id = CKRecord.ID(recordName: local.id.uuidString, zoneID: zone)
     // Keep the directory public-material-only and explicitly untrusted.
     let record: CKRecord
@@ -209,15 +223,14 @@ final class ContinuityService {
     catch let error as CKError where error.code == .unknownItem { record = CKRecord(recordType: "TetherDevice", recordID: id) }
     let data = try JSONEncoder().encode(local)
     if record["card"] as? Data != data { record["card"] = data; _ = try await database.save(record) }
-    let (records, _) = try await database.records(matching: CKQuery(recordType: "TetherDevice", predicate: NSPredicate(value: true)), inZoneWith: zone, resultsLimit: 100)
-    discovered = records.compactMap { _, result in
-      guard let record = try? result.get(), let data = record["card"] as? Data,
+    discovered = records.filter { $0.recordType == "TetherDevice" }.compactMap { record in
+      guard let data = record["card"] as? Data,
         let card = try? JSONDecoder().decode(DeviceCard.self, from: data), card.id != local.id else { return nil }
       return card
     }
   }
 
-  private func syncRevocations(_ database: CKDatabase, local: DeviceCard) async throws {
+  private func syncRevocations(_ database: CKDatabase, local: DeviceCard, records: [CKRecord]) async throws {
     guard let store else { return }
     for (id, signed) in store.snapshot.trust.revocations {
       let notice = try JSONDecoder().decode(DeviceRevocation.self, from: signed.payload)
@@ -230,10 +243,8 @@ final class ContinuityService {
       record["notice"] = try JSONEncoder().encode(signed)
       _ = try await database.save(record)
     }
-    let query = CKQuery(recordType: "TetherRevocation", predicate: NSPredicate(format: "recipient == %@", local.id.uuidString))
-    let (records, _) = try await database.records(matching: query, inZoneWith: zone, resultsLimit: 100)
-    for (_, result) in records {
-      guard let record = try? result.get(), let sender = record["issuer"] as? String,
+    for record in records where record.recordType == "TetherRevocation" && record["recipient"] as? String == local.id.uuidString {
+      guard let sender = record["issuer"] as? String,
         let senderID = UUID(uuidString: sender), let peer = try? peer(senderID),
         let data = record["notice"] as? Data,
         let signed = try? JSONDecoder().decode(SignedDeviceRevocation.self, from: data),

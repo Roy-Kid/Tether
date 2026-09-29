@@ -55,20 +55,28 @@ final class AuthenticationCoordinator {
 
   func connect(columns: UInt16, rows: UInt16) async throws -> TerminalSession {
     defer { password = "" }
-    if let issue = host.connectionProblem { throw IdentityError.storage(issue) }
+    if let issue = host.connectionProblem ?? host.routeProblem { throw IdentityError.storage(issue) }
     if let profile = host.profile { try profile.validate() }
     var offered: [Credential] = []
-    // No default key discovery for a managed identity.
-    if let id = host.credentialSecretID, host.profile?.authentication.primary.purpose == .ssh {
-      offered.append(.privateKey(pem: try credentials.read(id)))
+    // What each key is called, by its place in `offered`: the SDK names a
+    // key it could not use by position, and a person knows it by its file.
+    var keyNames: [Int: String] = [:]
+    func offer(_ pem: String, named name: String) {
+      keyNames[offered.count] = name
+      offered.append(.privateKey(pem: pem, unlock: Unlock(owner: self, name: name)))
+    }
+    // This device's key, whatever the other devices use. No default key
+    // discovery for a managed identity: its key is the one bound here.
+    if let id = host.credentialSecretID {
+      offer(try credentials.read(id), named: "\(host.label) key")
     } else {
-      let paths = host.isManaged ? host.keyPath.map { [$0] } ?? [] : identityFiles(for: host)
+      let paths = !host.isManaged || host.usesDefaultKeys
+        ? identityFiles(for: host) : host.keyPath.map { [$0] } ?? []
       for path in paths {
-        do { offered.append(.privateKey(pem: try String(contentsOfFile: expandingTilde(path), encoding: .utf8))) }
+        do { offer(try String(contentsOfFile: expandingTilde(path), encoding: .utf8), named: keyName(path)) }
         catch { if host.keyPath != nil { throw IdentityError.missingCredential } }
       }
     }
-    if host.profile?.authentication.primary.purpose == .ssh && offered.isEmpty { throw IdentityError.missingCredential }
     keysOffered = !offered.isEmpty
     // After the keys, so a key that works is used first; still offered, so a
     // server that wants a password gets the one the person gave.
@@ -79,7 +87,7 @@ final class AuthenticationCoordinator {
       session = try await TerminalSession.connect(to: Destination(host: host.hostname, port: host.port,
         user: host.username, columns: columns, rows: rows), trusting: Verification(owner: self), offering: offered)
     } catch {
-      throw refusal ?? error
+      throw refusal ?? namingSkippedKeys(error, keyNames)
     }
     passwordProven = savedPasswordAnswered || !keysOffered
     if host.profile?.authentication.otp != nil && !otpRequested {
@@ -93,10 +101,11 @@ final class AuthenticationCoordinator {
   func verify(_ identity: HostIdentity) async -> Bool {
     guard !cancelled, identity.host == host.hostname, identity.port == host.port else { return false }
     switch known.question(for: identity) {
-    case .changed?:
+    case .changed(let recorded)?:
       // A changed server key never silently replaces an existing pin. Removing
-      // the old pin is an explicit Security settings operation.
-      refuse(IdentityError.hostKeyChanged)
+      // the old pin is an explicit Security settings operation — or, for one
+      // system ssh recorded, `ssh-keygen -R`.
+      refuse(recorded.source == nil ? IdentityError.hostKeyChanged : IdentityError.systemHostKeyChanged)
       return false
     case .unknown?:
       guard await question(.trust(identity)) != nil, !cancelled else { return false }
@@ -185,6 +194,18 @@ final class AuthenticationCoordinator {
     }
   }
 
+  /// One key's passphrase. Asked only once the server has said it would
+  /// take the key, where the key's format lets it be asked first — and only
+  /// after the host is verified and the login approved, like every other
+  /// question a login asks. `nil` is a no, and ends the login as one.
+  func passphrase(forKey name: String, _ key: LockedKey, attempt: Int) async -> String? {
+    guard verified, authorized, !cancelled, !Task.isCancelled else { return nil }
+    let notice = attempt > 1 ? "The passphrase was not accepted." : nil
+    let asked = HandshakeQuestion.passphrase(key: name, fingerprint: key.fingerprint, notice: notice)
+    guard let typed = await question(asked), let passphrase = typed.first, !cancelled else { return nil }
+    return passphrase
+  }
+
   /// Asks, for as long as a person has to answer. `nil` is a no: declined,
   /// unanswered in time, or withdrawn because this attempt was.
   private func question(_ question: HandshakeQuestion) async -> [String]? {
@@ -241,10 +262,39 @@ final class AuthenticationCoordinator {
     let owner: AuthenticationCoordinator
     func trusts(_ host: HostIdentity) async -> Bool { await owner.verify(host) }
   }
+  private struct Unlock: KeyUnlocker {
+    let owner: AuthenticationCoordinator
+    let name: String
+    func passphrase(for key: LockedKey, attempt: Int) async -> String? {
+      await owner.passphrase(forKey: name, key, attempt: attempt)
+    }
+  }
   private struct Interactive: AuthPrompter {
     let owner: AuthenticationCoordinator
     func answer(instruction: String, prompts: [AuthPrompt]) async -> [String] {
       await owner.answer(instruction: instruction, prompts: prompts)
     }
   }
+}
+
+/// What a person calls a key file: its name, as `ls ~/.ssh` shows it.
+func keyName(_ path: String) -> String {
+  let name = (path as NSString).lastPathComponent
+  return name.isEmpty ? path : name
+}
+
+/// A refused login that left keys out says which, by the names this device
+/// knows them by. Anything else passes through untouched — a
+/// `TetherError` stays one, because what it is decides what the person is
+/// offered next.
+func namingSkippedKeys(_ error: Error, _ keyNames: [Int: String]) -> Error {
+  guard case TetherError.authenticationFailed(let remaining, let skipped) = error, !skipped.isEmpty else {
+    return error
+  }
+  let named = skipped.map { key in
+    var key = key
+    key.name = key.name ?? keyNames[key.position]
+    return key
+  }
+  return TetherError.authenticationFailed(remaining: remaining, skipped: named)
 }

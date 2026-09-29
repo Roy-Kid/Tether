@@ -1,6 +1,3 @@
-#if os(macOS)
-  import NervePlugin
-#endif
 #if os(iOS)
   import UIKit
 #endif
@@ -29,9 +26,6 @@ struct TetherApp: App {
     let registry = PluginRegistry()
     registry.register(TmuxPlugin())
     registry.register(FilesPlugin())
-    #if os(macOS)
-      registry.register(NervePlugin())
-    #endif
     return registry
   }()
 
@@ -73,6 +67,7 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        store.sweepCredentials()
         await store.startSync()
         await Task.yield()
         // The command line wins. Someone who typed `--open lab` asked for a
@@ -91,10 +86,15 @@ struct TetherApp: App {
         }
       }
       .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }
-      // User-owned SSH entries are re-read on the way back to the front. A
-      // stanza added in an editor shows up here and is not rewritten.
+      // `~/.ssh/config` is read again on the way back to the front: a stanza
+      // added or changed in an editor meanwhile reaches the library, and
+      // every device, from here.
       .onChange(of: phase) { _, phase in
-        if phase == .active { store.reload(); Task { await store.startSync(); await store.syncNow() } }
+        if phase == .active {
+          store.reload()
+          store.reconcile()
+          Task { await store.startSync(); await store.syncNow() }
+        }
       }
       #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in

@@ -73,12 +73,8 @@ struct Sidebar: View {
               // kind of host — a host with nothing left to decide.
               if !host.isLocal {
                 Button("Identity and Authentication…") { identityHost = host }
-                if host.isManaged {
-                  Button("Edit…") { onEdit(host) }
-                  Button("Delete host", role: .destructive) { store.delete(host) }
-                } else {
-                  Button("Add to Tether") { store.adopt(host) }
-                }
+                Button("Edit…") { onEdit(host) }
+                Button("Delete host", role: .destructive) { store.delete(host) }
               }
             }
         }
@@ -118,7 +114,7 @@ struct Sidebar: View {
         }
       }
     }
-    .modifier(SidebarActions(onNew: onNew, onSettings: onSettings, onDone: onDone))
+    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings, onDone: onDone))
     .navigationTitle(onDone == nil ? "Tether" : "Hosts")
   }
 }
@@ -191,6 +187,7 @@ extension ButtonStyle where Self == IconOnlyButtonStyle {
 }
 
 private struct SidebarActions: ViewModifier {
+  let store: HostStore
   let onNew: () -> Void
   let onSettings: () -> Void
   let onDone: (() -> Void)?
@@ -202,6 +199,8 @@ private struct SidebarActions: ViewModifier {
           Button("Add host", systemImage: "plus", action: onNew)
             .labelStyle(.iconOnly)
             .help("Add host")
+          SyncButton(store: store)
+            .labelStyle(.iconOnly)
           Spacer()
           if let onDone {
             Button("Done", action: onDone)
@@ -220,6 +219,10 @@ private struct SidebarActions: ViewModifier {
             .labelStyle(.iconOnly)
         }
         ToolbarItem(placement: .topBarTrailing) {
+          SyncButton(store: store)
+            .labelStyle(.iconOnly)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
           Button(action: onNew) {
             Label("Add host", systemImage: "plus")
           }
@@ -233,4 +236,35 @@ private struct SidebarActions: ViewModifier {
       }
     #endif
   }
+}
+
+/// Brings this device up to date now: on a Mac, its SSH configuration into
+/// the library first, then the library through iCloud both ways. A person
+/// who asked is told when it could not, in the one way the app tells anyone
+/// anything.
+struct SyncButton: View {
+  let store: HostStore
+  @State private var failure: SyncFailure?
+
+  var body: some View {
+    Button {
+      Task {
+        await store.syncEverything()
+        if let reason = store.syncFailure { failure = SyncFailure(message: reason) }
+      }
+    } label: {
+      Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+        .symbolEffect(.rotate, options: .repeating, isActive: store.syncing)
+    }
+    .disabled(store.syncing)
+    .help("Sync")
+    .dialog(for: failure) { shown in
+      Dialog.notice("Could not sync", message: shown.message) { failure = nil }
+    }
+  }
+}
+
+struct SyncFailure: Hashable {
+  let id = UUID()
+  let message: String
 }

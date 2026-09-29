@@ -34,8 +34,10 @@ public enum TetherError: Error, Equatable, Sendable, LocalizedError {
     /// sent: this is not a failed login.
     case hostRejected(endpoint: String)
     /// What the server said it would still accept, so an application can say
-    /// "this host wants a key" rather than "login failed".
-    case authenticationFailed(remaining: [String])
+    /// "this host wants a key" rather than "login failed" — and the keys that
+    /// were never used, with why. `remaining` is empty when nothing reached
+    /// the server to be refused: every key given was unusable.
+    case authenticationFailed(remaining: [String], skipped: [SkippedKey] = [])
     /// The credential was *accepted* and another factor is wanted, but none
     /// was left to offer. Telling someone their password was wrong when it
     /// was right is its own failure.
@@ -67,10 +69,11 @@ public enum TetherError: Error, Equatable, Sendable, LocalizedError {
             return "Could not reach the host. \(cause)"
         case .hostRejected:
             return "The host key was not trusted."
-        case .authenticationFailed(let remaining):
-            return remaining.isEmpty
+        case .authenticationFailed(let remaining, let skipped):
+            let refused = remaining.isEmpty
                 ? "Authentication failed."
                 : "Authentication failed. The server accepts: \(remaining.joined(separator: ", "))."
+            return ([refused] + skipped.map(\.sentence)).joined(separator: " ")
         case .moreFactorsNeeded(let remaining):
             return "Another factor is needed: \(remaining.joined(separator: ", "))."
         case .nothingToOffer:
@@ -87,6 +90,66 @@ public enum TetherError: Error, Equatable, Sendable, LocalizedError {
             let cause = cause.trimmingCharacters(in: .whitespacesAndNewlines)
             return cause.isEmpty ? "Protocol failure." : cause
         }
+    }
+}
+
+/// Why a private key could not be used.
+public enum KeyProblem: Sendable, Equatable, CustomStringConvertible {
+    /// Not a private key in a format this build reads. `cause` is the
+    /// parser's own words, for diagnostics rather than for a person.
+    case unreadable(cause: String)
+    /// A kind this build cannot sign with — a hardware security key, whose
+    /// private half never leaves the device, or DSA.
+    case unsupported(what: String)
+    /// Protected by a passphrase, and nothing was given to ask for it.
+    case locked
+    /// Every passphrase offered for it was wrong.
+    case wrongPassphrase
+
+    /// A clause, to follow a key's name.
+    public var description: String {
+        switch self {
+        case .unreadable: "it is not a private key that can be read"
+        case .unsupported(let what): "\(what) are not supported"
+        case .locked: "it needs a passphrase that was not given"
+        case .wrongPassphrase: "the passphrase was not accepted"
+        }
+    }
+}
+
+/// A private key that was left out of a login, and why.
+public struct SkippedKey: Sendable, Equatable {
+    /// Its place among the credentials offered, counting from zero — which
+    /// is how an application that built that list finds the file.
+    public let position: Int
+    /// `SHA256:…`, when the key could be read far enough to have one.
+    public let fingerprint: String?
+    public let problem: KeyProblem
+    /// What a person calls it. Tether never learns a file name; an
+    /// application that knows one sets it, and the error's sentence uses it.
+    public var name: String?
+
+    public init(position: Int, fingerprint: String?, problem: KeyProblem, name: String? = nil) {
+        self.position = position
+        self.fingerprint = fingerprint
+        self.problem = problem
+        self.name = name
+    }
+
+    /// One sentence: which key, and why it was not used.
+    var sentence: String {
+        "\(name ?? fingerprint ?? "A key") was not used: \(problem)."
+    }
+
+    init(_ skipped: TetherFFIBindings.SkippedKey) {
+        let problem: KeyProblem =
+            switch skipped.problem {
+            case .unreadable(let cause): .unreadable(cause: cause)
+            case .unsupported(let what): .unsupported(what: what)
+            case .locked: .locked
+            case .wrongPassphrase: .wrongPassphrase
+            }
+        self.init(position: Int(skipped.position), fingerprint: skipped.fingerprint, problem: problem)
     }
 }
 
@@ -174,7 +237,8 @@ extension Tether {
         case .TimedOut(let millis): .timedOut(millis: millis)
         case .Unreachable(let endpoint, let cause): .unreachable(endpoint: endpoint, cause: cause)
         case .HostRejected(let endpoint): .hostRejected(endpoint: endpoint)
-        case .AuthenticationFailed(let remaining): .authenticationFailed(remaining: remaining)
+        case .AuthenticationFailed(let remaining, let skipped):
+            .authenticationFailed(remaining: remaining, skipped: skipped.map(SkippedKey.init))
         case .MoreFactorsNeeded(let remaining): .moreFactorsNeeded(remaining: remaining)
         case .NothingToOffer: .nothingToOffer
         case .ShellRefused(let cause): .shellRefused(cause: cause)

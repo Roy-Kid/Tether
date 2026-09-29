@@ -23,7 +23,7 @@ private final class Person {
     asked.append(question)
     switch question {
     case .trust, .confirmation: return []
-    case .prompts: return replies.isEmpty ? nil : replies.removeFirst()
+    case .prompts, .passphrase: return replies.isEmpty ? nil : replies.removeFirst()
     }
   }
 

@@ -13,8 +13,6 @@ let package = Package(
         .package(path: "Packages/TetherFrontend"),
         .package(path: "Plugins/Tmux"),
         .package(path: "Plugins/Files"),
-        .package(path: "../../nerve/surfaces/tether"),
-        .package(path: "../../nerve/surfaces/ribbon"),
     ],
     targets: [
         .executableTarget(
@@ -25,12 +23,6 @@ let package = Package(
                 .product(name: "TetherPluginKit", package: "TetherFrontend"),
                 .product(name: "TmuxPlugin", package: "Tmux"),
                 .product(name: "FilesPlugin", package: "Files"),
-                .product(
-                    name: "NervePlugin", package: "tether",
-                    condition: .when(platforms: [.macOS])),
-                .product(
-                    name: "NerveRibbonUI", package: "ribbon",
-                    condition: .when(platforms: [.macOS])),
             ]
         ),
         .testTarget(name: "TetherAppTests", dependencies: ["TetherApp"])

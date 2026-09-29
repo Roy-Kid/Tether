@@ -163,12 +163,43 @@ public protocol HostTrust: Sendable {
   func trusts(_ host: HostIdentity) async -> Bool
 }
 
+/// A private key that needs its passphrase, as a person is shown it.
+public struct LockedKey: Sendable, Equatable {
+  /// The `SHA256:…` form `ssh-keygen -l` prints. `nil` for the formats that
+  /// keep even the public half behind the passphrase.
+  public let fingerprint: String?
+  /// The key's own comment, often `user@host`. Empty when the format
+  /// encrypts it along with the key.
+  public let comment: String
+
+  public init(fingerprint: String?, comment: String) {
+    self.fingerprint = fingerprint
+    self.comment = comment
+  }
+}
+
+/// Supplies a private key's passphrase, when and only when a login needs it.
+///
+/// Asked from the middle of a handshake. Where the key's format allows, the
+/// server has already said it would take this key — a person is never asked
+/// to unlock a key that was not going to be used.
+public protocol KeyUnlocker: Sendable {
+  /// `attempt` counts from 1; a second call means the first passphrase was
+  /// wrong. `nil` is the person's no, which ends the login as a decline.
+  func passphrase(for key: LockedKey, attempt: Int) async -> String?
+}
+
 /// Something to authenticate with. Offered in the order given, which is how
 /// "a key, then a one-time code" is expressed: two credentials, one login.
 public enum Credential: Sendable {
   case password(String)
   /// PEM text, so a key in a keychain item never has to reach the disk.
-  case privateKey(pem: String, passphrase: String? = nil)
+  ///
+  /// A key protected by a passphrase is unlocked with `passphrase` if one is
+  /// given, and otherwise by asking `unlock`. With neither it is left out,
+  /// and named in the error if the login then fails — as is a key that
+  /// cannot be read at all, which no longer costs the credentials after it.
+  case privateKey(pem: String, passphrase: String? = nil, unlock: (any KeyUnlocker)? = nil)
   case interactive(any AuthPrompter)
 }
 
@@ -518,10 +549,24 @@ private func secret(_ credential: Credential) -> TetherFFIBindings.Secret {
   switch credential {
   case .password(let password):
     .password(password: password)
-  case .privateKey(let pem, let passphrase):
-    .privateKey(pem: pem, passphrase: passphrase)
+  case .privateKey(let pem, let passphrase, let unlock):
+    .privateKey(pem: pem, passphrase: passphrase, unlock: unlock.map(UnlockBridge.init))
   case .interactive(let prompter):
     .interactive(prompter: PrompterBridge(prompter))
+  }
+}
+
+/// Bridges a consumer's `KeyUnlocker` onto the generated callback
+/// interface, so a generated type never appears in a signature a consumer
+/// writes.
+final class UnlockBridge: TetherFFIBindings.PassphrasePrompter {
+  private let inner: any KeyUnlocker
+
+  init(_ inner: any KeyUnlocker) { self.inner = inner }
+
+  func passphrase(key: TetherFFIBindings.LockedKey, attempt: UInt32) async -> String? {
+    await inner.passphrase(
+      for: LockedKey(fingerprint: key.fingerprint, comment: key.comment), attempt: Int(attempt))
   }
 }
 

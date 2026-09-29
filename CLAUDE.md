@@ -88,16 +88,27 @@ swift test --package-path swift                        # the SDK's Swift facade
 swift test --package-path app/Packages/TetherFrontend  # frontend, incl. render cost
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
-swift test --package-path app                          # the app's own state, local only
+swift test --package-path app                          # the app's own state
 ```
 
-CI runs everything above except the last: the app links whichever extensions a
-person has, some of which live outside this repository, and Tether's CI must
-not fail for something that is not Tether. Nothing in any suite touches the
-system keychain.
+CI runs everything above. The app links nothing from outside this repository;
+its plugins are the built-in ones. Nothing in any suite touches the system
+keychain.
 
 iOS targets are not installed by default:
 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
+
+iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs.
+The app is `Roy-Kid.Tether` with container `iCloud.Roy-Kid.Tether`, both
+registered to the team that ships it (`dev.tether.app` belongs to someone
+else). Profiles come from Xcode's own store, asked for once per machine and
+again when they expire:
+
+```bash
+./scripts/tether.sh --provision --team <TEAMID>          # needs xcodegen + Xcode signed in
+./scripts/tether.sh --build-app --team <TEAMID>          # or export TETHER_TEAM
+./scripts/tether.sh --build-app-ios --phone "<name>" --team <TEAMID>
+```
 
 Two things run on demand rather than on every change:
 
@@ -140,10 +151,19 @@ A session also leases a `Connection` — the right to run *another* command wher
 its shell is running. SSH answers with a second channel and
 this machine with a second process, so tmux works on both and is written once.
 
-Managed hosts live in the app's identity library and sync as configuration,
-not as secrets. `~/.ssh/config` stays the import and the
-interoperability file: entries this app does not own are left in place, and
-the file is edited rather than regenerated.
+There is one kind of host, and one source of truth: the host library,
+synchronized through iCloud. A host that arrives from another device on the
+same Apple ID is trusted — no review. Private keys travel with that library,
+so the other device logs in with the same key; a host with none gets one
+from Create SSH Key, and that key syncs too. Passwords stay on the device
+that saved them. A deleted host takes its keys out of the keychain. On a Mac
+`~/.ssh/config`
+feeds the library (`ConfigImport`): a new stanza is added, an edited stanza
+updates its host, a stanza taken out leaves its host in place. Nothing under
+`~/.ssh` is ever written: a change or deletion in Tether stays in Tether, and
+a stanza nobody touched never undoes it. The sync button reads the whole
+library through iCloud again. `~/.ssh/known_hosts` vouches for keys ssh
+already trusts, and objects to ones it does not.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the

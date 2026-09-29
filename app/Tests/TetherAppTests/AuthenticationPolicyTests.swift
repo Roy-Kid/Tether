@@ -30,6 +30,7 @@ struct AuthenticationPolicyTests {
         case .trust: asked.append("trust"); return []
         case .confirmation: asked.append("confirm"); return []
         case .prompts: asked.append("manual"); return nil
+        case .passphrase: asked.append("passphrase"); return nil
         }
       })
     let prompt = AuthPrompt(text: "Verification code:", echo: false)

@@ -22,7 +22,7 @@ import struct TetherApp.Host
 struct LocalHostTests {
   static func store() -> (HostStore, URL) {
     let location = temporaryFile("config")
-    return (HostStore(location: location, secrets: MemorySecrets()), location)
+    return (HostStore(location: location, secrets: MemorySecrets(), credentials: DeviceCredentialStore(secrets: MemorySecrets())), location)
   }
 
   static func host(_ label: String = "lab") -> Host {

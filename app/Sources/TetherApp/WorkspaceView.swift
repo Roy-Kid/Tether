@@ -689,23 +689,13 @@ extension RootView {
   /// in the list: a login can outlive the host it was for, and a deleted
   /// host must not come back through its keychain item.
   ///
-  /// A managed host keeps it through its record. A host from `ssh_config`
-  /// has no record to edit — the keychain is where its flag comes from.
+  /// Kept through the host's record, like everything else about it.
   private func keep(_ password: String, for host: Host) {
     guard let host = store.hosts.first(where: { $0.id == host.id }) else {
       notSaved("This host is no longer in the list.")
       return
     }
-    if host.isManaged {
-      if !store.save(host, password: password) { notSaved(store.problem) }
-      return
-    }
-    do {
-      try secrets.remember(password, for: host)
-      store.reload()
-    } catch {
-      notSaved(message(for: error))
-    }
+    if !store.save(host, password: password) { notSaved(store.problem) }
   }
 
   private func notSaved(_ problem: String?) {

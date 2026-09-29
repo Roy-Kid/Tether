@@ -83,7 +83,7 @@ async fn a_refused_credential_reports_what_the_server_still_wants() {
         dial(&server).connect(vec![Credential::Password("not the password".into())]).await;
 
     match outcome {
-        Err(DialError::Refused { remaining }) => {
+        Err(DialError::Refused { remaining, .. }) => {
             assert!(
                 remaining.iter().any(|method| method == "publickey"),
                 "the test server accepts keys and should say so: {remaining:?}"
@@ -102,7 +102,7 @@ async fn a_later_credential_is_reached_after_an_earlier_one_is_refused() {
     let session = dial(&server)
         .connect(vec![
             Credential::Password("wrong".into()),
-            Credential::PrivateKey { pem: server.key.clone(), passphrase: None },
+            Credential::PrivateKey { pem: server.key.clone(), passphrase: None, unlock: None },
         ])
         .await
         .expect("the key should be reached and accepted");
@@ -111,8 +111,8 @@ async fn a_later_credential_is_reached_after_an_earlier_one_is_refused() {
     session.close().await.expect("closes cleanly");
 }
 
-/// An unusable key is a protocol-level complaint about the key itself, not a
-/// rejection by the server — nothing was offered to it.
+/// An unusable key is a complaint about the key itself, not a rejection by
+/// the server — nothing was offered to it, and nothing was dialled for it.
 #[tokio::test]
 async fn a_key_that_cannot_be_parsed_says_so_rather_than_blaming_the_server() {
     let server = server_or_skip!();
@@ -121,15 +121,20 @@ async fn a_key_that_cannot_be_parsed_says_so_rather_than_blaming_the_server() {
         .connect(vec![Credential::PrivateKey {
             pem: "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a key\n".into(),
             passphrase: None,
+            unlock: None,
         }])
         .await;
 
     match outcome {
-        Err(DialError::Ssh(error)) => {
-            let text = error.to_string();
-            assert!(text.contains("unusable key"), "unhelpful: {text}");
+        Err(DialError::Unusable { skipped }) => {
+            assert_eq!(skipped.len(), 1);
+            assert!(
+                matches!(skipped[0].problem, tether_core::ssh::KeyError::Unreadable { .. }),
+                "unhelpful: {:?}",
+                skipped[0].problem
+            );
         }
-        other => panic!("expected an Ssh error about the key, got {other:?}"),
+        other => panic!("expected the key named as unusable, got {other:?}"),
     }
 }
 
@@ -138,8 +143,11 @@ async fn a_key_that_cannot_be_parsed_says_so_rather_than_blaming_the_server() {
 #[test]
 fn a_credential_never_prints_what_it_holds() {
     let password = Credential::Password("hunter2".into());
-    let key =
-        Credential::PrivateKey { pem: "PRIVATE MATERIAL".into(), passphrase: Some("s".into()) };
+    let key = Credential::PrivateKey {
+        pem: "PRIVATE MATERIAL".into(),
+        passphrase: Some("s".into()),
+        unlock: None,
+    };
 
     for credential in [&password, &key] {
         let printed = format!("{credential:?}");

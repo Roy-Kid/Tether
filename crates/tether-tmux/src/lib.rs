@@ -450,11 +450,14 @@ impl Driver {
                         } else {
                             b"\x1b[?1l"
                         });
-                        pane.terminal.feed(if values[4] == "1" {
-                            b"\x1b[?2004h"
-                        } else {
-                            b"\x1b[?2004l"
-                        });
+                        // tmux before 3.7 has no bracket_paste_flag and expands
+                        // the name to nothing. Treating that as off clears a
+                        // mode the server could not report.
+                        match values[4] {
+                            "1" => pane.terminal.feed(b"\x1b[?2004h"),
+                            "0" => pane.terminal.feed(b"\x1b[?2004l"),
+                            _ => {}
+                        }
                         pane.terminal.feed(if values[5] == "1" {
                             b"\x1b[?7h"
                         } else {

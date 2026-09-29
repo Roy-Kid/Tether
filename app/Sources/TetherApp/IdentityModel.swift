@@ -41,6 +41,14 @@ struct HostProfile: Codable, Hashable, Identifiable, Sendable {
   var tags: [String] = []
   var jumpHosts: [UUID] = []
   var authentication: AuthenticationProfile
+  /// When a person last changed it, wherever they did: in Tether, or in a
+  /// Mac's SSH configuration — then it is the file's modification time. What
+  /// decides between two edits that crossed.
+  var modified: Date?
+  /// Settings of the SSH configuration it came from that Tether cannot
+  /// follow yet — a jump host, a proxy command. Such a host is still one of
+  /// the hosts; it just cannot be reached from here except by `ssh` itself.
+  var unsupported: [String]?
 
   func validate() throws {
     guard !hostname.isEmpty, !username.isEmpty, port > 0,
@@ -68,6 +76,7 @@ struct HostProfile: Codable, Hashable, Identifiable, Sendable {
     var copy = self
     copy.label = ""
     copy.tags = []
+    copy.modified = nil
     return SHA256.hash(data: (try? encoder.encode(copy)) ?? Data()).map { String(format: "%02x", $0) }.joined()
   }
 }
@@ -77,6 +86,31 @@ struct LocalCredentialBinding: Codable, Hashable, Sendable {
   var keyPath: String?
   var secretID: UUID?
   var publicKey: String?
+  /// This device logs in the way `ssh` does here with no `IdentityFile`:
+  /// with whichever default key files exist. What an ssh-config entry that
+  /// names no key becomes when it is added to Tether.
+  var defaultKeys: Bool?
+}
+
+/// A UUID that is a function of `name`: the same name, on any device, is
+/// the same identifier. Marked as name-based (version 5) rather than random.
+func nameBasedUUID(_ name: String) -> UUID {
+  var digest = Array(SHA256.hash(data: Data(name.utf8)).prefix(16))
+  digest[6] = (digest[6] & 0x0F) | 0x50
+  digest[8] = (digest[8] & 0x3F) | 0x80
+  return UUID(uuid: (digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+    digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]))
+}
+
+extension CredentialDescriptor {
+  /// The one-time-code credential a host has, named after the host rather
+  /// than invented: two devices setting up the same host's code before they
+  /// have synchronized then agree on it, instead of each binding its seed to
+  /// an identifier the other side's settings will replace.
+  static func oneTimeCode(for profile: HostProfile) -> CredentialDescriptor {
+    CredentialDescriptor(id: nameBasedUUID("totp:" + profile.id.uuidString),
+      identityID: profile.authentication.identity.id, purpose: .totp)
+  }
 }
 
 struct FieldConflict: Codable, Hashable, Sendable {
@@ -90,9 +124,19 @@ struct SharedHostRecord: Codable, Sendable {
   var profile: HostProfile
   var base: HostProfile?
   var deleted = false
+  /// Gone because iCloud removed it — a purged or reset library, a record
+  /// deleted without a tombstone — rather than because a person deleted it.
+  /// The keys this device made for it are kept: they never left the device,
+  /// and nobody chose to throw them away.
+  var vanished: Bool?
   var dirty = true
   var conflicts: [String: FieldConflict] = [:]
   var systemFields: Data?
+  /// SHA-256 of the private key last sent or received for this host, or
+  /// `cleared` once someone removed it. The digest only — never the key.
+  var syncedKeyDigest: String?
+  /// The next sync withdraws the shared private key.
+  var forgetSharedKey: Bool?
 
   mutating func merge(_ remote: HostProfile, deleted remoteDeleted: Bool, systemFields: Data?) throws {
     guard remote.id == profile.id else { throw IdentityError.invalidConfiguration }
@@ -105,9 +149,16 @@ struct SharedHostRecord: Codable, Sendable {
       conflicts = [:]
       return
     }
-    let local = try Self.fields(profile)
-    let other = try Self.fields(remote)
-    let ancestor = try base.map(Self.fields) ?? [:]
+    // When it changed is not something two edits disagree about; the later
+    // of the two is simply when it last changed.
+    let latest = [profile.modified, remote.modified].compactMap { $0 }.max()
+    let remoteIsNewer = (remote.modified ?? .distantPast) > (profile.modified ?? .distantPast)
+    var local = try Self.fields(profile)
+    var other = try Self.fields(remote)
+    var ancestor = try base.map(Self.fields) ?? [:]
+    for key in ["modified"] {
+      local.removeValue(forKey: key); other.removeValue(forKey: key); ancestor.removeValue(forKey: key)
+    }
     var merged = local
     for key in Set(local.keys).union(other.keys) {
       if local[key] == other[key] {
@@ -116,13 +167,24 @@ struct SharedHostRecord: Codable, Sendable {
         merged[key] = other[key]
         conflicts.removeValue(forKey: key)
       } else if other[key] != ancestor[key] {
-        conflicts[key] = FieldConflict(local: local[key], remote: other[key])
+        // Where a host is and what it is called, two edits settle by which
+        // came last. How it authenticates never does: half of one policy and
+        // half of another could let in a login nobody chose.
+        if Self.settledByTime.contains(key) {
+          if remoteIsNewer { merged[key] = other[key] }
+          conflicts.removeValue(forKey: key)
+        } else {
+          conflicts[key] = FieldConflict(local: local[key], remote: other[key])
+        }
       }
     }
     profile = try Self.profile(merged)
+    profile.modified = latest
     base = remote
     dirty = profile != remote
   }
+
+  private static let settledByTime: Set<String> = ["label", "hostname", "username", "port", "tags", "unsupported"]
 
   mutating func resolve(useRemote: Bool) throws {
     var fields = try Self.fields(profile)
@@ -149,6 +211,8 @@ enum IdentityError: LocalizedError {
   /// The server's key is not the one pinned for it. Not a question to answer
   /// mid-login: someone rotating a key and someone in the middle look alike.
   case hostKeyChanged
+  /// The same, where the key on record is system ssh's, in `known_hosts`.
+  case systemHostKeyChanged
   /// A question the login asked went unanswered for too long.
   case unanswered
   /// A question the login asked could not be put on screen.
@@ -163,6 +227,7 @@ enum IdentityError: LocalizedError {
     case .expired: "The authentication request expired."
     case .untrustedDevice: "This device is not authorized for this operation."
     case .hostKeyChanged: "This host’s key has changed. Forget the old key in Settings to trust the new one."
+    case .systemHostKeyChanged: "This host’s key differs from the one ssh recorded in known_hosts."
     case .unanswered: "No answer in time."
     case .unshown: "The login asked a question that could not be shown."
     }

@@ -33,6 +33,19 @@ final class IdentityDatabase {
     return try JSONDecoder().decode(type, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))))
   }
 
+  /// Every library this database holds, and the pointer to the active one.
+  func scopes() throws -> [String] {
+    let statement = try prepare("SELECT scope FROM state")
+    defer { sqlite3_finalize(statement) }
+    var scopes: [String] = []
+    while true {
+      let result = sqlite3_step(statement)
+      if result == SQLITE_DONE { return scopes }
+      guard result == SQLITE_ROW, let text = sqlite3_column_text(statement, 0) else { throw failure() }
+      scopes.append(String(cString: text))
+    }
+  }
+
   func write<T: Encodable>(_ value: T, scope: String) throws {
     let data = try JSONEncoder().encode(value)
     try execute("BEGIN IMMEDIATE")
@@ -67,8 +80,41 @@ struct IdentitySnapshot: Codable {
   var bindings: [UUID: LocalCredentialBinding] = [:]
   var approvals: [UUID: String] = [:]
   var passwordBindings: [UUID: UUID] = [:]
+  /// Before imports were tracked: which ssh-config alias an added host came from.
   var adoptedAliases: [String: UUID] = [:]
+  /// Which library host each stanza of this Mac's SSH configuration became.
+  var imports: [String: ImportLink]?
   var syncState: Data?
   var trust = DeviceTrustState()
   var authorizations: [UUID: RemoteAuthorization] = [:]
+}
+
+extension IdentitySnapshot {
+  /// Keychain items this library points at: private keys, one-time-code
+  /// seeds, and this device's approval identity.
+  var credentialSecrets: Set<UUID> {
+    Set(bindings.values.compactMap(\.secretID)).union([trust.secretID].compactMap { $0 })
+  }
+
+  /// Passwords this library points at.
+  var passwordSecrets: Set<UUID> { Set(passwordBindings.values) }
+
+  /// Drops what this device kept for hosts a person deleted — here or on
+  /// another device — or for credentials a host no longer names, so that
+  /// nothing keeps a key alive for a host nobody can open. A host that
+  /// vanished with an iCloud reset keeps its keys (`SharedHostRecord.vanished`).
+  mutating func prune() {
+    let live = records.filter { !$0.value.deleted }
+    let keeping = records.filter { !$0.value.deleted || $0.value.vanished == true }
+    let credentials = Set(keeping.values.flatMap {
+      [$0.profile.authentication.primary.id, $0.profile.authentication.otp?.id].compactMap { $0 }
+    })
+    bindings = bindings.filter { credentials.contains($0.key) }
+    passwordBindings = passwordBindings.filter { keeping[$0.key] != nil }
+    approvals = approvals.filter { live[$0.key] != nil }
+    adoptedAliases = adoptedAliases.filter { live[$0.value] != nil }
+    // A link to a deleted host is kept: it is what stops the stanza that
+    // host came from bringing it straight back.
+    imports = imports?.filter { records[$0.value.id] != nil }
+  }
 }

@@ -14,6 +14,8 @@ struct DeviceCredentialStore: Sendable {
   func write(_ value: String, id: UUID, label: String) throws {
     try secrets.remember(value, for: Host(id: id, label: label, hostname: label, port: 22, username: "credential"))
   }
+  func forget(_ id: UUID) throws { try secrets.forget(id) }
+  func saved() throws -> [SavedSecret] { try secrets.saved() }
   func generateSSHKey(id: UUID, label: String) throws -> String {
     let key = P256.Signing.PrivateKey()
     try write(key.pemRepresentation, id: id, label: label)
@@ -87,30 +89,37 @@ struct TOTP: Codable, Sendable {
 }
 
 extension HostStore {
-  func generateKey(for host: Host, credentials: DeviceCredentialStore = DeviceCredentialStore()) {
+  /// One tap, one key. It is this device's, and the next sync gives the same
+  /// key to the other devices on this Apple ID. It only logs in once the
+  /// server has been told its public half.
+  func generateKey(for host: Host) {
     do {
-      guard var profile = host.profile else { throw IdentityError.invalidConfiguration }
-      let secretID = UUID()
+      guard host.profile != nil else { throw IdentityError.invalidConfiguration }
+      let secretID = Self.syncedKeyID(for: host.id)
       let publicKey = try credentials.generateSSHKey(id: secretID, label: host.label)
-      profile.authentication.primary.purpose = .ssh
-      let selected = profile
-      try update { state in
-        guard var record = state.records[host.id], !record.deleted, record.conflicts.isEmpty else { throw IdentityError.needsReview }
-        record.profile = selected; record.dirty = true
-        state.records[host.id] = record
-        state.bindings[selected.authentication.primary.id] = LocalCredentialBinding(
-          credentialID: selected.authentication.primary.id, secretID: secretID, publicKey: publicKey)
-        state.approvals[host.id] = selected.securityDigest
+      do {
+        try update { state in
+          guard var record = state.records[host.id], !record.deleted else { throw IdentityError.needsReview }
+          let credential = record.profile.authentication.primary.id
+          state.bindings[credential] = LocalCredentialBinding(credentialID: credential, secretID: secretID, publicKey: publicKey)
+          record.dirty = true
+          record.syncedKeyDigest = nil
+          record.forgetSharedKey = nil
+          state.records[host.id] = record
+        }
+        scheduleSync()
+      } catch {
+        try? credentials.forget(secretID)
+        throw error
       }
-      scheduleSync()
     } catch { recordProblem(error) }
   }
 
-  func setOTP(_ text: String, for host: Host, credentials: DeviceCredentialStore = DeviceCredentialStore()) {
+  func setOTP(_ text: String, for host: Host) {
     do {
       guard var profile = host.profile else { throw IdentityError.invalidConfiguration }
       let otp = try TOTP(importing: text)
-      let descriptor = profile.authentication.otp ?? CredentialDescriptor(identityID: profile.authentication.identity.id, purpose: .totp)
+      let descriptor = profile.authentication.otp ?? .oneTimeCode(for: profile)
       let secretID = UUID()
       try credentials.write(String(decoding: JSONEncoder().encode(otp), as: UTF8.self), id: secretID, label: host.label + " OTP")
       profile.authentication.otp = descriptor

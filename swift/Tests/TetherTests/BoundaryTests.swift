@@ -109,3 +109,46 @@ struct BoundaryTests {
         #expect(shortCircuited)
     }
 }
+
+private struct RefuseEveryHost: HostTrust {
+    func trusts(_ host: HostIdentity) async -> Bool { false }
+}
+
+@Suite("Private keys at the boundary")
+struct KeyBoundaryTests {
+    /// A key that cannot be read is named in the error rather than ending
+    /// the login as a protocol failure — and with nothing else to offer,
+    /// nothing is dialled: no host is asked to be trusted for nothing.
+    @Test("an unusable key comes back as a skipped key, before any host is reached")
+    func unusableKeyIsNamed() async {
+        do {
+            _ = try await TerminalSession.connect(
+                to: Destination(host: "192.0.2.1", port: 22, user: "nobody"),
+                trusting: RefuseEveryHost(),
+                offering: [.privateKey(pem: "PRIVATE MATERIAL")])
+            Issue.record("a key that is not a key cannot log in")
+        } catch let TetherError.authenticationFailed(remaining, skipped) {
+            #expect(remaining.isEmpty, "the server was never asked")
+            #expect(skipped.count == 1)
+            #expect(skipped.first?.position == 0)
+            if case .unreadable = skipped.first?.problem {} else {
+                Issue.record("expected unreadable, got \(String(describing: skipped.first?.problem))")
+            }
+        } catch {
+            Issue.record("expected authenticationFailed with a skipped key, got \(error)")
+        }
+    }
+
+    @Test("a skipped key reads as a sentence, under the name an application gives it")
+    func skippedKeySentence() {
+        var skipped = SkippedKey(position: 0, fingerprint: "SHA256:abc", problem: .locked)
+        #expect(
+            TetherError.authenticationFailed(remaining: ["publickey"], skipped: [skipped]).localizedDescription
+                == "Authentication failed. The server accepts: publickey. SHA256:abc was not used: it needs a passphrase that was not given.")
+        skipped.name = "id_ed25519"
+        #expect(
+            TetherError.authenticationFailed(remaining: [], skipped: [skipped]).localizedDescription
+                == "Authentication failed. id_ed25519 was not used: it needs a passphrase that was not given.")
+        #expect(TetherError.authenticationFailed(remaining: []).localizedDescription == "Authentication failed.")
+    }
+}

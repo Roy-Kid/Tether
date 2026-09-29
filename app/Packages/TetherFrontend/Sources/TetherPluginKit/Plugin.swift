@@ -104,15 +104,17 @@ public protocol TetherPlugin: AnyObject {
   var statusBarItem: PluginStatusBarItem? { get }
   /// The lamp itself, when the plugin draws it. Otherwise the host paints `statusBarItem`.
   func statusBarLabel() -> AnyView?
-  /// Right-click on the lamp. Nerve opens its own settings window from here.
+  /// Right-click on the lamp: a plugin that keeps its own settings window
+  /// opens it from here.
   func statusBarSettings() -> (() -> Void)?
   /// Status-bar-only plugins do not add a workspace command or tab.
   var isStatusBarOnly: Bool { get }
   /// A lightweight workspace presented when the status ribbon is clicked.
   func statusBarWorkspace() -> (any PluginWorkspace)?
   /// Whether this plugin needs the tab's connection before it can be
-  /// launched. tmux does — it runs commands where the shell is. Nerve reads
-  /// the hub on this Mac and needs nothing from the tab at all.
+  /// launched. tmux does — it runs commands where the shell is. A status
+  /// plugin reporting on something of this device's own needs nothing from
+  /// the tab at all.
   ///
   /// Named for the remote case it was written for; it is the connection that
   /// is needed, and a local session leases one too.

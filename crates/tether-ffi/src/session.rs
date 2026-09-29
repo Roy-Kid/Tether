@@ -12,6 +12,7 @@ use tether_core::terminal::{Options, ScreenSize, Scroll};
 use tether_core::{Credential, Dial, Ending, Local, SshClient, TerminalSession};
 
 use crate::input::{Resolved, TerminalInput};
+use crate::keys::{ForeignUnlocker, PassphrasePrompter};
 use crate::screen::ScreenFrame;
 use crate::{AuthPrompt, InteractivePrompter, TetherError};
 
@@ -92,9 +93,15 @@ pub enum Secret {
     },
     /// PEM text, so a key held in a keychain item never has to be written to
     /// a file to be used.
+    ///
+    /// A key protected by a passphrase is unlocked with `passphrase` when one
+    /// is given, and otherwise by asking `unlock` — only once the server has
+    /// said it would take the key. With neither, it is left out and named in
+    /// the error if the login fails.
     PrivateKey {
         pem: String,
         passphrase: Option<String>,
+        unlock: Option<Arc<dyn PassphrasePrompter>>,
     },
     /// Answers whatever the server asks, for as many rounds as it asks.
     Interactive {
@@ -139,7 +146,13 @@ pub async fn connect(
         .into_iter()
         .map(|secret| match secret {
             Secret::Password { password } => Credential::Password(password),
-            Secret::PrivateKey { pem, passphrase } => Credential::PrivateKey { pem, passphrase },
+            Secret::PrivateKey { pem, passphrase, unlock } => Credential::PrivateKey {
+                pem,
+                passphrase,
+                unlock: unlock.map(|prompter| {
+                    Arc::new(ForeignUnlocker(prompter)) as Arc<dyn tether_core::ssh::KeyUnlocker>
+                }),
+            },
             Secret::Interactive { prompter } => {
                 Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
             }

@@ -22,9 +22,9 @@ enum LaunchPreference {
 
 /// Settings, as a sidebar and a titled page.
 ///
-/// The Mac window follows the same preferences shape as Nerve: a tinted
-/// icon in the sidebar, a title and a subtitle over a grouped form, and a
-/// titlebar that only keeps the traffic lights. A tab strip puts every
+/// The Mac window is the shape a Mac preferences window takes today: a
+/// tinted icon in the sidebar, a title and a subtitle over a grouped form,
+/// and a titlebar that only keeps the traffic lights. A tab strip puts every
 /// section on screen at once and then hides all but one.
 ///
 /// A phone has no room for two columns. The same sections are a list that
@@ -48,6 +48,7 @@ struct AppSettings: View {
     case appearance
     case security
     case identities
+    case sync
     case extensions
 
     var id: String { rawValue }
@@ -58,6 +59,7 @@ struct AppSettings: View {
       case .appearance: "Appearance"
       case .security: "Security"
       case .identities: "Identities"
+      case .sync: "Sync"
       case .extensions: "Extensions"
       }
     }
@@ -68,6 +70,7 @@ struct AppSettings: View {
       case .appearance: "paintpalette.fill"
       case .security: "lock.shield.fill"
       case .identities: "person.badge.key.fill"
+      case .sync: "arrow.triangle.2.circlepath"
       case .extensions: "puzzlepiece.extension.fill"
       }
     }
@@ -78,6 +81,7 @@ struct AppSettings: View {
       case .appearance: "Window, terminal, and drawing"
       case .security: "Host keys and saved passwords"
       case .identities: "Hosts, keys, and trusted devices"
+      case .sync: "iCloud and your SSH configuration"
       case .extensions: "Accessories on a terminal tab"
       }
     }
@@ -88,6 +92,7 @@ struct AppSettings: View {
       case .appearance: .indigo
       case .security: .orange
       case .identities: .teal
+      case .sync: .blue
       case .extensions: .purple
       }
     }
@@ -197,6 +202,7 @@ struct AppSettings: View {
       case .identities:
         IdentitySettings(store: store, connections: connections)
         DeviceSettings(store: store, known: known)
+      case .sync: SyncSettings(store: store)
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)

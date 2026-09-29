@@ -15,7 +15,12 @@ Build:
   --build-app [--config debug|release]       assemble macOS Tether.app (default debug)
   --build-app-ios [--device <name-or-udid>]  simulator Tether.app + install
                                              (default "iPhone 17 Pro")
+  --build-app-ios --phone <name-or-udid>     connected iPhone/iPad Tether.app + install
   --build-xcframework                        TetherFFI.xcframework + checked-in bindings
+  --provision                                ask Xcode for this team's profiles
+
+Signing (builds without a team are ad-hoc: they run, but have no iCloud sync):
+  --team <TEAMID>         Apple developer team to sign with (or TETHER_TEAM)
 
 Verify / test (each is standalone):
   --fuzz [N]              coverage-guided fuzz, N seconds per target (default 60)
@@ -30,6 +35,8 @@ Verify / test (each is standalone):
 Examples:
   ./scripts/tether.sh --build-app
   ./scripts/tether.sh --build-app --config release
+  ./scripts/tether.sh --provision --team ABCDE12345
+  ./scripts/tether.sh --build-app-ios --phone "My iPhone" --team ABCDE12345
   ./scripts/tether.sh --fuzz 60
   ./scripts/tether.sh --check
   ./scripts/tether.sh --record-corpus shell vim
@@ -38,6 +45,7 @@ EOF
 
 DO_BUILD_APP=0
 DO_BUILD_APP_IOS=0
+DO_PROVISION=0
 DO_BUILD_XCFRAMEWORK=0
 DO_FUZZ=0
 DO_TEST_TMUX=0
@@ -48,6 +56,8 @@ DO_TEST=0
 
 CONFIG=debug
 DEVICE="iPhone 17 Pro"
+PHONE=
+TEAM="${TETHER_TEAM:-}"
 FUZZ_SECONDS=60
 CORPUS_NAMES=()
 
@@ -63,11 +73,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --build-app-ios)
       DO_BUILD_APP_IOS=1
-      if [[ "${2:-}" == "--device" ]]; then
-        [[ -n "${3:-}" ]] || { echo "--device needs a value" >&2; usage >&2; exit 2; }
-        DEVICE="$3"
+      if [[ "${2:-}" == "--device" || "${2:-}" == "--phone" ]]; then
+        [[ -n "${3:-}" ]] || { echo "$2 needs a value" >&2; usage >&2; exit 2; }
+        if [[ "$2" == "--device" ]]; then DEVICE="$3"; else PHONE="$3"; fi
         shift 2
       fi
+      ;;
+    --provision) DO_PROVISION=1 ;;
+    --team)
+      [[ -n "${2:-}" ]] || { echo "--team needs a value" >&2; usage >&2; exit 2; }
+      TEAM="$2"
+      shift
       ;;
     --build-xcframework) DO_BUILD_XCFRAMEWORK=1 ;;
     --fuzz)
@@ -100,11 +116,17 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ $DO_BUILD_APP -eq 0 && $DO_BUILD_APP_IOS -eq 0 && $DO_BUILD_XCFRAMEWORK -eq 0 \
+if [[ $DO_BUILD_APP -eq 0 && $DO_BUILD_APP_IOS -eq 0 && $DO_BUILD_XCFRAMEWORK -eq 0 && $DO_PROVISION -eq 0 \
   && $DO_FUZZ -eq 0 && $DO_TEST_TMUX -eq 0 && $DO_VERIFY_CONSUMER -eq 0 \
   && $DO_RECORD_CORPUS -eq 0 && $DO_CHECK -eq 0 && $DO_TEST -eq 0 ]]; then
   usage
   exit 2
+fi
+
+# Profiles before the builds that sign with them.
+if [[ $DO_PROVISION -eq 1 ]]; then
+  echo "== provision development profiles =="
+  TETHER_TEAM="$TEAM" "$ROOT/scripts/provision.sh" ${PHONE:+--phone "$PHONE"}
 fi
 
 if [[ $DO_BUILD_APP -eq 1 ]]; then
@@ -114,12 +136,17 @@ if [[ $DO_BUILD_APP -eq 1 ]]; then
     exit 2
   fi
   echo "== build macOS Tether.app ($CONFIG) =="
-  "$ROOT/scripts/build-app.sh" --config "$CONFIG"
+  TETHER_TEAM="$TEAM" "$ROOT/scripts/build-app.sh" --config "$CONFIG"
 fi
 
 if [[ $DO_BUILD_APP_IOS -eq 1 ]]; then
-  echo "== build + install simulator Tether.app =="
-  "$ROOT/scripts/build-app-ios.sh" --device "$DEVICE"
+  if [[ -n "$PHONE" ]]; then
+    echo "== build + install device Tether.app =="
+    TETHER_TEAM="$TEAM" "$ROOT/scripts/build-app-ios.sh" --phone "$PHONE"
+  else
+    echo "== build + install simulator Tether.app =="
+    TETHER_TEAM="$TEAM" "$ROOT/scripts/build-app-ios.sh" --device "$DEVICE"
+  fi
 fi
 
 if [[ $DO_BUILD_XCFRAMEWORK -eq 1 ]]; then

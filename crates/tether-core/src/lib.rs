@@ -37,7 +37,7 @@ mod session;
 mod ssh_client;
 
 pub use connection::{Capture, Channel, Connection, ConnectionError};
-pub use dial::{Credential, Dial, DialError};
+pub use dial::{Credential, Dial, DialError, SkippedKey};
 pub use local::Local;
 pub use producer::{Output, Producer, ProducerError};
 pub use session::{Ending, SessionError, TerminalSession};

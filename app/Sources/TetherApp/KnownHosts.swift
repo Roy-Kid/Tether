@@ -9,6 +9,9 @@ struct KnownHost: Codable, Hashable {
   var endpoint: String
   var algorithm: String
   var fingerprint: String
+  /// Where the record lives when it is not this app's: `known_hosts`, for a
+  /// key system ssh recorded. `nil` for the app's own.
+  var source: String?
 }
 
 /// What a person is being asked, when they are asked at all.
@@ -37,8 +40,18 @@ enum TrustQuestion {
 final class KnownHosts {
   private(set) var entries: [KnownHost] = []
   private let location: URL
+  /// System ssh's record, consulted for endpoints this app has not pinned.
+  /// Only for the app's own store: a test's store must not answer from the
+  /// developer's real file.
+  private let system: URL?
 
   init(location: URL? = nil) {
+    #if os(macOS)
+      system = location == nil
+        ? URL(fileURLWithPath: NSHomeDirectory()).appending(path: ".ssh/known_hosts") : nil
+    #else
+      system = nil
+    #endif
     if let location {
       self.location = location
     } else {
@@ -53,10 +66,23 @@ final class KnownHosts {
 
   /// `nil` when the key is already trusted for this endpoint and nobody needs
   /// to be asked.
+  ///
+  /// This app's own pin decides first. Without one, what system ssh recorded
+  /// does: read each time rather than copied, so a key someone updates with
+  /// `ssh-keygen -R` is updated here too.
   func question(for host: HostIdentity) -> TrustQuestion? {
+    question(for: host, system: system.map(SystemKnownHosts.init(contentsOf:)))
+  }
+
+  func question(for host: HostIdentity, system: SystemKnownHosts?) -> TrustQuestion? {
+    if let revoked = system?.revocation(of: host) { return .changed(from: revoked) }
     let endpoint = Self.endpoint(host)
     guard let recorded = entries.first(where: { $0.endpoint == endpoint }) else {
-      return .unknown
+      switch system?.verdict(for: host) {
+      case .trusted?: return nil
+      case .changed(let recorded)?: return .changed(from: recorded)
+      case nil: return .unknown
+      }
     }
     if recorded.fingerprint == host.fingerprint { return nil }
     return .changed(from: recorded)
@@ -82,7 +108,7 @@ final class KnownHosts {
   /// The default port is written out rather than elided: `example.org` and
   /// `example.org:22` would otherwise be two endpoints with one key between
   /// them, and the mismatch check would never fire.
-  static func endpoint(_ host: HostIdentity) -> String { "\(host.host):\(host.port)" }
+  nonisolated static func endpoint(_ host: HostIdentity) -> String { "\(host.host):\(host.port)" }
 
   private func load() {
     guard let data = try? Data(contentsOf: location) else { return }

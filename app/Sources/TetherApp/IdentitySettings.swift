@@ -8,18 +8,13 @@ struct IdentitySettings: View {
   @State private var selected: Host?
 
   var body: some View {
-    Section("Shared Environment") {
-      LabeledContent("Synchronization", value: store.syncStatus)
-      if store.scope.hasPrefix("icloud:") { Button("Add Local Library to iCloud") { store.importLocalLibrary() } }
-      Button("Sync Now") { Task { await store.startSync(); await store.syncNow() } }
-      if let problem = store.problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
-    }
     Section("Hosts and Identities") {
       ForEach(store.hosts) { host in
         Button { selected = host } label: {
-          LabeledContent(host.label, value: host.isManaged ? (host.connectionProblem ?? "Ready") : "This Mac’s SSH configuration")
+          LabeledContent(host.label, value: host.connectionProblem ?? host.routeProblem ?? "Ready")
         }
       }
+      if let problem = store.problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
     }
     .sheet(item: $selected) { host in
       NavigationStack { HostIdentitySettings(store: store, id: host.id, connections: connections) }
@@ -47,7 +42,8 @@ struct HostIdentitySettings: View {
         if let profile = host.profile {
           Section("Authentication") {
             LabeledContent("Identity", value: profile.authentication.identity.name)
-            LabeledContent("Method", value: profile.authentication.primary.purpose.rawValue.uppercased())
+            // Whether this device has a key, including one that arrived with the host.
+            LabeledContent("Method", value: host.offersConfiguredKey || host.usesDefaultKeys ? "Key" : "Password")
             LabeledContent("Confirmation", value: profile.authentication.confirmation.rawValue)
             if profile.authentication.otp != nil {
               LabeledContent("MFA", value: "TOTP")
@@ -75,8 +71,6 @@ struct HostIdentitySettings: View {
               }
               Button("Keep This Device’s Changes") { store.resolve(id, useRemote: false) }
               Button("Use iCloud Changes") { store.resolve(id, useRemote: true) }
-            } else if store.snapshot.approvals[id] != profile.securityDigest {
-              Button("Approve These Settings") { store.approve(id) }
             }
           }
           Section("This Device") {
@@ -84,14 +78,20 @@ struct HostIdentitySettings: View {
               if let publicKey = binding.publicKey {
                 Text(publicKey).font(.caption.monospaced()).textSelection(.enabled)
                 ShareLink("Export Public Key", item: publicKey)
+                Text("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
+                  .font(.caption).foregroundStyle(.secondary)
               } else if let path = binding.keyPath {
                 LabeledContent("SSH Key", value: path)
+              } else if binding.defaultKeys == true {
+                LabeledContent("SSH Key", value: "Default SSH keys")
+              } else {
+                LabeledContent("SSH Key", value: "Synced")
               }
             } else {
-              Button("Create This Device’s SSH Key") { store.generateKey(for: host) }
+              Button("Create SSH Key") { store.generateKey(for: host) }
+              Text("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
+                .font(.caption).foregroundStyle(.secondary)
             }
-            Text("The remote account must authorize this device’s public key before it can connect.")
-              .font(.caption).foregroundStyle(.secondary)
           }
           AuthorizationSettings(store: store, host: host, connections: connections)
           Section("MFA on This Device") {
@@ -100,17 +100,6 @@ struct HostIdentitySettings: View {
               store.setOTP(seed, for: host)
               seed = ""
             }.disabled(seed.isEmpty)
-          }
-          #if os(macOS)
-          Section("OpenSSH") {
-            Button("Export Managed SSH Configuration") { store.exportOpenSSH() }
-          }
-          #endif
-        } else {
-          Section {
-            Button("Add to Tether") { store.adopt(host); dismiss() }
-            Text("The original SSH entry remains managed by you. Tether shares the imported host configuration, with a separate identity on each device.")
-              .font(.caption).foregroundStyle(.secondary)
           }
         }
         if let problem = store.problem { Text(problem).foregroundStyle(.red) }

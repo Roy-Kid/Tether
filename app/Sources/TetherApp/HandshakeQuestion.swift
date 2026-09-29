@@ -17,6 +17,10 @@ enum HandshakeQuestion {
   /// One keyboard-interactive round: the server's own prompts and words, and
   /// a line of this app's when the server is asking again.
   case prompts([AuthPrompt], instruction: String, notice: String?)
+  /// A private key's passphrase, once the server said it would take the key.
+  /// Named by what this device calls the key; the fingerprint says which
+  /// one it is, and the notice replaces it when a passphrase was wrong.
+  case passphrase(key: String, fingerprint: String?, notice: String?)
 
   var dialog: Dialog {
     switch self {
@@ -26,6 +30,11 @@ enum HandshakeQuestion {
       Dialog(title: title, message: detail, actions: [.cancel(), Dialog.Action("Approve")])
     case .prompts(let prompts, let instruction, let notice):
       Self.dialog(prompts, instruction: instruction, notice: notice)
+    case .passphrase(let key, let fingerprint, let notice):
+      Dialog(
+        title: "Unlock \(key)", message: notice ?? fingerprint,
+        fields: [Dialog.Field("Passphrase", kind: .password)],
+        actions: [.cancel(), Dialog.Action("Unlock")])
     }
   }
 

@@ -76,7 +76,7 @@ async fn connect(server: Server, size: ScreenSize) -> TerminalSession {
         .verifier(Arc::new(TrustTestServer))
         .size(size)
         .term("xterm-256color")
-        .connect(vec![Credential::PrivateKey { pem: server.key, passphrase: None }])
+        .connect(vec![Credential::PrivateKey { pem: server.key, passphrase: None, unlock: None }])
         .await
         .expect("the test server should accept the test key")
 }

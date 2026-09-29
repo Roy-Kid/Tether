@@ -5,7 +5,6 @@ import SwiftUI
 import TetherPluginKit
 import TetherUI
 #if os(macOS)
-import NerveRibbonUI
 #endif
 
 #if os(macOS)
@@ -562,14 +561,14 @@ private struct StatusRibbonPopover: Identifiable {
   let workspace: any PluginWorkspace
 }
 
-/// The Nerve status lamp uses the same continuous AppKit ribbon renderer as
-/// the Nerve menu-bar surface. Clicking it opens the plugin's job panel.
+/// A status plugin's lamp: its own view when it draws one, otherwise its
+/// segments as a ribbon. Clicking it opens the plugin's panel; right-click
+/// reaches its settings.
 private struct PluginStatusRibbon: View {
   let item: PluginStatusBarItem
   var label: AnyView? = nil
   var openSettings: (() -> Void)? = nil
   let makeWorkspace: () -> (any PluginWorkspace)?
-  @Environment(\.colorScheme) private var colorScheme
   @State private var presentation: StatusRibbonPopover?
   @State private var isPresented = false
 
@@ -585,21 +584,8 @@ private struct PluginStatusRibbon: View {
       if let label {
         label
       } else {
-      #if os(macOS)
-      Image(nsImage: NerveRibbonRenderer.image(
-        segments: item.segments.map {
-          NerveRibbonSegment(color: $0.color, weight: CGFloat($0.weight))
-        },
-        width: Chrome.swatchWidth,
-        height: Chrome.ribbonHeight,
-        thickness: Chrome.ribbonThickness,
-        appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSAppearance(named: .aqua)!))
-        .resizable()
-        .interpolation(.high)
-        .frame(width: Chrome.swatchWidth, height: Chrome.swatchHeight)
-      #else
-      Image(systemName: "waveform.path").frame(width: Chrome.swatchWidth, height: Chrome.swatchHeight)
-      #endif
+        StatusRibbon(segments: item.segments)
+          .frame(width: Chrome.swatchWidth, height: Chrome.swatchHeight)
       }
     }
     .modifier(RibbonButtonChrome(plain: label != nil))
@@ -670,8 +656,7 @@ struct EmptyWorkspace: View {
   }
 
   /// Preferences window chrome: traffic lights only, content under a clear
-  /// titlebar. The page title lives in the detail pane, the way Nerve's
-  /// settings window does.
+  /// titlebar. The page title lives in the detail pane, not the titlebar.
   struct SettingsWindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { Hook() }
     func updateNSView(_ view: NSView, context: Context) { (view as? Hook)?.apply() }

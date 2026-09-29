@@ -44,6 +44,22 @@ vOUOLrxtLxgdPIZCau0bAAAAEnRldGhlci10ZXN0LWNsaWVudAECAw==
 
 pub const CLIENT_PUBLIC_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMz3v3bSTssM93NqrdibOUcsvOUOLrxtLxgdPIZCau0b tether-test-client";
 
+/// A client key locked with [`LOCKED_PASSPHRASE`], in OpenSSH's format — the
+/// public half readable, the rest not. Test-only.
+pub const LOCKED_KEY: &str = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAl68WTMp
+POCgCukBERmhH8AAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAICFLQcIbWCZXUrqF
+37lOOuTVDRTQ9C5mZju8ILB3n011AAAAoFpwrADSZe4I1dSd8NsOGgvE60TsJhksIlmFeA
+BluC6I46H4W/ui0uBUdvxzzUwI6agzoWuuHLwZhBSxj3YQjoiqEwTEr03KP1WK8I4bDR85
+wg3Q7Mjl+p/ifNa3t3qZq1GxMA1qU64CJBZSRs07GmZV4zf6/jniij+gFHcV4LjyzkLlYg
+AWHhZ6RyEnRGObeD10W92qL7HBfyHaMUGL9ko=
+-----END OPENSSH PRIVATE KEY-----
+"#;
+
+pub const LOCKED_PUBLIC_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICFLQcIbWCZXUrqF37lOOuTVDRTQ9C5mZju8ILB3n011 tether-test-locked";
+
+pub const LOCKED_PASSPHRASE: &str = "open sesame";
+
 /// What a fake host will and will not accept.
 ///
 /// A struct rather than a pile of booleans on the handler because these
@@ -71,6 +87,9 @@ pub struct Observed {
     pub pty_size: Option<(u32, u32)>,
     pub resizes: Vec<(u32, u32)>,
     pub password_attempts: u32,
+    /// Keys named without a signature — the probe a client sends to ask
+    /// whether a key would do, before it proves it holds one.
+    pub public_key_offers: u32,
     pub public_key_attempts: u32,
     pub received: Vec<u8>,
 }
@@ -86,6 +105,13 @@ pub struct FakeHost {
 impl FakeHost {
     pub fn new(policy: Policy) -> Self {
         Self { observed: Arc::new(Mutex::new(Observed::default())), round: 0, policy }
+    }
+
+    fn authorizes(&self, offered: &russh::keys::ssh_key::PublicKey) -> bool {
+        self.policy.accepts_key.is_some_and(|authorized| {
+            russh::keys::ssh_key::PublicKey::from_openssh(authorized)
+                .is_ok_and(|known| known.key_data() == offered.key_data())
+        })
     }
 }
 
@@ -117,6 +143,22 @@ impl Handler for FakeHost {
         Ok(Auth::Reject { proceed_with_methods: only_interactive(), partial_success: false })
     }
 
+    /// Answers the probe the way `sshd` does, from what it would authorize.
+    /// russh's default says yes to every key, which would let a client that
+    /// asks for a passphrase too early pass a test it should fail.
+    async fn auth_publickey_offered(
+        &mut self,
+        _: &str,
+        offered: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        self.observed.lock().unwrap().public_key_offers += 1;
+        if self.authorizes(offered) {
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::Reject { proceed_with_methods: only_interactive(), partial_success: false })
+        }
+    }
+
     async fn auth_publickey(
         &mut self,
         _: &str,
@@ -124,12 +166,7 @@ impl Handler for FakeHost {
     ) -> Result<Auth, Self::Error> {
         self.observed.lock().unwrap().public_key_attempts += 1;
 
-        let accepted = self.policy.accepts_key.is_some_and(|authorized| {
-            russh::keys::ssh_key::PublicKey::from_openssh(authorized)
-                .is_ok_and(|known| known.key_data() == offered.key_data())
-        });
-
-        if !accepted {
+        if !self.authorizes(offered) {
             return Ok(Auth::Reject {
                 proceed_with_methods: only_interactive(),
                 partial_success: false,
@@ -316,17 +353,12 @@ impl Handler for FakeHost {
 
 /// Starts the fake host on one end of an in-memory pipe and hands back the
 /// other end, plus what the server sees.
+#[allow(dead_code)] // each test binary that includes this uses a different part
 pub fn start(policy: Policy) -> (tokio::io::DuplexStream, Arc<Mutex<Observed>>) {
     let host = FakeHost::new(policy);
     let observed = Arc::clone(&host.observed);
     let (client_side, server_side) = tokio::io::duplex(64 * 1024);
-
-    let config = Arc::new(russh::server::Config {
-        inactivity_timeout: None,
-        auth_rejection_time: std::time::Duration::ZERO,
-        keys: vec![russh::keys::decode_secret_key(HOST_KEY, None).expect("test host key")],
-        ..Default::default()
-    });
+    let config = server_config();
 
     tokio::spawn(async move {
         if let Ok(session) = russh::server::run_stream(config, server_side, host).await {
@@ -335,6 +367,41 @@ pub fn start(policy: Policy) -> (tokio::io::DuplexStream, Arc<Mutex<Observed>>) 
     });
 
     (client_side, observed)
+}
+
+/// The same host on a loopback socket, for the callers that dial rather than
+/// hand over a stream — which is how `tether-core` reaches a server. Every
+/// connection is its own conversation with the same policy.
+#[allow(dead_code)]
+pub async fn listen(policy: Policy) -> (std::net::SocketAddr, Arc<Mutex<Observed>>) {
+    let host = FakeHost::new(policy);
+    let observed = Arc::clone(&host.observed);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
+    let address = listener.local_addr().expect("its address");
+    let config = server_config();
+
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let host = host.clone();
+            let config = Arc::clone(&config);
+            tokio::spawn(async move {
+                if let Ok(session) = russh::server::run_stream(config, socket, host).await {
+                    let _ = session.await;
+                }
+            });
+        }
+    });
+
+    (address, observed)
+}
+
+fn server_config() -> Arc<russh::server::Config> {
+    Arc::new(russh::server::Config {
+        inactivity_timeout: None,
+        auth_rejection_time: std::time::Duration::ZERO,
+        keys: vec![russh::keys::decode_secret_key(HOST_KEY, None).expect("test host key")],
+        ..Default::default()
+    })
 }
 
 /// Client-side transport settings for tests: no keepalives, no timeouts, so a
@@ -390,5 +457,30 @@ impl tether_ssh::Prompter for ScriptedPrompter {
     async fn answer(&self, challenge: &tether_ssh::Challenge) -> Option<Vec<String>> {
         self.seen.lock().unwrap().push(challenge.clone());
         self.answers.lock().unwrap().pop_front()
+    }
+}
+
+/// Answers passphrase questions from a script, and counts what it was asked.
+#[allow(dead_code)] // each test binary that includes this uses a different part
+pub struct ScriptedUnlocker {
+    answers: Mutex<std::collections::VecDeque<Option<String>>>,
+    pub asked: Arc<Mutex<Vec<(tether_ssh::KeyDescription, u32)>>>,
+}
+
+#[allow(dead_code)]
+impl ScriptedUnlocker {
+    pub fn new(answers: impl IntoIterator<Item = Option<&'static str>>) -> Self {
+        Self {
+            answers: Mutex::new(answers.into_iter().map(|a| a.map(str::to_owned)).collect()),
+            asked: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl tether_ssh::KeyUnlocker for ScriptedUnlocker {
+    async fn passphrase(&self, key: &tether_ssh::KeyDescription, attempt: u32) -> Option<String> {
+        self.asked.lock().unwrap().push((key.clone(), attempt));
+        self.answers.lock().unwrap().pop_front().flatten()
     }
 }

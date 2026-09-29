@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
-use tether_ssh::{Connection, Endpoint, HostVerifier, Prompter, SshError, Step, WindowSize};
+use tether_ssh::{
+    Connection, Endpoint, HostVerifier, KeyError, KeyUnlocker, PrivateKey, Prompter, SshError,
+    Step, WindowSize,
+};
 use tether_terminal::{Options, ScreenSize};
 
 use crate::session::TerminalSession;
@@ -26,9 +29,14 @@ pub enum Credential {
     Password(String),
     /// PEM text, not a path and not a parsed key: a caller's key may live in
     /// a keychain item that never touches the filesystem.
+    ///
+    /// A key protected by a passphrase is unlocked with `passphrase` when one
+    /// is given, and otherwise through `unlock` — asked only once the server
+    /// has said it would take the key. With neither, it is left out.
     PrivateKey {
         pem: String,
         passphrase: Option<String>,
+        unlock: Option<Arc<dyn KeyUnlocker>>,
     },
     /// Answers whatever the server asks, for as many rounds as it asks.
     Interactive(Arc<dyn Prompter>),
@@ -47,15 +55,36 @@ impl std::fmt::Debug for Credential {
     }
 }
 
+/// A private key left out of a login, and why.
+///
+/// Named by where it sat in the credentials the caller gave, counting from
+/// zero: the caller built that list, so it knows which file or keychain item
+/// that was — a name this crate never learns (spec §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedKey {
+    pub position: usize,
+    /// `SHA256:…`, when the key could be read far enough to have one.
+    pub fingerprint: Option<String>,
+    pub problem: KeyError,
+}
+
 /// What went wrong between a hostname and a shell.
 #[derive(Debug, thiserror::Error)]
 pub enum DialError {
     /// Every credential was offered and the server took none of them.
     ///
     /// Carries what the server said it would still accept, so a consumer can
-    /// tell a person "this host wants a key" rather than "login failed".
+    /// tell a person "this host wants a key" rather than "login failed" —
+    /// and the keys that were never offered, because "your key was not used,
+    /// and here is why" is often the whole story.
     #[error("authentication failed; the server still wants: {}", .remaining.join(", "))]
-    Refused { remaining: Vec<String> },
+    Refused { remaining: Vec<String>, skipped: Vec<SkippedKey> },
+
+    /// No credential could be used: every one given was a key that could not
+    /// be read, or a key's passphrase was wrong every time it was asked for.
+    /// The server was not refused anything; this side had nothing to offer.
+    #[error("no credential could be used")]
+    Unusable { skipped: Vec<SkippedKey> },
 
     /// Credentials ran out while the server was still asking for factors.
     /// Different from [`Self::Refused`]: what was offered was *accepted*.
@@ -156,12 +185,20 @@ impl Dial {
     }
 
     /// Authenticate once, then open independent channels on this connection.
+    ///
+    /// Keys are read before anything is dialled. One that cannot be used is
+    /// left out — logged, never printed — and reported with the outcome if
+    /// the login fails; it does not take the credentials after it down too.
     pub async fn authenticate(
         self,
         credentials: Vec<Credential>,
     ) -> Result<Arc<tether_ssh::Session>, DialError> {
         if credentials.is_empty() {
             return Err(DialError::NothingToOffer);
+        }
+        let (offers, mut skipped) = prepare(credentials);
+        if offers.is_empty() {
+            return Err(DialError::Unusable { skipped });
         }
 
         let mut connection = Connection::connect(
@@ -172,17 +209,55 @@ impl Dial {
         .await?;
 
         let mut refused = Vec::new();
-        let mut offered = credentials.into_iter().peekable();
+        let mut offered = offers.into_iter().peekable();
 
         let session = loop {
-            let Some(credential) = offered.next() else {
+            let Some(offer) = offered.next() else {
                 // Out of credentials. Which error depends on how the last
                 // attempt went, and that distinction is the difference
                 // between "your password is wrong" and "now your code".
-                return Err(DialError::Refused { remaining: refused });
+                return Err(DialError::Refused { remaining: refused, skipped });
             };
 
-            match attempt(connection, &self.user, credential).await? {
+            // A key with no readable public half is unlocked before its turn,
+            // while nothing about it has reached the server: a no, or three
+            // wrong passphrases, leave it out and keep the connection for the
+            // credentials after it — as ssh moves on to its next key.
+            let offer = match offer {
+                Offer::Key { position, key, unlock: Some(unlock) } if key.unlocks_first() => {
+                    match key.opened(unlock.as_ref()).await {
+                        Ok(open) => Offer::Key { position, key: Box::new(open), unlock: None },
+                        Err(problem) => {
+                            tracing::warn!(position, %problem, "a private key was left out");
+                            let fingerprint = key.description().fingerprint.clone();
+                            skipped.push(SkippedKey { position, fingerprint, problem });
+                            continue;
+                        }
+                    }
+                }
+                other => other,
+            };
+
+            let step = match attempt(connection, &self.user, &offer).await {
+                Ok(step) => step,
+                // A key the server accepted and that then could not be
+                // unlocked ends the login — the server is waiting for its
+                // signature, so the connection went with it — and is named
+                // like any other.
+                Err(SshError::Key(problem)) => {
+                    if let Offer::Key { position, key, .. } = &offer {
+                        skipped.push(SkippedKey {
+                            position: *position,
+                            fingerprint: key.description().fingerprint.clone(),
+                            problem,
+                        });
+                    }
+                    return Err(DialError::Unusable { skipped });
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            match step {
                 Step::Authenticated(session) => break session,
                 Step::AnotherFactor { remaining, next } => {
                     let remaining = names(&remaining);
@@ -203,6 +278,47 @@ impl Dial {
     }
 }
 
+/// A credential that survived being read.
+enum Offer {
+    Password(String),
+    Key { position: usize, key: Box<PrivateKey>, unlock: Option<Arc<dyn KeyUnlocker>> },
+    Interactive(Arc<dyn Prompter>),
+}
+
+/// Reads every key before a connection exists, and sets aside the ones that
+/// cannot be used — including a locked one with nothing to ask for its
+/// passphrase, which would otherwise fail only after the server accepted it.
+fn prepare(credentials: Vec<Credential>) -> (Vec<Offer>, Vec<SkippedKey>) {
+    let mut offers = Vec::new();
+    let mut skipped = Vec::new();
+    for (position, credential) in credentials.into_iter().enumerate() {
+        match credential {
+            Credential::Password(password) => offers.push(Offer::Password(password)),
+            Credential::Interactive(prompter) => offers.push(Offer::Interactive(prompter)),
+            Credential::PrivateKey { pem, passphrase, unlock } => {
+                let read = PrivateKey::parse(&pem, passphrase.as_deref()).and_then(|key| {
+                    if key.needs_passphrase() && unlock.is_none() {
+                        Err(KeyError::Locked)
+                    } else {
+                        Ok(key)
+                    }
+                });
+                match read {
+                    Ok(key) => offers.push(Offer::Key { position, key: Box::new(key), unlock }),
+                    Err(problem) => {
+                        tracing::warn!(position, %problem, "a private key was left out");
+                        let fingerprint = PrivateKey::parse(&pem, None)
+                            .ok()
+                            .and_then(|key| key.description().fingerprint.clone());
+                        skipped.push(SkippedKey { position, fingerprint, problem });
+                    }
+                }
+            }
+        }
+    }
+    (offers, skipped)
+}
+
 impl std::fmt::Debug for Dial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Dial")
@@ -214,17 +330,13 @@ impl std::fmt::Debug for Dial {
     }
 }
 
-async fn attempt(
-    connection: Connection,
-    user: &str,
-    credential: Credential,
-) -> Result<Step, SshError> {
-    match credential {
-        Credential::Password(password) => connection.password(user, &password).await,
-        Credential::PrivateKey { pem, passphrase } => {
-            connection.private_key(user, &pem, passphrase.as_deref()).await
+async fn attempt(connection: Connection, user: &str, offer: &Offer) -> Result<Step, SshError> {
+    match offer {
+        Offer::Password(password) => connection.password(user, password).await,
+        Offer::Key { key, unlock, .. } => {
+            connection.private_key(user, key, unlock.as_deref()).await
         }
-        Credential::Interactive(prompter) => {
+        Offer::Interactive(prompter) => {
             // A wrong code ends this round and leaves keyboard-interactive
             // available. Ask again on the same connection instead of
             // reporting the login as failed.

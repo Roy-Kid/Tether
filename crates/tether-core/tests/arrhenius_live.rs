@@ -40,7 +40,7 @@ async fn key_then_verification_code() {
     let error = Dial::new(Endpoint::new("login.hpc.arrhenius.naiss.se", 22), "jicli594")
         .verifier(Arc::new(Trust))
         .connect(vec![
-            Credential::PrivateKey { pem, passphrase: None },
+            Credential::PrivateKey { pem, passphrase: None, unlock: None },
             Credential::Interactive(Arc::new(LogThenDecline)),
         ])
         .await
