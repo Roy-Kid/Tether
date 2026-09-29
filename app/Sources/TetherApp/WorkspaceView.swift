@@ -435,7 +435,6 @@ struct RootView: View {
       set: { if let id = $0 { tabs.select(id) } })
   }
 
-  @ViewBuilder
   /// On a phone the session picker opens from the shell button, so it is not
   /// also a button of its own. An inspector accessory stays where it is.
   private var toolbarAccessories: [PluginAccessory] {
@@ -471,49 +470,11 @@ struct RootView: View {
 
 extension RootView {
   /// Everything that belongs to the window rather than to either column.
+  /// Split from the observers below: one chain is more than this compiler
+  /// will type-check.
   @ViewBuilder
   fileprivate var windowChrome: some View {
-    container
-    .terminalInputEnabled(terminalInputAllowed)
-    .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
-    .overlay {
-      PaletteOverlay(
-        tabs: tabs, store: store, commands: commandItems, onPickHost: open)
-    }
-    #if os(macOS)
-      .background {
-        Button("Command Menu") { tabs.openPalette(.command) }
-          .keyboardShortcut("p", modifiers: [.control, .shift])
-          .hidden()
-      }
-    #endif
-    .onChange(of: tabs.accessory) { _, open in
-      guard let open, let tab = tabs.tabs.first(where: { $0.id == open.tab }) else { return }
-      prepareAttachment(open.plugin, on: tab)
-    }
-    // The inspector follows the selected tab, so the tab now in front needs
-    // its own attachment the first time it is shown there.
-    .onChange(of: [tabs.inspectorPlugin, tabs.selected?.uuidString]) { _, _ in
-      guard let pluginID = tabs.inspectorPlugin, let tab = tabs.current else { return }
-      prepareAttachment(pluginID, on: tab)
-    }
-    .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
-    .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
-    .onChange(of: phase) { _, _ in refreshFramePublishing() }
-    .onChange(of: registry.disabled, initial: true) { _, _ in
-      tabs.accessories = registry.plugins.compactMap { plugin in
-        guard let plugin = plugin as? any TabPlugin, registry.isEnabled(plugin.metadata.id)
-        else { return nil }
-        return PluginAccessory(
-          id: plugin.metadata.id, title: plugin.metadata.name, accessory: plugin.accessory)
-      }
-    }
-    // On a Mac the accessory is a popover, so the window can present this.
-    // A phone's accessory is a sheet, and a sheet's ancestor cannot present a
-    // second one over it — so there it is presented from inside that sheet.
-    #if os(macOS)
-      .modifier(PluginSheetPresentation(tabs: tabs))
-    #endif
+    watchedWindow
     .onChange(of: tabs.intent) { _, intent in
       guard let intent else { return }
       tabs.intent = nil
@@ -604,6 +565,51 @@ extension RootView {
     .dialog(for: notice) { shown in
       Dialog.notice(shown.title, message: shown.message) { notice = nil }
     }
+  }
+
+  @ViewBuilder
+  private var watchedWindow: some View {
+    container
+      .terminalInputEnabled(terminalInputAllowed)
+      .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
+      .overlay {
+        PaletteOverlay(
+          tabs: tabs, store: store, commands: commandItems, onPickHost: open)
+      }
+      #if os(macOS)
+        .background {
+          Button("Command Menu") { tabs.openPalette(.command) }
+            .keyboardShortcut("p", modifiers: [.control, .shift])
+            .hidden()
+        }
+      #endif
+      .onChange(of: tabs.accessory) { _, open in
+        guard let open, let tab = tabs.tabs.first(where: { $0.id == open.tab }) else { return }
+        prepareAttachment(open.plugin, on: tab)
+      }
+      // The inspector follows the selected tab, so the tab now in front needs
+      // its own attachment the first time it is shown there.
+      .onChange(of: [tabs.inspectorPlugin, tabs.selected?.uuidString]) { _, _ in
+        guard let pluginID = tabs.inspectorPlugin, let tab = tabs.current else { return }
+        prepareAttachment(pluginID, on: tab)
+      }
+      .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
+      .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
+      .onChange(of: phase) { _, _ in refreshFramePublishing() }
+      .onChange(of: registry.disabled, initial: true) { _, _ in
+        tabs.accessories = registry.plugins.compactMap { plugin in
+          guard let plugin = plugin as? any TabPlugin, registry.isEnabled(plugin.metadata.id)
+          else { return nil }
+          return PluginAccessory(
+            id: plugin.metadata.id, title: plugin.metadata.name, accessory: plugin.accessory)
+        }
+      }
+      // On a Mac the accessory is a popover, so the window can present this.
+      // A phone's accessory is a sheet, and a sheet's ancestor cannot present a
+      // second one over it — so there it is presented from inside that sheet.
+      #if os(macOS)
+        .modifier(PluginSheetPresentation(tabs: tabs))
+      #endif
   }
 
   private var commandItems: [CommandItem] {
