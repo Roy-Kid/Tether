@@ -157,3 +157,23 @@ struct LaunchPreferenceTests {
     #expect(defaults.object(forKey: LaunchPreference.key) as? Bool == false)
   }
 }
+
+@MainActor
+@Suite("The last-tab preference")
+struct LastTabPreferenceTests {
+  @Test("keeps the empty window unless someone chose to quit")
+  func defaultsToStay() {
+    #expect(LastTabPreference.default == LastTabPreference.stay)
+    let defaults = UserDefaults.standard
+    let original = defaults.object(forKey: LastTabPreference.key)
+    defer {
+      if let original {
+        defaults.set(original, forKey: LastTabPreference.key)
+      } else {
+        defaults.removeObject(forKey: LastTabPreference.key)
+      }
+    }
+    defaults.removeObject(forKey: LastTabPreference.key)
+    #expect(LastTabPreference.chosen == LastTabPreference.stay)
+  }
+}

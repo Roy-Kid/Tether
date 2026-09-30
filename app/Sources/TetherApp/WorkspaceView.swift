@@ -56,6 +56,9 @@ struct RootView: View {
   }
   var body: some View {
     windowChrome
+      .onAppear {
+        tabs.onEmptied = { LastTabPreference.quitIfChosen() }
+      }
   }
 
   /// Two columns where there is room for two, a stack where there is not.

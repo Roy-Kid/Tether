@@ -1,6 +1,8 @@
 import SwiftUI
 #if os(macOS)
   import AppKit
+#elseif os(iOS)
+  import UIKit
 #endif
 import Tether
 import TetherPluginKit
@@ -18,6 +20,34 @@ enum LaunchPreference {
   /// do setup before it has been useful once, and the one machine it can
   /// always reach needs none.
   static let `default` = true
+}
+
+/// What happens once a close leaves the window with nothing open.
+///
+/// The key and the two values live together so the picker, the close path
+/// and the test name the same strings. The default keeps today's window:
+/// the status line already says there is nothing open.
+enum LastTabPreference {
+  static let key = "closeLastTab"
+  static let stay = "stay"
+  static let quit = "quit"
+  static let `default` = stay
+
+  static var chosen: String {
+    UserDefaults.standard.string(forKey: key) ?? `default`
+  }
+
+  /// Leave, when that is what was chosen. Otherwise the caller has already
+  /// landed on the empty window.
+  @MainActor
+  static func quitIfChosen() {
+    guard chosen == quit else { return }
+    #if os(macOS)
+      NSApplication.shared.terminate(nil)
+    #else
+      UIApplication.shared.perform(Selector(("suspend")))
+    #endif
+  }
 }
 
 /// Settings, as a sidebar and a titled page.
@@ -292,6 +322,7 @@ private struct PreferenceToggleRow: View {
 /// scrolling sheet and a phone's pushed pane share the same rows.
 private struct GeneralSettings: View {
   @AppStorage(LaunchPreference.key) private var openLocalAtLaunch = LaunchPreference.default
+  @AppStorage(LastTabPreference.key) private var closeLastTab = LastTabPreference.default
 
   var body: some View {
     SwiftUI.Section("On Launch") {
@@ -299,6 +330,15 @@ private struct GeneralSettings: View {
         title: "Open Local Terminal",
         description: "Open a local shell instead of the host list.",
         isOn: $openLocalAtLaunch)
+    }
+
+    SwiftUI.Section("When the Last Tab Closes") {
+      Picker("After the Last Tab", selection: $closeLastTab) {
+        Text("No open terminals").tag(LastTabPreference.stay)
+        Text("Quit").tag(LastTabPreference.quit)
+      }
+      .pickerStyle(.inline)
+      .labelsHidden()
     }
   }
 }

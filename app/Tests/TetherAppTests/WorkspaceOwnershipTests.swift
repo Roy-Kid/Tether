@@ -32,6 +32,20 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.current?.host.id == lab.id)
   }
 
+  @Test("closing the last tab in the window reports an empty window")
+  func closeLastReportsEmpty() {
+    let tabs = TabSet()
+    var emptied = 0
+    tabs.onEmptied = { emptied += 1 }
+    tabs.adopt(tab(.local, name: "Terminal 1"))
+    tabs.adopt(tab(.local, name: "Terminal 2", live: false))
+    tabs.close(tabs.tabs[0].id)
+    #expect(emptied == 0)
+    tabs.close(tabs.tabs[0].id)
+    #expect(emptied == 1)
+    #expect(tabs.tabs.isEmpty)
+  }
+
   @Test("closing the last tab on a host stays on that host")
   func closeLastStays() {
     let tabs = TabSet()

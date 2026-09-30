@@ -279,6 +279,10 @@ final class TabSet {
     inspector = true
   }
 
+  /// Fires when a close leaves no tab and no extension workspace. The app
+  /// decides whether that means staying on the empty window.
+  var onEmptied: (() -> Void)?
+
   func closeAll() {
     tabs.forEach { $0.close() }
     extensions.forEach { $0.workspace.close() }
@@ -376,6 +380,7 @@ final class TabSet {
       extensions[index].workspace.close()
       extensions.remove(at: index)
       if selected == id { selected = visibleIDs.last }
+      noteIfEmpty()
       return
     }
     guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
@@ -393,6 +398,15 @@ final class TabSet {
         lastByHost[host.id] = selected
       }
     }
+    noteIfEmpty()
+  }
+
+  /// The window is empty only when nothing remains anywhere, including a tab
+  /// that belongs to another host. Closing the last tab on this host still
+  /// leaves "No open terminals" without ending the app.
+  private func noteIfEmpty() {
+    guard tabs.isEmpty, extensions.isEmpty else { return }
+    onEmptied?()
   }
 
   func toggleZen() {
