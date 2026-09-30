@@ -100,6 +100,10 @@ final class SessionTab: Identifiable {
   /// the session, so a burst is not lost, but it does not copy a frame
   /// until someone is looking at it.
   private var publishesFrames = false
+  /// Keys waiting on an attachment to put the shell back at its prompt,
+  /// and how many have been queued. Later keys stay in order behind them.
+  private var keyQueue: Task<Void, Never>?
+  private var keySerial = 0
   /// What the window draws with, held so a session that opens later is told
   /// the same thing the one before it was.
   private var palette: TerminalPalette?
@@ -426,7 +430,29 @@ final class SessionTab: Identifiable {
       default: break
       }
     }
-    try? session?.send(input)
+    // A key typed while the shell is showing something else's history has
+    // to land on the live prompt. The wait is only that restoration;
+    // everything else is written straight through, and keys keep their order.
+    let restore = attachments.contains(where: \.attachment.shellInputWaits)
+    if !restore, keyQueue == nil {
+      try? session?.send(input)
+      return
+    }
+    keySerial += 1
+    let serial = keySerial
+    let pending = attachments
+    let session = session
+    let previous = keyQueue
+    keyQueue = Task { @MainActor [weak self] in
+      await previous?.value
+      if restore {
+        for item in pending where item.attachment.shellInputWaits {
+          await item.attachment.restoreShellForInput()
+        }
+      }
+      try? session?.send(input)
+      if self?.keySerial == serial { self?.keyQueue = nil }
+    }
   }
 
   /// What the text at a cell names, if anything. Asked when a person points.
@@ -442,7 +468,16 @@ final class SessionTab: Identifiable {
   ///
   /// The repaint loop wakes on the same change and publishes on the next
   /// refresh. Pulling a second copy here made a drag cost two grids per line.
+  /// A wheel can belong to whatever is standing on this shell instead: a
+  /// full-screen program keeps its own history, and the alternate screen
+  /// here has none.
   func scroll(_ to: ScrollTo) {
+    if case .lines(let lines) = to {
+      let fullScreen = frame?.alternateScreen == true
+      if attachments.contains(where: { $0.attachment.scrollShell(lines, fullScreen: fullScreen) }) {
+        return
+      }
+    }
     session?.scroll(to)
   }
 

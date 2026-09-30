@@ -606,7 +606,12 @@ extension RootView {
           return PluginAccessory(
             id: plugin.metadata.id, title: plugin.metadata.name, accessory: plugin.accessory)
         }
+        attachLiveTabs()
       }
+      // A wheel over the shell is offered to whatever is attached, which has
+      // to exist before the accessory is opened: a full-screen program can
+      // be keeping the history the wheel is asking for.
+      .onChange(of: tabs.tabs.map(\.isLive), initial: true) { _, _ in attachLiveTabs() }
       // On a Mac the accessory is a popover, so the window can present this.
       // A phone's accessory is a sheet, and a sheet's ancestor cannot present a
       // second one over it — so there it is presented from inside that sheet.
@@ -742,6 +747,16 @@ extension RootView {
         tab.resumeReading()
       } else {
         tab.pauseReading()
+      }
+    }
+  }
+
+  /// Attaches every tab plugin on a live tab, once. The accessory used to
+  /// be the first time; a wheel can need the attachment before that opens.
+  private func attachLiveTabs() {
+    for tab in tabs.tabs where tab.isLive {
+      for plugin in tabs.accessories {
+        prepareAttachment(plugin.id, on: tab)
       }
     }
   }

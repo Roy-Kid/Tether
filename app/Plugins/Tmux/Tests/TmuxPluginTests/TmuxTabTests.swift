@@ -162,6 +162,15 @@ struct TmuxTabTests {
     for _ in 0..<100 where tab.busy { try await Task.sleep(for: .milliseconds(10)) }
     #expect(tab.error == "Not connected.")
   }
+
+  @Test("a wheel is left with the shell until this one is known to be the client")
+  func wheelWaitsForAKnownClient() throws {
+    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
+    #expect(!tab.scrollShell(3, fullScreen: true))
+    #expect(!tab.scrollShell(3, fullScreen: false))
+    #expect(!tab.shellInputWaits)
+    #expect(tab.error == nil)
+  }
 }
 
 @MainActor
@@ -238,6 +247,19 @@ struct PaneScrollTests {
     #expect(steps.values.map(\.lines) == [4, -2, 1])
   }
 
+  @Test("a wheel over a pane hits that pane")
+  func wheelHitsThePane() {
+    let pieces = TmuxContent.pieces(
+      panes: [
+        PaneBox(id: 1, x: 0, y: 0, width: 40, height: 20),
+        PaneBox(id: 2, x: 40, y: 0, width: 40, height: 20),
+      ],
+      windowColumns: 80, windowRows: 20, cell: 10, line: 20, divider: 5)
+    #expect(TmuxContent.paneID(at: CGPoint(x: 10, y: 10), in: pieces) == 1)
+    #expect(TmuxContent.paneID(at: CGPoint(x: 410, y: 10), in: pieces) == 2)
+    #expect(TmuxContent.paneID(at: CGPoint(x: -1, y: 10), in: pieces) == nil)
+  }
+
   @Test("a pane's hit target is its grid, and the seam is only the shared edge")
   func piecesFollowTheGrid() {
     let pieces = TmuxContent.pieces(
@@ -298,5 +320,74 @@ struct PaneScrollTests {
     #expect(TmuxContent.pointSize(asked: 13, scale: 1) { $0 <= 8 } == 8)
     #expect(TmuxContent.pointSize(asked: 13, scale: 2) { _ in true } == 13)
     #expect(TmuxContent.pointSize(asked: 13, scale: 0.2) { _ in false } == 5)
+  }
+}
+
+@MainActor
+@Suite("scrolling the shell's own client")
+struct ShellScrollTests {
+  @Test("the wheel asks that client to scroll, and only a real session id is quoted")
+  func command() {
+    #expect(
+      TmuxShellScroll.command(session: "$1", lines: 4)
+        == TmuxShellCommand(
+          text: "tmux copy-mode -e -t '$1' \\; send-keys -X -N 4 -t '$1' scroll-up",
+          applied: 4))
+    #expect(
+      TmuxShellScroll.command(session: "$12", lines: -2)
+        == TmuxShellCommand(
+          text: "tmux send-keys -X -N 2 -t '$12' scroll-down", applied: -2))
+    #expect(TmuxShellScroll.command(session: "$1", lines: 0) == nil)
+    #expect(TmuxShellScroll.command(session: "dev", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(session: "$", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(session: "$(id)", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(session: "$1;id", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(session: "$1", lines: 900)?.applied == 500)
+    #expect(TmuxShellScroll.command(session: "$1", lines: 900)?.text.contains("-N 500") == true)
+    #expect(TmuxShellScroll.cancel(session: "$0") == "tmux send-keys -X -t '$0' cancel")
+    #expect(TmuxShellScroll.cancel(session: "dev") == nil)
+  }
+
+  @Test("the wheel is claimed only for the shell that is already that client")
+  func claimsOnlyTheKnownClient() {
+    #expect(
+      TmuxShellScroll.claims(
+        showing: false, connected: true, session: "$1", tty: "/dev/ttys001",
+        knownTTY: "/dev/ttys001"))
+    #expect(
+      !TmuxShellScroll.claims(
+        showing: true, connected: true, session: "$1", tty: "/dev/ttys001",
+        knownTTY: "/dev/ttys001"))
+    #expect(
+      !TmuxShellScroll.claims(
+        showing: false, connected: false, session: "$1", tty: "/dev/ttys001",
+        knownTTY: "/dev/ttys001"))
+    #expect(
+      !TmuxShellScroll.claims(
+        showing: false, connected: true, session: "dev", tty: "/dev/ttys001",
+        knownTTY: "/dev/ttys001"))
+    #expect(
+      !TmuxShellScroll.claims(
+        showing: false, connected: true, session: "$1", tty: "/dev/ttys002",
+        knownTTY: "/dev/ttys001"))
+    #expect(
+      !TmuxShellScroll.claims(
+        showing: false, connected: true, session: nil, tty: "/dev/ttys001",
+        knownTTY: "/dev/ttys001"))
+  }
+
+  @Test("opposite notches cancel, and a run that overflows stays in range")
+  func notchesCancel() {
+    var notches = ShellNotches()
+    notches.add(4)
+    notches.add(1)
+    #expect(notches.take() == 5)
+    #expect(notches.take() == 0)
+    notches.add(.max)
+    notches.add(1)
+    #expect(notches.take() == .max)
+    notches.add(3)
+    notches.add(-3)
+    #expect(notches.take() == 0)
   }
 }

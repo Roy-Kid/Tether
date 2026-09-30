@@ -62,6 +62,8 @@ rename or end sessions.
 The shell row (labelled with the local shell name when known) returns to the tab's
 original terminal. If that terminal is itself attached to a tmux session, the picker
 marks that session and returns to the existing client instead of opening a second one.
+The wheel on that client scrolls tmux's own history — the terminal has none while
+tmux holds the screen — and the next key returns to the live prompt.
 Closing the tab detaches only. Ending remote tasks is a separate confirmed action.
 After a connection loss, Reconnect requests authentication and attaches the previous
 session if it still exists. Missing tmux, rejected commands and connection errors are

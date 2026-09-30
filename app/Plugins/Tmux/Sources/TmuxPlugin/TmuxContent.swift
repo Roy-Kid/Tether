@@ -2,6 +2,10 @@ import SwiftUI
 import Tether
 import TetherUI
 
+#if os(macOS)
+  import AppKit
+#endif
+
 /// Plugin-local visual roles: this package never imports the app's theme.
 private enum TmuxStyle {
   static let inset: CGFloat = 12
@@ -140,11 +144,24 @@ struct TmuxContent: View {
           pieceView(piece, panes: visible, metrics: metrics, cell: cell, line: line)
         }
       }
+      // Behind the panes, and it does not take clicks. A wheel follows the
+      // pointer; if the pane's own view has no frame yet, the event still
+      // arrives here and the pane it lands on is the one that scrolls.
+      .background { paneWheel(pieces: pieces, line: line) }
       .clipped()
       .onAppear { resize(geometry.size, full) }
       .onChange(of: geometry.size) { _, size in resize(size, full) }
       .onChange(of: fontSize) { _, _ in resize(geometry.size, full) }
     }
+  }
+
+  /// The pane under a point, in this view's top-left coordinates. Seams are
+  /// not panes: a drag there resizes, and a wheel there is left alone.
+  static func paneID(at point: CGPoint, in pieces: [PanePiece]) -> UInt32? {
+    for piece in pieces {
+      if case .pane(let id) = piece.kind, piece.frame.contains(point) { return id }
+    }
+    return nil
   }
 
   /// Where each pane and the seam beside it sits. Panes first, seams after,
@@ -313,6 +330,15 @@ struct TmuxContent: View {
   private func resize(_ size: CGSize, _ metrics: FontMetrics) {
     model.resize(metrics.columns(fitting: size.width), metrics.rows(fitting: size.height))
   }
+
+  @ViewBuilder
+  private func paneWheel(pieces: [PanePiece], line: CGFloat) -> some View {
+    #if os(macOS)
+      PaneWheel(pieces: pieces, lineHeight: line) { pane, lines in
+        model.scroll(pane, lines: lines)
+      }
+    #endif
+  }
 }
 /// A pane's place in the window, in tmux cells. The frame it draws is a
 /// separate thing and is not needed to decide where the pointer lands.
@@ -356,6 +382,93 @@ private struct PaneLayout: Layout {
     }
   }
 }
+
+#if os(macOS)
+  /// Claims a wheel whose point is inside a pane, and nothing else.
+  ///
+  /// Returning the event would deliver it again to the pane underneath, and
+  /// the history would move twice. A click is not claimed: selection stays
+  /// with the pane.
+  private struct PaneWheel: NSViewRepresentable {
+    var pieces: [PanePiece]
+    var lineHeight: CGFloat
+    var onScroll: (UInt32, Int32) -> Void
+
+    func makeNSView(context: Context) -> PaneWheelView {
+      let view = PaneWheelView()
+      apply(to: view)
+      return view
+    }
+
+    func updateNSView(_ view: PaneWheelView, context: Context) { apply(to: view) }
+
+    static func dismantleNSView(_ view: PaneWheelView, coordinator: Coordinator) { view.stop() }
+
+    private func apply(to view: PaneWheelView) {
+      view.pieces = pieces
+      view.lineHeight = lineHeight
+      view.onScroll = onScroll
+    }
+  }
+
+  private final class PaneWheelView: NSView {
+    var pieces: [PanePiece] = []
+    var lineHeight: CGFloat = 1
+    var onScroll: ((UInt32, Int32) -> Void)?
+    private var monitor: Any?
+    /// Fractional lines left over from the last wheel event.
+    private var carried: CGFloat = 0
+    private var tracking: UInt32?
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard window != nil else {
+        stop()
+        return
+      }
+      guard monitor == nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        guard let self, self.take(event) else { return event }
+        return nil
+      }
+    }
+
+    func stop() {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+      carried = 0
+      tracking = nil
+    }
+
+    private func take(_ event: NSEvent) -> Bool {
+      guard event.window === window, window?.attachedSheet == nil else { return false }
+      guard bounds.width > 1, bounds.height > 1 else { return false }
+      let point = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(point) else {
+        carried = 0
+        tracking = nil
+        return false
+      }
+      guard let pane = TmuxContent.paneID(at: point, in: pieces) else { return false }
+      if pane != tracking {
+        tracking = pane
+        carried = 0
+      }
+      let height = max(lineHeight, 1)
+      carried += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / height : event.scrollingDeltaY
+      let whole = carried.rounded(.towardZero)
+      guard whole != 0 else { return true }
+      carried -= whole
+      let lines = Int(min(max(whole, -CGFloat(Int32.max)), CGFloat(Int32.max)))
+      onScroll?(pane, Int32(clamping: lines))
+      return true
+    }
+  }
+#endif
 
 struct TmuxInspector: View {
   @Bindable var model: TmuxTab

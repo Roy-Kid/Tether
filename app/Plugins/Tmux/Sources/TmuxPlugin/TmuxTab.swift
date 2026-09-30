@@ -50,6 +50,20 @@ public final class TmuxTab: TabAttachment {
   /// nothing.
   private var scrollSteps = ScrollSteps()
   private var scrollTask: Task<Void, Never>?
+  /// The tty `shellSessionID` was learned from. A wheel is taken only while
+  /// the shell is still that tty.
+  private var shellTTY: String?
+  /// When this shell was last asked whether it is a client. A full-screen
+  /// program is asked at most once a second, and only because a wheel asked.
+  private var shellChecked = Date.distantPast
+  /// Notches for the shell's own client. One drainer lets a flick finish,
+  /// then sends the whole gesture as one command.
+  private var shellNotches = ShellNotches()
+  private var shellLookup: Task<Void, Never>?
+  private var shellScrollTask: Task<Void, Never>?
+  /// The shell's client is showing its history. The next key puts it back
+  /// at the prompt before the key is delivered.
+  private var shellCopied = false
 
   init(tab: TabContext, owner: @escaping (String) -> TmuxTab?, onClose: @escaping () -> Void) {
     self.tab = tab
@@ -78,15 +92,64 @@ public final class TmuxTab: TabAttachment {
   public func content() -> AnyView { AnyView(TmuxContent(model: self)) }
   public func inspector() -> AnyView { AnyView(TmuxInspector(model: self)) }
   public func accessoryContent() -> AnyView { AnyView(TmuxPicker(model: self)) }
-  public func connectionChanged(_ connection: RemoteConnection) { self.connection = connection }
+  public func connectionChanged(_ connection: RemoteConnection) {
+    guard self.connection !== connection else { return }
+    self.connection = connection
+    shellLookup?.cancel()
+    shellLookup = nil
+    shellScrollTask?.cancel()
+    forgetShellClient()
+  }
   public func close() {
     closed = true
     operation?.cancel()
     pump?.cancel()
     sizeTask?.cancel()
+    shellLookup?.cancel()
+    shellScrollTask?.cancel()
     workspace?.detach()
     workspace = nil
     onClose()
+  }
+
+  /// A wheel over the shell. Taken only when this shell is already a client
+  /// we have named: anything else still scrolls the terminal's own history.
+  /// A full-screen program with no such client is asked, at most once a
+  /// second, because that is when this terminal has nothing to scroll.
+  public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool {
+    let tty = tab.terminalName()
+    if TmuxShellScroll.claims(
+      showing: isShowing, connected: connection != nil, session: shellSessionID, tty: tty,
+      knownTTY: shellTTY)
+    {
+      guard lines != 0 else { return true }
+      shellNotches.add(lines)
+      if shellScrollTask == nil {
+        shellScrollTask = Task { [weak self] in await self?.drainShellScroll() }
+      }
+      return true
+    }
+    if fullScreen, !isShowing, connection != nil { lookupShellClient() }
+    return false
+  }
+
+  public var shellInputWaits: Bool { shellCopied && !isShowing }
+
+  public func restoreShellForInput() async {
+    guard shellCopied else { return }
+    shellCopied = false
+    shellNotches = ShellNotches()
+    let scrolling = shellScrollTask
+    scrolling?.cancel()
+    await scrolling?.value
+    // The command already in flight may have entered copy mode. This is
+    // about to cancel that, so the next key must not wait again.
+    shellCopied = false
+    shellNotches = ShellNotches()
+    guard !closed, let session = shellSessionID, let connection,
+      let command = TmuxShellScroll.cancel(session: session)
+    else { return }
+    _ = try? await connection.execute(command)
   }
 
   // MARK: - Pointing at a pane's text
@@ -240,11 +303,8 @@ public final class TmuxTab: TabAttachment {
         do {
           let found = try await connection.tmuxSession(forClientTTY: tty)
           if closed || Task.isCancelled { return .unknown }
-          if let found {
-            shellSessionID = found
-            return found == id ? .thisSession : .other
-          }
-          return .other
+          noteShellClient(tty: tty, session: found)
+          return found == id ? .thisSession : .other
         } catch {
           try? await Task.sleep(for: .milliseconds(200))
           continue
@@ -303,9 +363,9 @@ public final class TmuxTab: TabAttachment {
         let connection = try lease()
         sessions = try await connection.tmuxSessions()
         if let tty = tab.terminalName() {
-          shellSessionID = try? await connection.tmuxSession(forClientTTY: tty)
+          noteShellClient(tty: tty, session: try? await connection.tmuxSession(forClientTTY: tty))
         } else {
-          shellSessionID = nil
+          noteShellClient(tty: nil, session: nil)
         }
         // This shell is already the client. The pane view would be a second
         // one, and prefix would type into the program inside the pane.
@@ -409,7 +469,7 @@ public final class TmuxTab: TabAttachment {
       if let tty = tab.terminalName(), let connection {
         let id = try? await connection.tmuxSession(forClientTTY: tty)
         if Task.isCancelled || !showing || session?.id != watched { return }
-        shellSessionID = id
+        noteShellClient(tty: tty, session: id)
         if id == watched {
           uncoverShellClient()
           return
@@ -500,6 +560,117 @@ public final class TmuxTab: TabAttachment {
     }
   }
 
+  /// One command for one gesture. A flick is many notches inside a frame
+  /// or two; sending the first alone starts a shell for a single line and
+  /// holds the rest for that round trip. Scrolling back is what says the
+  /// client is still there: a failure forgets it. Scrolling forward while
+  /// nothing is in copy mode is ordinary and stays quiet.
+  private func drainShellScroll() async {
+    defer { shellScrollTask = nil }
+    while !closed, !Task.isCancelled {
+      if isShowing {
+        shellNotches = ShellNotches()
+        return
+      }
+      let lines = await nextShellLines()
+      guard lines != 0, !closed, !Task.isCancelled else { return }
+      guard let session = shellSessionID, let connection,
+        let built = TmuxShellScroll.command(session: session, lines: lines)
+      else { return }
+      let (rest, overflowed) = lines.subtractingReportingOverflow(built.applied)
+      if !overflowed, rest != 0 { shellNotches.add(rest) }
+      let output: CommandOutput
+      do {
+        output = try await connection.execute(built.text)
+      } catch {
+        if Task.isCancelled || closed { return }
+        if built.applied > 0 { forgetShellClient() } else { shellNotches = ShellNotches() }
+        return
+      }
+      if Task.isCancelled || closed { return }
+      if built.applied > 0 {
+        if (output.status ?? 1) != 0 {
+          forgetShellClient()
+          return
+        }
+        shellCopied = true
+      } else if (output.status ?? 1) != 0 {
+        shellCopied = false
+      }
+    }
+  }
+
+  /// The lines of one gesture: wait one frame, and a second if the wheel
+  /// is still moving, then send whatever has arrived. A cancelled sleep
+  /// throws, and `try?` swallows it, so cancellation is read afterwards.
+  private func nextShellLines() async -> Int32 {
+    var seen = shellNotches.lines
+    for _ in 0..<2 {
+      if seen == 0 || closed || Task.isCancelled { return 0 }
+      try? await Task.sleep(for: .milliseconds(16))
+      if closed || Task.isCancelled { return 0 }
+      let now = shellNotches.lines
+      if now == seen { break }
+      seen = now
+    }
+    if closed || Task.isCancelled { return 0 }
+    return shellNotches.take()
+  }
+
+  /// Asks whether this shell is a client. The same tty is not asked again
+  /// within a second, so a program that merely fills the screen is not
+  /// polled on every notch.
+  private func lookupShellClient() {
+    guard shellLookup == nil, connection != nil, !isShowing, !closed else { return }
+    let tty = tab.terminalName()
+    let recent = Date().timeIntervalSince(shellChecked) < 1
+    if recent, tty == nil || tty == shellTTY { return }
+    shellChecked = Date()
+    shellLookup = Task { [weak self] in
+      await self?.findShellClient()
+      self?.shellLookup = nil
+    }
+  }
+
+  /// Retries while the tty is still unknown: a remote shell learns it after
+  /// connect. An answer records the tty either way, so a shell that is not
+  /// a client is not asked again until the wheel comes back.
+  private func findShellClient() async {
+    guard let connection else { return }
+    for attempt in 0..<15 {
+      if closed || Task.isCancelled || isShowing { return }
+      if let tty = tab.terminalName() {
+        do {
+          let found = try await connection.tmuxSession(forClientTTY: tty)
+          if closed || Task.isCancelled { return }
+          guard tab.terminalName() == tty else { continue }
+          noteShellClient(tty: tty, session: found)
+          if isShowing { uncoverShellClient() }
+          return
+        } catch {
+          try? await Task.sleep(for: .milliseconds(200))
+          continue
+        }
+      }
+      if attempt == 14 { return }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+  }
+
+  private func noteShellClient(tty: String?, session: String?) {
+    if session != shellSessionID { shellCopied = false }
+    shellTTY = tty
+    shellSessionID = session
+  }
+
+  private func forgetShellClient() {
+    shellSessionID = nil
+    shellTTY = nil
+    shellChecked = .distantPast
+    shellNotches = ShellNotches()
+    shellCopied = false
+  }
+
   func resize(_ columns: UInt16, _ rows: UInt16) {
     guard columns > 0, rows > 0 else { return }
     wanted = (columns, rows)
@@ -555,6 +726,70 @@ struct ScrollSteps: Equatable {
     } else {
       values[index].lines = sum
     }
+  }
+}
+
+/// Lines waiting for the shell's own client. Opposite notches that cancel
+/// are nothing to send.
+struct ShellNotches: Equatable {
+  private(set) var lines: Int32 = 0
+
+  mutating func add(_ lines: Int32) {
+    guard lines != 0 else { return }
+    let (partial, overflow) = self.lines.addingReportingOverflow(lines)
+    self.lines = overflow ? (lines > 0 ? Int32.max : Int32.min) : partial
+  }
+
+  mutating func take() -> Int32 {
+    defer { lines = 0 }
+    return lines
+  }
+}
+
+/// What a wheel over the shell's own client asks for.
+///
+/// The session id is the only part that changes, and it is only ever `$`
+/// and digits: that string is quoted into a shell command.
+struct TmuxShellCommand: Equatable {
+  var text: String
+  var applied: Int32
+}
+
+enum TmuxShellScroll {
+  /// How many lines one command will repeat. A swipe can ask for more;
+  /// the rest goes in the next command.
+  static let repeatCap = 500
+
+  static func command(session: String, lines: Int32) -> TmuxShellCommand? {
+    guard lines != 0, isSessionID(session) else { return nil }
+    let magnitude = min(Int(lines.magnitude), repeatCap)
+    guard magnitude > 0 else { return nil }
+    let applied: Int32 = lines > 0 ? Int32(magnitude) : -Int32(magnitude)
+    let target = "'\(session)'"
+    if lines > 0 {
+      return TmuxShellCommand(
+        text: "tmux copy-mode -e -t \(target) \\; send-keys -X -N \(magnitude) -t \(target) scroll-up",
+        applied: applied)
+    }
+    return TmuxShellCommand(
+      text: "tmux send-keys -X -N \(magnitude) -t \(target) scroll-down",
+      applied: applied)
+  }
+
+  static func cancel(session: String) -> String? {
+    guard isSessionID(session) else { return nil }
+    return "tmux send-keys -X -t '\(session)' cancel"
+  }
+
+  static func claims(
+    showing: Bool, connected: Bool, session: String?, tty: String?, knownTTY: String?
+  ) -> Bool {
+    guard !showing, connected, let session, let tty, tty == knownTTY else { return false }
+    return command(session: session, lines: 1) != nil
+  }
+
+  private static func isSessionID(_ text: String) -> Bool {
+    text.count > 1 && text.first == "$" && text.dropFirst().allSatisfy { $0 >= "0" && $0 <= "9" }
   }
 }
 

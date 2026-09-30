@@ -215,9 +215,24 @@ public protocol TabAttachment: AnyObject {
   /// for nothing. Asked when a person points, and answered at once: anything
   /// slow — checking the path exists — happens inside the actions.
   func actions(for pointed: PointedLink) -> LinkActions?
+  /// A wheel over the shell, in lines. Positive goes back.
+  ///
+  /// `true` takes the lines, and the shell's own history is left where it
+  /// is. A full-screen program can be keeping that history on its side,
+  /// where this terminal has none to move. `fullScreen` is that case.
+  func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool
+  /// The shell is showing another program's history, so a key has to wait
+  /// until that program is back at its prompt. Otherwise the key lands in
+  /// the history and reads as if it was ignored.
+  var shellInputWaits: Bool { get }
+  /// Puts the shell back at its live prompt. The host sends the key after.
+  func restoreShellForInput() async
 }
 
 extension TabAttachment {
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
+  public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool { false }
+  public var shellInputWaits: Bool { false }
+  public func restoreShellForInput() async {}
 }
