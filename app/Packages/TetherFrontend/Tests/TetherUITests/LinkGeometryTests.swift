@@ -22,6 +22,12 @@ struct LinkGeometryTests {
     #expect(geometry.cell(at: CGPoint(x: 20, y: 8 + 16 * 24)) == nil)
   }
 
+  @Test("a drag that leaves the grid ends on the nearest cell")
+  func clamped() {
+    #expect(geometry.clampedCell(at: CGPoint(x: -10, y: -10))! == (0, 0))
+    #expect(geometry.clampedCell(at: CGPoint(x: 10_000, y: 10_000))! == (23, 79))
+  }
+
   @Test("a wrapped link covers both rows it is drawn on")
   func rectsForSpans() {
     let link = TerminalLink(

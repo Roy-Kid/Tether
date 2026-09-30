@@ -89,6 +89,13 @@ final class SessionTab: Identifiable {
 
   private var columns: UInt16 = 80
   private var rows: UInt16 = 24
+  /// The far-side tty, once a listing has named it. A local shell already
+  /// has one on the session; this is only for a connection that does not.
+  private var shellTTY: String?
+  private var ttySearch: Task<Void, Never>?
+  /// Set when the view has reported a size. Until then the pty is still the
+  /// 80×24 it was opened at, which cannot pick this shell out of several.
+  private var sized = false
   /// The tab on screen, and the app in front. A hidden tab still waits on
   /// the session, so a burst is not lost, but it does not copy a frame
   /// until someone is looking at it.
@@ -165,6 +172,8 @@ final class SessionTab: Identifiable {
     pump = nil
     session?.close()
     session = nil
+    ttySearch?.cancel()
+    shellTTY = nil
     frame = nil
     dirtyRows = nil
     stage = .connecting
@@ -228,6 +237,7 @@ final class SessionTab: Identifiable {
     // background is in its first breath, and an unanswered question is
     // answered by the convention that a terminal is dark.
     try? session.setPalette(palette)
+    identifyShellTTY()
     if let connection = session.connection {
       ready.forEach { $0.resume(returning: connection) }
       ready.removeAll()
@@ -261,6 +271,11 @@ final class SessionTab: Identifiable {
     }
   }
 
+  /// Bumped by a resize. A repaint already in flight may have copied the
+  /// screen from before it, and publishing that copy would put the old
+  /// grid back. The resize itself has already drawn the screen as it is.
+  private var resizeEpoch = 0
+
   /// Repaints when the screen changes, and not otherwise.
   ///
   /// No timer while the screen is still: the session wakes this loop on the
@@ -277,8 +292,16 @@ final class SessionTab: Identifiable {
         // The wake is consumed either way. Showing the tab later copies
         // whatever the screen is then, rather than every intermediate one.
         guard self.publishesFrames else { continue }
+        let epoch = self.resizeEpoch
         let update = await Self.copyUpdate(session)
         guard !Task.isCancelled, self.publishesFrames else { continue }
+        // A resize landed while this copy was in flight. The copy may be
+        // the grid from before it; the screen now is the one to draw.
+        if self.resizeEpoch != epoch {
+          self.frame = session.frame()
+          self.dirtyRows = nil
+          continue
+        }
         self.publish(update, session: session)
       }
 
@@ -413,7 +436,7 @@ final class SessionTab: Identifiable {
 
   /// The directory the shell last reported, if it reports one.
   var workingDirectory: String? { session?.workingDirectory }
-  var terminalName: String? { session?.terminalName }
+  var terminalName: String? { session?.terminalName ?? shellTTY }
 
   /// Moves the viewport over the scrollback.
   ///
@@ -436,10 +459,43 @@ final class SessionTab: Identifiable {
 
   func resize(columns: UInt16, rows: UInt16) {
     guard columns > 0, rows > 0 else { return }
+    // The shell leaves the tree while a plugin stands in for it, and the
+    // view reports the size it collapses through on the way out. Applying
+    // that shrinks the pty, and a tmux client on it then pins the window
+    // to a corner of this one.
+    guard shown == nil else { return }
+    sized = true
+    identifyShellTTY()
     guard columns != self.columns || rows != self.rows else { return }
     self.columns = columns
     self.rows = rows
+    resizeEpoch += 1
     try? session?.resize(columns: columns, rows: rows)
+    // The engine has already reflowed. Draw that screen now: waiting for
+    // the next byte left the old grid up until something else was printed.
+    guard publishesFrames, let session else { return }
+    frame = session.frame()
+    dirtyRows = nil
+  }
+
+  /// Names this shell's far-side tty, when the session itself has none.
+  /// One search at a time: a resize while the previous listing is in flight
+  /// drops that listing, so an 80×24 answer cannot arrive after the real one.
+  private func identifyShellTTY() {
+    guard shellTTY == nil, session?.terminalName == nil, let connection = session?.connection
+    else { return }
+    let columns = self.columns
+    let rows = self.rows
+    let matchSize = sized
+    ttySearch?.cancel()
+    ttySearch = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(200))
+      guard let self, !Task.isCancelled else { return }
+      let found = await ShellTTY.find(
+        on: connection, columns: columns, rows: rows, matchSize: matchSize)
+      guard !Task.isCancelled, self.shellTTY == nil else { return }
+      self.shellTTY = found
+    }
   }
 
   func connectionReady() async throws -> RemoteConnection {
@@ -461,6 +517,7 @@ final class SessionTab: Identifiable {
     problem = nil
     passwordOffer = nil
     dialTask?.cancel()
+    ttySearch?.cancel()
     ready.forEach { $0.resume(throwing: CancellationError()) }
     ready.removeAll()
     // A question on screen is withdrawn, and the handshake waiting on it is

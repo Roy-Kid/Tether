@@ -762,7 +762,7 @@ extension RootView {
     return TabContext(
       id: id,
       plugin: pluginContext(for: tab),
-      terminalName: tab.terminalName,
+      terminalName: { [weak tab] in tab?.terminalName },
       focus: { tabs.select(id) },
       dismissAccessory: { if tabs.accessory?.tab == id { tabs.accessory = nil } },
       present: { view in tabs.sheet = PluginSheet(tab: id, plugin: pluginID, view: view) },

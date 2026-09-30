@@ -66,8 +66,9 @@ final class TabSet {
   /// inspector on the same kind of thing, for the tab now in front.
   var inspectorPlugin: String?
   var sheet: PluginSheet?
-  /// Every enabled tab plugin, in registration order. The first is what a
-  /// click on the selected tab opens.
+  /// Every enabled tab plugin, in registration order. A click on the
+  /// selected tab opens the first picker. An inspector is a button on the
+  /// status bar, not something a tab click toggles.
   var accessories: [PluginAccessory] = []
   var palette: Palette?
   var pendingClose: SessionTab.ID?
@@ -211,8 +212,10 @@ final class TabSet {
   func handleTabClick(_ id: UUID) {
     if selected == id {
       if let tab = tabs.first(where: { $0.id == id }) {
-        if let first = accessories.first, tab.canOpen(first.id) {
-          toggleAccessory(first.id, on: id)
+        if let picker = accessories.first(where: { $0.accessory.placement == .popover }),
+          tab.canOpen(picker.id)
+        {
+          toggleAccessory(picker.id, on: id)
         }
       } else {
         tabMenu = tabMenu == id ? nil : id

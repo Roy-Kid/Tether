@@ -97,6 +97,7 @@ private struct FileList: View {
     #if os(macOS)
       .listStyle(.inset)
       .focused($listFocused)
+      .background { ListKeyboardClaim() }
       .onAppear { listFocused = true }
       .environment(\.defaultMinListRowHeight, UIStyle.rowHeight)
       .contextMenu(forSelectionType: String.self) { paths in
@@ -159,6 +160,58 @@ private struct FileList: View {
     }
   }
 }
+
+#if os(macOS)
+  /// A click in the list selects a row and leaves the keyboard where it was,
+  /// which is the terminal. This view does not take the click; it moves the
+  /// first responder onto the list the click landed in.
+  private struct ListKeyboardClaim: NSViewRepresentable {
+    func makeNSView(context: Context) -> ListKeyboardClaimView { ListKeyboardClaimView() }
+    func updateNSView(_ view: ListKeyboardClaimView, context: Context) {}
+  }
+
+  private final class ListKeyboardClaimView: NSView {
+    private var monitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+      guard window != nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
+        [weak self] event in
+        self?.takeKeyboard(event)
+        return event
+      }
+    }
+
+    private func takeKeyboard(_ event: NSEvent) {
+      guard let window, event.window === window else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(point) else { return }
+      let hit = window.contentView?.hitTest(event.locationInWindow)
+      if hit is NSTextView { return }
+      var table: NSTableView?
+      var fallback: NSView?
+      var view: NSView? = hit
+      while let current = view {
+        if let found = current as? NSTableView {
+          table = found
+          break
+        }
+        if fallback == nil, current.acceptsFirstResponder { fallback = current }
+        view = current.superview
+      }
+      if let table {
+        window.makeFirstResponder(table)
+      } else if let fallback {
+        window.makeFirstResponder(fallback)
+      }
+    }
+  }
+#endif
 
 /// One entry: its symbol and its name, or a field while it is renamed.
 private struct FileRow: View {

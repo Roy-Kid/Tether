@@ -139,6 +139,22 @@ struct TmuxTabTests {
     #expect(plugin.tab(owning: "$1", on: host.host) == nil)
   }
 
+  @Test("choosing the session this shell is already showing returns to that client")
+  func choosingTheShellsSession() throws {
+    let host = HostProbe()
+    let tab = try #require(TmuxPlugin().attach(to: host.context()) as? TmuxTab)
+    tab.shellSessionID = "$1"
+    tab.session = info("$1", "dev")
+    tab.showing = true
+
+    tab.choose(info("$1", "dev"), windowID: nil)
+
+    #expect(!tab.showing)
+    #expect(tab.session == nil)
+    #expect(host.dismissed.count == 1)
+    #expect(!tab.busy, "the shell is the client, so nothing is attached")
+  }
+
   @Test("without a lease an operation fails where it can be seen")
   func noLeaseIsAnError() async throws {
     let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
@@ -180,6 +196,7 @@ struct TmuxPaneLinkTests {
 
 /// What a pane does with each way of scrolling. "Jump to the present" and a
 /// page key were dropped before, and only a wheel or a drag moved a pane.
+@MainActor
 @Suite("scrolling a pane")
 struct PaneScrollTests {
   @Test("every request becomes lines of the pane's own history")
@@ -190,5 +207,96 @@ struct PaneScrollTests {
     #expect(TmuxContent.lines(for: .live, page: 24) < -10_000, "all the way back to the present")
     #expect(TmuxContent.lines(for: .oldest, page: 24) > 10_000)
     #expect(TmuxContent.lines(for: .pageUp, page: 1) == 1, "a one-row pane still moves")
+  }
+
+  @Test("notches on one pane add up, and a return to zero is nothing to do")
+  func notchesAddUp() {
+    var steps = ScrollSteps()
+    steps.add(pane: 1, lines: 3)
+    steps.add(pane: 1, lines: 2)
+    #expect(steps.values == [ScrollSteps.Step(pane: 1, lines: 5)])
+    steps.add(pane: 1, lines: -5)
+    #expect(steps.values.isEmpty)
+    steps.add(pane: 1, lines: 0)
+    #expect(steps.values.isEmpty)
+    steps.add(pane: 1, lines: .max)
+    steps.add(pane: 1, lines: 1)
+    #expect(steps.values.first?.lines == .max)
+  }
+
+  @Test("a second pane stays its own step")
+  func panesStaySeparate() {
+    var steps = ScrollSteps()
+    steps.add(pane: 1, lines: 4)
+    steps.add(pane: 2, lines: -2)
+    #expect(steps.values == [
+      ScrollSteps.Step(pane: 1, lines: 4),
+      ScrollSteps.Step(pane: 2, lines: -2),
+    ])
+    steps.add(pane: 1, lines: 1)
+    #expect(steps.values.map(\.pane) == [1, 2, 1])
+    #expect(steps.values.map(\.lines) == [4, -2, 1])
+  }
+
+  @Test("a pane's hit target is its grid, and the seam is only the shared edge")
+  func piecesFollowTheGrid() {
+    let pieces = TmuxContent.pieces(
+      panes: [
+        PaneBox(id: 1, x: 0, y: 0, width: 40, height: 20),
+        PaneBox(id: 2, x: 40, y: 0, width: 40, height: 20),
+      ],
+      windowColumns: 80, windowRows: 20, cell: 10, line: 20, divider: 5)
+    #expect(pieces.map(\.kind) == [.pane(1), .pane(2), .vertical(1)])
+    #expect(pieces[0].frame == CGRect(x: 0, y: 0, width: 400, height: 400))
+    #expect(pieces[1].frame == CGRect(x: 400, y: 0, width: 400, height: 400))
+    #expect(pieces[2].frame == CGRect(x: 397.5, y: 0, width: 5, height: 400))
+  }
+
+  @Test("a pane that fills the window has no seam")
+  func fullWindowHasNoDivider() {
+    let pieces = TmuxContent.pieces(
+      panes: [PaneBox(id: 7, x: 0, y: 0, width: 80, height: 24)],
+      windowColumns: 80, windowRows: 24, cell: 10, line: 20, divider: 5)
+    #expect(pieces.count == 1)
+    #expect(pieces[0].kind == .pane(7))
+    #expect(pieces[0].frame == CGRect(x: 0, y: 0, width: 800, height: 480))
+  }
+
+  @Test("free space under a pane belongs to that pane, so the last row is not the clip")
+  func spareBelowStaysInThePane() {
+    let pane = PaneBox(id: 7, x: 0, y: 0, width: 80, height: 24)
+    let filled = TmuxContent.surfaceFrame(
+      pane: pane, columns: 80, rows: 24, among: [pane], cell: 10, line: 20,
+      view: CGSize(width: 2000, height: 2000))
+    #expect(filled == CGRect(x: 0, y: 0, width: 2000, height: 2000))
+    let exact = TmuxContent.surfaceFrame(
+      pane: pane, columns: 80, rows: 24, among: [pane], cell: 10, line: 20,
+      view: CGSize(width: 800, height: 480))
+    #expect(exact == CGRect(x: 0, y: 0, width: 800, height: 480))
+  }
+
+  @Test("a pane stops at the next one, and a short view does not shrink the grid")
+  func neighborsAndAShortView() {
+    let upper = PaneBox(id: 1, x: 0, y: 0, width: 80, height: 12)
+    let lower = PaneBox(id: 2, x: 0, y: 12, width: 80, height: 12)
+    let top = TmuxContent.surfaceFrame(
+      pane: upper, columns: 80, rows: 12, among: [upper, lower], cell: 10, line: 20,
+      view: CGSize(width: 800, height: 1000))
+    let bottom = TmuxContent.surfaceFrame(
+      pane: lower, columns: 80, rows: 12, among: [upper, lower], cell: 10, line: 20,
+      view: CGSize(width: 800, height: 1000))
+    #expect(top == CGRect(x: 0, y: 0, width: 800, height: 240))
+    #expect(bottom == CGRect(x: 0, y: 240, width: 800, height: 760))
+    let short = TmuxContent.surfaceFrame(
+      pane: upper, columns: 80, rows: 12, among: [upper], cell: 10, line: 20,
+      view: CGSize(width: 800, height: 100))
+    #expect(short.height == 240, "the grid stays whole; the view clips, the frame does not shrink")
+  }
+
+  @Test("a size that is still too tall keeps stepping down")
+  func pointSizeKeepsShrinking() {
+    #expect(TmuxContent.pointSize(asked: 13, scale: 1) { $0 <= 8 } == 8)
+    #expect(TmuxContent.pointSize(asked: 13, scale: 2) { _ in true } == 13)
+    #expect(TmuxContent.pointSize(asked: 13, scale: 0.2) { _ in false } == 5)
   }
 }

@@ -77,6 +77,16 @@ struct CellGeometry: Equatable {
 
   static let empty = CellGeometry(cellWidth: 1, lineHeight: 1, inset: 0, columns: 0, rows: 0)
 
+  /// The cell under `point`, clamped to the grid. A drag that leaves the
+  /// window still has an end; a click in the margin does not, and uses
+  /// [`cell(at:)`] instead.
+  func clampedCell(at point: CGPoint) -> (row: UInt16, column: UInt16)? {
+    guard columns > 0, rows > 0, cellWidth > 0, lineHeight > 0 else { return nil }
+    let column = min(max(Int((point.x - inset) / cellWidth), 0), Int(columns) - 1)
+    let row = min(max(Int((point.y - inset) / lineHeight), 0), Int(rows) - 1)
+    return (UInt16(row), UInt16(column))
+  }
+
   /// The cell under `point`, or `nil` in the margin.
   func cell(at point: CGPoint) -> (row: UInt16, column: UInt16)? {
     let x = (point.x - inset) / cellWidth

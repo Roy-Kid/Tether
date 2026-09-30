@@ -75,8 +75,10 @@ public struct TabContext {
   public let id: UUID
   /// The tab's lease and host, the same shape a workspace plugin is given.
   public let plugin: PluginContext
-  /// The local shell's controlling tty, if the producer exposes one.
-  public let terminalName: String?
+  /// The shell's controlling tty, asked when it is needed. A local shell
+  /// knows it at once. A remote one is learned after connect, so a name
+  /// copied when the plugin attached would stay empty.
+  public let terminalName: () -> String?
   /// Brings this tab to the front.
   public let focus: () -> Void
   /// Closes this plugin's accessory, wherever the host drew it.
@@ -110,7 +112,7 @@ public struct TabContext {
   public let newShell: () -> Void
 
   public init(
-    id: UUID, plugin: PluginContext, terminalName: String? = nil,
+    id: UUID, plugin: PluginContext, terminalName: @escaping () -> String? = { nil },
     focus: @escaping () -> Void, dismissAccessory: @escaping () -> Void,
     present: @escaping (AnyView) -> Void, dismissSheet: @escaping () -> Void,
     insertText: @escaping (String) -> Void = { _ in },

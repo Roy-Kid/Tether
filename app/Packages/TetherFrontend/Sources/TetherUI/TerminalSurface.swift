@@ -27,8 +27,15 @@ public struct TerminalSurface: View {
   let onFocus: () -> Void
   let onScroll: (ScrollTo) -> Void
   let links: TerminalLinks
+  /// A measurement the caller already fitted to the space it has. Nil measures
+  /// the setting's size. A second measurement at that size is larger than a
+  /// fitted frame, and the last line is then clipped away.
+  let metrics: FontMetrics?
   /// The link under a ⌘-held pointer, underlined while it is.
   @State private var hovered: TerminalLink?
+  /// Cells a drag is covering. Nil is a click: nothing highlighted, and the
+  /// clipboard left as it was.
+  @State private var selection: GridSelection?
   /// Whether the hovered link is known to be there.
   @State private var confirmed = false
   /// The size last given to the session. A keyboard animation changes height
@@ -50,7 +57,8 @@ public struct TerminalSurface: View {
     onResize: @escaping (UInt16, UInt16) -> Void = { _, _ in },
     onFocus: @escaping () -> Void = {},
     onScroll: @escaping (ScrollTo) -> Void = { _ in },
-    links: TerminalLinks = .none
+    links: TerminalLinks = .none,
+    metrics: FontMetrics? = nil
   ) {
     self.frame = frame
     self.dirtyRows = dirtyRows
@@ -61,9 +69,10 @@ public struct TerminalSurface: View {
     self.onFocus = onFocus
     self.onScroll = onScroll
     self.links = links
+    self.metrics = metrics
   }
   public var body: some View {
-    let metrics = FontMetrics(size: min(24, max(10, fontSize)))
+    let metrics = self.metrics ?? FontMetrics(size: min(24, max(10, fontSize)))
     let palette = Palette.chosen(setting: appearance, scheme: scheme)
     VStack(spacing: 0) {
       grid(metrics: metrics, palette: palette)
@@ -81,16 +90,24 @@ public struct TerminalSurface: View {
           columns: UInt16(frame.columns), rows: UInt16(frame.rows))
         terminal(metrics: metrics, palette: palette)
           .padding(inset)
+        SelectionHighlight(selection: selection, frame: frame, geometry: cells)
         LinkUnderline(link: hovered, confirmed: confirmed, geometry: cells)
         KeyCapture(
-          onInput: onInput, active: active, lineHeight: metrics.lineHeight,
-          onFocus: onFocus, onScroll: { onScroll(.lines($0)) },
+          onInput: { input in
+            selection = nil
+            onInput(input)
+          }, active: active, lineHeight: metrics.lineHeight,
+          onFocus: onFocus,
+          onScroll: { lines in
+            selection = nil
+            onScroll(.lines(lines))
+          },
           links: links, geometry: cells,
           cursorRect: CGRect(
             x: inset + CGFloat(frame.cursorColumn) * metrics.cellWidth,
             y: inset + CGFloat(frame.cursorRow) * metrics.lineHeight,
             width: metrics.cellWidth, height: metrics.lineHeight),
-          onHover: hover, latch: latch
+          onHover: hover, onSelection: applySelection, selection: selection, latch: latch
         )
         // Filled on purpose. A bare `NSView` has no intrinsic size, so
         // without this it lays out at zero — and a zero-sized view still
@@ -105,6 +122,7 @@ public struct TerminalSurface: View {
           // keeps arriving where they cannot see it. The way back is on
           // screen rather than a shortcut they have to know.
           Button("Jump to the present", systemImage: "arrow.down.to.line") {
+            selection = nil
             onScroll(.live)
           }
           .buttonStyle(.borderedProminent)
@@ -120,10 +138,14 @@ public struct TerminalSurface: View {
       .clipped()
       .onAppear { applyFit(geometry.size, metrics) }
       .onChange(of: geometry.size) { _, size in noteSize(size, metrics) }
+      .onChange(of: frame.columns) { _, _ in selection = nil }
+      .onChange(of: frame.rows) { _, _ in selection = nil }
       .onChange(of: fontSize) { _, _ in
         rowCache.clear()
         applyFit(geometry.size, metrics)
       }
+      .onChange(of: metrics.cellWidth) { _, _ in rowCache.clear() }
+      .onChange(of: metrics.lineHeight) { _, _ in rowCache.clear() }
       .onChange(of: appearance) { _, _ in rowCache.clear() }
       .onChange(of: scheme) { _, _ in rowCache.clear() }
       .onDisappear { pendingFit?.cancel() }
@@ -137,6 +159,24 @@ public struct TerminalSurface: View {
     } else {
       TerminalView(
         frame: frame, dirtyRows: dirtyRows, metrics: metrics, palette: palette, cache: rowCache)
+    }
+  }
+
+  /// A drag highlights as it moves and copies when it ends. The text is taken
+  /// from this frame, not from a selection stored a render ago: the last
+  /// cell of a drag can arrive before SwiftUI has published the highlight.
+  private func applySelection(_ update: SelectionUpdate) {
+    switch update {
+    case .highlight(let kind, let from, let to):
+      selection = GridText.selection(kind, from: from, to: to, in: frame)
+    case .copy(let kind, let from, let to):
+      let resolved = GridText.selection(kind, from: from, to: to, in: frame)
+      selection = resolved
+      if let resolved { Clipboard.write(GridText.string(in: frame, selection: resolved)) }
+    case .copyExisting(let existing):
+      Clipboard.write(GridText.string(in: frame, selection: existing))
+    case .clear:
+      selection = nil
     }
   }
 

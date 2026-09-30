@@ -70,6 +70,9 @@ struct TmuxContent: View {
         model.perform(action)
       }
     }
+    .task(id: model.isShowing ? model.session?.id : nil) {
+      await model.followShellClient()
+    }
   }
 
   /// A pane's history is scrolled by lines. The ends are as many lines as
@@ -107,72 +110,164 @@ struct TmuxContent: View {
       // window painted past the clip.
       let cell = metrics.cellWidth
       let line = metrics.lineHeight
-      ZStack(alignment: .topLeading) {
-        ForEach(
-          model.snapshot?.panes.filter { $0.window == window.id && $0.visible } ?? [], id: \.id
-        ) { pane in
-          TerminalSurface(
-            frame: pane.frame, active: pane.active, inset: 0,
-            onInput: { model.send(pane.id, $0) },
-            onFocus: { if !pane.active { model.perform(.selectPane(id: pane.id)) } },
-            onScroll: { model.scroll(pane.id, lines: Self.lines(for: $0, page: Int32(pane.height))) },
-            links: model.links(for: pane.id)
-          )
-          .overlay(alignment: .topTrailing) {
-            if pane.active {
-              RoundedRectangle(cornerRadius: TmuxStyle.markerRadius).fill(Color.accentColor)
-                .frame(width: TmuxStyle.markerWidth, height: TmuxStyle.markerHeight)
-                .padding(TmuxStyle.markerInset).allowsHitTesting(false).accessibilityHidden(true)
-            }
-          }
-          .frame(width: CGFloat(pane.width) * cell, height: CGFloat(pane.height) * line)
-          .clipped()
-          .position(
-            x: (CGFloat(pane.x) + CGFloat(pane.width) / 2) * cell,
-            y: (CGFloat(pane.y) + CGFloat(pane.height) / 2) * line)
-          if Int(pane.x) + Int(pane.width) < Int(window.width) {
-            Rectangle().fill(.separator).frame(
-              width: TmuxStyle.dividerWidth, height: CGFloat(pane.height) * line
-            )
-            .contentShape(Rectangle())
-            .position(
-              x: CGFloat(pane.x + pane.width) * cell,
-              y: (CGFloat(pane.y) + CGFloat(pane.height) / 2) * line
-            )
-            .gesture(
-              DragGesture().onEnded { value in
-                model.perform(
-                  .resizePane(
-                    id: pane.id,
-                    columns: UInt16(
-                      max(1, min(1000, Int(pane.width) + Int(value.translation.width / cell)))),
-                    rows: pane.height))
-              })
-          }
-          if Int(pane.y) + Int(pane.height) < Int(window.height) {
-            Rectangle().fill(.separator).frame(
-              width: CGFloat(pane.width) * cell, height: TmuxStyle.dividerWidth
-            )
-            .contentShape(Rectangle())
-            .position(
-              x: (CGFloat(pane.x) + CGFloat(pane.width) / 2) * cell,
-              y: CGFloat(pane.y + pane.height) * line
-            )
-            .gesture(
-              DragGesture().onEnded { value in
-                model.perform(
-                  .resizePane(
-                    id: pane.id, columns: pane.width,
-                    rows: UInt16(
-                      max(1, min(500, Int(pane.height) + Int(value.translation.height / line))))))
-              })
-          }
+      let visible = model.snapshot?.panes.filter { $0.window == window.id && $0.visible } ?? []
+      let boxes = visible.map { PaneBox(id: $0.id, x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+      let placed = Self.pieces(
+        panes: boxes, windowColumns: Int(window.width), windowRows: Int(window.height),
+        cell: cell, line: line, divider: TmuxStyle.dividerWidth)
+      // The grid is the top of the surface. Spare room under it stays in
+      // the same view, or the last row is the clip edge and its glyphs are cut.
+      let pieces = placed.map { piece -> PanePiece in
+        guard case .pane(let id) = piece.kind,
+          let pane = visible.first(where: { $0.id == id }),
+          let box = boxes.first(where: { $0.id == id })
+        else { return piece }
+        var expanded = piece
+        expanded.frame = Self.surfaceFrame(
+          pane: box, columns: Int(pane.frame.columns), rows: Int(pane.frame.rows),
+          among: boxes, cell: cell, line: line, view: geometry.size)
+        return expanded
+      }
+      // Placed, not positioned. `position` keeps each pane's hit target as
+      // the whole window and only draws the grid somewhere inside it, so a
+      // wheel or a drag landed on a divider — or on another pane's empty
+      // area — and the terminal under the pointer never saw it. Typing still
+      // worked, because keys follow the first responder.
+      // The surface is given `metrics`. Measuring the setting's size again
+      // draws a larger grid than this frame, and the last line is clipped.
+      PaneLayout(frames: pieces.map(\.frame)) {
+        ForEach(pieces) { piece in
+          pieceView(piece, panes: visible, metrics: metrics, cell: cell, line: line)
         }
       }
       .clipped()
       .onAppear { resize(geometry.size, full) }
       .onChange(of: geometry.size) { _, size in resize(size, full) }
       .onChange(of: fontSize) { _, _ in resize(geometry.size, full) }
+    }
+  }
+
+  /// Where each pane and the seam beside it sits. Panes first, seams after,
+  /// so a drag on the shared edge resizes and a drag on the grid selects.
+  static func pieces(
+    panes: [PaneBox], windowColumns: Int, windowRows: Int,
+    cell: CGFloat, line: CGFloat, divider: CGFloat
+  ) -> [PanePiece] {
+    var surfaces: [PanePiece] = []
+    var seams: [PanePiece] = []
+    for pane in panes {
+      let originX = CGFloat(pane.x) * cell
+      let originY = CGFloat(pane.y) * line
+      let width = CGFloat(pane.width) * cell
+      let height = CGFloat(pane.height) * line
+      surfaces.append(PanePiece(
+        id: "pane-\(pane.id)", kind: .pane(pane.id),
+        frame: CGRect(x: originX, y: originY, width: width, height: height)))
+      if Int(pane.x) + Int(pane.width) < windowColumns {
+        seams.append(PanePiece(
+          id: "v-\(pane.id)", kind: .vertical(pane.id),
+          frame: CGRect(x: originX + width - divider / 2, y: originY, width: divider, height: height)))
+      }
+      if Int(pane.y) + Int(pane.height) < windowRows {
+        seams.append(PanePiece(
+          id: "h-\(pane.id)", kind: .horizontal(pane.id),
+          frame: CGRect(x: originX, y: originY + height - divider / 2, width: width, height: divider)))
+      }
+    }
+    return surfaces + seams
+  }
+
+  /// Where a pane's surface goes. At least the grid. Free space beside and
+  /// under it, up to the next pane or the view, belongs to the same surface:
+  /// a frame that ends on the last row clips that row.
+  static func surfaceFrame(
+    pane: PaneBox, columns: Int, rows: Int, among panes: [PaneBox],
+    cell: CGFloat, line: CGFloat, view: CGSize
+  ) -> CGRect {
+    let x = CGFloat(pane.x) * cell
+    let y = CGFloat(pane.y) * line
+    let gridWidth = max(CGFloat(pane.width), CGFloat(columns)) * cell
+    let gridHeight = max(CGFloat(pane.height), CGFloat(rows)) * line
+    var floor = view.height
+    var rightEdge = view.width
+    let bottom = y + CGFloat(pane.height) * line
+    let right = x + CGFloat(pane.width) * cell
+    for other in panes where other.id != pane.id {
+      let otherTop = CGFloat(other.y) * line
+      let otherLeft = CGFloat(other.x) * cell
+      let otherRight = otherLeft + CGFloat(other.width) * cell
+      let otherBottom = otherTop + CGFloat(other.height) * line
+      if otherTop + 0.5 >= bottom, otherLeft < right, otherRight > x {
+        floor = min(floor, otherTop)
+      }
+      if otherLeft + 0.5 >= right, otherTop < bottom, otherBottom > y {
+        rightEdge = min(rightEdge, otherLeft)
+      }
+    }
+    let roomHeight = floor - y
+    let roomWidth = rightEdge - x
+    return CGRect(
+      x: x, y: y,
+      width: roomWidth >= gridWidth ? roomWidth : gridWidth,
+      height: roomHeight >= gridHeight ? roomHeight : gridHeight)
+  }
+
+  @ViewBuilder
+  private func pieceView(
+    _ piece: PanePiece, panes: [TmuxPaneFrame], metrics: FontMetrics, cell: CGFloat, line: CGFloat
+  ) -> some View {
+    switch piece.kind {
+    case .pane(let id):
+      if let pane = panes.first(where: { $0.id == id }) {
+        // The grid can be a row taller than the layout cell count. The frame
+        // follows the grid, or that row is sliced through the glyphs.
+        let width = max(piece.frame.width, CGFloat(pane.frame.columns) * cell)
+        let height = max(piece.frame.height, CGFloat(pane.frame.rows) * line)
+        paneSurface(pane, metrics: metrics)
+          .frame(width: width, height: height, alignment: .topLeading)
+          .clipped()
+      }
+    case .vertical(let id):
+      if let pane = panes.first(where: { $0.id == id }) {
+        Rectangle().fill(.separator)
+          .frame(width: piece.frame.width, height: piece.frame.height)
+          .contentShape(Rectangle())
+          .gesture(DragGesture().onEnded { value in
+            model.perform(.resizePane(
+              id: pane.id,
+              columns: UInt16(max(1, min(1000, Int(pane.width) + Int(value.translation.width / cell)))),
+              rows: pane.height))
+          })
+      }
+    case .horizontal(let id):
+      if let pane = panes.first(where: { $0.id == id }) {
+        Rectangle().fill(.separator)
+          .frame(width: piece.frame.width, height: piece.frame.height)
+          .contentShape(Rectangle())
+          .gesture(DragGesture().onEnded { value in
+            model.perform(.resizePane(
+              id: pane.id, columns: pane.width,
+              rows: UInt16(max(1, min(500, Int(pane.height) + Int(value.translation.height / line))))))
+          })
+      }
+    }
+  }
+
+  private func paneSurface(_ pane: TmuxPaneFrame, metrics: FontMetrics) -> some View {
+    TerminalSurface(
+      frame: pane.frame, active: pane.active, inset: 0,
+      onInput: { model.send(pane.id, $0) },
+      onFocus: { if !pane.active { model.perform(.selectPane(id: pane.id)) } },
+      onScroll: { model.scroll(pane.id, lines: Self.lines(for: $0, page: Int32(pane.height))) },
+      links: model.links(for: pane.id),
+      metrics: metrics
+    )
+    .overlay(alignment: .topTrailing) {
+      if pane.active {
+        RoundedRectangle(cornerRadius: TmuxStyle.markerRadius).fill(Color.accentColor)
+          .frame(width: TmuxStyle.markerWidth, height: TmuxStyle.markerHeight)
+          .padding(TmuxStyle.markerInset).allowsHitTesting(false).accessibilityHidden(true)
+      }
     }
   }
 
@@ -186,30 +281,82 @@ struct TmuxContent: View {
     _ window: TmuxWindowInfo, in size: CGSize, asked: CGFloat, at full: FontMetrics
   ) -> FontMetrics {
     guard window.width > 0, window.height > 0, size.width > 0, size.height > 0 else { return full }
+    // A point of slack. A grid that lands on the view's edge is clipped
+    // through the last row's glyphs.
     func fits(_ metrics: FontMetrics) -> Bool {
-      CGFloat(window.width) * metrics.cellWidth <= size.width
-        && CGFloat(window.height) * metrics.lineHeight <= size.height
+      CGFloat(window.width) * metrics.cellWidth <= size.width - 1
+        && CGFloat(window.height) * metrics.lineHeight <= size.height - 1
     }
     if fits(full) { return full }
 
     let scale = min(
       size.width / (CGFloat(window.width) * full.cellWidth),
       size.height / (CGFloat(window.height) * full.lineHeight))
-    var candidate = max(5, (asked * scale).rounded(.down))
-    // Three tries, not a search: the estimate is off by a rounded cell at
-    // most, and a layout pass is not the place for a loop that could run.
-    for _ in 0..<3 {
-      let metrics = FontMetrics(size: candidate)
-      if fits(metrics) || candidate <= 5 { return metrics }
+    let chosen = Self.pointSize(asked: asked, scale: scale) { candidate in
+      fits(FontMetrics(size: candidate))
+    }
+    return FontMetrics(size: chosen)
+  }
+
+  /// Whole point sizes from the asked size downward, until `fits` or the floor.
+  /// Never larger than what was asked: a bigger face fills a small window and
+  /// puts the last row back on the clip edge.
+  static func pointSize(asked: CGFloat, scale: CGFloat, fits: (CGFloat) -> Bool) -> CGFloat {
+    var candidate = min(asked, max(5, (asked * scale).rounded(.down)))
+    while candidate > 5 {
+      if fits(candidate) { return candidate }
       candidate -= 1
     }
-    return FontMetrics(size: max(5, candidate))
+    return 5
   }
 
   private func resize(_ size: CGSize, _ metrics: FontMetrics) {
     model.resize(metrics.columns(fitting: size.width), metrics.rows(fitting: size.height))
   }
 }
+/// A pane's place in the window, in tmux cells. The frame it draws is a
+/// separate thing and is not needed to decide where the pointer lands.
+struct PaneBox: Equatable {
+  var id: UInt32
+  var x: UInt16
+  var y: UInt16
+  var width: UInt16
+  var height: UInt16
+}
+
+struct PanePiece: Identifiable, Equatable {
+  enum Kind: Equatable {
+    case pane(UInt32)
+    case vertical(UInt32)
+    case horizontal(UInt32)
+  }
+
+  var id: String
+  var kind: Kind
+  var frame: CGRect
+}
+
+/// Each child is given exactly its rectangle. The hit target is that
+/// rectangle, which is what a wheel and a drag need and what `position`
+/// does not give.
+private struct PaneLayout: Layout {
+  var frames: [CGRect]
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews _: Subviews, cache _: inout ()) -> CGSize {
+    proposal.replacingUnspecifiedDimensions()
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    for index in subviews.indices where frames.indices.contains(index) {
+      let frame = frames[index]
+      subviews[index].place(
+        at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: frame.width, height: frame.height))
+    }
+  }
+}
+
 struct TmuxInspector: View {
   @Bindable var model: TmuxTab
   var body: some View {

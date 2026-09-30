@@ -44,6 +44,12 @@ public final class TmuxTab: TabAttachment {
   /// underneath us at any time, and asking once is not asking.
   private var wanted: (UInt16, UInt16)?
   private var sizeTask: Task<Void, Never>?
+  /// Notches from the wheel that have not been applied yet. One drainer
+  /// owns them: a task per notch finished out of order, and an earlier
+  /// snapshot then painted over a later one, so the wheel appeared to do
+  /// nothing.
+  private var scrollSteps = ScrollSteps()
+  private var scrollTask: Task<Void, Never>?
 
   init(tab: TabContext, owner: @escaping (String) -> TmuxTab?, onClose: @escaping () -> Void) {
     self.tab = tab
@@ -174,6 +180,35 @@ public final class TmuxTab: TabAttachment {
       tab.dismissAccessory()
       return
     }
+    // The shell may already be this session, and its tty is learned after
+    // connect. Covering it before that is known replaces the client: the
+    // status line is not in the pane, and prefix+s never reaches tmux, so
+    // the overlay tmux would have drawn does not appear.
+    if connection != nil, shellSessionID == nil {
+      tab.dismissAccessory()
+      Task { [weak self] in
+        guard let self else { return }
+        if self.tab.terminalName() == nil { self.showing = false }
+        switch await self.shellClient(of: chosen.id) {
+        case .thisSession:
+          self.detachSession()
+        case .other:
+          guard !self.closed else { return }
+          self.cover(chosen, windowID: windowID)
+        case .unknown:
+          // A control client left attached keeps asking for its own size,
+          // and the shell's tmux window follows it.
+          self.detachSession()
+        }
+      }
+      return
+    }
+    cover(chosen, windowID: windowID)
+  }
+
+  /// Puts `chosen` in front of the shell. The shell's own client never
+  /// reaches here: that one stays the shell.
+  private func cover(_ chosen: TmuxSessionInfo, windowID: UInt32?) {
     if session?.id == chosen.id {
       showing = true
       if let windowID { perform(.selectWindow(id: windowID)) }
@@ -185,6 +220,39 @@ public final class TmuxTab: TabAttachment {
         self.tab.dismissAccessory()
       }
     }
+  }
+
+  /// What this tab's shell is doing with `id`. A remote tty does not exist
+  /// at connect, so this waits briefly. Unknown stays unknown: covering the
+  /// shell then is what took its place.
+  private enum ShellClient {
+    case thisSession
+    case other
+    case unknown
+  }
+
+  private func shellClient(of id: String) async -> ShellClient {
+    if shellSessionID == id { return .thisSession }
+    guard let connection else { return .other }
+    for _ in 0..<10 {
+      if closed || Task.isCancelled { return .unknown }
+      if let tty = tab.terminalName() {
+        do {
+          let found = try await connection.tmuxSession(forClientTTY: tty)
+          if closed || Task.isCancelled { return .unknown }
+          if let found {
+            shellSessionID = found
+            return found == id ? .thisSession : .other
+          }
+          return .other
+        } catch {
+          try? await Task.sleep(for: .milliseconds(200))
+          continue
+        }
+      }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+    return .unknown
   }
 
   /// Show the shell this tab was opened with, keeping tmux attached.
@@ -234,11 +302,14 @@ public final class TmuxTab: TabAttachment {
       do {
         let connection = try lease()
         sessions = try await connection.tmuxSessions()
-        if let tty = tab.terminalName {
+        if let tty = tab.terminalName() {
           shellSessionID = try? await connection.tmuxSession(forClientTTY: tty)
         } else {
           shellSessionID = nil
         }
+        // This shell is already the client. The pane view would be a second
+        // one, and prefix would type into the program inside the pane.
+        uncoverShellClient()
       } catch {
         let text = error.localizedDescription
         missing =
@@ -321,8 +392,36 @@ public final class TmuxTab: TabAttachment {
     }
   }
 
+  /// Drops the control client when this tab's shell is already showing the
+  /// session. One client draws it; the other was covering it.
+  func uncoverShellClient() {
+    guard let shellSessionID, session?.id == shellSessionID else { return }
+    detachSession()
+  }
+
+  /// Waits briefly for the shell's tty, which a remote session learns after
+  /// connect, and gets out of the way if that shell is this session.
+  func followShellClient() async {
+    guard connection != nil else { return }
+    let watched = session?.id
+    for _ in 0..<40 {
+      if Task.isCancelled || !showing || session?.id != watched { return }
+      if let tty = tab.terminalName(), let connection {
+        let id = try? await connection.tmuxSession(forClientTTY: tty)
+        if Task.isCancelled || !showing || session?.id != watched { return }
+        shellSessionID = id
+        if id == watched {
+          uncoverShellClient()
+          return
+        }
+      }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+  }
+
   private func attach(_ session: TmuxSessionInfo) async throws {
-    let workspace = try await lease().attachTmux(sessionID: session.id)
+    let connection = try lease()
+    let workspace = try await connection.attachTmux(sessionID: session.id)
     guard !closed, !Task.isCancelled else {
       workspace.detach()
       return
@@ -373,15 +472,30 @@ public final class TmuxTab: TabAttachment {
   }
 
   func scroll(_ pane: UInt32, lines: Int32) {
-    guard !ended else { return }
+    guard !ended, workspace != nil else { return }
+    scrollSteps.add(pane: pane, lines: lines)
+    guard scrollTask == nil else { return }
+    scrollTask = Task { [weak self] in
+      await self?.drainScroll()
+    }
+  }
+
+  private func drainScroll() async {
+    defer { scrollTask = nil }
     guard let workspace else { return }
-    Task { [weak self] in
+    while !scrollSteps.values.isEmpty {
+      let batch = scrollSteps.values
+      scrollSteps = ScrollSteps()
       do {
-        try await workspace.scroll(pane: pane, lines: lines)
-        guard let self, !self.ended else { return }
-        self.snapshot = workspace.snapshot()
+        for step in batch {
+          try await workspace.scroll(pane: step.pane, lines: step.lines)
+        }
+        guard !ended else { return }
+        snapshot = workspace.snapshot()
       } catch {
-        self?.error = error.localizedDescription
+        scrollSteps = ScrollSteps()
+        self.error = error.localizedDescription
+        return
       }
     }
   }
@@ -412,6 +526,34 @@ public final class TmuxTab: TabAttachment {
         try await Task.sleep(for: .milliseconds(100))
         try await workspace.perform(.resize(columns: wanted.0, rows: wanted.1))
       } catch is CancellationError {} catch { self?.error = error.localizedDescription }
+    }
+  }
+}
+
+/// Wheel notches waiting to be applied, with a run of the same pane added
+/// together. Opposite notches that cancel are dropped, so a swipe that
+/// comes back to where it started does not scroll and then undo itself
+/// after the fact.
+struct ScrollSteps: Equatable {
+  struct Step: Equatable {
+    var pane: UInt32
+    var lines: Int32
+  }
+
+  private(set) var values: [Step] = []
+
+  mutating func add(pane: UInt32, lines: Int32) {
+    guard lines != 0 else { return }
+    guard let index = values.indices.last, values[index].pane == pane else {
+      values.append(Step(pane: pane, lines: lines))
+      return
+    }
+    let (partial, overflow) = values[index].lines.addingReportingOverflow(lines)
+    let sum = overflow ? (lines > 0 ? Int32.max : Int32.min) : partial
+    if sum == 0 {
+      values.removeLast()
+    } else {
+      values[index].lines = sum
     }
   }
 }

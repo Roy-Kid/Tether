@@ -69,13 +69,19 @@ public struct KeyCapture: View {
   var geometry: CellGeometry = .empty
   var cursorRect: CGRect = .zero
   var onHover: (TerminalLink?) -> Void = { _ in }
+  var onSelection: (SelectionUpdate) -> Void = { _ in }
+  /// The selection already showing, so a shift-click extends it and ⌘C copies it.
+  var selection: GridSelection?
 
   /// The surface's own: pointing at text needs to know where the cells are.
   init(
     onInput: @escaping (TerminalInput) -> Void, active: Bool, lineHeight: CGFloat,
     onFocus: @escaping () -> Void, onScroll: @escaping (Int32) -> Void,
     links: TerminalLinks, geometry: CellGeometry, cursorRect: CGRect,
-    onHover: @escaping (TerminalLink?) -> Void, latch: Latch = Latch()
+    onHover: @escaping (TerminalLink?) -> Void,
+    onSelection: @escaping (SelectionUpdate) -> Void = { _ in },
+    selection: GridSelection? = nil,
+    latch: Latch = Latch()
   ) {
     self.init(
       onInput: onInput, active: active, lineHeight: lineHeight, onFocus: onFocus,
@@ -85,6 +91,8 @@ public struct KeyCapture: View {
     self.geometry = geometry
     self.cursorRect = cursorRect
     self.onHover = onHover
+    self.onSelection = onSelection
+    self.selection = selection
   }
 
   public init(
@@ -109,7 +117,8 @@ public struct KeyCapture: View {
       MacKeyCapture(
         onInput: onInput, active: active && inputEnabled, onFocus: onFocus,
         onScroll: onScroll, lineHeight: lineHeight,
-        links: links, geometry: geometry, cursorRect: cursorRect, onHover: onHover)
+        links: links, geometry: geometry, cursorRect: cursorRect, onHover: onHover,
+        onSelection: onSelection, selection: selection)
     #else
       // A phone drags the screen itself; the capture view owns that gesture
       // for the same reason the Mac's owns the wheel.

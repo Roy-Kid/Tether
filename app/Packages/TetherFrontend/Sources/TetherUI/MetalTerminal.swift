@@ -169,12 +169,22 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
   @available(*, unavailable)
   required init(coder: NSCoder) { fatalError("not from a nib") }
 
+  /// Drawing only. A wheel and a drag follow the view under the pointer; if
+  /// this one is in front it swallows both, and typing still works because
+  /// keys follow the first responder rather than the pointer.
+  #if os(macOS)
+    override func hitTest(_: NSPoint) -> NSView? { nil }
+  #else
+    override func point(inside _: CGPoint, with _: UIEvent?) -> Bool { false }
+  #endif
+
   func present(frame: ScreenFrame, dirtyRows: Set<Int>?, metrics: FontMetrics, palette: Palette) {
     // Positions, colours and glyph resolution are baked into a row's
     // vertices: a new cell size, palette or display scale makes every row
     // stale, not only the changed ones.
     let restyled = metrics.cellWidth != self.metrics.cellWidth || metrics.lineHeight != self.metrics.lineHeight
       || palette != self.palette || contentScale != builtScale
+      || screen?.columns != frame.columns || screen?.rows != frame.rows
     if restyled { rowVertices.removeAll() }
     screen = frame
     self.metrics = metrics
@@ -234,7 +244,12 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
     }
   #endif
 
-  func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+  func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    // The drawable is new. Drawing into it is what fills the area the
+    // window just gained; leaving the callback empty kept the previous
+    // texture scaled over the new size until the next keystroke.
+    requestDraw()
+  }
 
   func draw(in view: MTKView) {
     guard let drawable = currentDrawable, let descriptor = currentRenderPassDescriptor else { return }

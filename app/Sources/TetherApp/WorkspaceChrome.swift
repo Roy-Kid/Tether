@@ -27,17 +27,14 @@ struct WorkspaceTabBar: View {
         ScrollView(.horizontal) {
           HStack(spacing: 0) {
             ForEach(tabs.visibleTabs) { tab in
-              tabChip(
-                id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil,
-                terminal: true)
+              tabChip(id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil)
                 .id(tab.id)
             }
             ForEach(tabs.visibleExtensions) { entry in
               tabChip(
                 id: entry.id, title: entry.workspace.title,
-                subtitle: entry.workspace.subtitle, symbol: entry.workspace.symbol,
-                terminal: false)
-              .id(entry.id)
+                subtitle: entry.workspace.subtitle, symbol: entry.workspace.symbol)
+                .id(entry.id)
             }
           }
         }
@@ -54,9 +51,7 @@ struct WorkspaceTabBar: View {
     .overlay(alignment: .bottom) { Divider() }
   }
 
-  private func tabChip(
-    id: UUID, title: String, subtitle: String, symbol: String?, terminal: Bool
-  ) -> some View {
+  private func tabChip(id: UUID, title: String, subtitle: String, symbol: String?) -> some View {
     let selected = tabs.selected == id
     let tab = tabs.tabs.first { $0.id == id }
     return HStack(spacing: UIStyle.Space.inline) {
@@ -86,25 +81,6 @@ struct WorkspaceTabBar: View {
       }
       .buttonStyle(ChromeButtonStyle())
       .help(subtitle.isEmpty ? title : "\(title) · \(subtitle)")
-      if terminal {
-        ForEach(tabs.accessories) { plugin in
-          Button {
-            tabs.toggleAccessory(plugin.id, on: id)
-          } label: {
-            Image(systemName: plugin.accessory.symbol)
-              .font(UIStyle.symbol)
-              .foregroundStyle(
-                tab?.attachment(for: plugin.id)?.isShowing == true
-                  || (selected && tabs.isShowingInspector(of: plugin.id))
-                  ? Color.accentColor : Theme.subtle)
-              .frame(width: UIStyle.Mark.iconLarge, height: Chrome.tab)
-          }
-          .buttonStyle(ChromeButtonStyle())
-          .disabled(tab?.canOpen(plugin.id) != true)
-          .help(plugin.accessory.name)
-          .accessibilityLabel("\(plugin.accessory.name), \(title)")
-        }
-      }
       // The space is held whether or not the cross is drawn: a tab that
       // grew by 18pt under the pointer would push the strip along.
       Button {
@@ -141,7 +117,18 @@ struct WorkspaceTabBar: View {
     }
     .accessibilityAddTraits(selected ? .isSelected : [])
     .contextMenu {
-      if tabs.tabs.contains(where: { $0.id == id }) {
+      if let tab = tabs.tabs.first(where: { $0.id == id }) {
+        // A picker has no icon of its own. The tab's menu is how it opens.
+        let pickers = tabs.accessories.filter { $0.accessory.placement == .popover }
+        if !pickers.isEmpty {
+          ForEach(pickers) { plugin in
+            Button(plugin.accessory.name) {
+              tabs.toggleAccessory(plugin.id, on: id)
+            }
+            .disabled(!tab.canOpen(plugin.id))
+          }
+          Divider()
+        }
         Button("Rename…") { tabs.renaming = id }
       }
       Button("Close Tab") { onClose(id) }
@@ -259,14 +246,40 @@ struct HostStatusBar: View {
 
       statusMark
       Spacer(minLength: 0)
-      #if os(macOS)
-        settingsButton
-      #endif
+      HStack(spacing: UIStyle.Space.tight) {
+        ForEach(tabs.accessories.filter { $0.accessory.placement == .inspector }) { plugin in
+          inspectorButton(plugin)
+        }
+        #if os(macOS)
+          settingsButton
+        #endif
+      }
     }
     .padding(.horizontal, UIStyle.Space.inset)
     .frame(height: Chrome.status)
     .background(Theme.sidebar)
     .overlay(alignment: .top) { Divider() }
+  }
+
+  /// An inspector plugin, beside Settings on the trailing edge: one
+  /// toggle for the column beside the terminal, not an icon on every tab.
+  private func inspectorButton(_ plugin: PluginAccessory) -> some View {
+    let showing = tabs.current != nil && tabs.isShowingInspector(of: plugin.id)
+    return Button {
+      guard let tab = tabs.current else { return }
+      tabs.toggleAccessory(plugin.id, on: tab.id)
+    } label: {
+      Image(systemName: plugin.accessory.symbol)
+        .font(UIStyle.symbol)
+        .foregroundStyle(showing ? Color.accentColor : Theme.subtle)
+        .frame(width: UIStyle.Mark.icon, height: Chrome.status)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .disabled(tabs.current?.canOpen(plugin.id) != true)
+    .help(plugin.accessory.name)
+    .accessibilityLabel(plugin.accessory.name)
+    .accessibilityValue(showing ? "Shown" : "Hidden")
   }
 
   private var hostLabel: String {
@@ -340,7 +353,7 @@ struct HostStatusBar: View {
         Image(systemName: "gearshape")
           .font(UIStyle.symbol)
           .foregroundStyle(Theme.subtle)
-          .frame(width: UIStyle.Mark.status, height: Chrome.status)
+          .frame(width: UIStyle.Mark.icon, height: Chrome.status)
           .contentShape(Rectangle())
       }
       .buttonStyle(ChromeButtonStyle())

@@ -39,8 +39,10 @@ For either shape:
   the app may name it; CI fails on any other.
 - Store nonsecret preferences with `PluginPreferences(pluginID:)`.
 
-The host renders each workspace plugin as a toolbar and palette entry, and
-each tab plugin as an icon on every terminal tab plus a submenu under Terminal.
+The host renders each workspace plugin as a toolbar and palette entry.
+A tab plugin kept beside the terminal is a button at the bottom right of
+the window, next to Settings; one that opens a picker is an item on the tab's menu. Both
+also have a submenu under Terminal.
 Inspectors go in the native inspector, settings in Settings → Extensions.
 Turning a plugin off closes its tabs and attachments before deactivation.
 `TetherPluginKitTests` verifies both shapes independently of tmux;
@@ -49,7 +51,7 @@ Swift source API, not a binary ABI or a permission sandbox.
 
 # Using tmux
 
-Open a local shell or connect to a host, then click the tmux icon on the terminal's tab.
+Open a local shell or connect to a host, then right-click the terminal's tab and choose tmux sessions. Clicking the selected tab opens the same picker.
 The machine running that shell must have `tmux` on its command path. Select an existing
 session or name a new one.
 The toolbar creates windows, splits panes and toggles pane zoom. Click a pane to
@@ -66,11 +68,12 @@ session if it still exists. Missing tmux, rejected commands and connection error
 shown in the picker or workspace. Ordinary SSH remains available when tmux is disabled.
 
 Native frames restore existing screen content and a bounded history on attach.
-This initial terminal surface does not yet expose history scrolling or text selection;
-it supports keyboard input, native text composition and clipboard paste. tmux's own
-copy-mode UI is not emitted over control mode. Alternate-screen, cursor-key and paste
-modes are restored; this is not a promise of complete terminal-protocol fidelity for
-every existing application state. Default remote socket only; no automatic reconnect.
+The wheel scrolls that history. A drag selects text, highlights it, and copies it;
+⌘C copies the selection again. Keyboard input, native text composition and clipboard
+paste work as well. tmux's own copy-mode UI is not emitted over control mode.
+Alternate-screen, cursor-key and paste modes are restored; this is not a promise of
+complete terminal-protocol fidelity for every existing application state. Default
+remote socket only; no automatic reconnect.
 
 # Verification
 

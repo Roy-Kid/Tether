@@ -243,6 +243,35 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.accessory == nil)
   }
 
+  @Test("clicking the selected tab opens the picker, and leaves the inspector alone")
+  func selectedTabClickSkipsTheInspector() {
+    let tabs = TabSet()
+    tabs.adopt(tab(.local, name: "Terminal 1"))
+    let id = tabs.selected!
+    tabs.accessories = [
+      PluginAccessory(
+        id: "test.files", title: "Files",
+        accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector)),
+      PluginAccessory(
+        id: "test.tab", title: "Test", accessory: TabAccessory(symbol: "star", name: "things")),
+    ]
+    tabs.current?.attach(StubAttachment(), for: "test.files")
+    tabs.current?.attach(StubAttachment(), for: "test.tab")
+    tabs.handleTabClick(id)
+    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
+    #expect(!tabs.inspector)
+
+    tabs.accessory = nil
+    tabs.accessories = [
+      PluginAccessory(
+        id: "test.files", title: "Files",
+        accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
+    ]
+    tabs.handleTabClick(id)
+    #expect(tabs.accessory == nil)
+    #expect(!tabs.inspector)
+  }
+
   @Test("an accessory kept beside the terminal opens the inspector, not a popover")
   func inspectorAccessoryTogglesTheInspector() {
     let tabs = TabSet()

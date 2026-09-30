@@ -90,6 +90,9 @@ public enum UIStyle {
   public static let treeWidth: CGFloat = 260
   public static let listHeight: CGFloat = 280
   public static let selectionOpacity = 0.12
+  /// Drawn over glyphs, so it has to read as a selection and still leave
+  /// the text visible. A list row's highlight is too faint for that.
+  public static let textSelectionOpacity = 0.40
   public static let hoverOpacity = 0.06
   /// Hover in a list someone is choosing from, where the row under the
   /// pointer is the answer being considered and has to read as one.
