@@ -51,7 +51,12 @@
       if !boxes.isEmpty {
         let stack = NSStackView(views: boxes)
         stack.orientation = .vertical
+        stack.alignment = .width
         stack.spacing = UIStyle.Space.inline
+        // An empty field's intrinsic width is the caret. The alert sizes the
+        // accessory from fittingSize, so pin the field or it draws as a ring.
+        let width = boxes.map { $0.widthAnchor.constraint(equalToConstant: UIStyle.treeWidth) }
+        NSLayoutConstraint.activate(width)
         stack.frame = NSRect(
           x: 0, y: 0, width: UIStyle.treeWidth,
           height: CGFloat(boxes.count) * (UIStyle.controlHeight + UIStyle.Space.inline))
