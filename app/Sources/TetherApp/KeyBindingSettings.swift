@@ -31,13 +31,15 @@ struct KeyBindingSettings: View {
         Text("\(filtered.count) commands")
           .foregroundStyle(.secondary)
         Spacer()
-        Button("Reset All") {
-          recording = nil
-          problem = nil
-          store.resetAll()
+        if commands.contains(where: { store.bindings(for: $0) != $0.defaults }) {
+          Button("Reset All") {
+            recording = nil
+            problem = nil
+            store.resetAll()
+          }
         }
-        .disabled(store.overrides.isEmpty)
       }
+      .frame(minHeight: 24)
     } footer: {
       Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Assigned shortcuts take priority over terminal input.")
     }
@@ -87,16 +89,21 @@ struct KeyBindingSettings: View {
         .help(command.id)
       shortcut(command, slot: 0)
       shortcut(command, slot: 1)
-      Button {
-        recording = nil
-        do { try store.reset(command, commands: commands); problem = nil }
-        catch { problem = error.localizedDescription }
-      } label: { Image(systemName: "arrow.counterclockwise") }
-      .buttonStyle(.borderless)
-      .frame(width: 20)
-      .disabled(!modified)
-      .help("Reset \(command.title)")
-      .accessibilityLabel("Reset \(command.title)")
+      Group {
+        if modified {
+          Button {
+            recording = nil
+            do { try store.reset(command, commands: commands); problem = nil }
+            catch { problem = error.localizedDescription }
+          } label: { Image(systemName: "arrow.counterclockwise") }
+          .buttonStyle(.borderless)
+          .help("Reset \(command.title)")
+          .accessibilityLabel("Reset \(command.title)")
+        } else {
+          Color.clear.allowsHitTesting(false).accessibilityHidden(true)
+        }
+      }
+      .frame(width: 20, height: 22)
     }
     .padding(.vertical, 3)
   }
@@ -134,16 +141,22 @@ struct KeyBindingSettings: View {
       .help(modified
         ? "Modified · Default: \(defaultLabel)"
         : binding?.label ?? "Record \(name.lowercased()) shortcut")
-      Button {
-        recording = nil
-        do { try store.set(nil, for: command, slot: slot, commands: commands); problem = nil }
-        catch { problem = error.localizedDescription }
-      } label: { Image(systemName: "xmark.circle.fill").font(.caption) }
-      .buttonStyle(.borderless)
-      .foregroundStyle(.secondary)
-      .disabled(binding == nil)
-      .accessibilityLabel("Clear \(name.lowercased()) shortcut for \(command.title)")
-      .help("Clear shortcut")
+      Group {
+        if binding != nil {
+          Button {
+            recording = nil
+            do { try store.set(nil, for: command, slot: slot, commands: commands); problem = nil }
+            catch { problem = error.localizedDescription }
+          } label: { Image(systemName: "xmark.circle.fill").font(.caption) }
+          .buttonStyle(.borderless)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Clear \(name.lowercased()) shortcut for \(command.title)")
+          .help("Clear shortcut")
+        } else {
+          Color.clear.allowsHitTesting(false).accessibilityHidden(true)
+        }
+      }
+      .frame(width: 16, height: 22)
     }
     .frame(width: 128)
     .background {
