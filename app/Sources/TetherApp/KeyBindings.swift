@@ -42,13 +42,41 @@ struct KeyBinding: Codable, Hashable {
   }
 
   var label: String {
-    var parts: [String] = []
-    if modifiers.contains(.control) { parts.append("Ctrl") }
-    if modifiers.contains(.option) { parts.append("Alt") }
-    if modifiers.contains(.shift) { parts.append("Shift") }
-    if modifiers.contains(.command) { parts.append("⌘") }
-    parts.append(Self.namedKeys[key] ?? key.uppercased())
-    return parts.joined(separator: "+")
+    #if os(macOS)
+      modifierLabels.map(\.symbol).joined() + keyLabel
+    #else
+      legacyLabel
+    #endif
+  }
+
+  /// Spoken names stay readable even when the visible shortcut uses symbols.
+  var accessibilityLabel: String {
+    (modifierLabels.map(\.name) + [keyLabel]).joined(separator: "+")
+  }
+
+  /// Display notation must not make shortcuts harder to find by typing.
+  var searchLabels: [String] {
+    [label, accessibilityLabel, legacyLabel,
+     legacyLabel.replacingOccurrences(of: "Alt+", with: "Option+")
+       .replacingOccurrences(of: "⌘+", with: "Cmd+")]
+  }
+
+  private var keyLabel: String { Self.namedKeys[key] ?? key.uppercased() }
+
+  private var modifierLabels: [(symbol: String, name: String)] {
+    [
+      (KeyModifiers.control, "⌃", "Control"),
+      (KeyModifiers.option, "⌥", "Option"),
+      (KeyModifiers.shift, "⇧", "Shift"),
+      (KeyModifiers.command, "⌘", "Command"),
+    ].compactMap { modifiers.contains($0.0) ? (symbol: $0.1, name: $0.2) : nil }
+  }
+
+  private var legacyLabel: String {
+    accessibilityLabel
+      .replacingOccurrences(of: "Control+", with: "Ctrl+")
+      .replacingOccurrences(of: "Option+", with: "Alt+")
+      .replacingOccurrences(of: "Command+", with: "⌘+")
   }
 }
 
@@ -149,8 +177,9 @@ final class KeyBindingStore {
   func filtered(_ commands: [KeyBindingCommand], query: String, boundOnly: Bool) -> [KeyBindingCommand] {
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
     return commands.filter {
-      let labels = requestedBindings(for: $0).compactMap { $0?.label }.joined(separator: " / ")
-      return (!boundOnly || !labels.isEmpty)
+      let bindings = requestedBindings(for: $0).compactMap { $0 }
+      let labels = bindings.flatMap(\.searchLabels).joined(separator: " / ")
+      return (!boundOnly || !bindings.isEmpty)
         && (query.isEmpty || "\($0.title) \($0.group) \($0.id) \(labels)"
           .localizedCaseInsensitiveContains(query))
     }
@@ -280,7 +309,12 @@ final class KeyBindingStore {
     case conflict(String)
     var errorDescription: String? {
       switch self {
-      case .invalid: "Use Ctrl, Alt or Command with a key, or a function key."
+      case .invalid:
+        #if os(macOS)
+          "Use ⌃, ⌥ or ⌘ with a key, or a function key."
+        #else
+          "Use Ctrl, Alt or Command with a key, or a function key."
+        #endif
       case .conflict(let title): "Already assigned to \(title). Clear that binding first."
       }
     }

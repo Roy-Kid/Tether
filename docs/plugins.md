@@ -70,7 +70,9 @@ without a default shortcut. Search by command, group or shortcut, or toggle grou
 with the button beside the search field. Both controls stay visible while scrolling.
 Each command has independent Primary and
 Secondary shortcuts; either runs the same action. Click a slot and press a
-combination of Ctrl, Alt (Option), Shift and Command with a key, or a function key.
+combination of ⌃, ⌥, ⇧ and ⌘ with a key, or a function key.
+macOS displays these modifier symbols throughout shortcut settings, menus and
+tooltips. Search also accepts modifier names such as `ctrl`, `option` and `cmd`.
 Esc cancels recording. Consecutive key sequences are not supported.
 
 Changes apply immediately and persist locally across launches. With an iCloud-enabled

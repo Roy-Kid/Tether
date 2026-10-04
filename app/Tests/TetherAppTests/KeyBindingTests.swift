@@ -131,7 +131,11 @@ struct KeyBindingTests {
     #expect(KeyBinding("f12", []).isValid)
     #expect(KeyBinding("space", .control).isValid)
     #expect(KeyBinding("left", .option).isValid)
-    #expect(KeyBinding("x", [.control, .option, .shift]).label == "Ctrl+Alt+Shift+X")
+    #if os(macOS)
+      #expect(KeyBinding("x", [.control, .option, .shift]).label == "⌃⌥⇧X")
+    #else
+      #expect(KeyBinding("x", [.control, .option, .shift]).label == "Ctrl+Alt+Shift+X")
+    #endif
   }
 
   @Test("malformed preferences fall back to defaults without crashing")
@@ -158,6 +162,17 @@ struct KeyBindingTests {
       #expect(store.filtered(commands, query: "", boundOnly: true).contains(rename) == false)
       try store.set(KeyBinding("r", .control), for: rename, slot: 1, commands: commands)
       #expect(store.filtered(commands, query: "ctrl+r", boundOnly: true) == [rename])
+      #if os(macOS)
+        #expect(store.filtered(commands, query: "⌃R", boundOnly: true) == [rename])
+      #endif
+      try store.set(KeyBinding("r", [.control, .option, .shift, .command]),
+                    for: rename, slot: 1, commands: commands)
+      for query in ["ctrl+alt+shift+⌘+r", "ctrl+option+shift+cmd+r", "control+option+shift+command+r"] {
+        #expect(store.filtered(commands, query: query, boundOnly: true) == [rename])
+      }
+      #if os(macOS)
+        #expect(store.filtered(commands, query: "⌃⌥⇧⌘R", boundOnly: true) == [rename])
+      #endif
       #expect(store.filtered(commands, query: "window", boundOnly: false).count == 2)
       #expect(store.filtered(commands, query: "nothing matches", boundOnly: false).isEmpty)
     }
