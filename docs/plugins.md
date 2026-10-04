@@ -153,11 +153,16 @@ Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to 
 Unassigned Control letters are sent unchanged as control input;
 the shell or editor decides what they do, including when cursor-key mode changes.
 The command palette, Quick Switch and host picker accept Ctrl+P/N as Up/Down.
+On macOS, these popups and the tmux session/window picker also show Cmd+1 through
+Cmd+9 beside their first nine available items. Pressing a number with Cmd immediately
+activates that item; filtering or entering a submenu updates the numbers. Disabled
+items are skipped. While a popup is open, these keys take priority over workspace
+bindings; closing it restores the usual bindings.
 Their search fields keep native Ctrl+B/F character movement and Ctrl+A/E
 beginning/end movement. The file tree accepts Ctrl+P/N to select rows and
 Ctrl+B/F as Left/Right to collapse/expand folders or move to their parent/first
-child. Custom workspace
-bindings still take priority when explicitly assigned.
+child. Except for a popup's numbered shortcuts, custom workspace bindings still
+take priority when explicitly assigned.
 
 Common operations follow the focused control. Native text fields in the workspace,
 Settings, sheets and popovers use AppKit editing, with these additional Unix-style

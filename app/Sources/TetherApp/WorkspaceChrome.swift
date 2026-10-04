@@ -501,6 +501,11 @@ struct HostPicker: View {
     .onPickerNavigation { movement in
       selection.navigate(movement, in: orderedHosts.map(\.id))
     }
+    .onPickerQuickSelection(count: orderedHosts.count) { index in
+      let hosts = orderedHosts
+      guard hosts.indices.contains(index) else { return }
+      choose(hosts[index])
+    }
   }
 
   private var orderedHosts: [Host] {
@@ -578,6 +583,7 @@ struct HostPicker: View {
           .foregroundStyle(Theme.text)
           .lineLimit(1)
         Spacer(minLength: 0)
+        PickerShortcutHint(index: orderedHosts.firstIndex { $0.id == host.id })
         Image(systemName: "checkmark")
           .font(UIStyle.accessory)
           .foregroundStyle(current ? Theme.text : .clear)
