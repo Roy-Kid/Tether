@@ -114,13 +114,13 @@ struct KeyBindingSettings: View {
     let binding = store.bindings(for: command)[slot]
     let modified = binding != command.defaults[slot]
     let name = slot == 0 ? "Primary" : "Secondary"
-    let defaultLabel = command.defaults[slot]?.label ?? "Unassigned"
+    let defaultLabel = command.defaults[slot]?.label ?? "Not set"
     return HStack(spacing: 2) {
       Button {
         problem = nil
         recording = active ? nil : target
       } label: {
-        Text(active ? "Press keys…" : binding?.label ?? "Record…")
+        Text(active ? "Press keys…" : binding?.label ?? "Not set")
           .font(.system(size: 11, design: .monospaced))
           .foregroundStyle(modified ? Color.accentColor : Color.primary)
           .lineLimit(1)
@@ -136,7 +136,7 @@ struct KeyBindingSettings: View {
             .allowsHitTesting(false)
         }
       }
-      .accessibilityLabel("\(command.title), \(name): \(binding?.label ?? "Unassigned")")
+      .accessibilityLabel("\(command.title), \(name): \(binding?.label ?? "Not set")")
       .accessibilityValue(modified ? "Modified from default" : "Default")
       .help(modified
         ? "Modified · Default: \(defaultLabel)"
