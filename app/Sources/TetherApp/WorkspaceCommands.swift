@@ -82,7 +82,8 @@ private struct PluginShortcut: ViewModifier {
   func body(content: Content) -> some View {
     content
       #if os(macOS)
-        .keyboardShortcut(tabs.keyBindings.overrides[id]?.compactMap { $0 }.first?.keyboardShortcut)
+        .keyboardShortcut(tabs.keyBindings.bindings(for: KeyBindingCommand(id: id, title: id, group: ""))
+          .compactMap { $0 }.first?.keyboardShortcut)
         .disabled(enabled != true)
       #endif
   }

@@ -20,6 +20,7 @@ final class HostCloudSync: CKSyncEngineDelegate {
   private var restartRequested = false
   private let zone = CKRecordZone.ID(zoneName: "TetherHosts")
   private var account: String?
+  private var failureGeneration = 0
   var continuityDatabase: CKDatabase? { engine == nil ? nil : container?.privateCloudDatabase }
 
   init(store: HostStore) { self.store = store }
@@ -85,24 +86,42 @@ final class HostCloudSync: CKSyncEngineDelegate {
     try store.switchAccount(scope)
     store.importLocalLibrary()
     account = scope
-    let state = try store.snapshot.syncState.map { try JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: $0) }
+    // An older app may have advanced past records it did not understand.
+    // Read the account in full once when enabling key binding sync.
+    let savedState = store.keyBindings?.needsInitialCloudFetch == true ? nil : store.snapshot.syncState
+    let state = try savedState.map { try JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: $0) }
     var configuration = CKSyncEngine.Configuration(database: container.privateCloudDatabase,
       stateSerialization: state, delegate: self)
     // Foreground sync is explicit; automatic sync also runs when the system permits.
     configuration.automaticallySync = true
     engine = CKSyncEngine(configuration)
     if state == nil { engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zone))]) }
+    // Existing installations already have a host sync token. The preferences
+    // zone must also be created when upgrading those installations.
+    engine?.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: KeyBindingCloudRecords.zone))])
     enqueue()
   }
 
   func enqueue() {
     guard let store, let engine, account == store.scope else { return }
     store.noteKeysAwaitingSync()
-    let pending = store.snapshot.records.values.filter { $0.dirty && $0.conflicts.isEmpty }.map {
+    var pending = store.snapshot.records.values.filter { $0.dirty && $0.conflicts.isEmpty }.map {
       CKSyncEngine.PendingRecordZoneChange.saveRecord(CKRecord.ID(recordName: $0.profile.id.uuidString, zoneID: zone))
     }
+    let bindingIDs = Set(store.keyBindings?.pending ?? [])
+    pending += bindingIDs.map {
+      CKSyncEngine.PendingRecordZoneChange.saveRecord(KeyBindingCloudRecords.id($0))
+    }
+    // Fetching the winning server revision can clean an outbox entry before
+    // its queued save is sent. Remove that save from the engine as well.
+    engine.state.remove(pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges.filter {
+      if case .saveRecord(let id) = $0, id.zoneID == KeyBindingCloudRecords.zone {
+        return !bindingIDs.contains(id.recordName)
+      }
+      return false
+    })
     engine.state.add(pendingRecordZoneChanges: pending)
-    store.setSyncStatus(pending.isEmpty ? "Synced" : "Changes waiting to sync")
+    if store.syncFailure == nil { store.setSyncStatus(pending.isEmpty ? "Synced" : "Changes waiting to sync") }
   }
 
   /// Forgets how far this device had read and reads the whole library
@@ -126,17 +145,22 @@ final class HostCloudSync: CKSyncEngineDelegate {
 
   func synchronize() async {
     guard let engine else { await start(); return }
+    let failures = failureGeneration
     do {
       store?.setSyncStatus("Syncing")
       try await engine.fetchChanges()
+      guard self.engine === engine else { return }
+      if failures == failureGeneration { store?.keyBindings?.didFetchCloud() }
       enqueue()
       try await engine.sendChanges()
       guard self.engine === engine else { return }
+      guard failures == failureGeneration else { return }
       let conflicts = store?.snapshot.records.values.contains { !$0.conflicts.isEmpty } ?? false
-      let pending = store?.snapshot.records.values.contains { $0.dirty } ?? false
+      let pending = (store?.snapshot.records.values.contains { $0.dirty } ?? false)
+        || !(store?.keyBindings?.pending.isEmpty ?? true)
       store?.setSyncStatus(conflicts ? "Configuration conflict" : pending ? "Changes waiting to sync" : "Synced")
       store?.didSync()
-    } catch { store?.setSyncStatus("Sync failed", failure: error.localizedDescription) }
+    } catch { if self.engine === engine { failed(error) } }
   }
 
   nonisolated func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
@@ -158,10 +182,22 @@ final class HostCloudSync: CKSyncEngineDelegate {
         for modification in changes.modifications { try receive(modification.record) }
         // Tether deletes with a tombstone, never by removing the record, so
         // a record that is simply gone went with something iCloud did.
-        let gone = changes.deletions.compactMap { UUID(uuidString: $0.recordID.recordName) }
+        let gone = changes.deletions.filter { $0.recordID.zoneID == zone }
+          .compactMap { UUID(uuidString: $0.recordID.recordName) }
         if !gone.isEmpty { try store.vanish(gone) }
+        let removed = changes.deletions.filter { $0.recordID.zoneID == KeyBindingCloudRecords.zone }
+          .map { $0.recordID.recordName }
+        store.keyBindings?.removeCloudRecords(removed)
+        engine.state.remove(pendingRecordZoneChanges: removed.map { .saveRecord(KeyBindingCloudRecords.id($0)) })
+        enqueue()
       case .sentRecordZoneChanges(let changes):
         for record in changes.savedRecords {
+          if record.recordID.zoneID == KeyBindingCloudRecords.zone {
+            let sent = try KeyBindingCloudRecords.change(in: record)
+            store.keyBindings?.didSave(sent, for: record.recordID.recordName,
+              systemFields: KeyBindingCloudRecords.systemFields(record))
+            continue
+          }
           guard let id = UUID(uuidString: record.recordID.recordName),
             let payload = record["profile"] as? Data else { continue }
           let sent = try JSONDecoder().decode(HostProfile.self, from: payload)
@@ -185,8 +221,16 @@ final class HostCloudSync: CKSyncEngineDelegate {
         for failure in changes.failedRecordSaves {
           if failure.error.code == .serverRecordChanged, let server = failure.error.serverRecord {
             try receive(server)
+          } else if failure.record.recordID.zoneID == KeyBindingCloudRecords.zone,
+            failure.error.code == .zoneNotFound || failure.error.code == .unknownItem {
+            if failure.error.code == .zoneNotFound {
+              store.keyBindings?.prepareReupload()
+              engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: KeyBindingCloudRecords.zone))])
+            } else {
+              store.keyBindings?.retryMissingRecord(failure.record.recordID.recordName)
+            }
           } else {
-            store.setSyncStatus("Sync failed", failure: failure.error.localizedDescription)
+            failed(failure.error)
           }
         }
         enqueue()
@@ -205,11 +249,22 @@ final class HostCloudSync: CKSyncEngineDelegate {
             try store.vanish()
           }
         }
+        for deletion in changes.deletions where deletion.zoneID == KeyBindingCloudRecords.zone {
+          if deletion.reason == .encryptedDataReset {
+            store.keyBindings?.prepareReupload()
+            engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: KeyBindingCloudRecords.zone))])
+            enqueue()
+          } else {
+            let ids = store.keyBindings.map { Array($0.entries.keys) } ?? []
+            store.keyBindings?.removeCloudRecords(ids)
+            engine.state.remove(pendingRecordZoneChanges: ids.map { .saveRecord(KeyBindingCloudRecords.id($0)) })
+          }
+        }
       case .sentDatabaseChanges(let changes):
-        if let failure = changes.failedZoneSaves.first { store.setSyncStatus("Sync failed", failure: failure.error.localizedDescription) }
+        if let failure = changes.failedZoneSaves.first { failed(failure.error) }
       default: break
       }
-    } catch { store.setSyncStatus("Sync failed", failure: error.localizedDescription) }
+    } catch { failed(error) }
   }
 
   /// A sync engine introduces itself with a sign-in to the account it
@@ -235,6 +290,11 @@ final class HostCloudSync: CKSyncEngineDelegate {
   }
 
   private func receive(_ record: CKRecord) throws {
+    if record.recordID.zoneID == KeyBindingCloudRecords.zone {
+      try store?.keyBindings?.receive(KeyBindingCloudRecords.change(in: record),
+        for: record.recordID.recordName, systemFields: KeyBindingCloudRecords.systemFields(record))
+      return
+    }
     guard record.recordType == "TetherHost", let payload = record["profile"] as? Data else { return }
     let profile = try JSONDecoder().decode(HostProfile.self, from: payload)
     guard record.recordID.recordName == profile.id.uuidString else { throw IdentityError.invalidConfiguration }
@@ -256,7 +316,7 @@ final class HostCloudSync: CKSyncEngineDelegate {
   private func batch(_ context: CKSyncEngine.SendChangesContext, engine: CKSyncEngine) -> CKSyncEngine.RecordZoneChangeBatch? {
     guard self.engine === engine, let store, store.scope == account else { return nil }
     do {
-      let records = try store.snapshot.records.values.filter { $0.dirty && $0.conflicts.isEmpty }.prefix(100).compactMap { entry -> CKRecord? in
+      var records = try store.snapshot.records.values.filter { $0.dirty && $0.conflicts.isEmpty }.prefix(100).compactMap { entry -> CKRecord? in
         let id = CKRecord.ID(recordName: entry.profile.id.uuidString, zoneID: zone)
         guard context.options.scope.contains(id) else { return nil }
         let record: CKRecord
@@ -276,8 +336,19 @@ final class HostCloudSync: CKSyncEngineDelegate {
         }
         return record
       }
+      if let bindings = store.keyBindings {
+        for id in bindings.pending where context.options.scope.contains(KeyBindingCloudRecords.id(id)) {
+          if records.count >= 100 { break }
+          if let entry = bindings.entries[id] { records.append(try KeyBindingCloudRecords.record(id, entry: entry)) }
+        }
+      }
       return records.isEmpty ? nil : CKSyncEngine.RecordZoneChangeBatch(recordsToSave: records)
-    } catch { store.setSyncStatus("Sync failed", failure: error.localizedDescription); return nil }
+    } catch { failed(error); return nil }
+  }
+
+  private func failed(_ error: Error) {
+    failureGeneration += 1
+    store?.setSyncStatus("Sync failed", failure: error.localizedDescription)
   }
 
   private func archive(_ record: CKRecord) -> Data {

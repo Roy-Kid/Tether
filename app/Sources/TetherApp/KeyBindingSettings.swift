@@ -32,6 +32,7 @@ struct KeyBindingSettings: View {
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
     }
+    .onChange(of: commands, initial: true) { _, commands in store.register(commands) }
   }
 
   private var searchBar: some View {
@@ -71,7 +72,7 @@ struct KeyBindingSettings: View {
       .buttonStyle(ChromeButtonStyle(selected: showingHelp))
       .accessibilityLabel("Key binding help")
       .popover(isPresented: $showingHelp) {
-        Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input.")
+        Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input. Custom bindings, clears and resets sync through iCloud when available. Orange shortcuts are inactive because another command has the same binding; hover for details.")
           .font(.callout)
           .padding(12)
           .frame(width: 280)
@@ -85,6 +86,12 @@ struct KeyBindingSettings: View {
   private var commandList: some View {
     if let problem {
       Section { Text(problem).foregroundStyle(.red).accessibilityLabel("Shortcut error: \(problem)") }
+    }
+    if commands.contains(where: { command in (0..<2).contains { store.conflict(for: command, slot: $0) != nil } }) {
+      Section {
+        Text("Some shortcuts conflict after syncing. Shortcuts marked in orange are inactive. Reassign or clear them to resolve the conflict.")
+          .foregroundStyle(.orange)
+      }
     }
     if filtered.isEmpty {
       Section { Text("No matching commands").foregroundStyle(.secondary) }
@@ -120,7 +127,7 @@ struct KeyBindingSettings: View {
   }
 
   private func row(_ command: KeyBindingCommand) -> some View {
-    let modified = store.bindings(for: command) != command.defaults
+    let modified = store.requestedBindings(for: command) != command.defaults
     return HStack(spacing: 8) {
       Text(command.title)
         .foregroundStyle(modified ? Color.accentColor : Color.primary)
@@ -150,7 +157,8 @@ struct KeyBindingSettings: View {
   private func shortcut(_ command: KeyBindingCommand, slot: Int) -> some View {
     let target = Slot(command: command.id, index: slot)
     let active = recording == target
-    let binding = store.bindings(for: command)[slot]
+    let binding = store.requestedBindings(for: command)[slot]
+    let conflict = store.conflict(for: command, slot: slot)
     let modified = binding != command.defaults[slot]
     let name = slot == 0 ? "Primary" : "Secondary"
     let defaultLabel = command.defaults[slot]?.label ?? "Not set"
@@ -161,25 +169,25 @@ struct KeyBindingSettings: View {
       } label: {
         Text(active ? "Press keys…" : binding?.label ?? "Not set")
           .font(.system(size: 11, design: .monospaced))
-          .foregroundStyle(modified ? Color.accentColor : Color.primary)
+          .foregroundStyle(conflict != nil ? Color.orange : modified ? Color.accentColor : Color.primary)
           .lineLimit(1)
           .minimumScaleFactor(0.75)
           .frame(maxWidth: .infinity, minHeight: 22)
       }
       .buttonStyle(.bordered)
-      .tint(active || modified ? .accentColor : .secondary)
+      .tint(conflict != nil ? .orange : active || modified ? .accentColor : .secondary)
       .overlay {
         if modified {
           RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1)
+            .strokeBorder((conflict != nil ? Color.orange : Color.accentColor).opacity(0.7), lineWidth: 1)
             .allowsHitTesting(false)
         }
       }
       .accessibilityLabel("\(command.title), \(name): \(binding?.label ?? "Not set")")
-      .accessibilityValue(modified ? "Modified from default" : "Default")
-      .help(modified
+      .accessibilityValue(conflict.map { "Inactive: " + $0 } ?? (modified ? "Modified from default" : "Default"))
+      .help(conflict ?? (modified
         ? "Modified · Default: \(defaultLabel)"
-        : binding?.label ?? "Record \(name.lowercased()) shortcut")
+        : binding?.label ?? "Record \(name.lowercased()) shortcut"))
       Group {
         if binding != nil {
           Button {

@@ -59,25 +59,87 @@ struct KeyBindingCommand: Identifiable, Equatable {
   var defaults: [KeyBinding?] = [nil, nil]
 }
 
-/// Only overrides are persisted: clearing a default is different from inheriting it.
+/// Local preferences and a durable outbox, partitioned by Apple account.
 @MainActor @Observable
 final class KeyBindingStore {
   static let preferenceKey = "keyBindings.v1"
-  private(set) var overrides: [String: [KeyBinding?]]
+  static let syncPreferenceKey = "keyBindings.sync.v1"
+  private var archive: KeyBindingArchive
+  private var knownCommands = WorkspaceAction.allCases.map(\.command)
   private let defaults: UserDefaults
+  @ObservationIgnored var onChange: (() -> Void)?
+
+  var account: String { archive.account }
+  var entries: [String: KeyBindingSyncEntry] { archive.accounts[account] ?? [:] }
+  var overrides: [String: [KeyBinding?]] { entries.compactMapValues(\.change.bindings) }
+  var pending: [String] { entries.filter { $0.value.dirty }.keys.sorted() }
+  var needsInitialCloudFetch: Bool { !archive.initializedAccounts.contains(account) }
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
-    let decoded = defaults.data(forKey: Self.preferenceKey).flatMap {
-      try? JSONDecoder().decode([String: [KeyBinding?]].self, from: $0)
-    } ?? [:]
-    overrides = decoded.filter { _, bindings in
-      bindings.count == 2 && bindings.compactMap { $0 }.allSatisfy(\.isValid)
+    if let data = defaults.data(forKey: Self.syncPreferenceKey),
+      var saved = try? JSONDecoder().decode(KeyBindingArchive.self, from: data) {
+      saved.accounts = saved.accounts.mapValues { $0.filter { $0.value.change.isValid } }
+      archive = saved
+    } else {
+      let legacy = defaults.data(forKey: Self.preferenceKey).flatMap {
+        try? JSONDecoder().decode([String: [KeyBinding?]].self, from: $0)
+      } ?? [:]
+      // Existing preferences have no edit time. Cloud revisions win when the
+      // same command already exists; untouched commands migrate independently.
+      let entries = legacy.mapValues {
+        KeyBindingSyncEntry(change: KeyBindingChange(bindings: $0,
+          modified: .distantPast, token: UUID().uuidString))
+      }.filter { $0.value.change.isValid }
+      archive = KeyBindingArchive(accounts: ["local": entries])
     }
   }
 
+  func register(_ commands: [KeyBindingCommand]) {
+    var merged = Dictionary(uniqueKeysWithValues: knownCommands.map { ($0.id, $0) })
+    for command in commands { merged[command.id] = command }
+    let next = merged.values.sorted { $0.id < $1.id }
+    if knownCommands != next { knownCommands = next }
+  }
+
+  func requestedBindings(for command: KeyBindingCommand) -> [KeyBinding?] {
+    entries[command.id]?.change.bindings ?? command.defaults
+  }
+
+  /// Keep the losing assignment for review, but never dispatch a combination
+  /// twice. Explicit assignments outrank defaults, then newest revision wins.
   func bindings(for command: KeyBindingCommand) -> [KeyBinding?] {
-    overrides[command.id] ?? command.defaults
+    requestedBindings(for: command).map { binding in
+      guard let binding, winner(for: binding, including: command)?.id == command.id else { return nil }
+      return binding
+    }
+  }
+
+  func conflict(for command: KeyBindingCommand, slot: Int) -> String? {
+    guard let binding = requestedBindings(for: command)[slot],
+      let winner = winner(for: binding, including: command), winner.id != command.id else { return nil }
+    return "\(binding.label) is active for \(winner.title). Reassign or clear this shortcut."
+  }
+
+  private func winner(for binding: KeyBinding, including command: KeyBindingCommand) -> KeyBindingCommand? {
+    catalog(including: command).filter { requestedBindings(for: $0).contains(binding) }.sorted { a, b in
+      let left = entries[a.id]?.change, right = entries[b.id]?.change
+      let explicitLeft = left?.bindings != nil, explicitRight = right?.bindings != nil
+      if explicitLeft != explicitRight { return explicitLeft }
+      if explicitLeft, let left, let right,
+        left.modified != right.modified || left.token != right.token { return left.isNewer(than: right) }
+      return a.id < b.id
+    }.first
+  }
+
+  private func catalog(including command: KeyBindingCommand) -> [KeyBindingCommand] {
+    var all = Dictionary(uniqueKeysWithValues: knownCommands.map { ($0.id, $0) })
+    all[command.id] = command
+    // Preserve and reserve assignments from plugins absent on this device.
+    for id in entries.keys where all[id] == nil {
+      all[id] = KeyBindingCommand(id: id, title: id, group: "")
+    }
+    return Array(all.values)
   }
 
   func summary(for command: KeyBindingCommand) -> String {
@@ -87,8 +149,9 @@ final class KeyBindingStore {
   func filtered(_ commands: [KeyBindingCommand], query: String, boundOnly: Bool) -> [KeyBindingCommand] {
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
     return commands.filter {
-      (!boundOnly || bindings(for: $0).contains { $0 != nil })
-        && (query.isEmpty || "\($0.title) \($0.group) \($0.id) \(summary(for: $0))"
+      let labels = requestedBindings(for: $0).compactMap { $0?.label }.joined(separator: " / ")
+      return (!boundOnly || !labels.isEmpty)
+        && (query.isEmpty || "\($0.title) \($0.group) \($0.id) \(labels)"
           .localizedCaseInsensitiveContains(query))
     }
   }
@@ -97,42 +160,117 @@ final class KeyBindingStore {
   func set(_ binding: KeyBinding?, for command: KeyBindingCommand, slot: Int,
            commands: [KeyBindingCommand]) throws {
     guard (0..<2).contains(slot) else { return }
+    register(commands)
     if let binding {
       guard binding.isValid else { throw BindingError.invalid }
-      for other in commands {
-        for (index, existing) in bindings(for: other).enumerated()
+      for other in catalog(including: command) {
+        for (index, existing) in requestedBindings(for: other).enumerated()
           where other.id != command.id || index != slot {
           if binding == existing { throw BindingError.conflict(other.title) }
         }
       }
     }
-    var pair = bindings(for: command)
+    var pair = requestedBindings(for: command)
     pair[slot] = binding
-    overrides[command.id] = pair
-    persist()
+    change(command.id, bindings: pair)
   }
 
   func reset(_ command: KeyBindingCommand, commands: [KeyBindingCommand]) throws {
+    register(commands)
     for binding in command.defaults.compactMap({ $0 }) {
-      if let other = commands.first(where: {
-        $0.id != command.id && bindings(for: $0).contains(binding)
+      if let other = catalog(including: command).first(where: {
+        $0.id != command.id && requestedBindings(for: $0).contains(binding)
       }) { throw BindingError.conflict(other.title) }
     }
-    overrides[command.id] = nil
-    persist()
+    change(command.id, bindings: nil)
   }
 
   func resetAll() {
-    overrides = [:]
-    defaults.removeObject(forKey: Self.preferenceKey)
+    for id in overrides.keys { change(id, bindings: nil) }
   }
 
   func command(for binding: KeyBinding, in commands: [KeyBindingCommand]) -> String? {
-    commands.first { bindings(for: $0).contains(binding) }?.id
+    register(commands)
+    return commands.first { bindings(for: $0).contains(binding) }?.id
+  }
+
+  func switchAccount(_ account: String) {
+    guard account != archive.account else { return }
+    archive.account = account
+    if account.hasPrefix("icloud:") {
+      var target = entries
+      for (id, entry) in archive.accounts["local"] ?? [:] {
+        if target[id] == nil || entry.change.isNewer(than: target[id]!.change) {
+          target[id] = KeyBindingSyncEntry(change: entry.change)
+        }
+      }
+      archive.accounts[account] = target
+      // Move the local outbox once; signing into a different account cannot
+      // export the previous account's settings or reimport stale preferences.
+      archive.accounts["local"] = [:]
+    }
+    persist()
+  }
+
+  func receive(_ change: KeyBindingChange, for id: String, systemFields: Data?) throws {
+    guard change.isValid else { throw IdentityError.invalidConfiguration }
+    let local = entries[id]?.change
+    let keepingLocal = local.map { $0.isNewer(than: change) } ?? false
+    archive.accounts[account, default: [:]][id] = KeyBindingSyncEntry(
+      change: keepingLocal ? local! : change, dirty: keepingLocal, systemFields: systemFields)
+    persist()
+  }
+
+  func didFetchCloud() {
+    guard needsInitialCloudFetch else { return }
+    archive.initializedAccounts.insert(account)
+    persist()
+  }
+
+  func didSave(_ sent: KeyBindingChange, for id: String, systemFields: Data) {
+    guard var current = entries[id] else { return }
+    // An edit made while a save was in flight stays in the outbox.
+    current.systemFields = systemFields
+    current.dirty = current.change != sent
+    archive.accounts[account, default: [:]][id] = current
+    persist()
+  }
+
+  func prepareReupload() {
+    archive.accounts[account] = entries.mapValues { KeyBindingSyncEntry(change: $0.change) }
+    persist()
+  }
+
+  func removeCloudRecords(_ ids: [String]) {
+    guard !ids.isEmpty else { return }
+    for id in ids { archive.accounts[account]?[id] = nil }
+    persist()
+  }
+
+  func retryMissingRecord(_ id: String) {
+    guard let current = entries[id] else { return }
+    archive.accounts[account]?[id] = KeyBindingSyncEntry(change: current.change)
+    persist()
+  }
+
+  private func change(_ id: String, bindings: [KeyBinding?]?) {
+    let latest = entries.values.map(\.change.modified).max() ?? .distantPast
+    let modified = max(Date(), latest.addingTimeInterval(0.001))
+    archive.accounts[account, default: [:]][id] = KeyBindingSyncEntry(
+      change: KeyBindingChange(bindings: bindings, modified: modified, token: UUID().uuidString),
+      systemFields: entries[id]?.systemFields)
+    persist()
+    onChange?()
   }
 
   private func persist() {
-    if let data = try? JSONEncoder().encode(overrides) {
+    if let data = try? JSONEncoder().encode(archive) {
+      defaults.set(data, forKey: Self.syncPreferenceKey)
+    }
+    // Retain the old format for downgrades; the account archive is authoritative.
+    if overrides.isEmpty {
+      defaults.removeObject(forKey: Self.preferenceKey)
+    } else if let data = try? JSONEncoder().encode(overrides) {
       defaults.set(data, forKey: Self.preferenceKey)
     }
   }

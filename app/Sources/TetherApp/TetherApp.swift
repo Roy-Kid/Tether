@@ -71,6 +71,8 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
+        store.useKeyBindings(tabs.keyBindings)
         store.sweepCredentials()
         await store.startSync()
         await Task.yield()

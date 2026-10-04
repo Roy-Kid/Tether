@@ -198,6 +198,7 @@ final class HostStore {
   private(set) var config = SSHConfig("")
   private(set) var unreadable = false
   private var cloud: HostCloudSync?
+  private(set) var keyBindings: KeyBindingStore?
   private(set) var continuity: ContinuityService?
   private let allowCloud: Bool
   private var swept = false
@@ -245,6 +246,12 @@ final class HostStore {
     if continuity == nil { continuity = ContinuityService(store: self, database: cloud?.continuityDatabase) }
     else { continuity?.useDatabase(cloud?.continuityDatabase) }
   }
+
+  func useKeyBindings(_ bindings: KeyBindingStore) {
+    keyBindings = bindings
+    bindings.switchAccount(scope)
+    bindings.onChange = { [weak self] in self?.cloud?.enqueue() }
+  }
   func syncNow() async { await cloud?.synchronize() }
 
   /// `failure` is what went wrong, for a person who asked to sync.
@@ -279,6 +286,7 @@ final class HostStore {
     continuity = nil
     scope = account
     snapshot = next
+    keyBindings?.switchAccount(account)
     accountGeneration += 1
     reload()
   }

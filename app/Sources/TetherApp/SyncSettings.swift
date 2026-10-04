@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Where the hosts come from and where they go: one library, shared through
-/// iCloud, and on a Mac the SSH configuration that feeds it.
+/// Hosts and key bindings share the same iCloud account and sync engine.
 struct SyncSettings: View {
   @Bindable var store: HostStore
 
@@ -12,6 +11,10 @@ struct SyncSettings: View {
         LabeledContent("Last Synced") { Text(last, format: .relative(presentation: .named)) }
       }
       LabeledContent("Hosts", value: String(store.hosts.count))
+      if let bindings = store.keyBindings {
+        LabeledContent("Key Bindings", value: bindings.pending.isEmpty
+          ? "Included in sync" : "\(bindings.pending.count) pending changes")
+      }
       if let failure = store.syncFailure {
         Text(failure).foregroundStyle(.red).textSelection(.enabled)
       }

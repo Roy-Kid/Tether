@@ -63,10 +63,41 @@ Secondary shortcuts; either runs the same action. Click a slot and press a
 combination of Ctrl, Alt (Option), Shift and Command with a key, or a function key.
 Esc cancels recording. Consecutive key sequences are not supported.
 
-Changes apply immediately and persist locally across launches. Clear a slot with
+Changes apply immediately and persist locally across launches. With an iCloud-enabled
+signed build, custom bindings sync through the existing iCloud account and **Sync Now**
+action. Offline edits are queued; incoming changes update shortcuts and menus without
+restarting. Clear a slot with
 its × button; reset a modified row to restore its defaults. Duplicate bindings
 are rejected across both slots and all known commands, including disabled plugins.
 The menu shows the first assigned shortcut; the command palette shows both.
+
+Sync stores one record per command in the private `TetherKeyBindings` zone
+(`TetherKeyBinding`, with a `value` Bytes field). Both alternatives travel together.
+Different commands merge independently; concurrent edits to the same command use
+the later recorded modification time, with a stable revision identifier breaking ties.
+Clearing a slot and restoring defaults are distinct: resets remain as records so an
+offline device cannot resurrect an older assignment. A fresh installation uploads
+no defaults. Existing local overrides migrate once into the first signed-in account;
+an existing cloud revision of the same command takes precedence over a legacy
+override without an edit time. Each Apple account keeps a separate offline cache.
+Signing out switches to local settings; cloud settings never move to another account.
+The first sync after upgrading reads the account in full, even when an older
+app has already advanced the CloudKit change token past key binding records.
+
+Concurrent edits to different commands can assign the same combination. Explicit
+assignments take precedence over defaults, then the newer command revision wins.
+The losing assignment is retained and shown in orange with a hover explanation,
+but does not dispatch or appear as an active menu shortcut. Reassign or clear it
+to resolve the conflict. Assignments for unavailable plugins are retained as well.
+
+Ad-hoc builds remain local and show the existing iCloud-unavailable status. Real
+sync needs the same developer team, container entitlement and provisioning setup
+as host sync (`./scripts/tether.sh --provision --team <TEAMID>`, then
+`./scripts/tether.sh --build-app --team <TEAMID>`). Development builds can create
+the record type in the development database; deploy the new record type and its
+field to the container's production schema before shipping an App Store build.
+Validate on two devices signed into the same Apple account: edit different
+commands offline, reconnect, clear/reset a binding, and verify both devices agree.
 
 Assigned combinations take priority over terminal input in the workspace window.
 Unbound Ctrl/Alt keys still reach the shell or remote editor. Sheets, Settings and
