@@ -25,6 +25,9 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
+      #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), KeyBinding("t")])
+      #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
+      #expect(store.command(for: KeyBinding("t"), in: commands) == "newTerminal")
       #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
       let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }
       #expect(Set(assigned).count == assigned.count)
@@ -125,7 +128,7 @@ struct KeyBindingTests {
       ]), forKey: KeyBindingStore.preferenceKey)
       let loaded = KeyBindingStore(defaults: defaults)
       #expect(loaded.overrides.count == 1)
-      #expect(loaded.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), nil])
+      #expect(loaded.bindings(for: WorkspaceAction.newTerminal.command) == WorkspaceAction.newTerminal.command.defaults)
     }
   }
 

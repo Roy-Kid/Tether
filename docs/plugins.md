@@ -110,8 +110,10 @@ only when provided by the selected tab's current attachment or workspace. Native
 text editing, file-list navigation and dialog confirmation keys keep their normal
 context-specific behavior; this page configures workspace commands.
 
-Defaults leave Ctrl+P/N/F/B, other common Unix Control keys and Alt+B/F/D
-available to the terminal. Control letters are sent unchanged as control input;
+New Terminal defaults to Cmd+N (primary) and Cmd+T (secondary). These take
+priority over terminal input in the workspace; personal overrides remain unchanged.
+Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to the terminal.
+Unassigned Control letters are sent unchanged as control input;
 the shell or editor decides what they do, including when cursor-key mode changes.
 The command palette, Quick Switch and host picker accept Ctrl+P/N as Up/Down.
 Their search fields keep native Ctrl+B/F character movement and Ctrl+A/E

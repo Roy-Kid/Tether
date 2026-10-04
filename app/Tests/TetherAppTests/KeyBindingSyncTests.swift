@@ -71,7 +71,7 @@ struct KeyBindingSyncTests {
       let command = WorkspaceAction.newTerminal.command
       try a.set(nil, for: command, slot: 0, commands: [command])
       try deliver(a, to: b)
-      #expect(b.bindings(for: command) == [nil, nil])
+      #expect(b.bindings(for: command) == [nil, command.defaults[1]])
       let stale = try #require(b.entries[command.id]?.change)
       try a.reset(command, commands: [command])
       try deliver(a, to: b)
