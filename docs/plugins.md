@@ -122,6 +122,7 @@ context-specific behavior; this page configures workspace commands.
 
 New Terminal defaults to Cmd+N (primary) and Cmd+T (secondary). These take
 priority over terminal input in the workspace; personal overrides remain unchanged.
+Rename Terminal defaults to Cmd+R and renames the selected terminal.
 Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to the terminal.
 Unassigned Control letters are sent unchanged as control input;
 the shell or editor decides what they do, including when cursor-key mode changes.

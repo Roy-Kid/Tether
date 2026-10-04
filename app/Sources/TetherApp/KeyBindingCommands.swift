@@ -28,7 +28,7 @@ enum WorkspaceAction: String, CaseIterable {
     case .zen: definition("Zen Mode", "View", KeyBinding("z", [.command, .shift]))
     case .previousTab: definition("Previous Tab", "Window", KeyBinding("left", [.command, .option]))
     case .nextTab: definition("Next Tab", "Window", KeyBinding("right", [.command, .option]))
-    case .renameTerminal: definition("Rename Terminal…", "Terminal")
+    case .renameTerminal: definition("Rename Terminal…", "Terminal", KeyBinding("r"))
     case .manageHosts: definition("Manage Hosts…", "File")
     }
   }

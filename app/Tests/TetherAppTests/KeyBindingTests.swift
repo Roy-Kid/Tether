@@ -26,6 +26,7 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
       #expect(store.command(for: KeyBinding("s"), in: commands) == "toggleTabBar")
+      #expect(store.command(for: KeyBinding("r"), in: commands) == "renameTerminal")
       #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), KeyBinding("t")])
       #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
       #expect(store.command(for: KeyBinding("t"), in: commands) == "newTerminal")
@@ -113,7 +114,7 @@ struct KeyBindingTests {
       #expect(store.bindings(for: first)[0] == nil)
       store.resetAll()
       #expect(store.bindings(for: first) == first.defaults)
-      #expect(store.bindings(for: second) == [nil, nil])
+      #expect(store.bindings(for: second) == second.defaults)
       #expect(defaults.data(forKey: KeyBindingStore.preferenceKey) == nil)
     }
   }
@@ -153,6 +154,7 @@ struct KeyBindingTests {
   func filtering() throws {
     try isolated { store, _ in
       let rename = WorkspaceAction.renameTerminal.command
+      try store.set(nil, for: rename, slot: 0, commands: commands)
       #expect(store.filtered(commands, query: "", boundOnly: true).contains(rename) == false)
       try store.set(KeyBinding("r", .control), for: rename, slot: 1, commands: commands)
       #expect(store.filtered(commands, query: "ctrl+r", boundOnly: true) == [rename])
