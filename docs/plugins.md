@@ -56,14 +56,15 @@ Swift source API, not a binary ABI or a permission sandbox.
 # Key bindings (macOS)
 
 Settings → Key Bindings lists workspace and plugin commands, including commands
-without a default shortcut. Search by command, group or shortcut, toggle grouping,
-or show only commands with bindings. Each command has independent Primary and
+without a default shortcut. Search by command, group or shortcut, or toggle grouping
+with the button beside the search field. Both controls stay visible while scrolling.
+Each command has independent Primary and
 Secondary shortcuts; either runs the same action. Click a slot and press a
 combination of Ctrl, Alt (Option), Shift and Command with a key, or a function key.
 Esc cancels recording. Consecutive key sequences are not supported.
 
 Changes apply immediately and persist locally across launches. Clear a slot with
-its × button; reset a row or all commands to restore defaults. Duplicate bindings
+its × button; reset a modified row to restore its defaults. Duplicate bindings
 are rejected across both slots and all known commands, including disabled plugins.
 The menu shows the first assigned shortcut; the command palette shows both.
 

@@ -1,12 +1,13 @@
 #if os(macOS)
 import SwiftUI
+import TetherUI
 
 struct KeyBindingSettings: View {
   let store: KeyBindingStore
   let commands: [KeyBindingCommand]
   @State private var query = ""
-  @State private var boundOnly = false
   @State private var grouped = true
+  @State private var showingHelp = false
   @State private var recording: Slot?
   @State private var problem: String?
 
@@ -16,34 +17,72 @@ struct KeyBindingSettings: View {
   }
 
   private var filtered: [KeyBindingCommand] {
-    store.filtered(commands, query: query, boundOnly: boundOnly)
+    store.filtered(commands, query: query, boundOnly: false)
   }
 
   var body: some View {
-    Section {
-      TextField("Search commands or shortcuts", text: $query)
+    VStack(spacing: 0) {
+      searchBar
+
+      Divider()
+
+      Form {
+        commandList
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+    }
+  }
+
+  private var searchBar: some View {
+    HStack(spacing: 8) {
+      TextField("Search key bindings", text: $query, prompt: Text("Search commands or shortcuts"))
         .textFieldStyle(.roundedBorder)
         .labelsHidden()
         .accessibilityLabel("Search key bindings")
-      Toggle("Only commands with shortcuts", isOn: $boundOnly)
-      Toggle("Group by feature", isOn: $grouped)
-      HStack {
-        Text("\(filtered.count) commands")
-          .foregroundStyle(.secondary)
-        Spacer()
-        if commands.contains(where: { store.bindings(for: $0) != $0.defaults }) {
-          Button("Reset All") {
-            recording = nil
-            problem = nil
-            store.resetAll()
-          }
-        }
-      }
-      .frame(minHeight: 24)
-    } footer: {
-      Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Assigned shortcuts take priority over terminal input.")
-    }
 
+      Button {
+        grouped.toggle()
+      } label: {
+        Image(systemName: "rectangle.3.group")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(grouped ? Color.accentColor : Color.secondary)
+          .frame(width: 28, height: 24)
+          .contentShape(Rectangle())
+          .help(grouped
+            ? "Group by feature: On\nClick to show all commands in a flat list."
+            : "Group by feature: Off\nClick to group commands by feature.")
+      }
+      .buttonStyle(ChromeButtonStyle(selected: grouped))
+      .accessibilityLabel("Group by feature")
+      .accessibilityValue(grouped ? "On" : "Off")
+      .accessibilityAddTraits(grouped ? .isSelected : [])
+
+      Button {
+        showingHelp.toggle()
+      } label: {
+        Image(systemName: "questionmark.circle")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+          .frame(width: 28, height: 24)
+          .contentShape(Rectangle())
+          .help("Key binding help\nLearn how to record, clear, and reset shortcuts.")
+      }
+      .buttonStyle(ChromeButtonStyle(selected: showingHelp))
+      .accessibilityLabel("Key binding help")
+      .popover(isPresented: $showingHelp) {
+        Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input.")
+          .font(.callout)
+          .padding(12)
+          .frame(width: 280)
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 8)
+  }
+
+  @ViewBuilder
+  private var commandList: some View {
     if let problem {
       Section { Text(problem).foregroundStyle(.red).accessibilityLabel("Shortcut error: \(problem)") }
     }

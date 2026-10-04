@@ -229,7 +229,17 @@ struct AppSettings: View {
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
     SettingsPage(title: section.title, subtitle: section.subtitle) {
-      form(section)
+      #if os(macOS)
+        if section == .keyBindings {
+          KeyBindingSettings(
+            store: connections?.keyBindings ?? fallbackKeyBindings,
+            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
+        } else {
+          form(section)
+        }
+      #else
+        form(section)
+      #endif
     }
     #if os(iOS)
       .navigationTitle(section.title)
@@ -247,11 +257,8 @@ struct AppSettings: View {
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
       case .keyBindings:
-        #if os(macOS)
-          KeyBindingSettings(
-            store: connections?.keyBindings ?? fallbackKeyBindings,
-            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
-        #endif
+        // This pane owns its scroll area so its search field can stay fixed.
+        EmptyView()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
       case .extensions: ExtensionSettings(registry: registry)
       }
