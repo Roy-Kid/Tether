@@ -581,7 +581,7 @@ extension RootView {
       }
       #if os(macOS)
         .background {
-          WorkspaceKeyBindingMonitor(enabled: shortcutsAllowed) { binding, repeated in
+          WorkspaceKeyBindingMonitor(enabled: shortcutsAllowed, textEditingEnabled: true) { binding, repeated in
             let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
             guard let id = tabs.keyBindings.command(for: binding, in: definitions) else { return false }
             if !repeated {

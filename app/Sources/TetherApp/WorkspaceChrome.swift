@@ -448,17 +448,11 @@ struct HostPicker: View {
     .onChange(of: orderedHosts.map(\.id), initial: true) { _, ids in
       selection.reconcile(ids)
     }
-    .onKeyPress(.escape) {
+    .onPickerCancel {
       tabs.hostPicker = false
-      return .handled
     }
-    .onKeyPress(.upArrow) {
-      selection.move(forward: false, in: orderedHosts.map(\.id))
-      return .handled
-    }
-    .onKeyPress(.downArrow) {
-      selection.move(forward: true, in: orderedHosts.map(\.id))
-      return .handled
+    .onPickerNavigation { movement in
+      selection.navigate(movement, in: orderedHosts.map(\.id))
     }
   }
 

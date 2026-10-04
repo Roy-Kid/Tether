@@ -15,6 +15,8 @@ struct TmuxPicker: View {
   @Bindable var model: TmuxTab
   /// The session whose windows are showing, when the picker is a level in.
   @State private var opened: String?
+  @State private var keyboardSelection: String?
+  @FocusState private var keyboardFocused: Bool
   @Environment(\.dynamicTypeSize) private var typeSize
   #if os(macOS)
     @State private var levelHeight = UIStyle.listHeight
@@ -23,6 +25,44 @@ struct TmuxPicker: View {
   var body: some View {
     layout
       .onAppear { model.refresh() }
+      #if os(macOS)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($keyboardFocused)
+        .task { await Task.yield(); keyboardFocused = true }
+        .onChange(of: keyboardItems.map(\.id), initial: true) { _, ids in
+          if !ids.contains(keyboardSelection ?? "") { keyboardSelection = ids.first }
+        }
+        .onPickerNavigation { movement in
+          let ids = keyboardItems.map(\.id)
+          guard !ids.isEmpty else { return }
+          if movement == .first { keyboardSelection = ids.first }
+          else if movement == .last { keyboardSelection = ids.last }
+          else {
+            let index = ids.firstIndex(of: keyboardSelection ?? "") ?? 0
+            let offset = movement.offset(pageSize: max(1, Int(UIStyle.listHeight / UIStyle.rowHeight)))
+            keyboardSelection = ids[min(ids.count - 1, max(0, index + offset))]
+          }
+        }
+        .onPickerSubmit { keyboardItems.first { $0.id == keyboardSelection }?.run() }
+        .onPickerCancel {
+          if opened != nil { opened = nil } else { model.tab.dismissAccessory() }
+        }
+        .onKeyPress(keys: [.leftArrow, .rightArrow, "b", "f", "B", "F"]) { press in
+          let arrow = press.key == .leftArrow || press.key == .rightArrow
+          let flags = press.modifiers.intersection([.control, .option, .command, .shift])
+          guard arrow ? flags.isEmpty : flags == .control else { return .ignored }
+          if press.key == .leftArrow || press.key.character.lowercased() == "b" {
+            guard opened != nil else { return .ignored }
+            opened = nil
+          } else {
+            guard !model.busy, let session = model.sessions.first(where: { "session:\($0.id)" == keyboardSelection }),
+              model.windows(for: session).count > 1 else { return .ignored }
+            opened = session.id
+          }
+          return .handled
+        }
+      #endif
       .dialog(for: model.sessionToEnd) { session in
         Dialog.confirm(
           "End this session?", verb: "End", role: .destructive, cancel: { model.sessionToEnd = nil }
@@ -55,11 +95,16 @@ struct TmuxPicker: View {
   @ViewBuilder
   private var layout: some View {
     #if os(macOS)
-      ScrollView {
-        level.padding(UIStyle.Space.group)
-          .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-            levelHeight = $0
-          }
+      ScrollViewReader { proxy in
+        ScrollView {
+          level.padding(UIStyle.Space.group)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+              levelHeight = $0
+            }
+        }
+        .onChange(of: keyboardSelection) { _, id in
+          if let id { proxy.scrollTo(id) }
+        }
       }
       .scrollBounceBehavior(.basedOnSize)
       .frame(width: UIStyle.treeWidth, alignment: .leading)
@@ -100,7 +145,7 @@ struct TmuxPicker: View {
       let shells = model.tab.shells()
       if shells.count > 1 {
         ForEach(shells) { shell in
-          row(title: shell.title, selected: shell.current && !model.showing) {
+          row(id: "shell:\(shell.id)", title: shell.title, selected: shell.current && !model.showing) {
             model.tab.openShell(shell.id)
             model.tab.dismissAccessory()
           }
@@ -109,6 +154,7 @@ struct TmuxPicker: View {
 
       if shells.count < 2 || model.showing {
         row(
+          id: "shell",
           title: model.tab.plugin.shellLabel,
           selected: !model.showing && model.shellSessionID == nil
         ) {
@@ -116,7 +162,7 @@ struct TmuxPicker: View {
         }
       }
 
-      row(title: "New shell…", selected: false) {
+      row(id: "new-shell", title: "New shell…", selected: false) {
         model.tab.newShell()
         model.tab.dismissAccessory()
       }
@@ -141,18 +187,7 @@ struct TmuxPicker: View {
 
       // Last in the list, because it is what there is to do when none of
       // the sessions above is the one that was wanted.
-      row(title: "New session…", selected: false) {
-        let tab = model.tab
-        tab.present(
-          AnyView(
-            CreateTmuxSheet(
-              model: model,
-              onCancel: tab.dismissSheet,
-              onCreate: {
-                tab.dismissSheet()
-                tab.dismissAccessory()
-              })))
-      }
+      row(id: "new-session", title: "New session…", selected: false, action: createSession)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
@@ -178,12 +213,14 @@ struct TmuxPicker: View {
         .frame(minHeight: UIStyle.rowHeight)
         .contentShape(Rectangle())
       }
-      .buttonStyle(ChromeButtonStyle())
+      .buttonStyle(ChromeButtonStyle(selected: keyboardSelection == "back"))
+      .id("back")
 
       Divider()
 
       ForEach(listed, id: \.id) { window in
         row(
+          id: "window:\(window.id)",
           title: tmuxWindowLine(window),
           selected: window.active
             && ((model.session?.id == session.id && model.showing)
@@ -203,7 +240,7 @@ struct TmuxPicker: View {
       }
 
       if model.session?.id == session.id {
-        row(title: "New window", selected: false) {
+        row(id: "new-window", title: "New window", selected: false) {
           model.perform(.newWindow)
         }
         .disabled(model.busy || model.ended)
@@ -220,6 +257,7 @@ struct TmuxPicker: View {
     // click was for.
     let deeper = listed.count > 1
     return row(
+      id: "session:\(session.id)",
       title: tmuxSessionLine(session, windows: listed, owned: owned),
       selected: (owned && model.showing)
         || (!model.showing && model.shellSessionID == session.id),
@@ -273,11 +311,65 @@ struct TmuxPicker: View {
   }
 
   private func row(
-    title: String, selected: Bool, chevron: Bool = false, end: RowEnd? = nil,
+    id: String, title: String, selected: Bool, chevron: Bool = false, end: RowEnd? = nil,
     action: @escaping () -> Void
   ) -> some View {
-    TreeRow(title: title, selected: selected, chevron: chevron, end: end, action: action)
+    TreeRow(title: title, selected: selected, highlighted: keyboardSelection == id,
+      chevron: chevron, end: end) {
+        keyboardSelection = id
+        action()
+      }
       .disabled(model.busy)
+      .id(id)
+  }
+
+  private struct KeyboardItem {
+    let id: String
+    let run: () -> Void
+  }
+
+  private var keyboardItems: [KeyboardItem] {
+    if let opened, let session = model.sessions.first(where: { $0.id == opened }) {
+      var items = [KeyboardItem(id: "back") { self.opened = nil }]
+      guard !model.busy else { return items }
+      items += model.windows(for: session).map { window in
+        KeyboardItem(id: "window:\(window.id)") { model.choose(session, windowID: window.id) }
+      }
+      if model.session?.id == session.id && !model.ended {
+        items.append(KeyboardItem(id: "new-window") { model.perform(.newWindow) })
+      }
+      return items
+    }
+    guard !model.busy else { return [] }
+    let shells = model.tab.shells()
+    var items: [KeyboardItem] = []
+    if shells.count > 1 {
+      items += shells.map { shell in
+        KeyboardItem(id: "shell:\(shell.id)") {
+          model.tab.openShell(shell.id)
+          model.tab.dismissAccessory()
+        }
+      }
+    }
+    if shells.count < 2 || model.showing { items.append(KeyboardItem(id: "shell", run: model.showShell)) }
+    items.append(KeyboardItem(id: "new-shell") { model.tab.newShell(); model.tab.dismissAccessory() })
+    items += model.sessions.map { session in
+      KeyboardItem(id: "session:\(session.id)") {
+        let windows = model.windows(for: session)
+        if windows.count > 1 { self.opened = session.id }
+        else { model.choose(session, windowID: windows.first?.id) }
+      }
+    }
+    items.append(KeyboardItem(id: "new-session", run: createSession))
+    return items
+  }
+
+  private func createSession() {
+    let tab = model.tab
+    tab.present(AnyView(CreateTmuxSheet(model: model, onCancel: tab.dismissSheet, onCreate: {
+      tab.dismissSheet()
+      tab.dismissAccessory()
+    })))
   }
 }
 
@@ -300,6 +392,7 @@ private struct RowEnd {
 private struct TreeRow: View {
   let title: String
   let selected: Bool
+  let highlighted: Bool
   let chevron: Bool
   let end: RowEnd?
   let action: () -> Void
@@ -341,7 +434,7 @@ private struct TreeRow: View {
     }
     .buttonStyle(
       ChromeButtonStyle(
-        selected: selected, hovered: hovering, hoverOpacity: UIStyle.focusOpacity)
+        selected: selected || highlighted, hovered: hovering, hoverOpacity: UIStyle.focusOpacity)
     )
     .overlay(alignment: .trailing) {
       if showsEnd, let end {

@@ -93,6 +93,17 @@ struct Sidebar: View {
     // promotes the field into an unrelated window toolbar. Keep Mac search
     // inside the content; explicitly anchor phone search below the title.
     #if os(macOS)
+      .onPickerNavigation { movement in
+        var choice = PickerSelection(id: selection)
+        choice.navigate(movement, in: store.filtered.map(\.id))
+        selection = choice.id
+      }
+      .onPickerSubmit(enabled: selection != nil) {
+        if let host = store.filtered.first(where: { $0.id == selection }) { onOpen(host) }
+      }
+      .onPickerCancel {
+        if !store.search.isEmpty { store.search = "" } else { onDone?() }
+      }
       .safeAreaInset(edge: .top, spacing: 0) {
         HostSearchField(text: $store.search)
           .frame(height: UIStyle.controlHeight)

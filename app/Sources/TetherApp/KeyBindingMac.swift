@@ -69,20 +69,24 @@ extension FocusedValues {
 }
 
 /// Runs before the terminal responder, including for Ctrl and Option combinations.
-/// The monitor belongs to one workspace window, never the Settings window or sheets.
+/// Workspace commands stay in the owning window. Native editing aliases can
+/// also be enabled for Settings and the owning window's sheets/popovers.
 struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
   let enabled: Bool
+  var textEditingEnabled = false
   let handle: (KeyBinding, Bool) -> Bool
 
   func makeNSView(context: Context) -> MonitorView { MonitorView() }
   func updateNSView(_ view: MonitorView, context: Context) {
     view.enabled = enabled
+    view.textEditingEnabled = textEditingEnabled
     view.handle = handle
   }
   static func dismantleNSView(_ view: MonitorView, coordinator: ()) { view.stop() }
 
   final class MonitorView: NSView {
     var enabled = false
+    var textEditingEnabled = false
     var handle: ((KeyBinding, Bool) -> Bool)?
     private var monitor: Any?
 
@@ -97,12 +101,19 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
     }
 
     func route(_ event: NSEvent) -> NSEvent? {
-      guard enabled, let window, event.window === window, window.isKeyWindow,
-        window.attachedSheet == nil, NSApp.modalWindow == nil,
-        let binding = KeyBinding(event: event)
+      guard let window, let target = event.window, target.isKeyWindow,
+        owns(target, root: window)
       else { return event }
-      if let input = window.firstResponder as? NSTextInputClient, input.hasMarkedText() { return event }
-      return handle?(binding, event.isARepeat) == true ? nil : event
+      if let input = target.firstResponder as? NSTextInputClient, input.hasMarkedText() { return event }
+      if enabled, target === window, window.attachedSheet == nil, NSApp.modalWindow == nil,
+        let binding = KeyBinding(event: event), handle?(binding, event.isARepeat) == true { return nil }
+      return textEditingEnabled ? UnixTextEditing.route(event) : event
+    }
+
+    private func owns(_ target: NSWindow, root: NSWindow) -> Bool {
+      if target === root { return true }
+      guard let parent = target.sheetParent ?? target.parent else { return false }
+      return owns(parent, root: root)
     }
 
     func stop() {

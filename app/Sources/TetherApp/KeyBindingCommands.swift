@@ -13,6 +13,8 @@ enum WorkspaceAction: String, CaseIterable {
   }
 
   var command: KeyBindingCommand {
+    // Leave Unix Control/Meta editing keys (Ctrl+P/N/F/B, Alt+B/F, etc.)
+    // available to the terminal unless the user explicitly assigns them.
     switch self {
     case .newTerminal: definition("New Terminal", "File", KeyBinding("n"))
     case .changeHost: definition("Change Host…", "File", KeyBinding("h", [.command, .shift]))

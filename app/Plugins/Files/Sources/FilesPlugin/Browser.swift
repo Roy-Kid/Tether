@@ -70,8 +70,18 @@ struct Browser: View {
 private struct FileList: View {
   @Bindable var model: FilesTab
   @FocusState private var listFocused: Bool
+  @State private var listHeight = UIStyle.listHeight
 
   var body: some View {
+    ScrollViewReader { proxy in
+      listing
+        .onChange(of: model.selection) { _, paths in
+          if paths.count == 1, let path = paths.first { proxy.scrollTo(path) }
+        }
+    }
+  }
+
+  private var listing: some View {
     List(selection: $model.selection) {
       if let problem = model.problem {
         Label(problem, systemImage: "exclamationmark.triangle")
@@ -96,6 +106,7 @@ private struct FileList: View {
     }
     #if os(macOS)
       .listStyle(.inset)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
       .focused($listFocused)
       .background { ListKeyboardClaim() }
       .onAppear { listFocused = true }
@@ -121,20 +132,35 @@ private struct FileList: View {
         model.previewSelection()
         return .handled
       }
-      .onKeyPress(.return) {
-        guard model.renaming == nil, model.selection.count == 1 else { return .ignored }
+      .onPickerSubmit(enabled: model.renaming == nil && model.selection.count == 1) {
         model.renaming = model.selection.first
-        return .handled
       }
       .onKeyPress(keys: [.delete, .deleteForward]) { _ in
         guard model.renaming == nil, !model.selection.isEmpty else { return .ignored }
         model.requestDelete(model.selected)
         return .handled
       }
-      .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
-        guard model.renaming == nil, press.modifiers.isEmpty else { return .ignored }
-        if press.key == .rightArrow { model.expandOrDescend() } else { model.collapseOrAscend() }
+      .onKeyPress(keys: [.leftArrow, .rightArrow, "b", "f", "B", "F"]) { press in
+        guard model.renaming == nil else { return .ignored }
+        let arrow = press.key == .leftArrow || press.key == .rightArrow
+        let modifiers = press.modifiers.intersection([.control, .option, .command, .shift])
+        guard arrow ? modifiers.isEmpty : modifiers == .control else { return .ignored }
+        if press.key == .rightArrow || press.key.character.lowercased() == "f" {
+          model.expandOrDescend()
+        } else {
+          model.collapseOrAscend()
+        }
         return .handled
+      }
+      .onPickerNavigation(enabled: model.renaming == nil) { movement in
+        switch movement {
+        case .first, .last:
+          let row = movement == .first ? model.rows.first : model.rows.last
+          model.selection = row.map { [$0.id] } ?? []
+        default:
+          let offset = movement.offset(pageSize: max(1, Int(listHeight / UIStyle.rowHeight)))
+          model.moveSelection(forward: offset > 0, steps: abs(offset))
+        }
       }
       .onKeyPress(keys: [.upArrow, .downArrow]) { press in
         guard press.modifiers.contains(.command) else { return .ignored }

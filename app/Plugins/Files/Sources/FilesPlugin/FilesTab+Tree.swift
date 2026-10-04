@@ -64,6 +64,19 @@ extension FilesTab {
     selection = selection.filter { !$0.hasPrefix(entry.path + "/") }
   }
 
+  /// Moves through visible rows, including children of expanded folders.
+  func moveSelection(forward: Bool, steps: Int = 1) {
+    let visible = rows.map(\.id)
+    guard !visible.isEmpty else { selection = []; return }
+    let selected = visible.indices.filter { selection.contains(visible[$0]) }
+    guard let index = forward ? selected.last : selected.first else {
+      selection = [forward ? visible[0] : visible[visible.count - 1]]
+      return
+    }
+    let next = min(visible.count - 1, max(0, index + (forward ? max(1, steps) : -max(1, steps))))
+    selection = [visible[next]]
+  }
+
   /// → : opens the selected folder, or moves into it once it is open.
   func expandOrDescend() {
     guard selection.count == 1, let entry = selection.first.flatMap(entry) else { return }

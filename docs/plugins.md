@@ -75,6 +75,49 @@ only when provided by the selected tab's current attachment or workspace. Native
 text editing, file-list navigation and dialog confirmation keys keep their normal
 context-specific behavior; this page configures workspace commands.
 
+Defaults leave Ctrl+P/N/F/B, other common Unix Control keys and Alt+B/F/D
+available to the terminal. Control letters are sent unchanged as control input;
+the shell or editor decides what they do, including when cursor-key mode changes.
+The command palette, Quick Switch and host picker accept Ctrl+P/N as Up/Down.
+Their search fields keep native Ctrl+B/F character movement and Ctrl+A/E
+beginning/end movement. The file tree accepts Ctrl+P/N to select rows and
+Ctrl+B/F as Left/Right to collapse/expand folders or move to their parent/first
+child. Custom workspace
+bindings still take priority when explicitly assigned.
+
+Common operations follow the focused control. Native text fields in the workspace,
+Settings, sheets and popovers use AppKit editing, with these additional Unix-style
+aliases; no system-wide key binding preferences are changed:
+
+| Operation | Keys |
+| --- | --- |
+| Character / line movement | Ctrl+B/F, Ctrl+A/E |
+| Word movement / word selection | Alt+B/F, Alt+Shift+B/F |
+| Character deletion | Ctrl+H/D, Backspace / Delete |
+| Word deletion | Ctrl+W / Alt+Backspace backward, Alt+D forward |
+| Delete to beginning / end | Ctrl+U / Ctrl+K |
+| Yank deleted text / transpose characters | Ctrl+Y / Ctrl+T |
+| Undo / redo | Ctrl+_ or Cmd+Z / Cmd+Shift+Z |
+| Select text | Shift+arrows; Ctrl+Shift+B/F/A/E |
+| Select all / cut / copy / paste | Cmd+A/X/C/V |
+| Confirm / cancel | Return or Ctrl+M/J / Escape or Ctrl+G |
+| Next / previous field | Tab or Ctrl+I / Shift+Tab |
+
+Command, host, settings, file and session lists support Up/Down or Ctrl+P/N,
+Page Up/Down or Alt+V/Ctrl+V, and Home/End or `Alt+<` / `Alt+>`. Selection stays within
+available items; Shift+arrows remain available for native text or multi-row
+selection. File and session trees also accept Ctrl+B/F as Left/Right. Return keeps
+the control's existing action (for example, rename in the file list). Escape and
+Ctrl+G cancel pickers; in a session submenu they first return to the parent level.
+
+These are common single-key editing aliases, not a complete Emacs implementation:
+there is no prefix-key sequence, universal argument or application-side mark ring.
+Ctrl+U uses line-editing behavior. The terminal receives original Control/Alt input,
+so history search (Ctrl+R), job control (Ctrl+C/D/Z), completion, marks and editor
+commands remain the shell/editor's responsibility. Input-method composition and
+shortcut recording keep their own keyboard handling. This settings page still
+configures workspace commands; context-specific editing/list keys are defaults.
+
 # Using tmux
 
 Open a local shell or connect to a host, then right-click the terminal's tab and choose tmux sessions. Clicking the selected tab opens the same picker.

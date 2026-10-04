@@ -1,12 +1,46 @@
 #if os(macOS)
 import AppKit
 import Testing
+import Tether
 
 @testable import TetherUI
 
 @MainActor
 @Suite("Input method positioning")
 struct InputMethodTests {
+  @Test("all Control letters reach the terminal unchanged, including editing and process-control keys")
+  func unixNavigation() throws {
+    _ = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+    let view = KeyCaptureView(frame: .zero)
+    window.contentView!.addSubview(view)
+    window.makeFirstResponder(view)
+    var inputs: [TerminalInput] = []
+    view.onInput = { inputs.append($0) }
+    for scalar in UInt32(97)...122 {
+      let letter = String(UnicodeScalar(scalar)!)
+      let character = String(UnicodeScalar(scalar - 96)!)
+      let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+        modifierFlags: .control, timestamp: 0, windowNumber: window.windowNumber,
+        context: nil, characters: character, charactersIgnoringModifiers: letter,
+        isARepeat: false, keyCode: 0))
+      inputs.removeAll()
+      #expect(view.performKeyEquivalent(with: event))
+      #expect(inputs == [.key(.text(letter), KeyModifiers(control: true))])
+    }
+    let arrows: [(Key, UInt16)] = [(.up, 126), (.down, 125), (.left, 123), (.right, 124)]
+    for (key, code) in arrows {
+      let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+        modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+        context: nil, characters: "", charactersIgnoringModifiers: "",
+        isARepeat: false, keyCode: code))
+      inputs.removeAll()
+      #expect(view.performKeyEquivalent(with: event))
+      #expect(inputs == [.key(key)])
+    }
+  }
+
   @Test("the terminal does not reserve an application's former Ctrl-Shift-P binding")
   func unboundShortcutReachesTerminal() throws {
     _ = NSApplication.shared

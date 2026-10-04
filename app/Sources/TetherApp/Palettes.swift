@@ -102,7 +102,7 @@ struct PaletteOverlay: View {
   }
 }
 
-private struct PalettePanel: View {
+struct PalettePanel: View {
   let kind: Palette
   @Binding var query: String
   let items: [CommandItem]
@@ -181,17 +181,9 @@ private struct PalettePanel: View {
       focused = true
     }
     .onChange(of: available, initial: true) { _, ids in selection.reconcile(ids) }
-    .onKeyPress(.escape) {
-      onCancel()
-      return .handled
-    }
-    .onKeyPress(.upArrow) {
-      selection.move(forward: false, in: available)
-      return .handled
-    }
-    .onKeyPress(.downArrow) {
-      selection.move(forward: true, in: available)
-      return .handled
+    .onPickerCancel(onCancel)
+    .onPickerNavigation { movement in
+      selection.navigate(movement, pageSize: max(1, Int(listHeight / 44)), in: available)
     }
   }
 

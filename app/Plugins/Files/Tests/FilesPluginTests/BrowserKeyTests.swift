@@ -10,8 +10,10 @@
   /// The browser as it is drawn, in a window, answering real key events —
   /// what a person pressing space in the inspector actually exercises.
   @MainActor
-  @Suite("keys in the browser")
+  @Suite("keys in the browser", .serialized)
   struct BrowserKeyTests {
+    init() { _ = NSApplication.shared }
+
     private func context() -> TabContext {
       TabContext(
         id: UUID(),
@@ -35,12 +37,83 @@
       return nil
     }
 
-    private func press(_ characters: String, code: UInt16, in window: NSWindow) {
+    private func press(_ characters: String, code: UInt16, in window: NSWindow,
+                       base: String? = nil, flags: NSEvent.ModifierFlags = []) {
       let event = NSEvent.keyEvent(
-        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
         windowNumber: window.windowNumber, context: nil, characters: characters,
-        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        charactersIgnoringModifiers: base ?? characters, isARepeat: false, keyCode: code)!
       window.sendEvent(event)
+    }
+
+    @Test("Control navigation moves between rows and expands or collapses folders")
+    func unixNavigation() async throws {
+      _ = NSApplication.shared
+      let source = StubSource([
+        "/": .directory, "/home": .directory, "/home/ada": .directory,
+        "/home/ada/notes.txt": .file, "/home/ada/plot.png": .file,
+        "/home/ada/src": .directory, "/home/ada/src/main.swift": .file,
+      ])
+      let model = FilesTab(tab: context(),
+        cache: FileCache(host: UUID(),
+          base: FileManager.default.temporaryDirectory.appendingPathComponent("unix-keys-\(UUID())")),
+        open: { _ in source })
+      await model.go(to: "/home/ada")
+      let window = NSWindow(
+        contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.orderFrontRegardless()
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(300))
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      window.makeFirstResponder(table)
+      model.selection = ["/home/ada/notes.txt"]
+      try await Task.sleep(for: .milliseconds(100))
+
+      press("\u{0e}", code: 45, in: window, base: "n", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/plot.png"])
+      press("\u{10}", code: 35, in: window, base: "p", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/notes.txt"])
+
+      model.selection = ["/home/ada/src"]
+      try await Task.sleep(for: .milliseconds(100))
+      press("\u{06}", code: 3, in: window, base: "f", flags: .control)
+      for _ in 0..<100 where !model.rows.contains(where: { $0.entry.path == "/home/ada/src/main.swift" }) {
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      #expect(model.rows.contains { $0.entry.path == "/home/ada/src/main.swift" })
+      press("\u{06}", code: 3, in: window, base: "f", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/src/main.swift"])
+      press("\u{02}", code: 11, in: window, base: "b", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/src"])
+      press("\u{02}", code: 11, in: window, base: "b", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(!model.rows.contains { $0.entry.path == "/home/ada/src/main.swift" })
+      press("\u{f72b}", code: 119, in: window)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/plot.png"])
+      press("v", code: 9, in: window, flags: .option)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/src"])
+      press("\u{16}", code: 9, in: window, base: "v", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.selection == ["/home/ada/plot.png"])
+      press("\u{0d}", code: 46, in: window, base: "m", flags: .control)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.renaming == "/home/ada/plot.png")
+      let editor = try #require(window.firstResponder as? NSTextView)
+      editor.setSelectedRange(NSRange(location: 2, length: 0))
+      press("\u{02}", code: 11, in: window, base: "b", flags: .control)
+      #expect(editor.selectedRange().location == 1)
+      #expect(model.selection == ["/home/ada/plot.png"])
+      press("\u{1b}", code: 53, in: window)
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(model.renaming == nil)
     }
 
     @Test("space previews a text file and Delete requests its removal")
@@ -77,9 +150,15 @@
       for _ in 0..<100 where shown.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
       #expect(shown.first?.map(\.lastPathComponent) == ["notes.txt"])
       press("\u{7f}", code: 51, in: window)
-      window.orderOut(nil)
-
       #expect(model.pendingDeletion.map(\.path) == ["/home/ada/notes.txt"])
+      // Dismiss the confirmation before hiding its host; otherwise the
+      // queued dialog can become a standalone modal and block the next test.
+      for _ in 0..<100 where window.sheets.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+      let sheet = try #require(window.sheets.first)
+      let cancel = try #require(findButton(titled: "Cancel", in: sheet.contentView!))
+      cancel.performClick(nil)
+      for _ in 0..<100 where !model.pendingDeletion.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+      window.orderOut(nil)
     }
 
     @Test("a delete request from a context menu presents confirmation")

@@ -153,6 +153,11 @@ struct AppSettings: View {
             .accessibilityLabel(item.title)
         }
         .listStyle(.sidebar)
+        .onPickerNavigation { movement in
+          var choice = PickerSelection(id: section)
+          choice.navigate(movement, in: Section.available)
+          section = choice.id
+        }
         .navigationSplitViewColumnWidth(min: 168, ideal: 184, max: 210)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           settingsFooter

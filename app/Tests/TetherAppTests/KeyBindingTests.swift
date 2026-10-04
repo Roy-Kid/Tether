@@ -32,6 +32,23 @@ struct KeyBindingTests {
     }
   }
 
+  @Test("defaults leave Unix editing, navigation and process-control keys to the terminal")
+  func unixDefaults() {
+    isolated { store, defaults in
+      let registry = PluginRegistry(defaults: defaults)
+      let catalog = KeyBindingCatalog.commands(registry: registry)
+      for key in "abcdefghijklmnopqrstuvwxyz".map(String.init) + ["_", "space", "[", "\\", "]", "^"] {
+        #expect(store.command(for: KeyBinding(key, .control), in: catalog) == nil)
+      }
+      for key in ["b", "f", "d", "v", "<", ">", "backspace"] {
+        #expect(store.command(for: KeyBinding(key, .option), in: catalog) == nil)
+      }
+      for key in ["up", "down", "left", "right"] {
+        #expect(store.command(for: KeyBinding(key, []), in: catalog) == nil)
+      }
+    }
+  }
+
   @Test("two independent alternatives persist, and cleared defaults stay cleared after relaunch")
   func persistence() throws {
     try isolated { store, defaults in

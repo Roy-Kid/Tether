@@ -52,6 +52,10 @@ struct TetherApp: App {
       // where ⌘, already goes.
       Settings {
         AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
+          .background {
+            WorkspaceKeyBindingMonitor(enabled: false, textEditingEnabled: true) { _, _ in false }
+              .allowsHitTesting(false)
+          }
       }
       .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
       .windowResizability(.contentMinSize)
@@ -150,4 +154,3 @@ extension TetherApp {
     tabs.open(.local, password: "")
   }
 }
-
