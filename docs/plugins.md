@@ -59,6 +59,8 @@ Settings → Appearance → Tab Layout switches between the horizontal titlebar
 and a vertical tab list on the left. The layout is saved across launches.
 Cmd+S shows or hides the entire tab bar in either layout, without closing any
 sessions. The titlebar button and View → Show/Hide Tab Bar do the same thing.
+Visibility is saved locally and restored on the next launch in either layout.
+Zen temporarily hides the bar without changing this preference.
 Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
 The same **Toggle Tab Bar** command is available in the Cmd+Shift+P command menu,
 whether the tab bar is currently shown or hidden.

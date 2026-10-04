@@ -57,7 +57,13 @@ final class TabSet {
   var selected: SessionTab.ID?
   var currentHost: Host?
   var zen = false
-  var tabBarVisible = true
+  private(set) var tabBarVisible: Bool {
+    didSet {
+      if tabBarVisible != oldValue {
+        defaults.set(tabBarVisible, forKey: TabBarPreference.key)
+      }
+    }
+  }
   var inspector = false
   var hostPicker = false
   var manageHosts = false
@@ -89,6 +95,13 @@ final class TabSet {
   private var recents: [UUID] = []
   private var inspectorBeforeZen = false
   private var terminalSerial: [UUID: Int] = [:]
+  private let defaults: UserDefaults
+
+  init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
+    tabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
+      ?? TabBarPreference.default
+  }
 
   var current: SessionTab? {
     tabs.first { $0.id == selected }

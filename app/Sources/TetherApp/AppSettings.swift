@@ -29,6 +29,12 @@ enum TabLayout: String {
   static let `default`: Self = .horizontal
 }
 
+/// The last tab-bar visibility on this device, independent of layout and Zen.
+enum TabBarPreference {
+  static let key = "tabBarVisible"
+  static let `default` = true
+}
+
 /// What happens once a close leaves the window with nothing open.
 ///
 /// The key and the two values live together so the picker, the close path
