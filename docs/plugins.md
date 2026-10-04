@@ -60,6 +60,8 @@ and a vertical tab list on the left. The layout is saved across launches.
 Cmd+S shows or hides the entire tab bar in either layout, without closing any
 sessions. The titlebar button and View → Show/Hide Tab Bar do the same thing.
 Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
+The same **Toggle Tab Bar** command is available in the Cmd+Shift+P command menu,
+whether the tab bar is currently shown or hidden.
 Showing tabs from Zen Mode exits Zen Mode; opening a tab's accessory also
 reveals a hidden tab bar so its popover has a visible anchor.
 

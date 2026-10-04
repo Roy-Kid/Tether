@@ -658,7 +658,9 @@ extension RootView {
       let command = action.command
       return CommandItem(
         id: command.id,
-        title: tabs.title(for: action),
+        // Keep the searchable toggle name consistent with Key Bindings.
+        // Native menus and the titlebar button still say Show/Hide Tab Bar.
+        title: action == .toggleTabBar ? command.title : tabs.title(for: action),
         detail: detail(command), enabled: action == .closeTab ? tabs.selected != nil : tabs.canPerform(action)
       ) {
         tabs.palette = nil
