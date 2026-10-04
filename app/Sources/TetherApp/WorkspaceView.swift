@@ -533,6 +533,7 @@ extension RootView {
     .dialog(for: tabs.pendingClose) { _ in
       Dialog.confirm(
         tabs.closeQuestion, message: tabs.closeNote, verb: "Close", role: .destructive,
+        shortcuts: [.enter, .command("w")],
         cancel: { tabs.pendingClose = nil }, perform: { tabs.confirmClose() })
     }
     .dialog(for: tabs.renaming) { id in

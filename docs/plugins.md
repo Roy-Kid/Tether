@@ -71,6 +71,10 @@ its × button; reset a modified row to restore its defaults. Duplicate bindings
 are rejected across both slots and all known commands, including disabled plugins.
 The menu shows the first assigned shortcut; the command palette shows both.
 
+The close-tab confirmation accepts Enter (including keypad Enter) or Cmd+W to
+close the tab. Escape cancels. Holding a confirmation key does not count as a
+second press; these shortcuts apply only while that confirmation is visible.
+
 Sync stores one record per command in the private `TetherKeyBindings` zone
 (`TetherKeyBinding`, with a `value` Bytes field). Both alternatives travel together.
 Different commands merge independently; concurrent edits to the same command use

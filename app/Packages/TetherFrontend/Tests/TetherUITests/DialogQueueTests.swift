@@ -209,7 +209,7 @@ struct DialogQueueTests {
     _ = await (first.value, second.value)
   }
 
-  @Test("Return never deletes")
+  @Test("destructive actions require an explicit Return opt-in")
   func defaultAction() {
     let delete = Dialog.confirm("Delete 3 items?", verb: "Delete", role: .destructive) {}
     #expect(delete.defaultAction == nil)
@@ -217,6 +217,11 @@ struct DialogQueueTests {
 
     let trust = Dialog.confirm("Unrecognised host", verb: "Trust") {}
     #expect(trust.defaultAction == 1)
+
+    let close = Dialog.confirm("Close Terminal 1?", verb: "Close", role: .destructive,
+      shortcuts: [.enter, .command("w")]) {}
+    #expect(close.defaultAction == 1)
+    #expect(close.cancelAction == 0)
   }
 
   @Test("an empty message is no message")

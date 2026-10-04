@@ -15,8 +15,7 @@ public struct Dialog: Identifiable {
   /// Only when the consequence is not already the button.
   public var message: String?
   public var fields: [Field]
-  /// In the order a person reads them. The first `.confirm` is what Return
-  /// does; a `.cancel` is what Escape does.
+  /// In reading order. Return chooses the default action; Escape cancels.
   public var actions: [Action]
 
   public init(title: String, message: String? = nil, fields: [Field] = [], actions: [Action]) {
@@ -58,15 +57,25 @@ public struct Dialog: Identifiable {
       case cancel
     }
 
+    /// Explicit Mac keyboard confirmation for a particular action. Destructive
+    /// actions have no Return shortcut unless the caller opts in.
+    public enum Shortcut: Equatable, Sendable {
+      case enter
+      case command(String)
+    }
+
     public var title: String
     public var role: Role
+    public var shortcuts: [Shortcut]
     /// Runs on the main actor with one value per field, before the reply is
     /// handed back to whoever asked.
     public var perform: @MainActor ([String]) -> Void
 
-    public init(_ title: String, role: Role = .confirm, perform: @escaping @MainActor ([String]) -> Void = { _ in }) {
+    public init(_ title: String, role: Role = .confirm, shortcuts: [Shortcut] = [],
+      perform: @escaping @MainActor ([String]) -> Void = { _ in }) {
       self.title = title
       self.role = role
+      self.shortcuts = shortcuts
       self.perform = perform
     }
 
@@ -78,11 +87,12 @@ public struct Dialog: Identifiable {
   /// A yes-or-no question: the verb, and Cancel.
   public static func confirm(
     _ title: String, message: String? = nil, verb: String, role: Action.Role = .confirm,
+    shortcuts: [Action.Shortcut] = [],
     cancel: @escaping @MainActor () -> Void = {}, perform: @escaping @MainActor () -> Void
   ) -> Dialog {
     Dialog(
       title: title, message: message,
-      actions: [.cancel(perform: cancel), Action(verb, role: role) { _ in perform() }])
+      actions: [.cancel(perform: cancel), Action(verb, role: role, shortcuts: shortcuts) { _ in perform() }])
   }
 
   /// Something that has already happened, and one button to say so.
@@ -102,10 +112,9 @@ public struct Dialog: Identifiable {
       actions: [.cancel(perform: cancel), Action(verb) { perform($0.first ?? "") }])
   }
 
-  /// The action Return performs: the first confirm. A destructive verb is
-  /// never the default — a stray Return must not delete anything.
+  /// An explicit Enter action, or the first ordinary confirmation.
   public var defaultAction: Int? {
-    actions.firstIndex { $0.role == .confirm }
+    actions.firstIndex { $0.shortcuts.contains(.enter) } ?? actions.firstIndex { $0.role == .confirm }
   }
 
   /// The action Escape performs.

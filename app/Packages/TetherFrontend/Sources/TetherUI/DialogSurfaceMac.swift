@@ -12,6 +12,9 @@
       let alert: NSAlert
       weak var host: NSWindow?
       var withdrawn = false
+      var answering = false
+      var shortcuts: [(Dialog.Action.Shortcut, NSButton)] = []
+      var keyMonitor: Any?
       /// Called once, however the dialog ends.
       var ended: ((NSApplication.ModalResponse) -> Void)?
       init(alert: NSAlert) { self.alert = alert }
@@ -19,6 +22,8 @@
       func end(_ response: NSApplication.ModalResponse) {
         guard let ended else { return }
         self.ended = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
         ended(response)
       }
     }
@@ -33,18 +38,31 @@
       alert.messageText = dialog.title
       alert.informativeText = dialog.message ?? ""
       let order = Self.buttonOrder(dialog)
+      let presentation = Presentation(alert: alert)
       for index in order {
         let action = dialog.actions[index]
         let button = alert.addButton(withTitle: action.title)
         switch action.role {
         case .destructive:
           button.hasDestructiveAction = true
+          // AppKit clears Return from destructive buttons when presenting
+          // the sheet. Explicit Enter shortcuts use the scoped monitor below.
           button.keyEquivalent = ""
         case .cancel:
           // Escape always; Return too when there is nothing else to press.
           button.keyEquivalent = dialog.actions.count == 1 ? "\r" : "\u{1b}"
         case .confirm:
           button.keyEquivalent = index == dialog.defaultAction ? "\r" : ""
+        }
+        button.keyEquivalentModifierMask = []
+        presentation.shortcuts += action.shortcuts.map { ($0, button) }
+        if !action.shortcuts.isEmpty {
+          button.toolTip = action.shortcuts.map {
+            switch $0 {
+            case .enter: "Enter"
+            case .command(let key): "⌘" + key.uppercased()
+            }
+          }.joined(separator: " / ")
         }
       }
       let boxes = dialog.fields.map(Self.box)
@@ -59,7 +77,6 @@
         alert.window.initialFirstResponder = boxes.first
       }
 
-      let presentation = Presentation(alert: alert)
       current = presentation
       presentation.ended = { [weak self] response in
         let position = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -68,6 +85,12 @@
         }
         if self?.current === presentation { self?.current = nil }
         gone()
+      }
+      if !presentation.shortcuts.isEmpty {
+        presentation.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+          guard let self else { return event }
+          return self.route(event)
+        }
       }
       if let window = Self.sheetHost(anchor?.window) {
         presentation.host = window
@@ -81,6 +104,30 @@
         }
       }
       return true
+    }
+
+    /// Only the visible, frontmost dialog owns these shortcuts. Consuming
+    /// repeat events makes a second Cmd+key a second press, not a held key.
+    func route(_ event: NSEvent) -> NSEvent? {
+      guard event.type == .keyDown, let current, !current.withdrawn, current.ended != nil,
+        event.window === current.alert.window, current.alert.window.isVisible,
+        current.alert.window.attachedSheet == nil else { return event }
+      if let editor = current.alert.window.firstResponder as? NSTextInputClient,
+        editor.hasMarkedText() { return event }
+      let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+      let shortcut = current.shortcuts.first { shortcut, _ in
+        switch shortcut {
+        case .enter: modifiers.isEmpty && (event.keyCode == 36 || event.keyCode == 76)
+        case .command(let key):
+          modifiers == .command && event.charactersIgnoringModifiers?.lowercased() == key.lowercased()
+        }
+      }
+      guard let (_, button) = shortcut else { return event }
+      if !event.isARepeat, !current.answering, button.isEnabled {
+        current.answering = true
+        button.performClick(nil)
+      }
+      return nil
     }
 
     /// Ends the sheet, and the dialog with it even when AppKit does not —

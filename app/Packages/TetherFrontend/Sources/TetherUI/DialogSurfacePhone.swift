@@ -75,7 +75,7 @@
           presentation.finish()
         }
         alert.addAction(button)
-        if index == dialog.defaultAction { alert.preferredAction = button }
+        if index == dialog.defaultAction, action.role == .confirm { alert.preferredAction = button }
       }
 
       current = presentation
