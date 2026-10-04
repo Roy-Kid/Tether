@@ -25,6 +25,7 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
+      #expect(store.command(for: KeyBinding("s"), in: commands) == "toggleTabBar")
       #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), KeyBinding("t")])
       #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
       #expect(store.command(for: KeyBinding("t"), in: commands) == "newTerminal")
@@ -32,6 +33,22 @@ struct KeyBindingTests {
       let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }
       #expect(Set(assigned).count == assigned.count)
       #expect(commands.allSatisfy { store.bindings(for: $0).count == 2 })
+    }
+  }
+
+  @Test("an existing explicit Cmd-S assignment wins over the new tab-bar default")
+  func tabBarDefaultRespectsExistingBindings() throws {
+    try isolated { _, defaults in
+      defaults.set(try JSONEncoder().encode([
+        "renameTerminal": [KeyBinding("s"), nil]
+      ]), forKey: KeyBindingStore.preferenceKey)
+      let loaded = KeyBindingStore(defaults: defaults)
+      #expect(loaded.command(for: KeyBinding("s"), in: commands) == "renameTerminal")
+      let toggle = WorkspaceAction.toggleTabBar.command
+      #expect(loaded.conflict(for: toggle, slot: 0) != nil)
+      try loaded.set(KeyBinding("s", [.command, .shift]), for: toggle, slot: 0, commands: commands)
+      #expect(KeyBindingStore(defaults: defaults).command(
+        for: KeyBinding("s", [.command, .shift]), in: commands) == toggle.id)
     }
   }
 

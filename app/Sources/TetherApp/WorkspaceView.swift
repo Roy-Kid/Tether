@@ -37,6 +37,7 @@ struct RootView: View {
   /// kept — or a host that cannot be connected to as configured.
   @State private var notice: WorkspaceNotice?
   @AppStorage("appearance") private var appearance = "system"
+  @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
   @Environment(\.openURL) private var openURL
   @Environment(\.scenePhase) private var phase
   #if !os(macOS)
@@ -91,12 +92,23 @@ struct RootView: View {
     private var macWorkspace: some View {
       ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
-          if tabs.zen {
-            Color.clear.frame(height: Chrome.titlebar).background { WindowDragArea() }
-          } else {
+          if tabs.showsTabBar && tabLayout == .horizontal {
             WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestClose($0) })
+          } else {
+            HStack(spacing: 0) {
+              Color.clear.frame(width: Chrome.trafficLights)
+              if !tabs.zen { TabBarToggle(tabs: tabs) }
+              Color.clear.background { WindowDragArea() }
+            }
+            .frame(height: tabs.zen ? Chrome.titlebar : Chrome.tab)
+            .background(tabs.zen ? Theme.window : Theme.sidebar)
           }
           HSplitView {
+            if tabs.showsTabBar && tabLayout == .vertical {
+              WorkspaceTabBar(tabs: tabs, layout: .vertical, onClose: { tabs.requestClose($0) })
+                .frame(minWidth: Chrome.tabSidebarMin, idealWidth: Chrome.tabSidebarIdeal,
+                       maxWidth: Chrome.tabSidebarMax)
+            }
             canvas
             // The inspector sits under the tab strip, not beside it in the
             // titlebar: its own header belongs to the column, in the same
@@ -138,6 +150,10 @@ struct RootView: View {
       .background(Theme.window)
       .background { CompactTitlebar() }
       .ignoresSafeArea(.container, edges: .top)
+      .onChange(of: tabLayout) { _, _ in
+        tabs.accessory = nil
+        tabs.tabMenu = nil
+      }
     }
 
     private var showInspector: Bool {
@@ -642,7 +658,7 @@ extension RootView {
       let command = action.command
       return CommandItem(
         id: command.id,
-        title: action == .zen && tabs.zen ? "Exit Zen Mode" : command.title,
+        title: tabs.title(for: action),
         detail: detail(command), enabled: action == .closeTab ? tabs.selected != nil : tabs.canPerform(action)
       ) {
         tabs.palette = nil

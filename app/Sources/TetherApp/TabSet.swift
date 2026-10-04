@@ -57,6 +57,7 @@ final class TabSet {
   var selected: SessionTab.ID?
   var currentHost: Host?
   var zen = false
+  var tabBarVisible = true
   var inspector = false
   var hostPicker = false
   var manageHosts = false
@@ -113,6 +114,8 @@ final class TabSet {
   }
 
   var recentHostIDs: [UUID] { recents }
+
+  var showsTabBar: Bool { tabBarVisible && !zen }
 
   func open(_ host: Host, password: String, typedNow: Bool = false) {
     show(host)
@@ -228,6 +231,7 @@ final class TabSet {
 
   func openTabMenu(_ id: UUID) {
     select(id)
+    revealTabBar()
     tabMenu = id
   }
 
@@ -241,6 +245,7 @@ final class TabSet {
     #endif
     let wanted = AccessoryRef(tab: id, plugin: pluginID)
     accessory = accessory == wanted ? nil : wanted
+    if accessory != nil { revealTabBar() }
   }
 
   /// Brings a plugin's accessory up on a tab without closing it if it is
@@ -253,6 +258,7 @@ final class TabSet {
       }
     #endif
     select(id)
+    revealTabBar()
     accessory = AccessoryRef(tab: id, plugin: pluginID)
   }
 
@@ -424,6 +430,27 @@ final class TabSet {
   func toggleInspector() {
     guard !zen else { return }
     inspector.toggle()
+  }
+
+  func toggleTabBar() {
+    if zen {
+      revealTabBar()
+    } else {
+      tabBarVisible.toggle()
+      if !tabBarVisible {
+        tabMenu = nil
+        accessory = nil
+      }
+    }
+  }
+
+  /// A popover needs a visible tab to anchor to, including when opened by
+  /// a command or a terminal link while the tab bar is hidden.
+  private func revealTabBar() {
+    #if os(macOS)
+      if zen { toggleZen() }
+      tabBarVisible = true
+    #endif
   }
 
   func openPalette(_ kind: Palette) {

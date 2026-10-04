@@ -22,6 +22,9 @@ struct WorkspaceCommands: Commands {
     CommandGroup(after: .sidebar) {
       command(.commandMenu)
       command(.quickSwitch)
+      #if os(macOS)
+        command(.toggleTabBar)
+      #endif
       command(.inspector)
       Divider()
       command(.zen)
@@ -64,7 +67,7 @@ struct WorkspaceCommands: Commands {
   }
 
   private func command(_ action: WorkspaceAction) -> some View {
-    Button(action == .zen && tabs.zen ? "Exit Zen Mode" : action.command.title) { tabs.perform(action) }
+    Button(tabs.title(for: action)) { tabs.perform(action) }
       .disabled(!tabs.canPerform(action))
       #if os(macOS)
         .keyboardShortcut(tabs.keyBindings.bindings(for: action.command).compactMap { $0 }.first?.keyboardShortcut)

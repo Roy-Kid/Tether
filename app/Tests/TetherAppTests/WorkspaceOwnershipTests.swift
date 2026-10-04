@@ -142,6 +142,67 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.tabs.count == 1)
   }
 
+  @Test("hiding the tab bar keeps sessions, selection and inspector, and dismisses anchored menus")
+  func tabBarVisibilityPreservesWorkspace() {
+    let tabs = TabSet()
+    tabs.adopt(tab(.local, name: "Terminal 1"))
+    tabs.adopt(tab(.local, name: "Terminal 2"))
+    let selected = tabs.selected
+    let ids = tabs.visibleIDs
+    tabs.inspector = true
+    tabs.tabMenu = selected
+    tabs.accessory = AccessoryRef(tab: selected!, plugin: "test.tab")
+
+    tabs.perform(.toggleTabBar)
+    #expect(!tabs.showsTabBar)
+    #expect(tabs.title(for: .toggleTabBar) == "Show Tab Bar")
+    #expect(tabs.selected == selected)
+    #expect(tabs.visibleIDs == ids)
+    #expect(tabs.inspector)
+    #expect(tabs.tabMenu == nil && tabs.accessory == nil)
+    #expect(tabs.pendingClose == nil)
+
+    tabs.perform(.previousTab)
+    #expect(tabs.selected == ids.first)
+    #expect(!tabs.showsTabBar)
+    tabs.perform(.toggleTabBar)
+    #expect(tabs.showsTabBar)
+    #expect(tabs.title(for: .toggleTabBar) == "Hide Tab Bar")
+    #expect(tabs.selected == ids.first)
+  }
+
+  #if os(macOS)
+  @Test("zen preserves tab visibility, and Show Tab Bar exits zen")
+  func tabBarVisibilityInZen() {
+    let tabs = TabSet()
+    tabs.perform(.toggleTabBar)
+    tabs.perform(.zen)
+    tabs.perform(.zen)
+    #expect(!tabs.showsTabBar)
+    tabs.inspector = true
+    tabs.perform(.zen)
+    tabs.perform(.toggleTabBar)
+    #expect(!tabs.zen)
+    #expect(tabs.showsTabBar)
+    #expect(tabs.inspector)
+  }
+
+  @Test("opening an accessory reveals the hidden tab that anchors its popover")
+  func accessoryRevealsTabBar() {
+    let tabs = TabSet()
+    tabs.adopt(tab(.local, name: "Terminal 1"))
+    let id = tabs.selected!
+    tabs.perform(.toggleTabBar)
+    tabs.toggleAccessory("test.tab", on: id)
+    #expect(tabs.showsTabBar)
+    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
+    tabs.perform(.toggleTabBar)
+    tabs.showAccessory("test.tab", on: id)
+    #expect(tabs.showsTabBar)
+    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
+  }
+  #endif
+
   @Test("tabs are named as Terminal N per host")
   func namesAreLocal() {
     let tabs = TabSet()

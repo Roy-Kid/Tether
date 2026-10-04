@@ -22,6 +22,13 @@ enum LaunchPreference {
   static let `default` = true
 }
 
+enum TabLayout: String {
+  case horizontal, vertical
+
+  static let preferenceKey = "tabLayout"
+  static let `default`: Self = .horizontal
+}
+
 /// What happens once a close leaves the window with nothing open.
 ///
 /// The key and the two values live together so the picker, the close path
@@ -377,6 +384,7 @@ private struct AppearanceSettings: View {
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
+  @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
 
   var body: some View {
     SwiftUI.Section("Window") {
@@ -385,6 +393,12 @@ private struct AppearanceSettings: View {
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
+      #if os(macOS)
+        Picker("Tab Layout", selection: $tabLayout) {
+          Text("Horizontal").tag(TabLayout.horizontal)
+          Text("Vertical").tag(TabLayout.vertical)
+        }
+      #endif
     }
 
     SwiftUI.Section("Terminal") {

@@ -55,6 +55,14 @@ Swift source API, not a binary ABI or a permission sandbox.
 
 # Key bindings (macOS)
 
+Settings → Appearance → Tab Layout switches between the horizontal titlebar
+and a vertical tab list on the left. The layout is saved across launches.
+Cmd+S shows or hides the entire tab bar in either layout, without closing any
+sessions. The titlebar button and View → Show/Hide Tab Bar do the same thing.
+Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
+Showing tabs from Zen Mode exits Zen Mode; opening a tab's accessory also
+reveals a hidden tab bar so its popover has a visible anchor.
+
 Settings → Key Bindings lists workspace and plugin commands, including commands
 without a default shortcut. Search by command, group or shortcut, or toggle grouping
 with the button beside the search field. Both controls stay visible while scrolling.
