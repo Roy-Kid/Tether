@@ -86,6 +86,7 @@ final class SessionTab: Identifiable {
   private var pump: Task<Void, Never>?
   private var dialTask: Task<Void, Never>?
   private var authentication: AuthenticationCoordinator?
+  private var startingDirectory: String?
 
   private var columns: UInt16 = 80
   private var rows: UInt16 = 24
@@ -109,11 +110,13 @@ final class SessionTab: Identifiable {
   /// than read from the keychain: typed, it is worth offering to keep.
   private var typedNow = false
 
-  init(host: Host, password: String, typedNow: Bool = false, known: KnownHosts, name: String) {
+  init(host: Host, password: String, typedNow: Bool = false, known: KnownHosts, name: String,
+       directory: String? = nil) {
     self.host = host
     self.known = known
     self.name = name
     self.typedNow = typedNow
+    self.startingDirectory = directory
     dialTask = Task { await dial(password) }
   }
 
@@ -219,8 +222,13 @@ final class SessionTab: Identifiable {
   /// of `dial`, down to handing out the same lease.
   private func open() async {
     do {
+      // The folder may have been removed after closing the tab.
+      var isDirectory: ObjCBool = false
+      let directory = startingDirectory.flatMap {
+        FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue ? $0 : nil
+      }
       let session = try await TerminalSession.local(
-        LocalShell(term: "xterm-256color", columns: columns, rows: rows))
+        LocalShell(directory: directory, term: "xterm-256color", columns: columns, rows: rows))
       adopt(session)
     } catch {
       fail(error)

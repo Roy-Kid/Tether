@@ -84,11 +84,12 @@ struct TetherApp: App {
         }
       }
       .onChange(of: store.hosts) { _, hosts in
+        tabs.reconcileClosedTabs(with: hosts)
         // A synchronized endpoint or policy change invalidates an in-flight
         // attempt and its old lease. Stale tabs cannot keep granting channels.
         for tab in tabs.tabs where tab.host.isManaged {
           let current = hosts.first { $0.id == tab.host.id }
-          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id) }
+          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id, remember: false) }
         }
       }
       .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }

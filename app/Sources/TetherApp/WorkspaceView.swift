@@ -217,6 +217,46 @@ struct RootView: View {
     }
   }
 
+  private func restoreTab(_ id: UUID) {
+    guard let record = tabs.restoration(for: id) else { return }
+    let host = latest(record.host)
+    if host.isLocal {
+      finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
+      return
+    }
+    Task {
+      if let issue = host.connectionProblem {
+        tabs.cancelRestore(id)
+        notice = WorkspaceNotice(title: "Could Not Connect", message: issue)
+        return
+      }
+      if let connection = try? await tabs.lease(for: host) {
+        finishRestore(record, tab: tabs.restore(id, host: host, on: connection))
+        return
+      }
+      let source = await passwordSource(for: host)
+      guard tabs.restoration(for: id) != nil else { return }
+      switch source {
+      case .none: finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
+      case .saved(let password): finishRestore(record, tab: tabs.restore(id, host: host, password: password))
+      case .ask: ask(ConnectRequest(host: host, restoring: id))
+      }
+    }
+  }
+
+  private func finishRestore(_ record: ClosedTerminal, tab: SessionTab?) {
+    guard let tab, !record.attachments.isEmpty else { return }
+    Task { [weak tab] in
+      guard let tab, (try? await tab.connectionReady()) != nil,
+        tabs.tabs.contains(where: { $0.id == tab.id }) else { return }
+      for saved in record.attachments {
+        guard registry.isEnabled(saved.pluginID) else { continue }
+        prepareAttachment(saved.pluginID, on: tab)
+        tab.attachment(for: saved.pluginID)?.restore(from: saved.state)
+      }
+    }
+  }
+
   private func ask(_ request: ConnectRequest) {
     if let tab = request.retrying, connectRequests.contains(where: { $0.retrying == tab }) { return }
     connectRequests.append(request)
@@ -276,6 +316,9 @@ struct RootView: View {
     connectRequests.removeAll { $0.id == request.id }
     if let answer = reconnectAnswers.removeValue(forKey: request.id) {
       answer.resume(returning: password)
+    } else if let id = request.restoring {
+      guard let record = tabs.restoration(for: id) else { return }
+      finishRestore(record, tab: tabs.restore(id, host: latest(request.host), password: password, typedNow: true))
     } else if let id = request.retrying {
       // A tab closed while its password was being asked for stays closed.
       tabs.tabs.first { $0.id == id }?.redial(host: latest(request.host), password: password, typedNow: true)
@@ -289,6 +332,7 @@ struct RootView: View {
   private func cancelConnect(_ request: ConnectRequest) {
     connectRequests.removeAll { $0.id == request.id }
     reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
+    if let id = request.restoring { tabs.cancelRestore(id) }
     if let id = request.retrying { tabs.close(id) }
   }
 
@@ -498,6 +542,7 @@ extension RootView {
       guard let intent else { return }
       tabs.intent = nil
       switch intent {
+      case .restoreTab(let id): restoreTab(id)
       case .newTerminal:
         if let host = tabs.currentHost {
           open(host)

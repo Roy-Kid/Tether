@@ -18,6 +18,7 @@ struct WorkspaceCommands: Commands {
     }
     CommandGroup(replacing: .saveItem) {
       command(.closeTab)
+      command(.restoreTab)
     }
     CommandGroup(after: .sidebar) {
       command(.commandMenu)

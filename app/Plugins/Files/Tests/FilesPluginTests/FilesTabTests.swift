@@ -62,6 +62,20 @@ struct FilesTabTests {
     "/home/ada/.env": .file, "/home/ada/runs/plot.png": .file,
   ]
 
+  @Test("a reopened tab restores the browser's directory on a fresh attachment")
+  func restoreDirectory() async throws {
+    let original = browser(StubSource(tree))
+    await original.go(to: "/home/ada/runs")
+    let state = try #require(original.restorationState)
+    original.close()
+    let restored = browser(StubSource(tree))
+    defer { restored.close() }
+    restored.restore(from: state)
+    try await settle(restored) { restored.directory == "/home/ada/runs" }
+    #expect(restored.entries.map(\.name) == ["plot.png"])
+    #expect(restored.transfers.running == 0)
+  }
+
   @Test("the browser starts at home, folders first, dot-files hidden until asked")
   func startsAtHome() async throws {
     let model = browser(StubSource(tree))

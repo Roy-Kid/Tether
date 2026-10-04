@@ -30,6 +30,7 @@ struct KeyBindingTests {
       #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), KeyBinding("t")])
       #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
       #expect(store.command(for: KeyBinding("t"), in: commands) == "newTerminal")
+      #expect(store.command(for: KeyBinding("t", [.command, .shift]), in: commands) == "restoreTab")
       #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
       let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }
       #expect(Set(assigned).count == assigned.count)
@@ -198,6 +199,9 @@ struct KeyBindingTests {
     let tabs = TabSet()
     #expect(!tabs.canPerform(.closeTab))
     #expect(!tabs.canPerform(.renameTerminal))
+    #expect(!tabs.canPerform(.restoreTab))
+    tabs.perform(.restoreTab)
+    #expect(tabs.intent == nil)
     tabs.perform(.commandMenu)
     #expect(tabs.palette == .command)
     tabs.perform(.closeTab)

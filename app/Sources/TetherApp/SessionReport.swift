@@ -47,6 +47,7 @@ struct ConnectRequest: Hashable {
   let id = UUID()
   let host: Host
   var retrying: SessionTab.ID?
+  var restoring: UUID?
 }
 
 extension Host {

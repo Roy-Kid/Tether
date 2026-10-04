@@ -68,6 +68,45 @@ public final class TmuxTab: TabAttachment {
   }
   public var isDisconnected: Bool { ended }
   public var closeNote: String? { session == nil ? nil : "tmux stays on the host." }
+  struct Restoration: Codable {
+    let sessionID: String
+    let sessionName: String
+    let windowID: UInt32?
+    let showing: Bool
+  }
+  public var restorationState: Data? {
+    guard let session else { return nil }
+    return try? JSONEncoder().encode(Restoration(sessionID: session.id, sessionName: session.name,
+      windowID: currentWindow?.id, showing: showing))
+  }
+  public func restore(from state: Data) {
+    guard let saved = try? JSONDecoder().decode(Restoration.self, from: state) else { return }
+    run { [self] in
+      sessions = try await lease().tmuxSessions()
+      guard !closed, !Task.isCancelled else { return }
+      guard let restored = sessions.first(where: { $0.id == saved.sessionID && $0.name == saved.sessionName }) else {
+        error = "The previous tmux session is no longer available."
+        return
+      }
+      // Another tab may have reattached while this one was closed.
+      guard owner(restored.id) == nil || owner(restored.id) === self else { return }
+      switch await shellClient(of: restored.id) {
+      case .thisSession: return
+      case .unknown:
+        error = "Could not identify this terminal's tmux client. Choose the session again to attach."
+        return
+      case .other: break
+      }
+      guard !closed, !Task.isCancelled else { return }
+      guard owner(restored.id) == nil || owner(restored.id) === self else { return }
+      try await attach(restored)
+      if let window = saved.windowID, restored.windows.contains(where: { $0.id == window }) {
+        try await workspace?.perform(.selectWindow(id: window))
+      }
+      guard !closed, !Task.isCancelled else { return }
+      showing = saved.showing
+    }
+  }
   public var commands: [PluginCommand] {
     guard session != nil else { return [] }
     let detach = PluginCommand(id: "detach", title: "Detach Session", symbol: "eject") {

@@ -4,6 +4,7 @@ enum WorkspaceAction: String, CaseIterable {
   case newTerminal, changeHost, closeTab, commandMenu, quickSwitch, inspector, zen
   case previousTab, nextTab, renameTerminal, manageHosts
   case toggleTabBar
+  case restoreTab
 
   static var available: [Self] {
     #if os(macOS)
@@ -20,6 +21,7 @@ enum WorkspaceAction: String, CaseIterable {
     case .newTerminal: definition("New Terminal", "File", KeyBinding("n"), KeyBinding("t"))
     case .changeHost: definition("Change Host…", "File", KeyBinding("h", [.command, .shift]))
     case .closeTab: definition("Close Tab", "File", KeyBinding("w"))
+    case .restoreTab: definition("Restore Tab", "File", KeyBinding("t", [.command, .shift]))
     case .commandMenu:
       definition("Command Menu", "View", KeyBinding("p", [.command, .shift]), KeyBinding("p", [.control, .shift]))
     case .quickSwitch: definition("Quick Switch…", "View", KeyBinding("p"))
@@ -80,6 +82,7 @@ extension TabSet {
   func canPerform(_ action: WorkspaceAction) -> Bool {
     switch action {
     case .closeTab: selected != nil || palette != nil || hostPicker || accessory != nil || tabMenu != nil
+    case .restoreTab: canRestoreTab
     case .renameTerminal: current != nil
     case .inspector: !zen
     case .previousTab, .nextTab: !visibleIDs.isEmpty
@@ -93,6 +96,7 @@ extension TabSet {
     case .newTerminal: intent = .newTerminal
     case .changeHost: hostPicker = true
     case .closeTab: requestCloseSelected()
+    case .restoreTab: requestRestoreTab()
     case .commandMenu: openPalette(.command)
     case .quickSwitch: openPalette(.quickSwitch)
     case .inspector: toggleInspector()

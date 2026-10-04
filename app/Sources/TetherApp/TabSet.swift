@@ -42,6 +42,7 @@ enum Palette: Equatable {
 
 enum WorkspaceIntent: Equatable {
   case newTerminal
+  case restoreTab(UUID)
   case connect(Host)
   case edit(Host)
   case launchPlugin(String)
@@ -53,6 +54,10 @@ enum WorkspaceIntent: Equatable {
 final class TabSet {
   let keyBindings = KeyBindingStore()
   var tabs: [SessionTab] = []
+  /// Recent user closes, newest last. Metadata is kept only for this app run.
+  var closedTabs: [ClosedTerminal] = []
+  var restoringTab: UUID?
+  static let closedTabLimit = 20
   var extensions: [WorkspaceEntry] = []
   var selected: SessionTab.ID?
   var currentHost: Host?
@@ -175,13 +180,13 @@ final class TabSet {
     return "Terminal \(next)"
   }
 
-  func adopt(_ tab: SessionTab) {
+  func adopt(_ tab: SessionTab, at index: Int? = nil) {
     show(tab.host)
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
     // A person who declined a question the login asked has closed it.
     let id = tab.id
-    tab.onDeclined = { [weak self] in self?.close(id) }
-    tabs.append(tab)
+    tab.onDeclined = { [weak self] in self?.close(id, remember: false) }
+    tabs.insert(tab, at: min(max(index ?? tabs.count, 0), tabs.count))
     select(tab.id)
   }
 
@@ -314,6 +319,9 @@ final class TabSet {
   var onEmptied: (() -> Void)?
 
   func closeAll() {
+    closedTabs.removeAll()
+    restoringTab = nil
+    if case .restoreTab = intent { intent = nil }
     closeCheck?.cancel()
     closeCheck = nil
     checkingClose = nil
@@ -430,7 +438,7 @@ final class TabSet {
     close(id)
   }
 
-  func close(_ id: SessionTab.ID) {
+  func close(_ id: SessionTab.ID, remember: Bool = true) {
     if checkingClose == id {
       closeCheck?.cancel()
       closeCheck = nil
@@ -451,6 +459,13 @@ final class TabSet {
     }
     guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
     let hostID = tabs[index].host.id
+    if remember {
+      closedTabs.append(ClosedTerminal(tabs[index], index: index))
+      if closedTabs.count > Self.closedTabLimit,
+        let oldest = closedTabs.firstIndex(where: { $0.id != restoringTab }) {
+        closedTabs.remove(at: oldest)
+      }
+    }
     tabs[index].close()
     tabs.remove(at: index)
 

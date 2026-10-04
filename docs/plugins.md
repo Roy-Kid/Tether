@@ -135,6 +135,18 @@ context-specific behavior; this page configures workspace commands.
 
 New Terminal defaults to Cmd+N (primary) and Cmd+T (secondary). These take
 priority over terminal input in the workspace; personal overrides remain unchanged.
+**Restore Tab** defaults to Cmd+Shift+T and is available in File, the command menu
+and Key Bindings. Each press reopens the most recently closed terminal, selecting
+its original host and restoring its name and position. The last 20 closed
+terminals are remembered for the current app run; cancelling a password prompt
+keeps the entry available. The action is disabled when history is empty.
+Local shells reopen in their previous directory when it still exists. SSH uses
+the usual authentication flow and opens a fresh shell. Closed processes and shell
+scrollback cannot be recovered. tmux attachments reconnect to the previous session
+if it still exists, and Files restores its browser directory. Active transfers
+are not restarted. Quitting or switching accounts clears this history.
+Tab plugins can implement `restorationState` and `restore(from:)` to save
+nonsecret metadata and apply it to a new attachment after authentication.
 Rename Terminal defaults to Cmd+R and renames the selected terminal.
 In its dialog, Return or keypad Enter saves the name; Escape cancels.
 Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to the terminal.
