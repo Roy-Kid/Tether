@@ -8,7 +8,7 @@
 ///
 /// Named rather than resolved to RGB because the *consumer* owns the palette:
 /// a renderer with a light theme must be able to draw "red" as its own red.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NamedColor {
     Black,
     Red,
@@ -34,7 +34,7 @@ pub enum NamedColor {
     Cursor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Color {
     Named(NamedColor),
     /// An index into the 256-colour palette.
@@ -47,7 +47,7 @@ pub enum Color {
 }
 
 /// How text in a cell is decorated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Underline {
     None,
     Single,
@@ -58,7 +58,7 @@ pub enum Underline {
 }
 
 /// Everything about a cell's appearance except its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Style {
     pub foreground: Color,
     pub background: Color,

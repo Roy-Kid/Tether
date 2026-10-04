@@ -10,6 +10,7 @@
 
 mod damage;
 mod directory;
+mod history;
 mod input;
 mod link;
 mod palette;
@@ -20,6 +21,7 @@ mod style;
 mod terminal;
 
 pub use damage::{Changes, RowSpan, ScreenDamage};
+pub use history::{HistoryEvent, HistoryRow};
 pub use input::{Input, Key, Modifiers};
 pub use link::{Link, LinkSpan, LinkTarget};
 pub use palette::{Palette, Rgb};

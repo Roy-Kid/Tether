@@ -624,7 +624,7 @@ extension RootView {
     // platform, and a phone can be killed without sending it at all — which
     // is why the sessions also close on `deinit`, not only here.
     .onReceive(NotificationCenter.default.publisher(for: terminationNotification)) { _ in
-      tabs.closeAll()
+      tabs.shutdown()
     }
     .onAppear { registry.onDisable = { id in tabs.closePlugin(id) } }
     .dialog(for: notice) { shown in

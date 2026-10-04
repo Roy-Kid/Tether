@@ -54,7 +54,7 @@ enum WorkspaceIntent: Equatable {
 final class TabSet {
   let keyBindings = KeyBindingStore()
   var tabs: [SessionTab] = []
-  /// Recent user closes, newest last. Metadata is kept only for this app run.
+  /// Recent user closes, newest last; persisted when a history store is supplied.
   var closedTabs: [ClosedTerminal] = []
   var restoringTab: UUID?
   static let closedTabLimit = 20
@@ -105,14 +105,22 @@ final class TabSet {
   private var inspectorBeforeZen = false
   private var terminalSerial: [UUID: Int] = [:]
   private let defaults: UserDefaults
+  private let historyStore: SessionHistoryStore?
+  var historyProblem: String?
+  private var reportedHistoryProblem: String?
 
   init(
     defaults: UserDefaults = .standard,
+    historyStore: SessionHistoryStore? = nil,
     inspectActivity: @escaping @MainActor (SessionTab) async -> ShellActivity = {
       await $0.activityForClose()
     }
   ) {
     self.defaults = defaults
+    self.historyStore = historyStore
+    closedTabs = historyStore?.load() ?? []
+    historyProblem = historyStore?.problem
+    reportedHistoryProblem = historyStore?.problem
     self.inspectActivity = inspectActivity
     tabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
       ?? TabBarPreference.default
@@ -181,6 +189,16 @@ final class TabSet {
   }
 
   func adopt(_ tab: SessionTab, at index: Int? = nil) {
+    if let historyStore, historyStore.canWrite {
+      let restoring = tab.historyID != nil
+      let id = tab.historyID ?? UUID()
+      do {
+        tab.history = try SessionHistory(directory: historyStore.location(id),
+          lineLimit: HistoryPreference.limit(in: defaults), restoring: restoring)
+        tab.historyID = id
+      } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
+      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
+    }
     show(tab.host)
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
     // A person who declined a question the login asked has closed it.
@@ -188,6 +206,23 @@ final class TabSet {
     tab.onDeclined = { [weak self] in self?.close(id, remember: false) }
     tabs.insert(tab, at: min(max(index ?? tabs.count, 0), tabs.count))
     select(tab.id)
+    persistHistory()
+  }
+
+  func persistHistory() {
+    historyStore?.save(open: tabs.enumerated().map { ClosedTerminal($0.element, index: $0.offset) }, closed: closedTabs)
+    if let problem = historyStore?.problem { reportHistoryProblem(problem) }
+  }
+
+  private func reportHistoryProblem(_ message: String) {
+    guard reportedHistoryProblem != message else { return }
+    reportedHistoryProblem = message
+    historyProblem = message
+  }
+
+  func checkpointHistory() {
+    tabs.forEach { $0.checkpointHistory() }
+    persistHistory()
   }
 
   /// The first tab with something to tell the person.
@@ -318,6 +353,12 @@ final class TabSet {
   /// decides whether that means staying on the empty window.
   var onEmptied: (() -> Void)?
 
+  func shutdown() {
+    checkpointHistory()
+    tabs.forEach { $0.onHistoryChanged = nil; $0.close() }
+    extensions.forEach { $0.workspace.close() }
+  }
+
   func closeAll() {
     closedTabs.removeAll()
     restoringTab = nil
@@ -333,6 +374,7 @@ final class TabSet {
     currentHost = nil
     lastByHost = [:]
     recents = []
+    persistHistory()
     tabMenu = nil
     accessory = nil
     sheet = nil
@@ -467,7 +509,9 @@ final class TabSet {
       }
     }
     tabs[index].close()
+    if let error = tabs[index].history?.error { reportHistoryProblem(error) }
     tabs.remove(at: index)
+    persistHistory()
 
     // Stay on this host even when the last tab closes. Jumping to another
     // machine is a choice, not a side effect of tidying.

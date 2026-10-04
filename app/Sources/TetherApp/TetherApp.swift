@@ -17,7 +17,7 @@ struct TetherApp: App {
     #endif
     return HostStore()
   }()
-  @State private var tabs = TabSet()
+  @State private var tabs = TabSet(historyStore: SessionHistoryStore())
   /// One keychain for the process. Passwords are read at the moment of
   /// connecting and never held here (spec §18).
   private let secrets: any SecretStore = Keychain()
@@ -71,6 +71,7 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        tabs.reconcileClosedTabs(with: store.hosts)
         tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
         store.useKeyBindings(tabs.keyBindings)
         store.sweepCredentials()
@@ -97,6 +98,7 @@ struct TetherApp: App {
       // added or changed in an editor meanwhile reaches the library, and
       // every device, from here.
       .onChange(of: phase) { _, phase in
+        if phase != .active { tabs.checkpointHistory() }
         if phase == .active {
           store.reload()
           store.reconcile()

@@ -28,7 +28,8 @@ public final class RemoteConnection: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = defaultScrollbackLines
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) async throws -> TerminalSession {
     let session = try await cancellable { token in
       try await self.inner.openShell(
@@ -36,6 +37,7 @@ public final class RemoteConnection: Sendable {
         columns: columns,
         rows: rows,
         scrollbackLines: scrollbackLines,
+        history: history?.inner,
         cancellation: token)
     }
     return TerminalSession(session)

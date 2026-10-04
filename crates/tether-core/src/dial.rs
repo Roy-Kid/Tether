@@ -112,6 +112,7 @@ pub struct Dial {
     term: String,
     size: ScreenSize,
     options: Options,
+    history: Option<crate::history::HistoryArchive>,
 }
 
 impl Dial {
@@ -132,6 +133,7 @@ impl Dial {
             term: "xterm-256color".to_owned(),
             size: ScreenSize::new(80, 24),
             options: Options::default(),
+            history: None,
         }
     }
 
@@ -156,6 +158,11 @@ impl Dial {
         self
     }
 
+    pub fn history(mut self, history: Option<crate::history::HistoryArchive>) -> Self {
+        self.history = history;
+        self
+    }
+
     pub fn options(mut self, options: Options) -> Self {
         self.options = options;
         self
@@ -170,6 +177,7 @@ impl Dial {
     pub async fn connect(self, credentials: Vec<Credential>) -> Result<TerminalSession, DialError> {
         let size = self.size;
         let options = self.options;
+        let history = self.history.clone();
         let term = self.term.clone();
         let connection = self.authenticate(credentials).await?;
         let shell =
@@ -181,6 +189,7 @@ impl Dial {
             crate::Connection::Remote(connection),
             None,
             None,
+            history,
         ))
     }
 

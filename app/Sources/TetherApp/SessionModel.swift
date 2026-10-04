@@ -29,7 +29,12 @@ final class SessionTab: Identifiable {
   /// The host as it was when this tab last dialled.
   private(set) var host: Host
   /// Stable work-position name (`Terminal 1`), not the remote title.
-  var name: String
+  var name: String { didSet { onHistoryChanged?() } }
+  var historyID: UUID?
+  var history: SessionHistory?
+  var onHistoryChanged: (() -> Void)?
+  private var reportedHistoryError = false
+  private var lastHistoryUpdate = Date.distantPast
 
   private(set) var stage: Stage = .connecting
   private(set) var frame: ScreenFrame?
@@ -142,7 +147,7 @@ final class SessionTab: Identifiable {
       fail(IdentityError.storage(issue)); return
     }
     if host.allowsMasterReuse, await TerminalSession.sshMasterIsRunning(host.sshTarget) {
-      do { adopt(try await TerminalSession.connectOverSsh(host.sshTarget, columns: columns, rows: rows)) }
+      do { adopt(try await TerminalSession.connectOverSsh(host.sshTarget, columns: columns, rows: rows, history: history)) }
       catch { fail(error) }
       return
     }
@@ -153,7 +158,7 @@ final class SessionTab: Identifiable {
     authentication = coordinator
     defer { coordinator.cancel(); authentication = nil }
     do {
-      adopt(try await coordinator.connect(columns: columns, rows: rows))
+      adopt(try await coordinator.connect(columns: columns, rows: rows, history: history))
       // Only a password the login is known to have used: one typed at the
       // server's own prompt, or the one given before dialling when nothing
       // else could have logged in. A key that got there first proves nothing.
@@ -206,7 +211,7 @@ final class SessionTab: Identifiable {
   /// the server asked were spent getting the connection this tab is holding.
   private func attach(_ connection: RemoteConnection) async {
     do {
-      let session = try await connection.openShell(columns: columns, rows: rows)
+      let session = try await connection.openShell(columns: columns, rows: rows, history: history)
       adopt(session)
     } catch {
       fail(error)
@@ -228,7 +233,7 @@ final class SessionTab: Identifiable {
         FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue ? $0 : nil
       }
       let session = try await TerminalSession.local(
-        LocalShell(directory: directory, term: "xterm-256color", columns: columns, rows: rows))
+        LocalShell(directory: directory, term: "xterm-256color", columns: columns, rows: rows, history: history))
       adopt(session)
     } catch {
       fail(error)
@@ -241,6 +246,7 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
+    reportHistoryError()
     // Before the first byte where possible: a program can ask what the
     // background is in its first breath, and an unanswered question is
     // answered by the convention that a terminal is dark.
@@ -297,6 +303,11 @@ final class SessionTab: Identifiable {
         let pause = ProcessInfo.processInfo.isLowPowerModeEnabled ? 33 : 8
         do { try await Task.sleep(for: .milliseconds(pause)) } catch { return }
         guard !Task.isCancelled else { return }
+        if self.onHistoryChanged != nil, Date().timeIntervalSince(self.lastHistoryUpdate) >= 1 {
+          self.lastHistoryUpdate = Date()
+          self.onHistoryChanged?()
+        }
+        self.reportHistoryError()
         // The wake is consumed either way. Showing the tab later copies
         // whatever the screen is then, rather than every intermediate one.
         guard self.publishesFrames else { continue }
@@ -532,6 +543,17 @@ final class SessionTab: Identifiable {
     return try await withCheckedThrowingContinuation { ready.append($0) }
   }
 
+  func checkpointHistory() {
+    session?.checkpointHistory()
+    reportHistoryError()
+  }
+
+  private func reportHistoryError() {
+    guard !reportedHistoryError, let error = history?.error else { return }
+    reportedHistoryError = true
+    problem = SessionProblem(kind: .history, reason: error)
+  }
+
   func close() {
     closed = true
     problem = nil
@@ -566,12 +588,14 @@ final class SessionTab: Identifiable {
   func attach(_ attachment: any TabAttachment, for pluginID: String) {
     precondition(self.attachment(for: pluginID) == nil, "One attachment per plugin per tab")
     attachments.append(TabAttachmentEntry(pluginID: pluginID, attachment: attachment))
+    onHistoryChanged?()
   }
 
   /// Closes and forgets one plugin's attachment, as when it is turned off.
   func detach(_ pluginID: String) {
     attachments.filter { $0.pluginID == pluginID }.forEach { $0.attachment.close() }
     attachments.removeAll { $0.pluginID == pluginID }
+    onHistoryChanged?()
   }
 
   // MARK: - Questions

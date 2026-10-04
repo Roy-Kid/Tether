@@ -53,7 +53,7 @@ final class AuthenticationCoordinator {
     asking?.cancel()
   }
 
-  func connect(columns: UInt16, rows: UInt16) async throws -> TerminalSession {
+  func connect(columns: UInt16, rows: UInt16, history: SessionHistory? = nil) async throws -> TerminalSession {
     defer { password = "" }
     if let issue = host.connectionProblem ?? host.routeProblem { throw IdentityError.storage(issue) }
     if let profile = host.profile { try profile.validate() }
@@ -85,7 +85,7 @@ final class AuthenticationCoordinator {
     let session: TerminalSession
     do {
       session = try await TerminalSession.connect(to: Destination(host: host.hostname, port: host.port,
-        user: host.username, columns: columns, rows: rows), trusting: Verification(owner: self), offering: offered)
+        user: host.username, columns: columns, rows: rows, history: history), trusting: Verification(owner: self), offering: offered)
     } catch {
       throw refusal ?? namingSkippedKeys(error, keyNames)
     }

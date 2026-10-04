@@ -1,14 +1,15 @@
 import Foundation
 import Tether
 
-/// Reopening information only: no passwords, live sessions or terminal output.
-struct ClosedTerminal: Identifiable, Equatable {
-  struct Attachment: Equatable {
+/// Reopening information and a reference to separately stored terminal content.
+struct ClosedTerminal: Identifiable, Equatable, Codable {
+  struct Attachment: Equatable, Codable {
     let pluginID: String
     let state: Data
   }
 
   let id: UUID
+  let historyID: UUID?
   let host: Host
   let name: String
   let directory: String?
@@ -18,6 +19,7 @@ struct ClosedTerminal: Identifiable, Equatable {
   @MainActor
   init(_ tab: SessionTab, index: Int) {
     id = tab.id
+    historyID = tab.historyID
     host = tab.host
     name = tab.name
     directory = tab.workingDirectory
@@ -55,6 +57,7 @@ extension TabSet {
       cancelRestore(id)
       return false
     }
+    tab.historyID = record.historyID
     closedTabs.removeAll { $0.id == id }
     restoringTab = nil
     adopt(tab, at: record.index)
@@ -79,6 +82,7 @@ extension TabSet {
     closedTabs.removeAll { record in
       record.host.isManaged && !hosts.contains { $0.sameSessionTarget(as: record.host) }
     }
+    persistHistory()
     if let restoringTab, !closedTabs.contains(where: { $0.id == restoringTab }) {
       cancelRestore(restoringTab)
     }
