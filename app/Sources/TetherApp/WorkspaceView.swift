@@ -581,10 +581,18 @@ extension RootView {
       }
       #if os(macOS)
         .background {
-          Button("Command Menu") { tabs.openPalette(.command) }
-            .keyboardShortcut("p", modifiers: [.control, .shift])
-            .hidden()
+          WorkspaceKeyBindingMonitor(enabled: shortcutsAllowed) { binding, repeated in
+            let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
+            guard let id = tabs.keyBindings.command(for: binding, in: definitions) else { return false }
+            if !repeated {
+              if let action = WorkspaceAction(rawValue: id) { tabs.perform(action) }
+              else if let item = commandItems.first(where: { $0.id == id && $0.enabled }) { item.run() }
+            }
+            return true
+          }
+          .allowsHitTesting(false)
         }
+        .focusedSceneValue(\.workspaceShortcutsEnabled, shortcutsAllowed)
       #endif
       .onChange(of: tabs.accessory) { _, open in
         guard let open, let tab = tabs.tabs.first(where: { $0.id == open.tab }) else { return }
@@ -615,57 +623,57 @@ extension RootView {
       #endif
   }
 
+  /// Sheets and authentication questions own their keyboard while presented.
+  private var shortcutsAllowed: Bool {
+    tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil
+      && !tabs.manageHosts && editing == nil && connectRequests.isEmpty
+      && !showingSettings && notice == nil
+      && tabs.problem == nil && tabs.passwordOffer == nil
+  }
+
   private var commandItems: [CommandItem] {
-    var items: [CommandItem] = [
-      CommandItem(id: "new", title: "New Terminal", detail: "File", enabled: true) {
-        tabs.intent = .newTerminal
-        tabs.palette = nil
-      },
-      CommandItem(id: "host", title: "Change Host…", detail: "File", enabled: true) {
-        tabs.palette = nil
-        tabs.hostPicker = true
-      },
-      CommandItem(
-        id: "close", title: "Close Tab", detail: "File", enabled: tabs.selected != nil
-      ) {
-        tabs.palette = nil
-        tabs.requestCloseSelected()
-      },
-      CommandItem(
-        id: "zen", title: tabs.zen ? "Exit Zen Mode" : "Zen Mode", detail: "View · ⌘⇧Z",
-        enabled: true
-      ) {
-        tabs.palette = nil
-        tabs.toggleZen()
-      },
-      CommandItem(
-        id: "rename", title: "Rename Terminal", detail: "Terminal", enabled: tabs.current != nil
-      ) {
-        tabs.palette = nil
-        tabs.renaming = tabs.current?.id
-      },
-    ]
-    #if os(macOS)
-      // The inspector is a second column in a window; a phone has neither.
-      items.append(
-        CommandItem(id: "inspector", title: "Inspector", detail: "View", enabled: !tabs.zen) {
-          tabs.palette = nil
-          tabs.toggleInspector()
-        })
-    #endif
-    items += registry.plugins
-      .filter { registry.isEnabled($0.metadata.id) && !$0.isStatusBarOnly }
-      .map { plugin in
-      let blocked =
-        plugin is any TabPlugin
-        ? tabs.current?.canOpen(plugin.metadata.id) != true
-        : plugin.needsRemoteConnection && tabs.current?.connection == nil
+    let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
+    func detail(_ command: KeyBindingCommand) -> String {
+      let shortcut = tabs.keyBindings.summary(for: command)
+      return shortcut.isEmpty ? command.group : "\(command.group) · \(shortcut)"
+    }
+    var items = WorkspaceAction.available.map { action in
+      let command = action.command
       return CommandItem(
-        id: "plugin-\(plugin.metadata.id)", title: plugin.metadata.name,
-        detail: plugin.metadata.summary, enabled: !blocked
+        id: command.id,
+        title: action == .zen && tabs.zen ? "Exit Zen Mode" : command.title,
+        detail: detail(command), enabled: action == .closeTab ? tabs.selected != nil : tabs.canPerform(action)
       ) {
         tabs.palette = nil
-        launch(plugin)
+        tabs.perform(action)
+      }
+    }
+    for plugin in registry.plugins where registry.isEnabled(plugin.metadata.id) {
+      let id = plugin.metadata.id
+      if !plugin.isStatusBarOnly, let definition = definitions.first(where: { $0.id == KeyBindingCatalog.launchID(id) }) {
+        let blocked = plugin is any TabPlugin
+          ? tabs.current?.canOpen(id) != true
+          : plugin.needsRemoteConnection && tabs.current?.connection == nil
+        items.append(CommandItem(id: definition.id, title: definition.title,
+                                 detail: detail(definition), enabled: !blocked) {
+          tabs.palette = nil
+          launch(plugin)
+        })
+      }
+      let commands: [PluginCommand]
+      if let entry = tabs.extensions.first(where: { $0.id == tabs.selected && $0.pluginID == id }) {
+        commands = entry.workspace.commands
+      } else {
+        commands = tabs.current?.attachment(for: id)?.commands ?? []
+      }
+      for command in commands {
+        let commandID = KeyBindingCatalog.commandID(command.id, plugin: id)
+        guard let definition = definitions.first(where: { $0.id == commandID }) else { continue }
+        items.append(CommandItem(id: commandID, title: command.title,
+                                 detail: detail(definition), enabled: true) {
+          tabs.palette = nil
+          command.action()
+        })
       }
     }
     return items

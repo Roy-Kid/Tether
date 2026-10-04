@@ -72,10 +72,12 @@ struct AppSettings: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
   #endif
   @AppStorage("appearance") private var appearance = "system"
+  @State private var fallbackKeyBindings = KeyBindingStore()
 
   private enum Section: String, Identifiable, CaseIterable {
     case general
     case appearance
+    case keyBindings
     case security
     case identities
     case sync
@@ -87,6 +89,7 @@ struct AppSettings: View {
       switch self {
       case .general: "General"
       case .appearance: "Appearance"
+      case .keyBindings: "Key Bindings"
       case .security: "Security"
       case .identities: "Identities"
       case .sync: "Sync"
@@ -98,6 +101,7 @@ struct AppSettings: View {
       switch self {
       case .general: "gearshape.fill"
       case .appearance: "paintpalette.fill"
+      case .keyBindings: "keyboard.fill"
       case .security: "lock.shield.fill"
       case .identities: "person.badge.key.fill"
       case .sync: "arrow.triangle.2.circlepath"
@@ -109,6 +113,7 @@ struct AppSettings: View {
       switch self {
       case .general: "What opens when Tether launches"
       case .appearance: "Window, terminal, and drawing"
+      case .keyBindings: "Two shortcuts for every command"
       case .security: "Host keys and saved passwords"
       case .identities: "Hosts, keys, and trusted devices"
       case .sync: "iCloud and your SSH configuration"
@@ -120,6 +125,7 @@ struct AppSettings: View {
       switch self {
       case .general: .gray
       case .appearance: .indigo
+      case .keyBindings: .blue
       case .security: .orange
       case .identities: .teal
       case .sync: .blue
@@ -129,7 +135,12 @@ struct AppSettings: View {
 
     /// Sections a platform has nothing to put in are not shown empty.
     static var available: [Self] {
-      allCases.filter { $0 != .general || TerminalSession.isLocalAvailable }
+      allCases.filter {
+        #if !os(macOS)
+          if $0 == .keyBindings { return false }
+        #endif
+        return $0 != .general || TerminalSession.isLocalAvailable
+      }
     }
   }
 
@@ -152,7 +163,7 @@ struct AppSettings: View {
       }
       .navigationSplitViewStyle(.balanced)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-      .frame(minWidth: Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
+      .frame(minWidth: section == .keyBindings ? 820 : Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
       .background { SettingsWindowChrome() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
     #else
@@ -235,6 +246,12 @@ struct AppSettings: View {
       case .sync: SyncSettings(store: store)
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
+      case .keyBindings:
+        #if os(macOS)
+          KeyBindingSettings(
+            store: connections?.keyBindings ?? fallbackKeyBindings,
+            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
+        #endif
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
       case .extensions: ExtensionSettings(registry: registry)
       }

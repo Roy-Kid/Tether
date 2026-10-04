@@ -6,42 +6,33 @@ import TetherPluginKit
 /// the in-window palettes use; this is not a second set of buttons.
 struct WorkspaceCommands: Commands {
   @Bindable var tabs: TabSet
+  #if os(macOS)
+    @FocusedValue(\.workspaceShortcutsEnabled) private var shortcutsEnabled
+  #endif
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
-      Button("New Terminal") { tabs.intent = .newTerminal }
-        .keyboardShortcut("n")
-      Button("Change Host…") { tabs.hostPicker = true }
-        .keyboardShortcut("h", modifiers: [.command, .shift])
+      command(.newTerminal)
+      command(.changeHost)
+      command(.manageHosts)
     }
     CommandGroup(replacing: .saveItem) {
-      Button("Close Tab") { tabs.requestCloseSelected() }
-        .keyboardShortcut("w")
-        .disabled(tabs.selected == nil && tabs.palette == nil && !tabs.hostPicker)
+      command(.closeTab)
     }
     CommandGroup(after: .sidebar) {
-      Button("Command Menu") { tabs.openPalette(.command) }
-        .keyboardShortcut("p", modifiers: [.command, .shift])
-      Button("Quick Switch…") { tabs.openPalette(.quickSwitch) }
-        .keyboardShortcut("p")
-      Button("Inspector") { tabs.toggleInspector() }
-        .disabled(tabs.zen)
+      command(.commandMenu)
+      command(.quickSwitch)
+      command(.inspector)
       Divider()
-      Button(tabs.zen ? "Exit Zen Mode" : "Zen Mode") { tabs.toggleZen() }
-        .keyboardShortcut("z", modifiers: [.command, .shift])
+      command(.zen)
     }
     CommandGroup(after: .windowArrangement) {
-      Button("Previous Tab") { tabs.cycleTab(forward: false) }
-        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-        .disabled(tabs.visibleIDs.isEmpty)
-      Button("Next Tab") { tabs.cycleTab(forward: true) }
-        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-        .disabled(tabs.visibleIDs.isEmpty)
+      command(.previousTab)
+      command(.nextTab)
     }
     CommandMenu("Terminal") {
-      Button("Rename Terminal…") { tabs.renaming = tabs.current?.id }
-        .disabled(tabs.current == nil)
-      Button("New Terminal") { tabs.intent = .newTerminal }
+      command(.renameTerminal)
+      command(.newTerminal)
       // One submenu per tab plugin, under its own name. The menu bar can
       // grow a menu per plugin only by knowing them in advance, which is
       // exactly what the host must not do.
@@ -52,11 +43,13 @@ struct WorkspaceCommands: Commands {
             Button("\(plugin.accessory.name.localizedCapitalized)…") {
               tabs.toggleAccessory(plugin.id, on: tab.id)
             }
+            .modifier(PluginShortcut(tabs: tabs, id: KeyBindingCatalog.launchID(plugin.id)))
             .disabled(!tab.canOpen(plugin.id))
             if let commands = tab.attachment(for: plugin.id)?.commands, !commands.isEmpty {
               Divider()
               ForEach(commands) { command in
                 Button(command.title, action: command.action)
+                  .modifier(PluginShortcut(tabs: tabs, id: KeyBindingCatalog.commandID(command.id, plugin: plugin.id)))
               }
             }
           }
@@ -68,5 +61,29 @@ struct WorkspaceCommands: Commands {
         Text(part)
       }
     }
+  }
+
+  private func command(_ action: WorkspaceAction) -> some View {
+    Button(action == .zen && tabs.zen ? "Exit Zen Mode" : action.command.title) { tabs.perform(action) }
+      .disabled(!tabs.canPerform(action))
+      #if os(macOS)
+        .keyboardShortcut(tabs.keyBindings.bindings(for: action.command).compactMap { $0 }.first?.keyboardShortcut)
+        .disabled(shortcutsEnabled != true)
+      #endif
+  }
+}
+
+private struct PluginShortcut: ViewModifier {
+  let tabs: TabSet
+  let id: String
+  #if os(macOS)
+    @FocusedValue(\.workspaceShortcutsEnabled) private var enabled
+  #endif
+  func body(content: Content) -> some View {
+    content
+      #if os(macOS)
+        .keyboardShortcut(tabs.keyBindings.overrides[id]?.compactMap { $0 }.first?.keyboardShortcut)
+        .disabled(enabled != true)
+      #endif
   }
 }

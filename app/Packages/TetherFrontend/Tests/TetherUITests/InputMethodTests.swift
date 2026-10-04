@@ -7,6 +7,23 @@ import Testing
 @MainActor
 @Suite("Input method positioning")
 struct InputMethodTests {
+  @Test("the terminal does not reserve an application's former Ctrl-Shift-P binding")
+  func unboundShortcutReachesTerminal() throws {
+    _ = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+    let view = KeyCaptureView(frame: .zero)
+    window.contentView!.addSubview(view)
+    window.makeFirstResponder(view)
+    var inputs = 0
+    view.onInput = { _ in inputs += 1 }
+    let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+      modifierFlags: [.control, .shift], timestamp: 0, windowNumber: window.windowNumber,
+      context: nil, characters: "\u{10}", charactersIgnoringModifiers: "P", isARepeat: false, keyCode: 35))
+    #expect(view.performKeyEquivalent(with: event))
+    #expect(inputs == 1)
+  }
+
   @Test("candidate anchor follows the caret inside an offset terminal pane")
   func followsCaret() {
     _ = NSApplication.shared

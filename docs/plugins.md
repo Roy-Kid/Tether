@@ -38,6 +38,10 @@ For either shape:
   plugin in the application's composition root. That line is the only place
   the app may name it; CI fails on any other.
 - Store nonsecret preferences with `PluginPreferences(pluginID:)`.
+- Expose stable `commandDescriptors` on the plugin for commands that should
+  appear in Settings → Key Bindings before connecting. Their IDs must match
+  the commands returned by attachments or workspaces. The host namespaces IDs
+  by plugin and dispatches against the selected tab's current commands.
 
 The host renders each workspace plugin as a toolbar and palette entry.
 A tab plugin kept beside the terminal is a button at the bottom right of
@@ -48,6 +52,27 @@ Turning a plugin off closes its tabs and attachments before deactivation.
 `TetherPluginKitTests` verifies both shapes independently of tmux;
 `app/Plugins/Tmux/Tests` verifies tmux without a server. This interface is a
 Swift source API, not a binary ABI or a permission sandbox.
+
+# Key bindings (macOS)
+
+Settings → Key Bindings lists workspace and plugin commands, including commands
+without a default shortcut. Search by command, group or shortcut, toggle grouping,
+or show only commands with bindings. Each command has independent Primary and
+Secondary shortcuts; either runs the same action. Click a slot and press a
+combination of Ctrl, Alt (Option), Shift and Command with a key, or a function key.
+Esc cancels recording. Consecutive key sequences are not supported.
+
+Changes apply immediately and persist locally across launches. Clear a slot with
+its × button; reset a row or all commands to restore defaults. Duplicate bindings
+are rejected across both slots and all known commands, including disabled plugins.
+The menu shows the first assigned shortcut; the command palette shows both.
+
+Assigned combinations take priority over terminal input in the workspace window.
+Unbound Ctrl/Alt keys still reach the shell or remote editor. Sheets, Settings and
+input-method composition retain their own keyboard handling. Plugin actions run
+only when provided by the selected tab's current attachment or workspace. Native
+text editing, file-list navigation and dialog confirmation keys keep their normal
+context-specific behavior; this page configures workspace commands.
 
 # Using tmux
 

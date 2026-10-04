@@ -11,6 +11,12 @@ public final class FilesPlugin: TabPlugin {
     id: FilesPlugin.id, name: "Files", symbol: "folder",
     summary: "Browse, preview and move files where the shell is.")
   public let accessory = TabAccessory(symbol: "folder", name: "Files", placement: .inspector)
+  public let commandDescriptors = [
+    PluginCommandDescriptor(id: "refresh", title: "Refresh"),
+    PluginCommandDescriptor(id: "newFolder", title: "New Folder"),
+    PluginCommandDescriptor(id: "home", title: "Home"),
+    PluginCommandDescriptor(id: "hidden", title: "Toggle Hidden Files"),
+  ]
 
   public init() {}
 

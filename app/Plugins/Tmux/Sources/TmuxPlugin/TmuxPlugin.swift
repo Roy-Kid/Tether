@@ -15,6 +15,13 @@ public final class TmuxPlugin: TabPlugin {
     id: TmuxPlugin.id, name: "tmux", symbol: "rectangle.split.2x2",
     summary: "Persistent sessions. Native windows and panes.")
   public let accessory = TabAccessory(symbol: "rectangle.split.2x2", name: "tmux sessions")
+  public let commandDescriptors = [
+    PluginCommandDescriptor(id: "detach", title: "Detach Session"),
+    PluginCommandDescriptor(id: "newWindow", title: "New Window"),
+    PluginCommandDescriptor(id: "splitHorizontal", title: "Split Left and Right"),
+    PluginCommandDescriptor(id: "splitVertical", title: "Split Top and Bottom"),
+    PluginCommandDescriptor(id: "zoom", title: "Zoom Pane"),
+  ]
   private var tabs: [UUID: TmuxTab] = [:]
 
   public init() {}

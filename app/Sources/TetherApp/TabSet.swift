@@ -51,6 +51,7 @@ enum WorkspaceIntent: Equatable {
 @MainActor
 @Observable
 final class TabSet {
+  let keyBindings = KeyBindingStore()
   var tabs: [SessionTab] = []
   var extensions: [WorkspaceEntry] = []
   var selected: SessionTab.ID?
