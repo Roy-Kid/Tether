@@ -10,7 +10,7 @@
 //! behind a lock, and the two talk over a channel. The consumer never sees
 //! any of that: it asks for a screen and gets one (spec §16).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tether_terminal::{
@@ -53,6 +53,9 @@ pub enum Ending {
 /// State both the pump and the consumer touch.
 struct Shared {
     terminal: Mutex<Terminal>,
+    history: Option<crate::history::HistoryArchive>,
+    history_stopped: AtomicBool,
+    history_generation: AtomicU64,
     /// Bumped on every observable change, so a consumer can wait rather than
     /// poll. The number itself carries no meaning beyond "different".
     generation: AtomicU64,
@@ -66,6 +69,24 @@ struct Shared {
 }
 
 impl Shared {
+    fn checkpoint_history(&self) {
+        if let Some(history) = &self.history {
+            // Keep capture and commit ordered with synchronous resize/close.
+            let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
+            if self.history_stopped.load(Ordering::Relaxed) {
+                return;
+            }
+            let generation = self.generation.load(Ordering::Relaxed);
+            if generation == self.history_generation.load(Ordering::Relaxed) {
+                return;
+            }
+            self.history_generation.store(generation, Ordering::Relaxed);
+            let events = terminal.take_history_events();
+            let screen = terminal.history_screen();
+            history.write(events, screen);
+        }
+    }
+
     /// Wakes anyone waiting. Called after every mutation of the terminal, and
     /// once more when the session ends so a waiter is never left parked on a
     /// session that will never speak again.
@@ -76,6 +97,7 @@ impl Shared {
     }
 
     fn finish(&self, ending: Ending) {
+        self.checkpoint_history();
         {
             let mut slot = self.ending.lock().expect("ending lock poisoned");
             if slot.is_none() {
@@ -121,11 +143,41 @@ impl TerminalSession {
     /// handing back a stream a caller could also write to would give the far
     /// end two writers and no ordering between them.
     pub fn start<P: Producer>(producer: P, size: ScreenSize, options: Options) -> Self {
+        Self::start_recorded(producer, size, options, None)
+    }
+
+    pub fn start_recorded<P: Producer>(
+        producer: P,
+        size: ScreenSize,
+        options: Options,
+        history: Option<crate::history::HistoryArchive>,
+    ) -> Self {
         let (commands, inbox) = tokio::sync::mpsc::unbounded_channel();
         let (changed, updates) = tokio::sync::watch::channel(0);
 
+        let mut terminal = Terminal::with_options(size, options);
+        if let Some(archive) = &history {
+            if let Err(error) = archive.begin_session() {
+                archive.record_error(error.to_string());
+            }
+            match archive.tail(options.scrollback_lines) {
+                Ok(rows) => {
+                    let restored = terminal.restore_history(&rows);
+                    if !rows.is_empty() {
+                        let mut events = vec![tether_terminal::HistoryEvent::Truncate(rows.len())];
+                        events.extend(restored.into_iter().map(tether_terminal::HistoryEvent::Row));
+                        archive.write(events, terminal.history_screen());
+                    }
+                }
+                Err(error) => archive.record_error(error.to_string()),
+            }
+            terminal.record_history();
+        }
         let shared = Arc::new(Shared {
-            terminal: Mutex::new(Terminal::with_options(size, options)),
+            terminal: Mutex::new(terminal),
+            history,
+            history_stopped: AtomicBool::new(false),
+            history_generation: AtomicU64::new(u64::MAX),
             generation: AtomicU64::new(0),
             changed,
             ending: Mutex::new(None),
@@ -154,8 +206,9 @@ impl TerminalSession {
         connection: Connection,
         terminal_name: Option<String>,
         local_process_id: Option<u32>,
+        history: Option<crate::history::HistoryArchive>,
     ) -> Self {
-        let mut session = Self::start(producer, size, options);
+        let mut session = Self::start_recorded(producer, size, options, history);
         session.connection = Some(connection);
         session.terminal_name = terminal_name;
         session.local_process_id = local_process_id;
@@ -360,7 +413,25 @@ impl TerminalSession {
     /// Exists for a consumer that holds the session behind a shared handle
     /// and so cannot consume it — a frontend closing a window, where there is
     /// nothing useful to await and nowhere to report a failure to.
+    /// Commit output already parsed before releasing the consumer's handle.
+    pub fn checkpoint_history(&self) {
+        self.shared.checkpoint_history();
+    }
+
+    pub fn history_error(&self) -> Option<String> {
+        self.shared.history.as_ref().and_then(|history| history.error())
+    }
+
     pub fn close_in_place(&self) {
+        {
+            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            if !self.shared.history_stopped.swap(true, Ordering::Relaxed)
+                && let Some(history) = &self.shared.history
+            {
+                history.write(terminal.take_history_events(), terminal.history_screen());
+                history.flush();
+            }
+        }
         // A closed channel means the pump already stopped, which is the
         // outcome being asked for.
         let _ = self.commands.send(Command::Close);
@@ -382,6 +453,7 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
+        self.close_in_place();
         // Dropping the handle must not leave a task holding a socket open.
         // The pump also observes the command channel closing, but aborting is
         // what makes it prompt rather than eventual. Already `None` when
@@ -421,6 +493,8 @@ async fn pump<P: Producer>(
     mut inbox: tokio::sync::mpsc::UnboundedReceiver<Command>,
 ) {
     let mut paused = false;
+    let mut checkpoint = tokio::time::interval(std::time::Duration::from_millis(250));
+    checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             // Biased so a queued keystroke is sent before we park on output
@@ -453,12 +527,36 @@ async fn pump<P: Producer>(
                 }
             }
 
+            _ = checkpoint.tick(), if shared.history.is_some() => {
+                let shared = Arc::clone(&shared);
+                let _ = tokio::task::spawn_blocking(move || shared.checkpoint_history()).await;
+            }
+
             output = producer.next_output(), if !paused => {
                 match output {
                     Some(Output::Bytes(bytes)) => {
-                        let replies = {
-                            let mut terminal =
-                                shared.terminal.lock().expect("terminal lock poisoned");
+                        let replies = if shared.history.is_some() {
+                            let worker = Arc::clone(&shared);
+                            match tokio::task::spawn_blocking(move || {
+                                let mut replies = Vec::new();
+                                for chunk in bytes.chunks(8192) {
+                                    let mut terminal = worker.terminal.lock().expect("terminal lock poisoned");
+                                    terminal.feed(chunk);
+                                    if !worker.history_stopped.load(Ordering::Relaxed) {
+                                        if terminal.pending_history_events() >= 256 {
+                                            let events = terminal.take_history_events();
+                                            worker.history.as_ref().unwrap().write(events, terminal.history_screen());
+                                        }
+                                    } else { terminal.take_history_events(); }
+                                    replies.extend(terminal.take_replies());
+                                }
+                                replies
+                            }).await {
+                                Ok(replies) => replies,
+                                Err(error) => { shared.finish(Ending::Lost(error.to_string())); return; }
+                            }
+                        } else {
+                            let mut terminal = shared.terminal.lock().expect("terminal lock poisoned");
                             terminal.feed(&bytes);
                             terminal.take_replies()
                         };

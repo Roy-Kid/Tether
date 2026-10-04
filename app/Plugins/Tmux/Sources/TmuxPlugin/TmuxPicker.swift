@@ -45,6 +45,13 @@ struct TmuxPicker: View {
           }
         }
         .onPickerSubmit { keyboardItems.first { $0.id == keyboardSelection }?.run() }
+        .onPickerQuickSelection(count: keyboardItems.count) { index in
+          let items = keyboardItems
+          guard items.indices.contains(index) else { return }
+          let item = items[index]
+          keyboardSelection = item.id
+          item.run()
+        }
         .onPickerCancel {
           if opened != nil { opened = nil } else { model.tab.dismissAccessory() }
         }
@@ -207,6 +214,7 @@ struct TmuxPicker: View {
             .font(UIStyle.header)
             .foregroundStyle(Theme.subtle)
           Spacer(minLength: 0)
+          PickerShortcutHint(index: keyboardItems.firstIndex { $0.id == "back" })
         }
         .padding(.horizontal, UIStyle.Space.inline)
         .padding(.vertical, UIStyle.rowPadding)
@@ -315,7 +323,7 @@ struct TmuxPicker: View {
     action: @escaping () -> Void
   ) -> some View {
     TreeRow(title: title, selected: selected, highlighted: keyboardSelection == id,
-      chevron: chevron, end: end) {
+      chevron: chevron, end: end, shortcutIndex: keyboardItems.firstIndex { $0.id == id }) {
         keyboardSelection = id
         action()
       }
@@ -395,6 +403,7 @@ private struct TreeRow: View {
   let highlighted: Bool
   let chevron: Bool
   let end: RowEnd?
+  let shortcutIndex: Int?
   let action: () -> Void
   @State private var hovering = false
 
@@ -415,6 +424,7 @@ private struct TreeRow: View {
           .foregroundStyle(Theme.text)
           .adaptiveRowText()
         Spacer(minLength: 0)
+        PickerShortcutHint(index: shortcutIndex)
         // Room for the ✕, only while it shows: a long title gives way to it
         // instead of running underneath.
         if showsEnd {

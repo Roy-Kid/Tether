@@ -13,3 +13,5 @@ description = "Terminal engine boundary: bytes in, screen state and damage out."
 alacritty_terminal = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+cursor-icon = "1"

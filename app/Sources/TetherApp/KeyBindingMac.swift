@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import TetherUI
 
 extension KeyBinding {
   init?(event: NSEvent) {
@@ -105,6 +106,7 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
         owns(target, root: window)
       else { return event }
       if let input = target.firstResponder as? NSTextInputClient, input.hasMarkedText() { return event }
+      if PickerShortcuts.handle(event) { return nil }
       if enabled, target === window, window.attachedSheet == nil, NSApp.modalWindow == nil,
         let binding = KeyBinding(event: event), handle?(binding, event.isARepeat) == true { return nil }
       return textEditingEnabled ? UnixTextEditing.route(event) : event

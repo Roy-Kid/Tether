@@ -54,6 +54,7 @@ public final class FilesTab: TabAttachment {
   private let opener: (RemoteConnection?) async throws -> any FileSource
   private let presenter: ([URL]) -> Void
   private var session: Task<any FileSource, Error>?
+  private var restorationTask: Task<Void, Never>?
   /// Printed paths recently looked for, and what was found.
   var resolved: [String: (Date, FileEntry?)] = [:]
   /// How long a lookup is trusted. Long enough for a hover and its click,
@@ -91,6 +92,16 @@ public final class FilesTab: TabAttachment {
   public var isShowing: Bool { false }
   public var subtitle: String { "" }
   public var isDisconnected: Bool { false }
+  public var requiresCloseConfirmation: Bool { transfers.running > 0 }
+  public var restorationState: Data? { directory?.data(using: .utf8) }
+  public func restore(from state: Data) {
+    guard let path = String(data: state, encoding: .utf8) else { return }
+    restorationTask?.cancel()
+    restorationTask = Task { [weak self] in
+      guard !Task.isCancelled else { return }
+      await self?.go(to: path, remember: false)
+    }
+  }
   public var closeNote: String? {
     switch transfers.running {
     case 0: nil
@@ -127,6 +138,9 @@ public final class FilesTab: TabAttachment {
   }
 
   public func close() {
+    restorationTask?.cancel()
+    restorationTask = nil
+    generation += 1
     transfers.cancelAll()
     let old = session
     session = nil
@@ -212,7 +226,7 @@ public final class FilesTab: TabAttachment {
     defer { if mine == generation { loading = false } }
     do {
       let listed = try await source().list(path)
-      guard mine == generation else { return }
+      guard mine == generation, !Task.isCancelled else { return }
       if remember, let directory, directory != path { history.append(directory) }
       directory = path
       listings[path] = FilesTab.sorted(listed)

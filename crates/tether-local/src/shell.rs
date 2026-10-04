@@ -173,10 +173,6 @@ impl Shell {
             .openpty(pty_size(size))
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
         let tty_name = pair.master.tty_name().map(|path| path.to_string_lossy().into_owned());
-        #[cfg(unix)]
-        let process_id = pair.master.process_group_leader().map(|pid| pid as u32);
-        #[cfg(not(unix))]
-        let process_id = None;
 
         let mut builder = CommandBuilder::new(program);
         for argument in arguments {
@@ -197,6 +193,9 @@ impl Shell {
         let mut child = pair.slave.spawn_command(builder).map_err(|error| {
             LocalError::NotStarted { program: program.to_owned(), cause: error.to_string() }
         })?;
+        // Before spawning, the PTY has no foreground process group. Keep the
+        // actual child PID so cwd follows the shell even while a job is in front.
+        let process_id = child.process_id();
 
         // The slave must go now. While this process still holds one, the
         // kernel sees a reader on the terminal and the master never reports

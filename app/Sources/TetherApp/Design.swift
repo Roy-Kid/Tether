@@ -33,6 +33,9 @@ enum Chrome {
   static let trafficLights: CGFloat = 76
   static let margin: CGFloat = 12
   static let tabTitleWidth: CGFloat = 180
+  static let tabSidebarMin: CGFloat = 180
+  static let tabSidebarIdeal: CGFloat = 220
+  static let tabSidebarMax: CGFloat = 320
   /// The trailing column beside the terminal. Matches the design mock's
   /// 280pt inspector and the old `inspectorColumnWidth` range.
   static let inspectorMin: CGFloat = 240

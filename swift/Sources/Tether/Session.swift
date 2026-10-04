@@ -228,6 +228,7 @@ public struct Destination: Sendable {
   public var columns: UInt16
   public var rows: UInt16
   public var scrollbackLines: UInt32
+  public var history: SessionHistory?
 
   public init(
     host: String,
@@ -236,7 +237,8 @@ public struct Destination: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = defaultScrollbackLines
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) {
     self.host = host
     self.port = port
@@ -245,6 +247,7 @@ public struct Destination: Sendable {
     self.columns = columns
     self.rows = rows
     self.scrollbackLines = scrollbackLines
+    self.history = history
   }
 }
 
@@ -266,19 +269,22 @@ public struct LocalShell: Sendable {
   public var columns: UInt16
   public var rows: UInt16
   public var scrollbackLines: UInt32
+  public var history: SessionHistory?
 
   public init(
     directory: String? = nil,
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = defaultScrollbackLines
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) {
     self.directory = directory
     self.term = term
     self.columns = columns
     self.rows = rows
     self.scrollbackLines = scrollbackLines
+    self.history = history
   }
 }
 
@@ -327,7 +333,7 @@ public final class TerminalSession: Sendable {
             term: destination.term,
             columns: destination.columns,
             rows: destination.rows,
-            scrollbackLines: destination.scrollbackLines),
+            scrollbackLines: destination.scrollbackLines, history: destination.history?.inner),
           trust: HostTrustBridge(trust),
           secrets: credentials.map(secret), cancellation: token)
       }
@@ -355,7 +361,7 @@ public final class TerminalSession: Sendable {
           term: shell.term,
           columns: shell.columns,
           rows: shell.rows,
-          scrollbackLines: shell.scrollbackLines))
+          scrollbackLines: shell.scrollbackLines, history: shell.history?.inner))
     }
     return TerminalSession(session)
   }
@@ -389,7 +395,8 @@ public final class TerminalSession: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = defaultScrollbackLines
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) async throws -> TerminalSession {
     let token = TetherFFIBindings.CancellationToken()
     return try await withTaskCancellationHandler {
@@ -402,7 +409,7 @@ public final class TerminalSession: Sendable {
             term: term,
             columns: columns,
             rows: rows,
-            scrollbackLines: scrollbackLines),
+            scrollbackLines: scrollbackLines, history: history?.inner),
           cancellation: token)
       }
       if Task.isCancelled {
@@ -469,6 +476,10 @@ public final class TerminalSession: Sendable {
   public func update() -> FrameUpdate {
     inner.update()
   }
+
+  /// Commit the screen before the owning tab closes or the app backgrounds.
+  public func checkpointHistory() { inner.checkpointHistory() }
+  public var historyError: String? { inner.historyError() }
 
   /// Drops scrollback above `keep` lines and does not grow it back.
   public func releaseHistory(keep: UInt32) {

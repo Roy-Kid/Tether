@@ -24,7 +24,7 @@ import Tether
 /// reach it. Collapsing them is why some clients show a list of IP addresses.
 /// In `~/.ssh/config` the two are the stanza's name and its `HostName`, which
 /// is the same distinction drawn by the people who invented the file.
-struct Host: Identifiable, Hashable {
+struct Host: Identifiable, Hashable, Codable {
   var id = UUID()
   var label: String
   var hostname: String

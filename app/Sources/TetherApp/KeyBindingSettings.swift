@@ -72,7 +72,7 @@ struct KeyBindingSettings: View {
       .buttonStyle(ChromeButtonStyle(selected: showingHelp))
       .accessibilityLabel("Key binding help")
       .popover(isPresented: $showingHelp) {
-        Text("Click a shortcut and press a key combination. Alt is the Option key. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input. Custom bindings, clears and resets sync through iCloud when available. Orange shortcuts are inactive because another command has the same binding; hover for details.")
+        Text("Click a shortcut and press a key combination using ⌃, ⌥, ⇧ or ⌘. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input. Custom bindings, clears and resets sync through iCloud when available. Orange shortcuts are inactive because another command has the same binding; hover for details.")
           .font(.callout)
           .padding(12)
           .frame(width: 280)
@@ -183,7 +183,7 @@ struct KeyBindingSettings: View {
             .allowsHitTesting(false)
         }
       }
-      .accessibilityLabel("\(command.title), \(name): \(binding?.label ?? "Not set")")
+      .accessibilityLabel("\(command.title), \(name): \(binding?.accessibilityLabel ?? "Not set")")
       .accessibilityValue(conflict.map { "Inactive: " + $0 } ?? (modified ? "Modified from default" : "Default"))
       .help(conflict ?? (modified
         ? "Modified · Default: \(defaultLabel)"

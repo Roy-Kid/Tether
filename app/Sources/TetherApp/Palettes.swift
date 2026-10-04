@@ -151,6 +151,7 @@ struct PalettePanel: View {
                         .foregroundStyle(Theme.subtle)
                     }
                     Spacer()
+                    PickerShortcutHint(index: available.firstIndex(of: item.id))
                   }
                   .padding(.horizontal, UIStyle.Space.inset)
                   .padding(.vertical, UIStyle.Space.group)
@@ -184,6 +185,10 @@ struct PalettePanel: View {
     .onPickerCancel(onCancel)
     .onPickerNavigation { movement in
       selection.navigate(movement, pageSize: max(1, Int(listHeight / 44)), in: available)
+    }
+    .onPickerQuickSelection(count: available.count) { index in
+      selection = PickerSelection(id: available[index])
+      activateSelection()
     }
   }
 

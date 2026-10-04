@@ -38,7 +38,7 @@ struct Collected {
 /// `Arc<Mutex<_>>` because the engine hands events to `&self` while we hold
 /// `&mut Term`, and because a `Terminal` should be movable between threads.
 #[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Collected>>);
+pub(crate) struct Sink(Arc<Mutex<Collected>>);
 
 impl EventListener for Sink {
     fn send_event(&self, event: Event) {
@@ -184,6 +184,7 @@ pub struct Terminal {
     /// Set when the cap changed while the alternate screen — which does not
     /// hold the history — was showing.
     scrollback_needs_apply: bool,
+    pub(crate) history: Option<crate::history::Capture>,
 }
 
 impl Terminal {
@@ -213,6 +214,52 @@ impl Terminal {
             dirty: true,
             scrollback_limit: options.scrollback_lines,
             scrollback_needs_apply: false,
+            history: None,
+        }
+    }
+
+    /// Warm a fresh terminal with a bounded tail. This only draws content;
+    /// it cannot send input or terminal replies to the new shell.
+    pub fn restore_history(&mut self, rows: &[crate::HistoryRow]) -> Vec<crate::HistoryRow> {
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let capacity =
+            rows.iter().map(|r| r.columns as usize / self.size.columns as usize + 2).sum::<usize>()
+                + self.size.rows as usize
+                + 4;
+        self.inner.grid_mut().update_history(capacity);
+        self.feed(&crate::history::display_bytes(rows));
+        // Leave recent content visible and the cursor below the separator,
+        // where the new shell can start. Only rows that actually scrolled off
+        // belong in the archive's history; the rest remain its screen snapshot.
+        self.take_replies();
+        let depth = self.inner.grid().history_size();
+        let restored =
+            (-(depth as i32)..0).map(|line| crate::history::row(&self.inner, line)).collect();
+        self.inner.grid_mut().update_history(self.scrollback_limit);
+        restored
+    }
+
+    /// Capture completed main-screen rows independently of frame publication.
+    pub fn record_history(&mut self) {
+        self.history = Some(crate::history::Capture::default());
+    }
+
+    pub fn pending_history_events(&self) -> usize {
+        self.history.as_ref().map_or(0, |h| h.events.len())
+    }
+
+    pub fn take_history_events(&mut self) -> Vec<crate::HistoryEvent> {
+        self.history.as_mut().map(|h| std::mem::take(&mut h.events)).unwrap_or_default()
+    }
+
+    /// The main screen, even while a full-screen application is showing.
+    pub fn history_screen(&self) -> Vec<crate::HistoryRow> {
+        if self.inner.mode().contains(TermMode::ALT_SCREEN) {
+            self.history.as_ref().map(|h| h.main_screen.clone()).unwrap_or_default()
+        } else {
+            crate::history::screen(&self.inner)
         }
     }
 
@@ -235,7 +282,16 @@ impl Terminal {
             return;
         }
         self.dirty = true;
-        self.parser.advance(&mut self.inner, bytes);
+        if let Some(history) = &mut self.history {
+            let mut handler = crate::history::Recording {
+                term: &mut self.inner,
+                capture: history,
+                limit: self.scrollback_limit,
+            };
+            self.parser.advance(&mut handler, bytes);
+        } else {
+            self.parser.advance(&mut self.inner, bytes);
+        }
         self.directory.feed(bytes);
         self.adopt_title();
         self.apply_scrollback_limit();
@@ -359,8 +415,42 @@ impl Terminal {
     /// Always reported as full damage: reflow can move every line.
     pub fn resize(&mut self, size: ScreenSize) {
         let size = usable(size);
+        let recording = self.history.is_some();
+        let alternate = self.inner.mode().contains(TermMode::ALT_SCREEN);
+        let before = self.inner.grid().history_size();
+        if recording {
+            let (depth, columns, rows) = if alternate {
+                let history = self.history.as_ref().unwrap();
+                (
+                    history.main_history,
+                    history.main_screen.first().map_or(self.size.columns, |r| r.columns),
+                    history.main_screen.len(),
+                )
+            } else {
+                (before, self.size.columns, self.size.rows as usize)
+            };
+            let capacity = (depth + rows) * columns as usize / size.columns as usize
+                + self.size.rows as usize
+                + size.rows as usize
+                + 1;
+            self.inner.set_options(Config { scrolling_history: capacity, ..Config::default() });
+        }
         self.size = size;
         self.inner.resize(Dims { size });
+        if let Some(history) = &mut self.history {
+            if alternate {
+                history.reflowed = true;
+            } else {
+                history.events.push(crate::HistoryEvent::Truncate(before));
+                let depth = self.inner.grid().history_size();
+                for line in -(depth as i32)..0 {
+                    history
+                        .events
+                        .push(crate::HistoryEvent::Row(crate::history::row(&self.inner, line)));
+                }
+                self.inner.grid_mut().update_history(self.scrollback_limit);
+            }
+        }
         self.pending_full_damage = true;
         self.dirty = true;
     }
@@ -752,7 +842,7 @@ fn shape_of(shape: alacritty_terminal::vte::ansi::CursorShape) -> CursorShape {
     }
 }
 
-fn style_of(cell: &alacritty_terminal::term::cell::Cell) -> Style {
+pub(crate) fn style_of(cell: &alacritty_terminal::term::cell::Cell) -> Style {
     let flags = cell.flags;
     Style {
         foreground: color_of(cell.fg),

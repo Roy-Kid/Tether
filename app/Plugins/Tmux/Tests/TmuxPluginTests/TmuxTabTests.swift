@@ -34,6 +34,34 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @MainActor
 @Suite("tmux on a tab")
 struct TmuxTabTests {
+  @Test("restore metadata keeps the session identity and shell-or-tmux choice without retaining a client")
+  func restorationMetadata() async throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let original = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    #expect(original.restorationState == nil)
+    original.session = info("$7", "work")
+    original.showing = true
+    let data = try #require(original.restorationState)
+    let saved = try JSONDecoder().decode(TmuxTab.Restoration.self, from: data)
+    #expect(saved.sessionID == "$7")
+    #expect(saved.sessionName == "work")
+    #expect(saved.showing)
+    original.showShell()
+    let hidden = try JSONDecoder().decode(TmuxTab.Restoration.self,
+      from: #require(original.restorationState))
+    #expect(!hidden.showing)
+    original.close()
+
+    let restored = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { restored.close() }
+    restored.restore(from: data)
+    for _ in 0..<100 where restored.busy { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(!restored.busy)
+    #expect(restored.error != nil, "reopening needs a fresh lease; metadata cannot keep one alive")
+    #expect(restored.session == nil)
+  }
+
   @Test("a session belongs to one tab: choosing it elsewhere brings its tab forward")
   func ownership() throws {
     let host = HostProbe()

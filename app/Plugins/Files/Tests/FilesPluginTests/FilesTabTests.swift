@@ -62,6 +62,20 @@ struct FilesTabTests {
     "/home/ada/.env": .file, "/home/ada/runs/plot.png": .file,
   ]
 
+  @Test("a reopened tab restores the browser's directory on a fresh attachment")
+  func restoreDirectory() async throws {
+    let original = browser(StubSource(tree))
+    await original.go(to: "/home/ada/runs")
+    let state = try #require(original.restorationState)
+    original.close()
+    let restored = browser(StubSource(tree))
+    defer { restored.close() }
+    restored.restore(from: state)
+    try await settle(restored) { restored.directory == "/home/ada/runs" }
+    #expect(restored.entries.map(\.name) == ["plot.png"])
+    #expect(restored.transfers.running == 0)
+  }
+
   @Test("the browser starts at home, folders first, dot-files hidden until asked")
   func startsAtHome() async throws {
     let model = browser(StubSource(tree))
@@ -270,16 +284,19 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     #expect(model.closeNote == nil)
+    #expect(!model.requiresCloseConfirmation)
 
     let fetching = Task { await model.preview([model.entries.first { $0.name == "A.png" }!]) }
     try await settle(model) { model.transfers.running == 1 }
     #expect(model.closeNote == "1 transfer stops.")
+    #expect(model.requiresCloseConfirmation)
     // Progress arrives on a later hop to the main actor than the row does.
     try await settle(model) { model.transfers.items.first?.done == 1 }
 
     model.close()
     await fetching.value
     #expect(model.transfers.items.isEmpty, "a stopped copy is not a failure to show")
+    #expect(!model.requiresCloseConfirmation)
     #expect(model.previewed.isEmpty)
   }
 

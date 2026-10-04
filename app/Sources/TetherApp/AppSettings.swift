@@ -22,6 +22,19 @@ enum LaunchPreference {
   static let `default` = true
 }
 
+enum TabLayout: String {
+  case horizontal, vertical
+
+  static let preferenceKey = "tabLayout"
+  static let `default`: Self = .horizontal
+}
+
+/// The last tab-bar visibility on this device, independent of layout and Zen.
+enum TabBarPreference {
+  static let key = "tabBarVisible"
+  static let `default` = true
+}
+
 /// What happens once a close leaves the window with nothing open.
 ///
 /// The key and the two values live together so the picker, the close path
@@ -77,6 +90,7 @@ struct AppSettings: View {
   private enum Section: String, Identifiable, CaseIterable {
     case general
     case appearance
+    case history
     case keyBindings
     case security
     case identities
@@ -89,6 +103,7 @@ struct AppSettings: View {
       switch self {
       case .general: "General"
       case .appearance: "Appearance"
+      case .history: "Session History"
       case .keyBindings: "Key Bindings"
       case .security: "Security"
       case .identities: "Identities"
@@ -101,6 +116,7 @@ struct AppSettings: View {
       switch self {
       case .general: "gearshape.fill"
       case .appearance: "paintpalette.fill"
+      case .history: "clock.arrow.circlepath"
       case .keyBindings: "keyboard.fill"
       case .security: "lock.shield.fill"
       case .identities: "person.badge.key.fill"
@@ -113,6 +129,7 @@ struct AppSettings: View {
       switch self {
       case .general: "What opens when Tether launches"
       case .appearance: "Window, terminal, and drawing"
+      case .history: "Terminal content saved on this device"
       case .keyBindings: "Two shortcuts for every command"
       case .security: "Host keys and saved passwords"
       case .identities: "Hosts, keys, and trusted devices"
@@ -125,6 +142,7 @@ struct AppSettings: View {
       switch self {
       case .general: .gray
       case .appearance: .indigo
+      case .history: .blue
       case .keyBindings: .blue
       case .security: .orange
       case .identities: .teal
@@ -261,6 +279,7 @@ struct AppSettings: View {
       case .sync: SyncSettings(store: store)
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
+      case .history: HistorySettings()
       case .keyBindings:
         // This pane owns its scroll area so its search field can stay fixed.
         EmptyView()
@@ -377,6 +396,7 @@ private struct AppearanceSettings: View {
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
+  @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
 
   var body: some View {
     SwiftUI.Section("Window") {
@@ -385,6 +405,12 @@ private struct AppearanceSettings: View {
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
+      #if os(macOS)
+        Picker("Tab Layout", selection: $tabLayout) {
+          Text("Horizontal").tag(TabLayout.horizontal)
+          Text("Vertical").tag(TabLayout.vertical)
+        }
+      #endif
     }
 
     SwiftUI.Section("Terminal") {
@@ -560,6 +586,30 @@ private struct SecuritySettings: View {
       reload()
     } catch {
       problem = error.localizedDescription
+    }
+  }
+}
+
+private struct HistorySettings: View {
+  @AppStorage(HistoryPreference.linesKey) private var lines = HistoryPreference.defaultLines
+  @AppStorage(HistoryPreference.unlimitedKey) private var unlimited = false
+
+  var body: some View {
+    SwiftUI.Section {
+      Toggle("Unlimited", isOn: $unlimited)
+      if !unlimited {
+        TextField("Lines per Session", value: $lines, format: .number.grouping(.never))
+          .onChange(of: lines) { _, value in if value < 1 { lines = 1 } }
+      }
+    } header: {
+      Text("Saved History")
+    } footer: {
+      Text("Keeps the most recent lines plus the current screen. Applies to newly opened or restored sessions. Unlimited history uses more disk space.")
+    }
+    SwiftUI.Section {
+      LabeledContent("Recently Closed Tabs", value: "20")
+    } footer: {
+      Text("Session content is stored only on this device. Restoring a tab starts a new shell or connection; running processes are not restored.")
     }
   }
 }

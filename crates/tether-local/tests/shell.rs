@@ -83,6 +83,24 @@ async fn wait_until_ready(shell: &mut Shell) {
     panic!("the shell never started reading its terminal");
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn shell_pid_tracks_its_directory_without_osc_sequences() {
+    let start = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let mut shell =
+        Shell::open(Command::new("/bin/sh").arg("-i").directory(&start), WindowSize::default())
+            .unwrap();
+    wait_until_ready(&mut shell).await;
+    let pid = shell.process_id().expect("the spawned shell has a PID");
+    assert!(pid > 1);
+    assert_eq!(shell.current_directory().as_deref(), start.to_str());
+    shell.write("cd /; printf 'DI''RECTORY-CHANGED\\n'\n").await.unwrap();
+    read_until(&mut shell, "DIRECTORY-CHANGED").await;
+    assert_eq!(shell.process_id(), Some(pid));
+    assert_eq!(shell.current_directory().as_deref(), Some("/"));
+    shell.close();
+}
+
 fn shell_running(script: &str) -> Command {
     Command::new("/bin/sh").arg("-c").arg(script)
 }

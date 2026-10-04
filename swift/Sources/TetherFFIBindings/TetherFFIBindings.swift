@@ -1564,7 +1564,7 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
-    func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, cancellation: CancellationToken) async throws  -> Session
+    func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?, cancellation: CancellationToken) async throws  -> Session
     
     func renameTmux(sessionId: String, name: String) async throws 
     
@@ -1750,12 +1750,12 @@ open func execute(command: String, cancellation: CancellationToken)async throws 
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
-open func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, cancellation: CancellationToken)async throws  -> Session  {
+open func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?, cancellation: CancellationToken)async throws  -> Session  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_tether_ffi_fn_method_remoteconnection_open_shell(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(term),FfiConverterUInt16.lower(columns),FfiConverterUInt16.lower(rows),FfiConverterUInt32.lower(scrollbackLines),FfiConverterTypeCancellationToken_lower(cancellation)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(term),FfiConverterUInt16.lower(columns),FfiConverterUInt16.lower(rows),FfiConverterUInt32.lower(scrollbackLines),FfiConverterOptionTypeSessionHistory.lower(history),FfiConverterTypeCancellationToken_lower(cancellation)
                 )
             },
             pollFunc: ffi_tether_ffi_rust_future_poll_u64,
@@ -2335,6 +2335,8 @@ public protocol SessionProtocol: AnyObject, Sendable {
      */
     func awaitChange() async  -> Bool
     
+    func checkpointHistory() 
+    
     /**
      * Ends the session. Idempotent, because a frontend closing a window
      * cannot easily know whether the far side got there first.
@@ -2357,6 +2359,8 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * Everything needed to draw the screen once.
      */
     func frame()  -> ScreenFrame
+    
+    func historyError()  -> String?
     
     /**
      * What the text at a cell names, if anything, and where it is drawn.
@@ -2508,6 +2512,14 @@ open func awaitChange()async  -> Bool  {
         )
 }
     
+open func checkpointHistory()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_checkpoint_history(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
     /**
      * Ends the session. Idempotent, because a frontend closing a window
      * cannot easily know whether the far side got there first.
@@ -2560,6 +2572,15 @@ open func frame() -> ScreenFrame  {
     return try!  FfiConverterTypeScreenFrame_lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_session_frame(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func historyError() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_history_error(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -2754,6 +2775,134 @@ public func FfiConverterTypeSession_lift(_ handle: UInt64) throws -> Session {
 #endif
 public func FfiConverterTypeSession_lower(_ value: Session) -> UInt64 {
     return FfiConverterTypeSession.lower(value)
+}
+
+
+
+
+
+
+public protocol SessionHistoryProtocol: AnyObject, Sendable {
+    
+    func error()  -> String?
+    
+}
+open class SessionHistory: SessionHistoryProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_tether_ffi_fn_clone_sessionhistory(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_tether_ffi_fn_free_sessionhistory(handle, $0) }
+    }
+
+    
+public static func `open`(directory: String, lineLimit: UInt64?, restoring: Bool)throws  -> SessionHistory  {
+    return try  FfiConverterTypeSessionHistory_lift(try rustCallWithError(FfiConverterTypeTetherError_lift) {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_constructor_sessionhistory_open(
+        FfiConverterString.lower(directory),
+        FfiConverterOptionUInt64.lower(lineLimit),
+        FfiConverterBool.lower(restoring),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+open func error() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_sessionhistory_error(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionHistory: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = SessionHistory
+
+    public static func lift(_ handle: UInt64) throws -> SessionHistory {
+        return SessionHistory(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: SessionHistory) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionHistory {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SessionHistory, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionHistory_lift(_ handle: UInt64) throws -> SessionHistory {
+    return try FfiConverterTypeSessionHistory.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionHistory_lower(_ value: SessionHistory) -> UInt64 {
+    return FfiConverterTypeSessionHistory.lower(value)
 }
 
 
@@ -3472,7 +3621,7 @@ public func FfiConverterTypeCommandOutput_lower(_ value: CommandOutput) -> RustB
 /**
  * Where to connect and as whom.
  */
-public struct Destination: Equatable, Hashable {
+public struct Destination {
     public let host: String
     public let port: UInt16
     public let user: String
@@ -3485,6 +3634,7 @@ public struct Destination: Equatable, Hashable {
     public let columns: UInt16
     public let rows: UInt16
     public let scrollbackLines: UInt32
+    public let history: SessionHistory?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3493,7 +3643,7 @@ public struct Destination: Equatable, Hashable {
          * What the far side will see in `$TERM`. It decides which sequences
          * remote programs emit, so it must describe what this frontend can
          * actually draw.
-         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32) {
+         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?) {
         self.host = host
         self.port = port
         self.user = user
@@ -3501,6 +3651,7 @@ public struct Destination: Equatable, Hashable {
         self.columns = columns
         self.rows = rows
         self.scrollbackLines = scrollbackLines
+        self.history = history
     }
 
     
@@ -3525,7 +3676,8 @@ public struct FfiConverterTypeDestination: FfiConverterRustBuffer {
                 term: FfiConverterString.read(from: &buf), 
                 columns: FfiConverterUInt16.read(from: &buf), 
                 rows: FfiConverterUInt16.read(from: &buf), 
-                scrollbackLines: FfiConverterUInt32.read(from: &buf)
+                scrollbackLines: FfiConverterUInt32.read(from: &buf), 
+                history: FfiConverterOptionTypeSessionHistory.read(from: &buf)
         )
     }
 
@@ -3537,6 +3689,7 @@ public struct FfiConverterTypeDestination: FfiConverterRustBuffer {
         FfiConverterUInt16.write(value.columns, into: &buf)
         FfiConverterUInt16.write(value.rows, into: &buf)
         FfiConverterUInt32.write(value.scrollbackLines, into: &buf)
+        FfiConverterOptionTypeSessionHistory.write(value.history, into: &buf)
     }
 }
 
@@ -3865,7 +4018,7 @@ public func FfiConverterTypeLinkSpan_lower(_ value: LinkSpan) -> RustBuffer {
  * is already running on. What comes back is the same [`Session`] a remote
  * connection returns, so nothing above this point has two paths to maintain.
  */
-public struct LocalShell: Equatable, Hashable {
+public struct LocalShell {
     /**
      * Where the shell starts. The person's home directory when absent,
      * which is what a shell would have chosen anyway.
@@ -3880,6 +4033,7 @@ public struct LocalShell: Equatable, Hashable {
     public let columns: UInt16
     public let rows: UInt16
     public let scrollbackLines: UInt32
+    public let history: SessionHistory?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3892,12 +4046,13 @@ public struct LocalShell: Equatable, Hashable {
          * What the shell will see in `$TERM`. It decides which sequences
          * programs emit, so it must describe what this frontend can actually
          * draw.
-         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32) {
+         */term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?) {
         self.directory = directory
         self.term = term
         self.columns = columns
         self.rows = rows
         self.scrollbackLines = scrollbackLines
+        self.history = history
     }
 
     
@@ -3920,7 +4075,8 @@ public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
                 term: FfiConverterString.read(from: &buf), 
                 columns: FfiConverterUInt16.read(from: &buf), 
                 rows: FfiConverterUInt16.read(from: &buf), 
-                scrollbackLines: FfiConverterUInt32.read(from: &buf)
+                scrollbackLines: FfiConverterUInt32.read(from: &buf), 
+                history: FfiConverterOptionTypeSessionHistory.read(from: &buf)
         )
     }
 
@@ -3930,6 +4086,7 @@ public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
         FfiConverterUInt16.write(value.columns, into: &buf)
         FfiConverterUInt16.write(value.rows, into: &buf)
         FfiConverterUInt32.write(value.scrollbackLines, into: &buf)
+        FfiConverterOptionTypeSessionHistory.write(value.history, into: &buf)
     }
 }
 
@@ -6926,6 +7083,30 @@ fileprivate struct FfiConverterOptionTypeRemoteConnection: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSessionHistory: FfiConverterRustBuffer {
+    typealias SwiftType = SessionHistory?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSessionHistory.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSessionHistory.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeTransferProgress: FfiConverterRustBuffer {
     typealias SwiftType = TransferProgress?
 
@@ -7822,6 +8003,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55719) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_sessionhistory_error() != 57731) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_passphraseprompter_passphrase() != 15227) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7829,6 +8013,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_await_change() != 61272) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_checkpoint_history() != 32845) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_close() != 6571) {
@@ -7844,6 +8031,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_frame() != 8673) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_history_error() != 40699) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_link_at() != 40864) {
@@ -7897,7 +8087,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remoteconnection_execute() != 7135) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 34310) {
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 576) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 30515) {
@@ -7937,6 +8127,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_constructor_cancellationtoken_new() != 63626) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_constructor_sessionhistory_open() != 8006) {
         return InitializationResult.apiChecksumMismatch
     }
 

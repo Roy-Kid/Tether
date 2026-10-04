@@ -37,6 +37,7 @@ struct RootView: View {
   /// kept — or a host that cannot be connected to as configured.
   @State private var notice: WorkspaceNotice?
   @AppStorage("appearance") private var appearance = "system"
+  @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
   @Environment(\.openURL) private var openURL
   @Environment(\.scenePhase) private var phase
   #if !os(macOS)
@@ -91,12 +92,23 @@ struct RootView: View {
     private var macWorkspace: some View {
       ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
-          if tabs.zen {
-            Color.clear.frame(height: Chrome.titlebar).background { WindowDragArea() }
-          } else {
+          if tabs.showsTabBar && tabLayout == .horizontal {
             WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestClose($0) })
+          } else {
+            HStack(spacing: 0) {
+              Color.clear.frame(width: Chrome.trafficLights)
+              if !tabs.zen { TabBarToggle(tabs: tabs) }
+              Color.clear.background { WindowDragArea() }
+            }
+            .frame(height: tabs.zen ? Chrome.titlebar : Chrome.tab)
+            .background(tabs.zen ? Theme.window : Theme.sidebar)
           }
           HSplitView {
+            if tabs.showsTabBar && tabLayout == .vertical {
+              WorkspaceTabBar(tabs: tabs, layout: .vertical, onClose: { tabs.requestClose($0) })
+                .frame(minWidth: Chrome.tabSidebarMin, idealWidth: Chrome.tabSidebarIdeal,
+                       maxWidth: Chrome.tabSidebarMax)
+            }
             canvas
             // The inspector sits under the tab strip, not beside it in the
             // titlebar: its own header belongs to the column, in the same
@@ -138,6 +150,10 @@ struct RootView: View {
       .background(Theme.window)
       .background { CompactTitlebar() }
       .ignoresSafeArea(.container, edges: .top)
+      .onChange(of: tabLayout) { _, _ in
+        tabs.accessory = nil
+        tabs.tabMenu = nil
+      }
     }
 
     private var showInspector: Bool {
@@ -201,6 +217,46 @@ struct RootView: View {
     }
   }
 
+  private func restoreTab(_ id: UUID) {
+    guard let record = tabs.restoration(for: id) else { return }
+    let host = latest(record.host)
+    if host.isLocal {
+      finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
+      return
+    }
+    Task {
+      if let issue = host.connectionProblem {
+        tabs.cancelRestore(id)
+        notice = WorkspaceNotice(title: "Could Not Connect", message: issue)
+        return
+      }
+      if let connection = try? await tabs.lease(for: host) {
+        finishRestore(record, tab: tabs.restore(id, host: host, on: connection))
+        return
+      }
+      let source = await passwordSource(for: host)
+      guard tabs.restoration(for: id) != nil else { return }
+      switch source {
+      case .none: finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
+      case .saved(let password): finishRestore(record, tab: tabs.restore(id, host: host, password: password))
+      case .ask: ask(ConnectRequest(host: host, restoring: id))
+      }
+    }
+  }
+
+  private func finishRestore(_ record: ClosedTerminal, tab: SessionTab?) {
+    guard let tab, !record.attachments.isEmpty else { return }
+    Task { [weak tab] in
+      guard let tab, (try? await tab.connectionReady()) != nil,
+        tabs.tabs.contains(where: { $0.id == tab.id }) else { return }
+      for saved in record.attachments {
+        guard registry.isEnabled(saved.pluginID) else { continue }
+        prepareAttachment(saved.pluginID, on: tab)
+        tab.attachment(for: saved.pluginID)?.restore(from: saved.state)
+      }
+    }
+  }
+
   private func ask(_ request: ConnectRequest) {
     if let tab = request.retrying, connectRequests.contains(where: { $0.retrying == tab }) { return }
     connectRequests.append(request)
@@ -260,6 +316,9 @@ struct RootView: View {
     connectRequests.removeAll { $0.id == request.id }
     if let answer = reconnectAnswers.removeValue(forKey: request.id) {
       answer.resume(returning: password)
+    } else if let id = request.restoring {
+      guard let record = tabs.restoration(for: id) else { return }
+      finishRestore(record, tab: tabs.restore(id, host: latest(request.host), password: password, typedNow: true))
     } else if let id = request.retrying {
       // A tab closed while its password was being asked for stays closed.
       tabs.tabs.first { $0.id == id }?.redial(host: latest(request.host), password: password, typedNow: true)
@@ -273,6 +332,7 @@ struct RootView: View {
   private func cancelConnect(_ request: ConnectRequest) {
     connectRequests.removeAll { $0.id == request.id }
     reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
+    if let id = request.restoring { tabs.cancelRestore(id) }
     if let id = request.retrying { tabs.close(id) }
   }
 
@@ -482,6 +542,7 @@ extension RootView {
       guard let intent else { return }
       tabs.intent = nil
       switch intent {
+      case .restoreTab(let id): restoreTab(id)
       case .newTerminal:
         if let host = tabs.currentHost {
           open(host)
@@ -532,7 +593,7 @@ extension RootView {
     }
     .dialog(for: tabs.pendingClose) { _ in
       Dialog.confirm(
-        tabs.closeQuestion, message: tabs.closeNote, verb: "Close", role: .destructive,
+        tabs.closeQuestion, message: tabs.closeNote, verb: "Close Tab", role: .destructive,
         shortcuts: [.enter, .command("w")],
         cancel: { tabs.pendingClose = nil }, perform: { tabs.confirmClose() })
     }
@@ -563,7 +624,7 @@ extension RootView {
     // platform, and a phone can be killed without sending it at all — which
     // is why the sessions also close on `deinit`, not only here.
     .onReceive(NotificationCenter.default.publisher(for: terminationNotification)) { _ in
-      tabs.closeAll()
+      tabs.shutdown()
     }
     .onAppear { registry.onDisable = { id in tabs.closePlugin(id) } }
     .dialog(for: notice) { shown in
@@ -642,7 +703,9 @@ extension RootView {
       let command = action.command
       return CommandItem(
         id: command.id,
-        title: action == .zen && tabs.zen ? "Exit Zen Mode" : command.title,
+        // Keep the searchable toggle name consistent with Key Bindings.
+        // Native menus and the titlebar button still say Show/Hide Tab Bar.
+        title: action == .toggleTabBar ? command.title : tabs.title(for: action),
         detail: detail(command), enabled: action == .closeTab ? tabs.selected != nil : tabs.canPerform(action)
       ) {
         tabs.palette = nil
