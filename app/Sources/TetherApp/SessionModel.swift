@@ -242,9 +242,18 @@ final class SessionTab: Identifiable {
     // answered by the convention that a terminal is dark.
     try? session.setPalette(palette)
     identifyShellTTY()
+    // One wrapper for everyone waiting on this lease. A later read of
+    // `connection` builds another, so the object handed out here is the
+    // one a plugin can recognise as the lease it was given.
     if let connection = session.connection {
       ready.forEach { $0.resume(returning: connection) }
       ready.removeAll()
+      // The shell was dialled again in this same tab. Attachments still
+      // hold the lease that died — the files browser in particular — and
+      // nothing else tells them the one in `session` replaced it.
+      for entry in attachments {
+        entry.attachment.connectionChanged(connection)
+      }
     }
     stage = .connected
     frame = session.frame()
@@ -293,6 +302,12 @@ final class SessionTab: Identifiable {
         let pause = ProcessInfo.processInfo.isLowPowerModeEnabled ? 33 : 8
         do { try await Task.sleep(for: .milliseconds(pause)) } catch { return }
         guard !Task.isCancelled else { return }
+        // A program's copy (`OSC 52`) is delivered on the same wake as the
+        // bytes that carried it. Taken even when this tab is hidden, so a
+        // later show does not dump a stale copy onto the pasteboard. Written
+        // only while this tab is the one on screen.
+        let copied = await Self.takeClipboard(session)
+        if self.publishesFrames, let copied { copyToPasteboard(copied) }
         // The wake is consumed either way. Showing the tab later copies
         // whatever the screen is then, rather than every intermediate one.
         guard self.publishesFrames else { continue }
@@ -313,6 +328,8 @@ final class SessionTab: Identifiable {
       // ending is, so stopping here would leave a program's last line
       // undrawn.
       guard let self else { return }
+      let copied = await Self.takeClipboard(session)
+      if self.publishesFrames, let copied { copyToPasteboard(copied) }
       self.publish(await Self.copyUpdate(session), session: session)
       self.finish(session.ending())
     }
@@ -324,6 +341,12 @@ final class SessionTab: Identifiable {
     await Task.detached(priority: .userInitiated) { session.update() }.value
   }
 
+  /// A remote copy, off the main actor. Same lock as the grid, taken
+  /// separately so a clipboard request is not dropped with the damage.
+  private nonisolated static func takeClipboard(_ session: TerminalSession) async -> String? {
+    await Task.detached(priority: .userInitiated) { session.takeClipboard() }.value
+  }
+
   /// Applies a partial update onto the frame already on screen. A full
   /// update replaces it. With no frame yet, the whole screen is taken,
   /// because a list of dirty rows has nothing to patch.
@@ -333,7 +356,7 @@ final class SessionTab: Identifiable {
       self.frame = frame
       dirtyRows = nil
       remoteTitle = frame.title
-    case .rows(let rows, let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines):
+    case .rows(let rows, let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else {
         self.frame = session.frame()
         dirtyRows = nil
@@ -343,15 +366,15 @@ final class SessionTab: Identifiable {
       self.frame = patched(
         current, rows: rows, cursorRow: cursorRow, cursorColumn: cursorColumn,
         cursorShape: cursorShape, cursorVisible: cursorVisible, title: title,
-        viewportOffset: viewportOffset, historyLines: historyLines)
+        viewportOffset: viewportOffset, historyLines: historyLines, mouse: mouse)
       dirtyRows = Set(rows.map { Int($0.row) })
       remoteTitle = title
-    case .idle(let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines):
+    case .idle(let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else { return }
       self.frame = ScreenFrame(
         columns: current.columns, rows: current.rows, cursorRow: cursorRow,
         cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
-        alternateScreen: current.alternateScreen, viewportOffset: viewportOffset,
+        alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
         historyLines: historyLines, title: title, lines: current.lines)
       dirtyRows = []
       remoteTitle = title
@@ -374,7 +397,7 @@ final class SessionTab: Identifiable {
   private func patched(
     _ current: ScreenFrame, rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32,
     cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32,
-    historyLines: UInt32
+    historyLines: UInt32, mouse: MouseTracking
   ) -> ScreenFrame {
     var lines = current.lines
     for row in rows {
@@ -385,7 +408,7 @@ final class SessionTab: Identifiable {
     return ScreenFrame(
       columns: current.columns, rows: current.rows, cursorRow: cursorRow,
       cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
-      alternateScreen: current.alternateScreen, viewportOffset: viewportOffset,
+      alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
       historyLines: historyLines, title: title, lines: lines)
   }
 
@@ -481,6 +504,19 @@ final class SessionTab: Identifiable {
     session?.scroll(to)
   }
 
+  /// A wheel the program asked to hear. `true` means an attachment took the
+  /// lines, so the view does not also report them as pointer events.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool {
+    attachments.contains { $0.attachment.claimWheel(lines, column: column, row: row) }
+  }
+
+  /// Moves this shell's own history, without offering the lines to a plugin
+  /// again. Positive goes back.
+  func scrollOwnHistory(by lines: Int32) {
+    guard lines != 0 else { return }
+    session?.scroll(.lines(lines))
+  }
+
   /// Tells the far side what this window draws with.
   ///
   /// The colours a program paints itself in are its own; what it asks first
@@ -496,8 +532,8 @@ final class SessionTab: Identifiable {
     guard columns > 0, rows > 0 else { return }
     // The shell leaves the tree while a plugin stands in for it, and the
     // view reports the size it collapses through on the way out. Applying
-    // that shrinks the pty, and a tmux client on it then pins the window
-    // to a corner of this one.
+    // that shrinks the pty, and a client already running on it then pins
+    // the window to a corner of this one.
     guard shown == nil else { return }
     sized = true
     identifyShellTTY()

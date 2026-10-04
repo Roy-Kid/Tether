@@ -14,7 +14,7 @@ use crate::directory::DirectoryScanner;
 use crate::input::Input;
 use crate::link::{self, Glyph, Link, LinkTarget};
 use crate::palette::Palette;
-use crate::screen::{Cell, Cursor, CursorShape, Modes, Screen};
+use crate::screen::{Cell, Cursor, CursorShape, Modes, MouseEncoding, MouseMotion, Screen};
 use crate::scroll::{Scroll, Viewport};
 use crate::size::{Position, ScreenSize};
 use crate::style::{Color, NamedColor, Style, Underline};
@@ -28,6 +28,10 @@ struct Collected {
     /// attributes, colour queries. A consumer that dropped these would hang
     /// any program that waits for an answer.
     replies: Vec<u8>,
+    /// Text a program asked to put on the local clipboard, via `OSC 52`.
+    /// The last such request wins. A request to *read* the clipboard is not
+    /// recorded: that would hand this machine's clipboard to the far side.
+    clipboard: Option<String>,
     /// What the consumer draws with, when it has said. Only colour queries
     /// use it, and only to answer them.
     palette: Option<Palette>,
@@ -60,11 +64,20 @@ impl EventListener for Sink {
                     collected.replies.extend_from_slice(reply.as_bytes());
                 }
             }
-            // Clipboard and size queries also answer by writing back; the
-            // ones that need state we do not have are answered by the
-            // consumer, not invented here.
+            // A copy is for the machine the person is sitting at. Kept until
+            // they take it — the engine has no clipboard of its own, and
+            // inventing one here would be the wrong machine.
+            //
+            // A *read* is refused. `OSC 52` can ask for the clipboard as
+            // well as set it, and answering would send whatever the person
+            // copied last back to a program that has not been trusted with
+            // it (spec §18).
+            Event::ClipboardStore(_, text) => {
+                if !text.is_empty() && text.len() <= MAX_CLIPBOARD_BYTES {
+                    collected.clipboard = Some(text);
+                }
+            }
             Event::ClipboardLoad(_, _)
-            | Event::ClipboardStore(_, _)
             | Event::TextAreaSizeRequest(_)
             | Event::CursorBlinkingChange
             | Event::MouseCursorDirty
@@ -94,6 +107,12 @@ impl Dimensions for Dims {
         self.size.columns as usize
     }
 }
+
+/// How much text one `OSC 52` copy may place on the local clipboard.
+///
+/// A remote program is untrusted input. A megabyte is more than a person
+/// copies and less than a way to pin memory by announcing a clipboard.
+const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 
 /// The narrowest grid the engine can reflow into.
 ///
@@ -383,6 +402,18 @@ impl Terminal {
         std::mem::take(&mut self.sink.0.lock().expect("sink poisoned").replies)
     }
 
+    /// Text a program asked to copy onto the local clipboard since the last
+    /// call, if it asked.
+    ///
+    /// `OSC 52`. The consumer writes it to the clipboard of the machine the
+    /// person is using. Empty when nothing arrived, and empty again once
+    /// taken — a copy is delivered once. A request larger than
+    /// [`MAX_CLIPBOARD_BYTES`] is ignored, and a request to read the
+    /// clipboard is never answered.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.sink.0.lock().expect("sink poisoned").clipboard.take()
+    }
+
     /// What changed since this was last called, and clears it.
     pub fn take_changes(&mut self) -> Changes {
         let screen = self.take_screen_damage();
@@ -624,11 +655,27 @@ impl Terminal {
 
     fn read_modes(&self) -> Modes {
         let mode = self.inner.mode();
+        let mouse_motion = if mode.contains(TermMode::MOUSE_MOTION) {
+            MouseMotion::Any
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            MouseMotion::Drag
+        } else {
+            MouseMotion::None
+        };
+        let mouse_encoding = if mode.contains(TermMode::SGR_MOUSE) {
+            MouseEncoding::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            MouseEncoding::Utf8
+        } else {
+            MouseEncoding::Normal
+        };
         Modes {
             alternate_screen: mode.contains(TermMode::ALT_SCREEN),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
             mouse_reporting: mode.intersects(TermMode::MOUSE_MODE),
+            mouse_motion,
+            mouse_encoding,
             line_wrap: mode.contains(TermMode::LINE_WRAP),
         }
     }

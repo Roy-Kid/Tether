@@ -27,16 +27,15 @@ extension FilesTab {
       },
     ]
     #if os(macOS)
-      commands += [
+      commands.append(
         PluginCommand(id: "open", title: "Open", symbol: "arrow.up.forward.app") { [weak self] in
           Task { await self?.withResolved(printed) { self?.openExternally([$0]) } }
-        },
-        PluginCommand(id: "save", title: "Save to Downloads", symbol: "arrow.down.circle") {
-          [weak self] in
-          Task { await self?.withResolved(printed) { self?.saveToDownloads([$0]) } }
-        },
-      ]
+        })
     #endif
+    commands.append(
+      PluginCommand(id: "download", title: "Download", symbol: "arrow.down.circle") { [weak self] in
+        Task { await self?.withResolved(printed) { self?.download([$0]) } }
+      })
     return LinkActions(
       open: { [weak self] in Task { await self?.look(at: printed) } },
       preview: { [weak self] in AnyView(LinkPreview(model: self, printed: printed)) },
@@ -108,6 +107,21 @@ extension FilesTab {
       tab.showAccessory()
       await preview([entry])
     }
+  }
+
+  /// Return, or a paste, in the find field. The same lookup a printed path
+  /// gets: the shell's directory, then the browser's, then home. Found, the
+  /// field gives its slot back. Not found, it stays, and the tree stays.
+  func revealQuery(_ text: String, commit: Int) async {
+    let printed = Printed.at(text, in: tab.workingDirectory())
+    guard await resolve(printed) != nil else {
+      guard commit == findCommit else { return }
+      return missing()
+    }
+    guard commit == findCommit else { return }
+    await reveal(printed)
+    guard commit == findCommit, finding else { return }
+    closeFind()
   }
 
   /// Shows the path in the browser: its directory, with it selected.

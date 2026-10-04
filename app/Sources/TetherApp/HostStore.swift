@@ -171,8 +171,9 @@ extension Host {
 }
 
 /// The hosts: one library — the one source of truth — synchronized through
-/// iCloud, and on a Mac fed by `~/.ssh/config` (`HostStore+Import`), never
-/// written back to it. There is one kind of host. A host that arrives from
+/// iCloud, and on a Mac fed by `~/.ssh/config` (`HostStore+Import`). The file
+/// is written back only when a person agrees (`HostStore+Align`). There is one
+/// kind of host. A host that arrives from
 /// another device on the same Apple ID is already trusted. Private keys
 /// travel with the library; passwords stay on the device that saved them.
 @MainActor
@@ -197,6 +198,17 @@ final class HostStore {
   let credentials: DeviceCredentialStore
   private(set) var config = SSHConfig("")
   private(set) var unreadable = false
+  /// A difference between the library and `~/.ssh/config` waiting on an
+  /// answer. Nothing is written until they give one.
+  var pendingAlignment: ConfigAlign.Plan?
+  /// The difference they declined. Not asked again until it changes.
+  var declinedAlignment: ConfigAlign.Plan?
+  /// Hosts an import from `~/.ssh/config` would overwrite, waiting on an
+  /// answer. The file is never written.
+  var pendingImport: ConfigurationImport?
+  /// The diff they declined this launch. Not asked again until the
+  /// difference changes, or the app is opened again.
+  var declinedImport: String?
   private var cloud: HostCloudSync?
   private(set) var continuity: ContinuityService?
   private let allowCloud: Bool
@@ -234,7 +246,6 @@ final class HostStore {
       snapshot = try database.read(IdentitySnapshot.self, scope: scope) ?? IdentitySnapshot()
     } catch { problem = error.localizedDescription }
     reload()
-    reconcile()
     trustArrivedSettings()
   }
 
@@ -259,14 +270,12 @@ final class HostStore {
     syncFailure = nil
   }
 
-  /// The sync button: this Mac's SSH configuration into the library, then
-  /// the whole library read through iCloud again.
+  /// The sync button reads the whole library through iCloud again.
+  /// `~/.ssh/config` is a separate import, and only when they ask.
   func syncEverything() async {
     guard !syncing else { return }
     syncing = true
     defer { syncing = false }
-    reload()
-    reconcile()
     if cloud == nil { await startSync() } else { await cloud?.resynchronize() }
   }
 

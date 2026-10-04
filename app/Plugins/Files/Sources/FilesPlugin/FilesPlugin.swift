@@ -18,5 +18,5 @@ public final class FilesPlugin: TabPlugin {
     FilesTab(tab: tab)
   }
 
-  public func settings() -> AnyView { AnyView(EmptyView()) }
+  public func settings() -> AnyView { AnyView(FilesSettings()) }
 }

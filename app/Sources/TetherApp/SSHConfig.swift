@@ -2,11 +2,11 @@ import Foundation
 
 /// An OpenSSH client configuration, read for the hosts it describes.
 ///
-/// Read, never written. The file is the person's, and almost none of it is
-/// this app's to understand — `ControlMaster`, `ForwardAgent`, a comment
-/// reminding them which machine is which. The way to keep all of it is not to
-/// hold the pen: Tether's own hosts go to a file of their own
-/// (`OpenSSHExport`), which this one includes.
+/// Almost none of the file is this app's to understand — `ControlMaster`,
+/// `ForwardAgent`, a comment reminding them which machine is which. Import
+/// only reads it. The one write is the alignment a person agreed to
+/// (`ConfigAlign`), and it touches `~/.ssh/config` itself: a file that config
+/// includes is left alone.
 struct SSHConfig: Equatable {
   /// One host, with every setting this app understands already resolved.
   struct Entry: Equatable {
@@ -27,7 +27,7 @@ struct SSHConfig: Equatable {
   }
 
   /// One `Keyword value` line.
-  fileprivate struct Directive: Equatable {
+  struct Directive: Equatable {
     var keyword: String
     var value: String
   }
@@ -168,19 +168,24 @@ extension SSHConfig {
   ///
   /// A relative `Include` is relative to the directory the config lives in,
   /// `~/.ssh` for the file this app reads — where ssh looks for it too.
-  /// `skipping` names files not to follow: Tether's own export is included by
-  /// the person's config, and reading it back would list every managed host
-  /// a second time as a stranger.
+  /// `skipping` names files not to follow. A file that cannot be read is
+  /// skipped, as ssh skips a pattern that matches nothing.
   static func read(_ url: URL, skipping: [URL] = []) throws -> SSHConfig {
+    parse(try String(contentsOf: url, encoding: .utf8), file: url, skipping: skipping)
+  }
+
+  /// `text` as though it were what `file` contains now, includes and all.
+  ///
+  /// What an alignment checks before it replaces the file: the text it would
+  /// write, read the way `ssh` would read it.
+  static func parse(_ text: String, file url: URL, skipping: [URL] = []) -> SSHConfig {
     let base = url.deletingLastPathComponent()
     let skipped = Set(skipping.map { $0.resolvingSymlinksInPath().path })
-    return SSHConfig(try String(contentsOf: url, encoding: .utf8), file: url.path) { argument in
+    return SSHConfig(text, file: url.path) { argument in
       let expanded = expandingTilde(argument)
       let pattern = expanded.hasPrefix("/") ? expanded : base.appending(path: expanded).path
       return globbed(pattern)
         .filter { !skipped.contains(URL(fileURLWithPath: $0).resolvingSymlinksInPath().path) }
-        // A file that cannot be read is skipped, as ssh skips a pattern
-        // that matches nothing.
         .compactMap { path in (try? String(contentsOfFile: path, encoding: .utf8)).map { Source(path: path, text: $0) } }
     }
   }
@@ -248,7 +253,7 @@ private struct Reader {
 ///
 /// `Keyword value` and `Keyword=value` are the same line to ssh, so they are
 /// the same line here.
-private func directive(_ line: String) -> SSHConfig.Directive? {
+func directive(_ line: String) -> SSHConfig.Directive? {
   let trimmed = line.trimmingCharacters(in: .whitespaces)
   guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
 
@@ -262,7 +267,7 @@ private func directive(_ line: String) -> SSHConfig.Directive? {
 }
 
 /// Splits a value into words, keeping a quoted one whole.
-private func tokens(_ value: String) -> [String] {
+func tokens(_ value: String) -> [String] {
   var tokens: [String] = []
   var current = ""
   var quoting = false

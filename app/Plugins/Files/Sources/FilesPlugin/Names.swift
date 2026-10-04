@@ -108,6 +108,12 @@ enum Names {
     return symbols.first { type.conforms(to: $0.0) }?.1 ?? "doc"
   }
 
+  /// The absolute paths Copy Path puts on the clipboard: one path a line,
+  /// exactly as stored, with nothing added around them.
+  static func copiedPaths(_ paths: [String]) -> String {
+    paths.joined(separator: "\n")
+  }
+
   /// `text` as one word to a POSIX shell: bare when nothing in it is
   /// special, single-quoted otherwise.
   static func shellQuoted(_ text: String) -> String {
@@ -258,5 +264,42 @@ enum Paths {
       result.append(current)
     }
     return result
+  }
+}
+
+/// The path menu. The current directory is the menu's title, so it is not
+/// listed again. Home and Shell are their own rows only when that directory
+/// is not already one of the directories above — otherwise `home` and Home
+/// are the same place twice, and `/` is named Root so it is not a stray slash.
+struct PathPlaces: Equatable {
+  var directory: String?
+  var home: String?
+  var shell: String?
+
+  /// Enclosing directories, nearest first.
+  var places: [String] {
+    guard let directory, directory != "/" else { return [] }
+    return Array(Paths.ancestors(directory).dropLast().reversed())
+  }
+
+  var showsHome: Bool {
+    guard let home else { return directory != nil }
+    return home != directory && !places.contains(home)
+  }
+
+  var showsShell: Bool {
+    guard let shell, shell != directory else { return false }
+    return !places.contains(shell)
+  }
+
+  func title(_ path: String) -> String {
+    path == "/" ? "Root" : Names.display(Paths.name(path))
+  }
+
+  func symbol(_ path: String) -> String {
+    if path == shell, path != home { return "terminal" }
+    if path == home { return "house" }
+    if path == "/" { return "externaldrive" }
+    return "folder"
   }
 }

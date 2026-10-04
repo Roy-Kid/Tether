@@ -59,6 +59,36 @@ pub enum TerminalInput {
     Paste {
         text: String,
     },
+    /// A pointer event in cells of the visible grid, counted from the top left.
+    ///
+    /// The engine encodes it in whichever mouse protocol the far side turned
+    /// on, and encodes it as nothing when tracking is off.
+    Pointer {
+        button: PointerButton,
+        phase: PointerPhase,
+        column: u16,
+        row: u16,
+        modifiers: KeyModifiers,
+    },
+}
+
+/// A mouse button. `None` is motion with nothing held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PointerButton {
+    Left,
+    Middle,
+    Right,
+    None,
+    WheelUp,
+    WheelDown,
+}
+
+/// Press, release, or a move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PointerPhase {
+    Press,
+    Release,
+    Move,
 }
 
 /// What an input turns out to be once translated.
@@ -86,6 +116,19 @@ impl TerminalInput {
     pub fn resolve(&self) -> Resolved {
         match self {
             Self::Paste { text } => Resolved::Encoded(Input::Paste(text.clone())),
+            Self::Pointer { button, phase, column, row, modifiers } => {
+                Resolved::Encoded(Input::Pointer {
+                    button: pointer_button(*button),
+                    phase: pointer_phase(*phase),
+                    column: *column,
+                    row: *row,
+                    modifiers: Modifiers {
+                        shift: modifiers.shift,
+                        alt: modifiers.alt,
+                        control: modifiers.control,
+                    },
+                })
+            }
             Self::Key { key, modifiers } => match key_of(key) {
                 Some(key) => Resolved::Encoded(Input::Key {
                     key,
@@ -111,6 +154,25 @@ fn text_of(key: &KeyPress) -> String {
     match key {
         KeyPress::Char { text } => text.clone(),
         _ => String::new(),
+    }
+}
+
+fn pointer_button(button: PointerButton) -> tether_core::terminal::PointerButton {
+    match button {
+        PointerButton::Left => tether_core::terminal::PointerButton::Left,
+        PointerButton::Middle => tether_core::terminal::PointerButton::Middle,
+        PointerButton::Right => tether_core::terminal::PointerButton::Right,
+        PointerButton::None => tether_core::terminal::PointerButton::None,
+        PointerButton::WheelUp => tether_core::terminal::PointerButton::WheelUp,
+        PointerButton::WheelDown => tether_core::terminal::PointerButton::WheelDown,
+    }
+}
+
+fn pointer_phase(phase: PointerPhase) -> tether_core::terminal::PointerPhase {
+    match phase {
+        PointerPhase::Press => tether_core::terminal::PointerPhase::Press,
+        PointerPhase::Release => tether_core::terminal::PointerPhase::Release,
+        PointerPhase::Move => tether_core::terminal::PointerPhase::Move,
     }
 }
 

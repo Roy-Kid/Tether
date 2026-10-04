@@ -24,7 +24,6 @@ Signing (builds without a team are ad-hoc: they run, but have no iCloud sync):
 
 Verify / test (each is standalone):
   --fuzz [N]              coverage-guided fuzz, N seconds per target (default 60)
-  --test-tmux             loopback OpenSSH + real tmux end-to-end
   --verify-consumer       PATH-stripped consumer build
   --record-corpus [names…]  re-record the §12 workloads (all, or just the named ones)
   --check                 cargo clippy --workspace --all-targets -- -D warnings
@@ -48,7 +47,6 @@ DO_BUILD_APP_IOS=0
 DO_PROVISION=0
 DO_BUILD_XCFRAMEWORK=0
 DO_FUZZ=0
-DO_TEST_TMUX=0
 DO_VERIFY_CONSUMER=0
 DO_RECORD_CORPUS=0
 DO_CHECK=0
@@ -93,7 +91,6 @@ while [[ $# -gt 0 ]]; do
         shift
       fi
       ;;
-    --test-tmux) DO_TEST_TMUX=1 ;;
     --verify-consumer) DO_VERIFY_CONSUMER=1 ;;
     --record-corpus)
       DO_RECORD_CORPUS=1
@@ -117,7 +114,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $DO_BUILD_APP -eq 0 && $DO_BUILD_APP_IOS -eq 0 && $DO_BUILD_XCFRAMEWORK -eq 0 && $DO_PROVISION -eq 0 \
-  && $DO_FUZZ -eq 0 && $DO_TEST_TMUX -eq 0 && $DO_VERIFY_CONSUMER -eq 0 \
+  && $DO_FUZZ -eq 0 && $DO_VERIFY_CONSUMER -eq 0 \
   && $DO_RECORD_CORPUS -eq 0 && $DO_CHECK -eq 0 && $DO_TEST -eq 0 ]]; then
   usage
   exit 2
@@ -157,11 +154,6 @@ fi
 if [[ $DO_FUZZ -eq 1 ]]; then
   echo "== fuzz ($FUZZ_SECONDS s per target) =="
   "$ROOT/scripts/fuzz-targets.sh" --seconds "$FUZZ_SECONDS"
-fi
-
-if [[ $DO_TEST_TMUX -eq 1 ]]; then
-  echo "== loopback OpenSSH + real tmux =="
-  "$ROOT/scripts/test-native-tmux.sh"
 fi
 
 if [[ $DO_VERIFY_CONSUMER -eq 1 ]]; then

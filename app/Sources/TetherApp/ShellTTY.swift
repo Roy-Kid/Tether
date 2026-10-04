@@ -3,12 +3,13 @@ import Tether
 
 /// The far-side tty of this tab's shell, when the producer does not record one.
 ///
-/// A local shell's name is its pty. An SSH shell's tmux client is the pty on
-/// the far side, which this process never sees: `ssh -tt` and a russh channel
-/// both leave `terminalName` empty, so the tab could not tell that its own
-/// shell was already the client and covered it with a second one. The exec
-/// that lists processes is another channel on the same connection, so the
-/// shell is a sibling session under that connection's sshd.
+/// A local shell's name is its pty. When the SSH shell is already a client,
+/// that client's pty is on the far side, which this process never sees:
+/// `ssh -tt` and a russh channel both leave `terminalName` empty, so the tab
+/// could not tell that its own shell was already the client and covered it
+/// with a second one. The exec that lists processes is another channel on
+/// the same connection, so the shell is a sibling session under that
+/// connection's sshd.
 enum ShellTTY {
   static let listCommand =
     "printf '%s\\n' \"TETHER-TTY $$\"; ps -ax -o pid= -o ppid= -o tty=; printf '%s\\n' TETHER-TTY-END"

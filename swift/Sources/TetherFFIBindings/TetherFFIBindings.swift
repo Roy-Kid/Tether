@@ -398,7 +398,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles.
+// Initial value and increment amount for handles. 
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -651,11 +651,11 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * ordinary Swift.
  */
 public protocol CancellationTokenProtocol: AnyObject, Sendable {
-
-    func cancel()
-
+    
+    func cancel() 
+    
     func isCancelled()  -> Bool
-
+    
 }
 /**
  * A cancellation signal a consumer can raise.
@@ -726,9 +726,9 @@ public convenience init() {
         try! rustCall { uniffi_tether_ffi_fn_free_cancellationtoken(handle, $0) }
     }
 
+    
 
-
-
+    
 open func cancel()  {try! rustCall() {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_cancellationtoken_cancel(
@@ -736,7 +736,7 @@ open func cancel()  {try! rustCall() {
     )
 }
 }
-
+    
 open func isCancelled() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
         uniffiCallStatus in
@@ -745,9 +745,9 @@ open func isCancelled() -> Bool  {
     )
 })
 }
+    
 
-
-
+    
 }
 
 
@@ -805,9 +805,9 @@ public func FfiConverterTypeCancellationToken_lower(_ value: CancellationToken) 
  * the point of asking at all (spec §18).
  */
 public protocol HostTrust: AnyObject, Sendable {
-
+    
     func trusts(host: HostIdentity) async  -> Bool
-
+    
 }
 /**
  * Asks the application whether a host may be talked to.
@@ -867,9 +867,9 @@ open class HostTrustImpl: HostTrust, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_hosttrust(handle, $0) }
     }
 
+    
 
-
-
+    
 open func trusts(host: HostIdentity)async  -> Bool  {
     return
         try!  await uniffiRustCallAsync(
@@ -883,12 +883,12 @@ open func trusts(host: HostIdentity)async  -> Bool  {
             freeFunc: ffi_tether_ffi_rust_future_free_i8,
             liftFunc: FfiConverterBool.lift,
             errorHandler: nil
-
+            
         )
 }
+    
 
-
-
+    
 }
 
 
@@ -1044,13 +1044,13 @@ public func FfiConverterTypeHostTrust_lower(_ value: HostTrust) -> UInt64 {
  * asynchronously — a person has to read the prompt and type.
  */
 public protocol InteractivePrompter: AnyObject, Sendable {
-
+    
     /**
      * Returns one answer per prompt, in order. An empty vector means the
      * person declined; the caller treats that as cancellation.
      */
     func answer(instruction: String, prompts: [AuthPrompt]) async  -> [String]
-
+    
 }
 /**
  * What Tether asks the application when a server wants an interactive answer.
@@ -1109,9 +1109,9 @@ open class InteractivePrompterImpl: InteractivePrompter, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_interactiveprompter(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * Returns one answer per prompt, in order. An empty vector means the
      * person declined; the caller treats that as cancellation.
@@ -1129,12 +1129,12 @@ open func answer(instruction: String, prompts: [AuthPrompt])async  -> [String]  
             freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceString.lift,
             errorHandler: nil
-
+            
         )
 }
+    
 
-
-
+    
 }
 
 
@@ -1292,13 +1292,13 @@ public func FfiConverterTypeInteractivePrompter_lower(_ value: InteractivePrompt
  * key, where the format lets the server be asked first.
  */
 public protocol PassphrasePrompter: AnyObject, Sendable {
-
+    
     /**
      * `attempt` counts from one; a second call means the first was wrong.
      * `None` is the person declining, which ends the login as a decline.
      */
     func passphrase(key: LockedKey, attempt: UInt32) async  -> String?
-
+    
 }
 /**
  * Asks the application for a key's passphrase.
@@ -1357,9 +1357,9 @@ open class PassphrasePrompterImpl: PassphrasePrompter, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_passphraseprompter(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * `attempt` counts from one; a second call means the first was wrong.
      * `None` is the person declining, which ends the login as a decline.
@@ -1377,12 +1377,12 @@ open func passphrase(key: LockedKey, attempt: UInt32)async  -> String?  {
             freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterOptionString.lift,
             errorHandler: nil
-
+            
         )
 }
+    
 
-
-
+    
 }
 
 
@@ -1533,7 +1533,7 @@ public func FfiConverterTypePassphrasePrompter_lower(_ value: PassphrasePrompter
 
 
 public protocol RemoteConnectionProtocol: AnyObject, Sendable {
-
+    
     /**
      * Starts a file session where this lease's shell is running.
      *
@@ -1541,47 +1541,47 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
      * what the terminal is doing, and closing the files closes nothing else.
      */
     func files(cancellation: CancellationToken) async throws  -> RemoteFiles
-
+    
     func attachTmux(sessionId: String, cancellation: CancellationToken) async throws  -> TmuxWorkspace
-
+    
     func createTmux(name: String, directory: String?, cancellation: CancellationToken) async throws  -> TmuxSessionInfo
-
-    func endTmux(sessionId: String) async throws
-
+    
+    func endTmux(sessionId: String) async throws 
+    
     /**
      * Ends one window without attaching to its session. A window id is
      * unique across the server, so it names the window on its own.
      */
-    func endTmuxWindow(windowId: UInt32) async throws
-
+    func endTmuxWindow(windowId: UInt32) async throws 
+    
     /**
      * Executes without creating a terminal or performing another authentication.
      * Both output size and duration are bounded at this public boundary.
      */
     func execute(command: String, cancellation: CancellationToken) async throws  -> CommandOutput
-
+    
     /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
     func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, cancellation: CancellationToken) async throws  -> Session
-
-    func renameTmux(sessionId: String, name: String) async throws
-
+    
+    func renameTmux(sessionId: String, name: String) async throws 
+    
     /**
      * Where tmux says a pane's program is — `#{pane_current_path}`, which
      * tmux reads from the process itself, so it is known even when the
      * shell in the pane reports nothing.
      */
     func tmuxPaneDirectory(paneId: UInt32) async throws  -> String
-
+    
     /**
      * Finds the tmux session attached to a particular terminal, if any.
      */
     func tmuxSessionForClient(tty: String) async throws  -> String?
-
+    
     func tmuxSessions(cancellation: CancellationToken) async throws  -> [TmuxSessionInfo]
-
+    
 }
 open class RemoteConnection: RemoteConnectionProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1633,9 +1633,9 @@ open class RemoteConnection: RemoteConnectionProtocol, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_remoteconnection(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * Starts a file session where this lease's shell is running.
      *
@@ -1657,7 +1657,7 @@ open func files(cancellation: CancellationToken)async throws  -> RemoteFiles  {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func attachTmux(sessionId: String, cancellation: CancellationToken)async throws  -> TmuxWorkspace  {
     return
         try  await uniffiRustCallAsync(
@@ -1673,7 +1673,7 @@ open func attachTmux(sessionId: String, cancellation: CancellationToken)async th
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func createTmux(name: String, directory: String?, cancellation: CancellationToken)async throws  -> TmuxSessionInfo  {
     return
         try  await uniffiRustCallAsync(
@@ -1689,7 +1689,7 @@ open func createTmux(name: String, directory: String?, cancellation: Cancellatio
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func endTmux(sessionId: String)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -1705,7 +1705,7 @@ open func endTmux(sessionId: String)async throws   {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
     /**
      * Ends one window without attaching to its session. A window id is
      * unique across the server, so it names the window on its own.
@@ -1725,7 +1725,7 @@ open func endTmuxWindow(windowId: UInt32)async throws   {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
     /**
      * Executes without creating a terminal or performing another authentication.
      * Both output size and duration are bounded at this public boundary.
@@ -1745,7 +1745,7 @@ open func execute(command: String, cancellation: CancellationToken)async throws 
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
     /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
@@ -1765,7 +1765,7 @@ open func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func renameTmux(sessionId: String, name: String)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -1781,7 +1781,7 @@ open func renameTmux(sessionId: String, name: String)async throws   {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
     /**
      * Where tmux says a pane's program is — `#{pane_current_path}`, which
      * tmux reads from the process itself, so it is known even when the
@@ -1802,7 +1802,7 @@ open func tmuxPaneDirectory(paneId: UInt32)async throws  -> String  {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
     /**
      * Finds the tmux session attached to a particular terminal, if any.
      */
@@ -1821,7 +1821,7 @@ open func tmuxSessionForClient(tty: String)async throws  -> String?  {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func tmuxSessions(cancellation: CancellationToken)async throws  -> [TmuxSessionInfo]  {
     return
         try  await uniffiRustCallAsync(
@@ -1837,9 +1837,9 @@ open func tmuxSessions(cancellation: CancellationToken)async throws  -> [TmuxSes
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
+    
 
-
-
+    
 }
 
 
@@ -1895,76 +1895,76 @@ public func FfiConverterTypeRemoteConnection_lower(_ value: RemoteConnection) ->
  * that granted it for as long as a browser is open.
  */
 public protocol RemoteFilesProtocol: AnyObject, Sendable {
-
+    
     /**
      * Ends the file session. The shell is untouched.
      */
-    func close() async
-
+    func close() async 
+    
     /**
      * Copies `path` to `destination` on this machine, returning the bytes
      * copied. `destination` is replaced if it exists, and appears only once
      * the copy is whole.
      */
     func download(path: String, destination: String, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
-
+    
     /**
      * The account's home directory, as an absolute path.
      */
     func home() async throws  -> String
-
+    
     /**
      * Whether these files are on this machine, so a path is also a local
      * path: a preview can show the file itself instead of a copy.
      */
     func isLocal()  -> Bool
-
+    
     /**
      * What is in `directory`, sorted by name, links listed as links.
      */
     func list(directory: String, cancellation: CancellationToken) async throws  -> [FileEntry]
-
+    
     /**
      * What `path` is, reporting a link as a link.
      */
     func lstat(path: String) async throws  -> FileEntry
-
-    func makeDirectory(path: String) async throws
-
+    
+    func makeDirectory(path: String) async throws 
+    
     /**
      * Removes a file, a link, or an empty directory.
      */
-    func remove(path: String) async throws
-
+    func remove(path: String) async throws 
+    
     /**
      * Removes `path` and everything under it without following links,
      * returning how many things were removed. Cancelling stops the walk;
      * what was removed stays removed.
      */
     func removeTree(path: String, cancellation: CancellationToken) async throws  -> UInt64
-
+    
     /**
      * Moves `from` to `to`, replacing a file at `to` only when asked.
      */
-    func rename(from: String, to: String, replace: Bool) async throws
-
+    func rename(from: String, to: String, replace: Bool) async throws 
+    
     /**
      * `path` with `.`, `..` and links resolved, as the server sees it.
      */
     func resolve(path: String) async throws  -> String
-
+    
     /**
      * What `path` is, looking through a link.
      */
     func stat(path: String) async throws  -> FileEntry
-
+    
     /**
      * Copies `source` on this machine to `path`, returning the bytes
      * copied. Refuses to replace an existing file unless `replace` is set,
      * and never replaces a directory.
      */
     func upload(source: String, path: String, replace: Bool, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
-
+    
 }
 /**
  * Files on the machine a session's shell is running on.
@@ -2022,9 +2022,9 @@ open class RemoteFiles: RemoteFilesProtocol, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_remotefiles(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * Ends the file session. The shell is untouched.
      */
@@ -2041,10 +2041,10 @@ open func close()async   {
             freeFunc: ffi_tether_ffi_rust_future_free_void,
             liftFunc: { $0 },
             errorHandler: nil
-
+            
         )
 }
-
+    
     /**
      * Copies `path` to `destination` on this machine, returning the bytes
      * copied. `destination` is replaced if it exists, and appears only once
@@ -2065,7 +2065,7 @@ open func download(path: String, destination: String, progress: TransferProgress
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * The account's home directory, as an absolute path.
      */
@@ -2084,7 +2084,7 @@ open func home()async throws  -> String  {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * Whether these files are on this machine, so a path is also a local
      * path: a preview can show the file itself instead of a copy.
@@ -2097,7 +2097,7 @@ open func isLocal() -> Bool  {
     )
 })
 }
-
+    
     /**
      * What is in `directory`, sorted by name, links listed as links.
      */
@@ -2116,7 +2116,7 @@ open func list(directory: String, cancellation: CancellationToken)async throws  
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * What `path` is, reporting a link as a link.
      */
@@ -2135,7 +2135,7 @@ open func lstat(path: String)async throws  -> FileEntry  {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
 open func makeDirectory(path: String)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -2151,7 +2151,7 @@ open func makeDirectory(path: String)async throws   {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * Removes a file, a link, or an empty directory.
      */
@@ -2170,7 +2170,7 @@ open func remove(path: String)async throws   {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * Removes `path` and everything under it without following links,
      * returning how many things were removed. Cancelling stops the walk;
@@ -2191,7 +2191,7 @@ open func removeTree(path: String, cancellation: CancellationToken)async throws 
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * Moves `from` to `to`, replacing a file at `to` only when asked.
      */
@@ -2210,7 +2210,7 @@ open func rename(from: String, to: String, replace: Bool)async throws   {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * `path` with `.`, `..` and links resolved, as the server sees it.
      */
@@ -2229,7 +2229,7 @@ open func resolve(path: String)async throws  -> String  {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * What `path` is, looking through a link.
      */
@@ -2248,7 +2248,7 @@ open func stat(path: String)async throws  -> FileEntry  {
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
-
+    
     /**
      * Copies `source` on this machine to `path`, returning the bytes
      * copied. Refuses to replace an existing file unless `replace` is set,
@@ -2269,9 +2269,9 @@ open func upload(source: String, path: String, replace: Bool, progress: Transfer
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
+    
 
-
-
+    
 }
 
 
@@ -2324,7 +2324,7 @@ public func FfiConverterTypeRemoteFiles_lower(_ value: RemoteFiles) -> UInt64 {
  * A live terminal session.
  */
 public protocol SessionProtocol: AnyObject, Sendable {
-
+    
     /**
      * Waits until the screen changed, returning `false` once the session has
      * ended and never will again.
@@ -2334,56 +2334,56 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * byte. Polling on a timer would either lag or burn a core.
      */
     func awaitChange() async  -> Bool
-
+    
     /**
      * Ends the session. Idempotent, because a frontend closing a window
      * cannot easily know whether the far side got there first.
      */
-    func close()
-
+    func close() 
+    
     func connection()  -> RemoteConnection?
-
+    
     /**
      * The local shell's live working directory, if available.
      */
     func currentDirectory()  -> String?
-
+    
     /**
      * `null` while the session is still running.
      */
     func ending()  -> SessionEnding?
-
+    
     /**
      * Everything needed to draw the screen once.
      */
     func frame()  -> ScreenFrame
-
+    
     /**
      * What the text at a cell names, if anything, and where it is drawn.
      * Asked when a person points, not every frame.
      */
     func linkAt(row: UInt16, column: UInt16)  -> TerminalLink?
-
+    
     /**
      * Stops reading the far side until [`resume`](Self::resume).
      */
-    func pause()
-
+    func pause() 
+    
     /**
      * Drops scrollback above `keep` lines for the rest of this session.
      */
-    func releaseHistory(keep: UInt32)
-
+    func releaseHistory(keep: UInt32) 
+    
     /**
      * Tells both the engine and the far side that the window changed size.
      */
-    func resize(columns: UInt16, rows: UInt16) throws
-
+    func resize(columns: UInt16, rows: UInt16) throws 
+    
     /**
      * Reads the far side again.
      */
-    func resume()
-
+    func resume() 
+    
     /**
      * Moves the viewport over the scrollback.
      *
@@ -2391,8 +2391,8 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * end of its travel is a no-op rather than an error a frontend has to
      * handle on every notch.
      */
-    func scroll(to: ScrollTo)
-
+    func scroll(to: ScrollTo) 
+    
     /**
      * Sends something the person did.
      *
@@ -2400,8 +2400,8 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * program set — which is why a frontend sends a key rather than bytes
      * (spec §12).
      */
-    func send(input: TerminalInput) throws
-
+    func send(input: TerminalInput) throws 
+    
     /**
      * Tells the engine what this consumer draws with, so that a program
      * asking for a colour is answered.
@@ -2409,23 +2409,32 @@ public protocol SessionProtocol: AnyObject, Sendable {
      * Settable at any time: a person switching their window to light is the
      * same question being asked again. `None` goes back to saying nothing.
      */
-    func setPalette(palette: TerminalPalette?) throws
-
+    func setPalette(palette: TerminalPalette?) throws 
+    
+    /**
+     * Text a remote program asked to place on the local clipboard (`OSC 52`).
+     *
+     * `None` when it asked for nothing since the last call. A program that
+     * asked to *read* the clipboard is refused: the clipboard belongs to
+     * the machine the person is using, and remote data is untrusted.
+     */
+    func takeClipboard()  -> String?
+    
     /**
      * The local shell's tty path, for matching tmux clients to this tab.
      */
     func terminalName()  -> String?
-
+    
     /**
      * What changed since the last call. Rows that did not change are absent.
      */
     func update()  -> FrameUpdate
-
+    
     /**
      * The directory the shell last reported, if it reports one.
      */
     func workingDirectory()  -> String?
-
+    
 }
 /**
  * A live terminal session.
@@ -2480,9 +2489,9 @@ open class Session: SessionProtocol, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_session(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * Waits until the screen changed, returning `false` once the session has
      * ended and never will again.
@@ -2504,10 +2513,10 @@ open func awaitChange()async  -> Bool  {
             freeFunc: ffi_tether_ffi_rust_future_free_i8,
             liftFunc: FfiConverterBool.lift,
             errorHandler: nil
-
+            
         )
 }
-
+    
     /**
      * Ends the session. Idempotent, because a frontend closing a window
      * cannot easily know whether the far side got there first.
@@ -2519,7 +2528,7 @@ open func close()  {try! rustCall() {
     )
 }
 }
-
+    
 open func connection() -> RemoteConnection?  {
     return try!  FfiConverterOptionTypeRemoteConnection.lift(try! rustCall() {
         uniffiCallStatus in
@@ -2528,7 +2537,7 @@ open func connection() -> RemoteConnection?  {
     )
 })
 }
-
+    
     /**
      * The local shell's live working directory, if available.
      */
@@ -2540,7 +2549,7 @@ open func currentDirectory() -> String?  {
     )
 })
 }
-
+    
     /**
      * `null` while the session is still running.
      */
@@ -2552,7 +2561,7 @@ open func ending() -> SessionEnding?  {
     )
 })
 }
-
+    
     /**
      * Everything needed to draw the screen once.
      */
@@ -2564,7 +2573,7 @@ open func frame() -> ScreenFrame  {
     )
 })
 }
-
+    
     /**
      * What the text at a cell names, if anything, and where it is drawn.
      * Asked when a person points, not every frame.
@@ -2579,7 +2588,7 @@ open func linkAt(row: UInt16, column: UInt16) -> TerminalLink?  {
     )
 })
 }
-
+    
     /**
      * Stops reading the far side until [`resume`](Self::resume).
      */
@@ -2590,7 +2599,7 @@ open func pause()  {try! rustCall() {
     )
 }
 }
-
+    
     /**
      * Drops scrollback above `keep` lines for the rest of this session.
      */
@@ -2602,7 +2611,7 @@ open func releaseHistory(keep: UInt32)  {try! rustCall() {
     )
 }
 }
-
+    
     /**
      * Tells both the engine and the far side that the window changed size.
      */
@@ -2615,7 +2624,7 @@ open func resize(columns: UInt16, rows: UInt16)throws   {try rustCallWithError(F
     )
 }
 }
-
+    
     /**
      * Reads the far side again.
      */
@@ -2626,7 +2635,7 @@ open func resume()  {try! rustCall() {
     )
 }
 }
-
+    
     /**
      * Moves the viewport over the scrollback.
      *
@@ -2642,7 +2651,7 @@ open func scroll(to: ScrollTo)  {try! rustCall() {
     )
 }
 }
-
+    
     /**
      * Sends something the person did.
      *
@@ -2658,7 +2667,7 @@ open func send(input: TerminalInput)throws   {try rustCallWithError(FfiConverter
     )
 }
 }
-
+    
     /**
      * Tells the engine what this consumer draws with, so that a program
      * asking for a colour is answered.
@@ -2674,7 +2683,23 @@ open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(F
     )
 }
 }
-
+    
+    /**
+     * Text a remote program asked to place on the local clipboard (`OSC 52`).
+     *
+     * `None` when it asked for nothing since the last call. A program that
+     * asked to *read* the clipboard is refused: the clipboard belongs to
+     * the machine the person is using, and remote data is untrusted.
+     */
+open func takeClipboard() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_take_clipboard(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * The local shell's tty path, for matching tmux clients to this tab.
      */
@@ -2686,7 +2711,7 @@ open func terminalName() -> String?  {
     )
 })
 }
-
+    
     /**
      * What changed since the last call. Rows that did not change are absent.
      */
@@ -2698,7 +2723,7 @@ open func update() -> FrameUpdate  {
     )
 })
 }
-
+    
     /**
      * The directory the shell last reported, if it reports one.
      */
@@ -2710,9 +2735,9 @@ open func workingDirectory() -> String?  {
     )
 })
 }
+    
 
-
-
+    
 }
 
 
@@ -2762,29 +2787,29 @@ public func FfiConverterTypeSession_lower(_ value: Session) -> UInt64 {
 
 
 public protocol TmuxWorkspaceProtocol: AnyObject, Sendable {
-
+    
     func awaitChange() async  -> Bool
-
-    func detach()
-
+    
+    func detach() 
+    
     /**
      * What the text at a cell of a pane names, as `Session::link_at`.
      */
     func linkAt(pane: UInt32, row: UInt16, column: UInt16)  -> TerminalLink?
-
-    func perform(action: TmuxAction) async throws
-
-    func scroll(pane: UInt32, lines: Int32) async throws
-
-    func send(pane: UInt32, input: TerminalInput) throws
-
+    
+    func perform(action: TmuxAction) async throws 
+    
+    func scroll(pane: UInt32, lines: Int32) async throws 
+    
+    func send(pane: UInt32, input: TerminalInput) throws 
+    
     func snapshot()  -> TmuxSnapshot
-
+    
     /**
      * The directory a pane's shell last reported, if it reports one.
      */
     func workingDirectory(pane: UInt32)  -> String?
-
+    
 }
 open class TmuxWorkspace: TmuxWorkspaceProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -2836,9 +2861,9 @@ open class TmuxWorkspace: TmuxWorkspaceProtocol, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_tmuxworkspace(handle, $0) }
     }
 
+    
 
-
-
+    
 open func awaitChange()async  -> Bool  {
     return
         try!  await uniffiRustCallAsync(
@@ -2852,10 +2877,10 @@ open func awaitChange()async  -> Bool  {
             freeFunc: ffi_tether_ffi_rust_future_free_i8,
             liftFunc: FfiConverterBool.lift,
             errorHandler: nil
-
+            
         )
 }
-
+    
 open func detach()  {try! rustCall() {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_detach(
@@ -2863,7 +2888,7 @@ open func detach()  {try! rustCall() {
     )
 }
 }
-
+    
     /**
      * What the text at a cell of a pane names, as `Session::link_at`.
      */
@@ -2878,7 +2903,7 @@ open func linkAt(pane: UInt32, row: UInt16, column: UInt16) -> TerminalLink?  {
     )
 })
 }
-
+    
 open func perform(action: TmuxAction)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -2894,7 +2919,7 @@ open func perform(action: TmuxAction)async throws   {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func scroll(pane: UInt32, lines: Int32)async throws   {
     return
         try  await uniffiRustCallAsync(
@@ -2910,7 +2935,7 @@ open func scroll(pane: UInt32, lines: Int32)async throws   {
             errorHandler: FfiConverterTypeTetherError_lift
         )
 }
-
+    
 open func send(pane: UInt32, input: TerminalInput)throws   {try rustCallWithError(FfiConverterTypeTetherError_lift) {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_tmuxworkspace_send(
@@ -2920,7 +2945,7 @@ open func send(pane: UInt32, input: TerminalInput)throws   {try rustCallWithErro
     )
 }
 }
-
+    
 open func snapshot() -> TmuxSnapshot  {
     return try!  FfiConverterTypeTmuxSnapshot_lift(try! rustCall() {
         uniffiCallStatus in
@@ -2929,7 +2954,7 @@ open func snapshot() -> TmuxSnapshot  {
     )
 })
 }
-
+    
     /**
      * The directory a pane's shell last reported, if it reports one.
      */
@@ -2942,9 +2967,9 @@ open func workingDirectory(pane: UInt32) -> String?  {
     )
 })
 }
+    
 
-
-
+    
 }
 
 
@@ -2998,9 +3023,9 @@ public func FfiConverterTypeTmuxWorkspace_lower(_ value: TmuxWorkspace) -> UInt6
  * chunk. Called from a background thread.
  */
 public protocol TransferProgress: AnyObject, Sendable {
-
-    func advanced(bytes: UInt64)
-
+    
+    func advanced(bytes: UInt64) 
+    
 }
 /**
  * Hears how far a transfer has got: the running total in bytes, after each
@@ -3056,9 +3081,9 @@ open class TransferProgressImpl: TransferProgress, @unchecked Sendable {
         try! rustCall { uniffi_tether_ffi_fn_free_transferprogress(handle, $0) }
     }
 
+    
 
-
-
+    
 open func advanced(bytes: UInt64)  {try! rustCall() {
         uniffiCallStatus in
     uniffi_tether_ffi_fn_method_transferprogress_advanced(
@@ -3067,9 +3092,9 @@ open func advanced(bytes: UInt64)  {try! rustCall() {
     )
 }
 }
+    
 
-
-
+    
 }
 
 
@@ -3112,7 +3137,7 @@ fileprivate struct UniffiCallbackInterfaceTransferProgress {
                 )
             }
 
-
+            
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -3215,9 +3240,9 @@ public struct AuthPrompt: Equatable, Hashable {
         self.echo = echo
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3231,7 +3256,7 @@ public struct FfiConverterTypeAuthPrompt: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AuthPrompt {
         return
             try AuthPrompt(
-                text: FfiConverterString.read(from: &buf),
+                text: FfiConverterString.read(from: &buf), 
                 echo: FfiConverterBool.read(from: &buf)
         )
     }
@@ -3288,9 +3313,9 @@ public struct CellStyle: Equatable, Hashable {
         self.hidden = hidden
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3304,15 +3329,15 @@ public struct FfiConverterTypeCellStyle: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CellStyle {
         return
             try CellStyle(
-                foreground: FfiConverterTypeCellColor.read(from: &buf),
-                background: FfiConverterTypeCellColor.read(from: &buf),
-                underline: FfiConverterTypeUnderlineStyle.read(from: &buf),
-                underlineColor: FfiConverterOptionTypeCellColor.read(from: &buf),
-                bold: FfiConverterBool.read(from: &buf),
-                dim: FfiConverterBool.read(from: &buf),
-                italic: FfiConverterBool.read(from: &buf),
-                strikethrough: FfiConverterBool.read(from: &buf),
-                inverse: FfiConverterBool.read(from: &buf),
+                foreground: FfiConverterTypeCellColor.read(from: &buf), 
+                background: FfiConverterTypeCellColor.read(from: &buf), 
+                underline: FfiConverterTypeUnderlineStyle.read(from: &buf), 
+                underlineColor: FfiConverterOptionTypeCellColor.read(from: &buf), 
+                bold: FfiConverterBool.read(from: &buf), 
+                dim: FfiConverterBool.read(from: &buf), 
+                italic: FfiConverterBool.read(from: &buf), 
+                strikethrough: FfiConverterBool.read(from: &buf), 
+                inverse: FfiConverterBool.read(from: &buf), 
                 hidden: FfiConverterBool.read(from: &buf)
         )
     }
@@ -3363,9 +3388,9 @@ public struct ColorValue: Equatable, Hashable {
         self.blue = blue
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3379,8 +3404,8 @@ public struct FfiConverterTypeColorValue: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ColorValue {
         return
             try ColorValue(
-                red: FfiConverterUInt8.read(from: &buf),
-                green: FfiConverterUInt8.read(from: &buf),
+                red: FfiConverterUInt8.read(from: &buf), 
+                green: FfiConverterUInt8.read(from: &buf), 
                 blue: FfiConverterUInt8.read(from: &buf)
         )
     }
@@ -3424,9 +3449,9 @@ public struct CommandOutput: Equatable, Hashable {
         self.stderr = stderr
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3440,8 +3465,8 @@ public struct FfiConverterTypeCommandOutput: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CommandOutput {
         return
             try CommandOutput(
-                status: FfiConverterOptionInt32.read(from: &buf),
-                stdout: FfiConverterData.read(from: &buf),
+                status: FfiConverterOptionInt32.read(from: &buf), 
+                stdout: FfiConverterData.read(from: &buf), 
                 stderr: FfiConverterData.read(from: &buf)
         )
     }
@@ -3488,7 +3513,7 @@ public struct Destination: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(host: String, port: UInt16, user: String,
+    public init(host: String, port: UInt16, user: String, 
         /**
          * What the far side will see in `$TERM`. It decides which sequences
          * remote programs emit, so it must describe what this frontend can
@@ -3503,9 +3528,9 @@ public struct Destination: Equatable, Hashable {
         self.scrollbackLines = scrollbackLines
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3519,12 +3544,12 @@ public struct FfiConverterTypeDestination: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Destination {
         return
             try Destination(
-                host: FfiConverterString.read(from: &buf),
-                port: FfiConverterUInt16.read(from: &buf),
-                user: FfiConverterString.read(from: &buf),
-                term: FfiConverterString.read(from: &buf),
-                columns: FfiConverterUInt16.read(from: &buf),
-                rows: FfiConverterUInt16.read(from: &buf),
+                host: FfiConverterString.read(from: &buf), 
+                port: FfiConverterUInt16.read(from: &buf), 
+                user: FfiConverterString.read(from: &buf), 
+                term: FfiConverterString.read(from: &buf), 
+                columns: FfiConverterUInt16.read(from: &buf), 
+                rows: FfiConverterUInt16.read(from: &buf), 
                 scrollbackLines: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -3578,10 +3603,10 @@ public struct FileEntry: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, path: String, kind: FileKind, size: UInt64,
+    public init(name: String, path: String, kind: FileKind, size: UInt64, 
         /**
          * Seconds since the Unix epoch, when the server said.
-         */modified: UInt64?,
+         */modified: UInt64?, 
         /**
          * Permission bits, without the type.
          */permissions: UInt32) {
@@ -3593,9 +3618,9 @@ public struct FileEntry: Equatable, Hashable {
         self.permissions = permissions
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3609,11 +3634,11 @@ public struct FfiConverterTypeFileEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileEntry {
         return
             try FileEntry(
-                name: FfiConverterString.read(from: &buf),
-                path: FfiConverterString.read(from: &buf),
-                kind: FfiConverterTypeFileKind.read(from: &buf),
-                size: FfiConverterUInt64.read(from: &buf),
-                modified: FfiConverterOptionUInt64.read(from: &buf),
+                name: FfiConverterString.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeFileKind.read(from: &buf), 
+                size: FfiConverterUInt64.read(from: &buf), 
+                modified: FfiConverterOptionUInt64.read(from: &buf), 
                 permissions: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -3659,7 +3684,7 @@ public struct HostIdentity: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(host: String, port: UInt16, algorithm: String,
+    public init(host: String, port: UInt16, algorithm: String, 
         /**
          * The `SHA256:…` form a person compares against what their
          * administrator published.
@@ -3670,9 +3695,9 @@ public struct HostIdentity: Equatable, Hashable {
         self.fingerprint = fingerprint
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3686,9 +3711,9 @@ public struct FfiConverterTypeHostIdentity: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HostIdentity {
         return
             try HostIdentity(
-                host: FfiConverterString.read(from: &buf),
-                port: FfiConverterUInt16.read(from: &buf),
-                algorithm: FfiConverterString.read(from: &buf),
+                host: FfiConverterString.read(from: &buf), 
+                port: FfiConverterUInt16.read(from: &buf), 
+                algorithm: FfiConverterString.read(from: &buf), 
                 fingerprint: FfiConverterString.read(from: &buf)
         )
     }
@@ -3738,9 +3763,9 @@ public struct KeyModifiers: Equatable, Hashable {
         self.control = control
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3754,8 +3779,8 @@ public struct FfiConverterTypeKeyModifiers: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeyModifiers {
         return
             try KeyModifiers(
-                shift: FfiConverterBool.read(from: &buf),
-                alt: FfiConverterBool.read(from: &buf),
+                shift: FfiConverterBool.read(from: &buf), 
+                alt: FfiConverterBool.read(from: &buf), 
                 control: FfiConverterBool.read(from: &buf)
         )
     }
@@ -3799,10 +3824,10 @@ public struct LinkSpan: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(row: UInt16,
+    public init(row: UInt16, 
         /**
          * First column, inclusive.
-         */start: UInt16,
+         */start: UInt16, 
         /**
          * One past the last column.
          */end: UInt16) {
@@ -3811,9 +3836,9 @@ public struct LinkSpan: Equatable, Hashable {
         self.end = end
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3827,8 +3852,8 @@ public struct FfiConverterTypeLinkSpan: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkSpan {
         return
             try LinkSpan(
-                row: FfiConverterUInt16.read(from: &buf),
-                start: FfiConverterUInt16.read(from: &buf),
+                row: FfiConverterUInt16.read(from: &buf), 
+                start: FfiConverterUInt16.read(from: &buf), 
                 end: FfiConverterUInt16.read(from: &buf)
         )
     }
@@ -3887,7 +3912,7 @@ public struct LocalShell: Equatable, Hashable {
         /**
          * Where the shell starts. The person's home directory when absent,
          * which is what a shell would have chosen anyway.
-         */directory: String?,
+         */directory: String?, 
         /**
          * What the shell will see in `$TERM`. It decides which sequences
          * programs emit, so it must describe what this frontend can actually
@@ -3900,9 +3925,9 @@ public struct LocalShell: Equatable, Hashable {
         self.scrollbackLines = scrollbackLines
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3916,10 +3941,10 @@ public struct FfiConverterTypeLocalShell: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LocalShell {
         return
             try LocalShell(
-                directory: FfiConverterOptionString.read(from: &buf),
-                term: FfiConverterString.read(from: &buf),
-                columns: FfiConverterUInt16.read(from: &buf),
-                rows: FfiConverterUInt16.read(from: &buf),
+                directory: FfiConverterOptionString.read(from: &buf), 
+                term: FfiConverterString.read(from: &buf), 
+                columns: FfiConverterUInt16.read(from: &buf), 
+                rows: FfiConverterUInt16.read(from: &buf), 
                 scrollbackLines: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -3969,7 +3994,7 @@ public struct LockedKey: Equatable, Hashable {
         /**
          * `SHA256:…`. Absent for the formats that keep even the public half
          * behind the passphrase.
-         */fingerprint: String?,
+         */fingerprint: String?, 
         /**
          * The key's own comment, often `user@host`; empty when encrypted.
          */comment: String) {
@@ -3977,9 +4002,9 @@ public struct LockedKey: Equatable, Hashable {
         self.comment = comment
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -3993,7 +4018,7 @@ public struct FfiConverterTypeLockedKey: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LockedKey {
         return
             try LockedKey(
-                fingerprint: FfiConverterOptionString.read(from: &buf),
+                fingerprint: FfiConverterOptionString.read(from: &buf), 
                 comment: FfiConverterString.read(from: &buf)
         )
     }
@@ -4035,6 +4060,11 @@ public struct ScreenFrame: Equatable, Hashable {
      */
     public let alternateScreen: Bool
     /**
+     * What to do with the pointer. Read on every event: a program turns
+     * tracking on without otherwise changing the grid.
+     */
+    public let mouse: MouseTracking
+    /**
      * Lines between the bottom of this frame and the live screen. Zero means
      * new output appears on what is being shown.
      */
@@ -4049,14 +4079,18 @@ public struct ScreenFrame: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(columns: UInt32, rows: UInt32, cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool,
+    public init(columns: UInt32, rows: UInt32, cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, 
         /**
          * A full-screen program is running, so scrollback must not be shown.
-         */alternateScreen: Bool,
+         */alternateScreen: Bool, 
+        /**
+         * What to do with the pointer. Read on every event: a program turns
+         * tracking on without otherwise changing the grid.
+         */mouse: MouseTracking, 
         /**
          * Lines between the bottom of this frame and the live screen. Zero means
          * new output appears on what is being shown.
-         */viewportOffset: UInt32,
+         */viewportOffset: UInt32, 
         /**
          * How many lines of history exist behind the live screen. Zero on the
          * alternate screen, which keeps none.
@@ -4068,15 +4102,16 @@ public struct ScreenFrame: Equatable, Hashable {
         self.cursorShape = cursorShape
         self.cursorVisible = cursorVisible
         self.alternateScreen = alternateScreen
+        self.mouse = mouse
         self.viewportOffset = viewportOffset
         self.historyLines = historyLines
         self.title = title
         self.lines = lines
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4090,16 +4125,17 @@ public struct FfiConverterTypeScreenFrame: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScreenFrame {
         return
             try ScreenFrame(
-                columns: FfiConverterUInt32.read(from: &buf),
-                rows: FfiConverterUInt32.read(from: &buf),
-                cursorRow: FfiConverterUInt32.read(from: &buf),
-                cursorColumn: FfiConverterUInt32.read(from: &buf),
-                cursorShape: FfiConverterTypeCaretShape.read(from: &buf),
-                cursorVisible: FfiConverterBool.read(from: &buf),
-                alternateScreen: FfiConverterBool.read(from: &buf),
-                viewportOffset: FfiConverterUInt32.read(from: &buf),
-                historyLines: FfiConverterUInt32.read(from: &buf),
-                title: FfiConverterString.read(from: &buf),
+                columns: FfiConverterUInt32.read(from: &buf), 
+                rows: FfiConverterUInt32.read(from: &buf), 
+                cursorRow: FfiConverterUInt32.read(from: &buf), 
+                cursorColumn: FfiConverterUInt32.read(from: &buf), 
+                cursorShape: FfiConverterTypeCaretShape.read(from: &buf), 
+                cursorVisible: FfiConverterBool.read(from: &buf), 
+                alternateScreen: FfiConverterBool.read(from: &buf), 
+                mouse: FfiConverterTypeMouseTracking.read(from: &buf), 
+                viewportOffset: FfiConverterUInt32.read(from: &buf), 
+                historyLines: FfiConverterUInt32.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
                 lines: FfiConverterSequenceTypeScreenRow.read(from: &buf)
         )
     }
@@ -4112,6 +4148,7 @@ public struct FfiConverterTypeScreenFrame: FfiConverterRustBuffer {
         FfiConverterTypeCaretShape.write(value.cursorShape, into: &buf)
         FfiConverterBool.write(value.cursorVisible, into: &buf)
         FfiConverterBool.write(value.alternateScreen, into: &buf)
+        FfiConverterTypeMouseTracking.write(value.mouse, into: &buf)
         FfiConverterUInt32.write(value.viewportOffset, into: &buf)
         FfiConverterUInt32.write(value.historyLines, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
@@ -4144,9 +4181,9 @@ public struct ScreenRow: Equatable, Hashable {
         self.runs = runs
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4205,9 +4242,9 @@ public struct SkippedKey: Equatable, Hashable {
         self.problem = problem
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4221,8 +4258,8 @@ public struct FfiConverterTypeSkippedKey: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SkippedKey {
         return
             try SkippedKey(
-                position: FfiConverterUInt32.read(from: &buf),
-                fingerprint: FfiConverterOptionString.read(from: &buf),
+                position: FfiConverterUInt32.read(from: &buf), 
+                fingerprint: FfiConverterOptionString.read(from: &buf), 
                 problem: FfiConverterTypeKeyProblem.read(from: &buf)
         )
     }
@@ -4272,7 +4309,7 @@ public struct StyledRun: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(text: String,
+    public init(text: String, 
         /**
          * How many columns the run covers. Not `text.count` — a wide character
          * is one grapheme over two columns, and a frontend laying out a
@@ -4283,9 +4320,9 @@ public struct StyledRun: Equatable, Hashable {
         self.style = style
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4299,8 +4336,8 @@ public struct FfiConverterTypeStyledRun: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StyledRun {
         return
             try StyledRun(
-                text: FfiConverterString.read(from: &buf),
-                columns: FfiConverterUInt32.read(from: &buf),
+                text: FfiConverterString.read(from: &buf), 
+                columns: FfiConverterUInt32.read(from: &buf), 
                 style: FfiConverterTypeCellStyle.read(from: &buf)
         )
     }
@@ -4344,9 +4381,9 @@ public struct TerminalLink: Equatable, Hashable {
         self.spans = spans
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4360,8 +4397,8 @@ public struct FfiConverterTypeTerminalLink: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalLink {
         return
             try TerminalLink(
-                text: FfiConverterString.read(from: &buf),
-                kind: FfiConverterTypeLinkKind.read(from: &buf),
+                text: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeLinkKind.read(from: &buf), 
                 spans: FfiConverterSequenceTypeLinkSpan.read(from: &buf)
         )
     }
@@ -4412,7 +4449,7 @@ public struct TerminalPalette: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(foreground: ColorValue, background: ColorValue, cursor: ColorValue,
+    public init(foreground: ColorValue, background: ColorValue, cursor: ColorValue, 
         /**
          * The sixteen ANSI colours: eight normal, then eight bright. Any other
          * length is refused rather than padded — a palette that is not sixteen
@@ -4424,9 +4461,9 @@ public struct TerminalPalette: Equatable, Hashable {
         self.ansi = ansi
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4440,9 +4477,9 @@ public struct FfiConverterTypeTerminalPalette: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalPalette {
         return
             try TerminalPalette(
-                foreground: FfiConverterTypeColorValue.read(from: &buf),
-                background: FfiConverterTypeColorValue.read(from: &buf),
-                cursor: FfiConverterTypeColorValue.read(from: &buf),
+                foreground: FfiConverterTypeColorValue.read(from: &buf), 
+                background: FfiConverterTypeColorValue.read(from: &buf), 
+                cursor: FfiConverterTypeColorValue.read(from: &buf), 
                 ansi: FfiConverterSequenceTypeColorValue.read(from: &buf)
         )
     }
@@ -4492,9 +4529,9 @@ public struct TmuxListedWindow: Equatable, Hashable {
         self.panes = panes
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4508,10 +4545,10 @@ public struct FfiConverterTypeTmuxListedWindow: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxListedWindow {
         return
             try TmuxListedWindow(
-                id: FfiConverterUInt32.read(from: &buf),
-                index: FfiConverterUInt32.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
-                active: FfiConverterBool.read(from: &buf),
+                id: FfiConverterUInt32.read(from: &buf), 
+                index: FfiConverterUInt32.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                active: FfiConverterBool.read(from: &buf), 
                 panes: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -4566,9 +4603,9 @@ public struct TmuxPaneFrame: Equatable, Hashable {
         self.frame = frame
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4582,14 +4619,14 @@ public struct FfiConverterTypeTmuxPaneFrame: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxPaneFrame {
         return
             try TmuxPaneFrame(
-                id: FfiConverterUInt32.read(from: &buf),
-                window: FfiConverterUInt32.read(from: &buf),
-                x: FfiConverterUInt16.read(from: &buf),
-                y: FfiConverterUInt16.read(from: &buf),
-                width: FfiConverterUInt16.read(from: &buf),
-                height: FfiConverterUInt16.read(from: &buf),
-                active: FfiConverterBool.read(from: &buf),
-                visible: FfiConverterBool.read(from: &buf),
+                id: FfiConverterUInt32.read(from: &buf), 
+                window: FfiConverterUInt32.read(from: &buf), 
+                x: FfiConverterUInt16.read(from: &buf), 
+                y: FfiConverterUInt16.read(from: &buf), 
+                width: FfiConverterUInt16.read(from: &buf), 
+                height: FfiConverterUInt16.read(from: &buf), 
+                active: FfiConverterBool.read(from: &buf), 
+                visible: FfiConverterBool.read(from: &buf), 
                 frame: FfiConverterTypeScreenFrame.read(from: &buf)
         )
     }
@@ -4638,9 +4675,9 @@ public struct TmuxSessionInfo: Equatable, Hashable {
         self.windows = windows
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4654,9 +4691,9 @@ public struct FfiConverterTypeTmuxSessionInfo: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxSessionInfo {
         return
             try TmuxSessionInfo(
-                id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
-                attached: FfiConverterBool.read(from: &buf),
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                attached: FfiConverterBool.read(from: &buf), 
                 windows: FfiConverterSequenceTypeTmuxListedWindow.read(from: &buf)
         )
     }
@@ -4698,9 +4735,9 @@ public struct TmuxSnapshot: Equatable, Hashable {
         self.ended = ended
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4714,8 +4751,8 @@ public struct FfiConverterTypeTmuxSnapshot: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxSnapshot {
         return
             try TmuxSnapshot(
-                windows: FfiConverterSequenceTypeTmuxWindowInfo.read(from: &buf),
-                panes: FfiConverterSequenceTypeTmuxPaneFrame.read(from: &buf),
+                windows: FfiConverterSequenceTypeTmuxWindowInfo.read(from: &buf), 
+                panes: FfiConverterSequenceTypeTmuxPaneFrame.read(from: &buf), 
                 ended: FfiConverterOptionString.read(from: &buf)
         )
     }
@@ -4760,9 +4797,9 @@ public struct TmuxWindowInfo: Equatable, Hashable {
         self.height = height
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4776,10 +4813,10 @@ public struct FfiConverterTypeTmuxWindowInfo: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxWindowInfo {
         return
             try TmuxWindowInfo(
-                id: FfiConverterUInt32.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
-                active: FfiConverterBool.read(from: &buf),
-                width: FfiConverterUInt16.read(from: &buf),
+                id: FfiConverterUInt32.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                active: FfiConverterBool.read(from: &buf), 
+                width: FfiConverterUInt16.read(from: &buf), 
                 height: FfiConverterUInt16.read(from: &buf)
         )
     }
@@ -4823,9 +4860,9 @@ public struct UpdatedRow: Equatable, Hashable {
         self.line = line
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -4839,7 +4876,7 @@ public struct FfiConverterTypeUpdatedRow: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UpdatedRow {
         return
             try UpdatedRow(
-                row: FfiConverterUInt32.read(from: &buf),
+                row: FfiConverterUInt32.read(from: &buf), 
                 line: FfiConverterTypeScreenRow.read(from: &buf)
         )
     }
@@ -4868,7 +4905,7 @@ public func FfiConverterTypeUpdatedRow_lower(_ value: UpdatedRow) -> RustBuffer 
 
 
 public enum CaretShape: Equatable, Hashable {
-
+    
     case block
     case underline
     case beam
@@ -4893,38 +4930,38 @@ public struct FfiConverterTypeCaretShape: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CaretShape {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .block
-
+        
         case 2: return .underline
-
+        
         case 3: return .beam
-
+        
         case 4: return .hidden
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: CaretShape, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .block:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case .underline:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .beam:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .hidden:
             writeInt(&buf, Int32(4))
-
+        
         }
     }
 }
@@ -4948,7 +4985,7 @@ public func FfiConverterTypeCaretShape_lower(_ value: CaretShape) -> RustBuffer 
 
 
 public enum CellColor: Equatable, Hashable {
-
+    
     case named(name: ColorName
     )
     case indexed(index: UInt8
@@ -4975,40 +5012,40 @@ public struct FfiConverterTypeCellColor: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CellColor {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .named(name: try FfiConverterTypeColorName.read(from: &buf)
         )
-
+        
         case 2: return .indexed(index: try FfiConverterUInt8.read(from: &buf)
         )
-
+        
         case 3: return .rgb(red: try FfiConverterUInt8.read(from: &buf), green: try FfiConverterUInt8.read(from: &buf), blue: try FfiConverterUInt8.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: CellColor, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .named(name):
             writeInt(&buf, Int32(1))
             FfiConverterTypeColorName.write(name, into: &buf)
-
-
+            
+        
         case let .indexed(index):
             writeInt(&buf, Int32(2))
             FfiConverterUInt8.write(index, into: &buf)
-
-
+            
+        
         case let .rgb(red,green,blue):
             writeInt(&buf, Int32(3))
             FfiConverterUInt8.write(red, into: &buf)
             FfiConverterUInt8.write(green, into: &buf)
             FfiConverterUInt8.write(blue, into: &buf)
-
+            
         }
     }
 }
@@ -5038,7 +5075,7 @@ public func FfiConverterTypeCellColor_lower(_ value: CellColor) -> RustBuffer {
  */
 
 public enum ColorName: Equatable, Hashable {
-
+    
     case black
     case red
     case green
@@ -5078,128 +5115,128 @@ public struct FfiConverterTypeColorName: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ColorName {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .black
-
+        
         case 2: return .red
-
+        
         case 3: return .green
-
+        
         case 4: return .yellow
-
+        
         case 5: return .blue
-
+        
         case 6: return .magenta
-
+        
         case 7: return .cyan
-
+        
         case 8: return .white
-
+        
         case 9: return .brightBlack
-
+        
         case 10: return .brightRed
-
+        
         case 11: return .brightGreen
-
+        
         case 12: return .brightYellow
-
+        
         case 13: return .brightBlue
-
+        
         case 14: return .brightMagenta
-
+        
         case 15: return .brightCyan
-
+        
         case 16: return .brightWhite
-
+        
         case 17: return .foreground
-
+        
         case 18: return .background
-
+        
         case 19: return .cursor
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: ColorName, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .black:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case .red:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .green:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .yellow:
             writeInt(&buf, Int32(4))
-
-
+        
+        
         case .blue:
             writeInt(&buf, Int32(5))
-
-
+        
+        
         case .magenta:
             writeInt(&buf, Int32(6))
-
-
+        
+        
         case .cyan:
             writeInt(&buf, Int32(7))
-
-
+        
+        
         case .white:
             writeInt(&buf, Int32(8))
-
-
+        
+        
         case .brightBlack:
             writeInt(&buf, Int32(9))
-
-
+        
+        
         case .brightRed:
             writeInt(&buf, Int32(10))
-
-
+        
+        
         case .brightGreen:
             writeInt(&buf, Int32(11))
-
-
+        
+        
         case .brightYellow:
             writeInt(&buf, Int32(12))
-
-
+        
+        
         case .brightBlue:
             writeInt(&buf, Int32(13))
-
-
+        
+        
         case .brightMagenta:
             writeInt(&buf, Int32(14))
-
-
+        
+        
         case .brightCyan:
             writeInt(&buf, Int32(15))
-
-
+        
+        
         case .brightWhite:
             writeInt(&buf, Int32(16))
-
-
+        
+        
         case .foreground:
             writeInt(&buf, Int32(17))
-
-
+        
+        
         case .background:
             writeInt(&buf, Int32(18))
-
-
+        
+        
         case .cursor:
             writeInt(&buf, Int32(19))
-
+        
         }
     }
 }
@@ -5227,11 +5264,11 @@ public func FfiConverterTypeColorName_lower(_ value: ColorName) -> RustBuffer {
  * The server's status code is context inside `cause`, never a case of its
  * own (spec §18).
  */
-public
+public 
 enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-
-
+    
+    
     case NotFound(path: String
     )
     case Exists(path: String
@@ -5246,15 +5283,15 @@ enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case Failed(cause: String
     )
 
+    
 
+    
 
-
-
-
+    
     public var errorDescription: String? {
         String(reflecting: self)
     }
-
+    
 }
 
 #if compiler(>=6)
@@ -5271,9 +5308,9 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
+        
 
-
-
+        
         case 1: return .NotFound(
             path: try FfiConverterString.read(from: &buf)
             )
@@ -5301,43 +5338,43 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
     public static func write(_ value: FileError, into buf: inout [UInt8]) {
         switch value {
 
+        
 
-
-
-
+        
+        
         case let .NotFound(path):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(path, into: &buf)
-
-
+            
+        
         case let .Exists(path):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(path, into: &buf)
-
-
+            
+        
         case let .PermissionDenied(path):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(path, into: &buf)
-
-
+            
+        
         case let .NotEmpty(path):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(path, into: &buf)
-
-
+            
+        
         case .Cancelled:
             writeInt(&buf, Int32(5))
-
-
+        
+        
         case let .Disconnected(cause):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(cause, into: &buf)
-
-
+            
+        
         case let .Failed(cause):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(cause, into: &buf)
-
+            
         }
     }
 }
@@ -5364,7 +5401,7 @@ public func FfiConverterTypeFileError_lower(_ value: FileError) -> RustBuffer {
  */
 
 public enum FileKind: Equatable, Hashable {
-
+    
     case file
     case directory
     case link
@@ -5389,38 +5426,38 @@ public struct FfiConverterTypeFileKind: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileKind {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .file
-
+        
         case 2: return .directory
-
+        
         case 3: return .link
-
+        
         case 4: return .other
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FileKind, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .file:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case .directory:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .link:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .other:
             writeInt(&buf, Int32(4))
-
+        
         }
     }
 }
@@ -5450,12 +5487,12 @@ public func FfiConverterTypeFileKind_lower(_ value: FileKind) -> RustBuffer {
  */
 
 public enum FrameUpdate: Equatable, Hashable {
-
+    
     case full(frame: ScreenFrame
     )
-    case rows(rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    case rows(rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32, mouse: MouseTracking
     )
-    case idle(cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    case idle(cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32, mouse: MouseTracking
     )
 
 
@@ -5477,30 +5514,30 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FrameUpdate {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .full(frame: try FfiConverterTypeScreenFrame.read(from: &buf)
         )
-
-        case 2: return .rows(rows: try FfiConverterSequenceTypeUpdatedRow.read(from: &buf), cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        
+        case 2: return .rows(rows: try FfiConverterSequenceTypeUpdatedRow.read(from: &buf), cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf), mouse: try FfiConverterTypeMouseTracking.read(from: &buf)
         )
-
-        case 3: return .idle(cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        
+        case 3: return .idle(cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf), mouse: try FfiConverterTypeMouseTracking.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FrameUpdate, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .full(frame):
             writeInt(&buf, Int32(1))
             FfiConverterTypeScreenFrame.write(frame, into: &buf)
-
-
-        case let .rows(rows,cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+            
+        
+        case let .rows(rows,cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines,mouse):
             writeInt(&buf, Int32(2))
             FfiConverterSequenceTypeUpdatedRow.write(rows, into: &buf)
             FfiConverterUInt32.write(cursorRow, into: &buf)
@@ -5510,9 +5547,10 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
             FfiConverterString.write(title, into: &buf)
             FfiConverterUInt32.write(viewportOffset, into: &buf)
             FfiConverterUInt32.write(historyLines, into: &buf)
-
-
-        case let .idle(cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+            FfiConverterTypeMouseTracking.write(mouse, into: &buf)
+            
+        
+        case let .idle(cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines,mouse):
             writeInt(&buf, Int32(3))
             FfiConverterUInt32.write(cursorRow, into: &buf)
             FfiConverterUInt32.write(cursorColumn, into: &buf)
@@ -5521,7 +5559,8 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
             FfiConverterString.write(title, into: &buf)
             FfiConverterUInt32.write(viewportOffset, into: &buf)
             FfiConverterUInt32.write(historyLines, into: &buf)
-
+            FfiConverterTypeMouseTracking.write(mouse, into: &buf)
+            
         }
     }
 }
@@ -5553,7 +5592,7 @@ public func FfiConverterTypeFrameUpdate_lower(_ value: FrameUpdate) -> RustBuffe
  */
 
 public enum KeyPress: Equatable, Hashable {
-
+    
     case char(text: String
     )
     case enter
@@ -5592,114 +5631,114 @@ public struct FfiConverterTypeKeyPress: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeyPress {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .char(text: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 2: return .enter
-
+        
         case 3: return .tab
-
+        
         case 4: return .backspace
-
+        
         case 5: return .escape
-
+        
         case 6: return .delete
-
+        
         case 7: return .insert
-
+        
         case 8: return .up
-
+        
         case 9: return .down
-
+        
         case 10: return .left
-
+        
         case 11: return .right
-
+        
         case 12: return .home
-
+        
         case 13: return .end
-
+        
         case 14: return .pageUp
-
+        
         case 15: return .pageDown
-
+        
         case 16: return .function(number: try FfiConverterUInt8.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: KeyPress, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .char(text):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(text, into: &buf)
-
-
+            
+        
         case .enter:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .tab:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .backspace:
             writeInt(&buf, Int32(4))
-
-
+        
+        
         case .escape:
             writeInt(&buf, Int32(5))
-
-
+        
+        
         case .delete:
             writeInt(&buf, Int32(6))
-
-
+        
+        
         case .insert:
             writeInt(&buf, Int32(7))
-
-
+        
+        
         case .up:
             writeInt(&buf, Int32(8))
-
-
+        
+        
         case .down:
             writeInt(&buf, Int32(9))
-
-
+        
+        
         case .left:
             writeInt(&buf, Int32(10))
-
-
+        
+        
         case .right:
             writeInt(&buf, Int32(11))
-
-
+        
+        
         case .home:
             writeInt(&buf, Int32(12))
-
-
+        
+        
         case .end:
             writeInt(&buf, Int32(13))
-
-
+        
+        
         case .pageUp:
             writeInt(&buf, Int32(14))
-
-
+        
+        
         case .pageDown:
             writeInt(&buf, Int32(15))
-
-
+        
+        
         case let .function(number):
             writeInt(&buf, Int32(16))
             FfiConverterUInt8.write(number, into: &buf)
-
+            
         }
     }
 }
@@ -5726,7 +5765,7 @@ public func FfiConverterTypeKeyPress_lower(_ value: KeyPress) -> RustBuffer {
  */
 
 public enum KeyProblem: Equatable, Hashable {
-
+    
     /**
      * Not a private key in a format this build reads. `cause` is diagnostic.
      */
@@ -5766,42 +5805,42 @@ public struct FfiConverterTypeKeyProblem: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeyProblem {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .unreadable(cause: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 2: return .unsupported(what: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 3: return .locked
-
+        
         case 4: return .wrongPassphrase
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: KeyProblem, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .unreadable(cause):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(cause, into: &buf)
-
-
+            
+        
         case let .unsupported(what):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(what, into: &buf)
-
-
+            
+        
         case .locked:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .wrongPassphrase:
             writeInt(&buf, Int32(4))
-
+        
         }
     }
 }
@@ -5829,7 +5868,7 @@ public func FfiConverterTypeKeyProblem_lower(_ value: KeyProblem) -> RustBuffer 
  */
 
 public enum LinkKind: Equatable, Hashable {
-
+    
     /**
      * The URI a program attached with `OSC 8`, exactly as sent.
      */
@@ -5863,40 +5902,40 @@ public struct FfiConverterTypeLinkKind: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkKind {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .hyperlink(uri: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 2: return .url(url: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 3: return .path(path: try FfiConverterString.read(from: &buf), line: try FfiConverterOptionUInt32.read(from: &buf), column: try FfiConverterOptionUInt32.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: LinkKind, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .hyperlink(uri):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(uri, into: &buf)
-
-
+            
+        
         case let .url(url):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(url, into: &buf)
-
-
+            
+        
         case let .path(path,line,column):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(path, into: &buf)
             FfiConverterOptionUInt32.write(line, into: &buf)
             FfiConverterOptionUInt32.write(column, into: &buf)
-
+            
         }
     }
 }
@@ -5919,6 +5958,275 @@ public func FfiConverterTypeLinkKind_lower(_ value: LinkKind) -> RustBuffer {
 
 
 /**
+ * How much of the pointer the far side wants sent back.
+ *
+ * `Off` leaves clicks and the wheel to this app: selection and its own
+ * history. Anything else is a program — an editor, a pager, tmux — that
+ * asked to handle the pointer itself.
+ */
+
+public enum MouseTracking: Equatable, Hashable {
+    
+    case off
+    /**
+     * Presses, releases and the wheel. No motion.
+     */
+    case clicks
+    /**
+     * Motion while a button is held, as well as clicks.
+     */
+    case drag
+    /**
+     * Every move, whether or not a button is held.
+     */
+    case any
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MouseTracking: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMouseTracking: FfiConverterRustBuffer {
+    typealias SwiftType = MouseTracking
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MouseTracking {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .off
+        
+        case 2: return .clicks
+        
+        case 3: return .drag
+        
+        case 4: return .any
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MouseTracking, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .off:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .clicks:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .drag:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .any:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMouseTracking_lift(_ buf: RustBuffer) throws -> MouseTracking {
+    return try FfiConverterTypeMouseTracking.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMouseTracking_lower(_ value: MouseTracking) -> RustBuffer {
+    return FfiConverterTypeMouseTracking.lower(value)
+}
+
+
+
+/**
+ * A mouse button. `None` is motion with nothing held.
+ */
+
+public enum PointerButton: Equatable, Hashable {
+    
+    case left
+    case middle
+    case right
+    case none
+    case wheelUp
+    case wheelDown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PointerButton: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePointerButton: FfiConverterRustBuffer {
+    typealias SwiftType = PointerButton
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PointerButton {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .left
+        
+        case 2: return .middle
+        
+        case 3: return .right
+        
+        case 4: return .none
+        
+        case 5: return .wheelUp
+        
+        case 6: return .wheelDown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PointerButton, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .left:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .middle:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .right:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .none:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .wheelUp:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .wheelDown:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerButton_lift(_ buf: RustBuffer) throws -> PointerButton {
+    return try FfiConverterTypePointerButton.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerButton_lower(_ value: PointerButton) -> RustBuffer {
+    return FfiConverterTypePointerButton.lower(value)
+}
+
+
+
+/**
+ * Press, release, or a move.
+ */
+
+public enum PointerPhase: Equatable, Hashable {
+    
+    case press
+    case release
+    case move
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PointerPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePointerPhase: FfiConverterRustBuffer {
+    typealias SwiftType = PointerPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PointerPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .press
+        
+        case 2: return .release
+        
+        case 3: return .move
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PointerPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .press:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .release:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .move:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerPhase_lift(_ buf: RustBuffer) throws -> PointerPhase {
+    return try FfiConverterTypePointerPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerPhase_lower(_ value: PointerPhase) -> RustBuffer {
+    return FfiConverterTypePointerPhase.lower(value)
+}
+
+
+
+/**
  * Where to put the viewport over the scrollback.
  *
  * Named by intent, not by line arithmetic: how much a page is depends on the
@@ -5927,7 +6235,7 @@ public func FfiConverterTypeLinkKind_lower(_ value: LinkKind) -> RustBuffer {
  */
 
 public enum ScrollTo: Equatable, Hashable {
-
+    
     /**
      * Positive goes back into history, negative comes forward.
      */
@@ -5957,46 +6265,46 @@ public struct FfiConverterTypeScrollTo: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ScrollTo {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .lines(count: try FfiConverterInt32.read(from: &buf)
         )
-
+        
         case 2: return .pageUp
-
+        
         case 3: return .pageDown
-
+        
         case 4: return .oldest
-
+        
         case 5: return .live
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: ScrollTo, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .lines(count):
             writeInt(&buf, Int32(1))
             FfiConverterInt32.write(count, into: &buf)
-
-
+            
+        
         case .pageUp:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .pageDown:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .oldest:
             writeInt(&buf, Int32(4))
-
-
+        
+        
         case .live:
             writeInt(&buf, Int32(5))
-
+        
         }
     }
 }
@@ -6023,7 +6331,7 @@ public func FfiConverterTypeScrollTo_lower(_ value: ScrollTo) -> RustBuffer {
  */
 
 public enum Secret {
-
+    
     case password(password: String
     )
     /**
@@ -6062,40 +6370,40 @@ public struct FfiConverterTypeSecret: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Secret {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .password(password: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 2: return .privateKey(pem: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionString.read(from: &buf), unlock: try FfiConverterOptionTypePassphrasePrompter.read(from: &buf)
         )
-
+        
         case 3: return .interactive(prompter: try FfiConverterTypeInteractivePrompter.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: Secret, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .password(password):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(password, into: &buf)
-
-
+            
+        
         case let .privateKey(pem,passphrase,unlock):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(pem, into: &buf)
             FfiConverterOptionString.write(passphrase, into: &buf)
             FfiConverterOptionTypePassphrasePrompter.write(unlock, into: &buf)
-
-
+            
+        
         case let .interactive(prompter):
             writeInt(&buf, Int32(3))
             FfiConverterTypeInteractivePrompter.write(prompter, into: &buf)
-
+            
         }
     }
 }
@@ -6122,7 +6430,7 @@ public func FfiConverterTypeSecret_lower(_ value: Secret) -> RustBuffer {
  */
 
 public enum SessionEnding: Equatable, Hashable {
-
+    
     case exited(status: UInt32
     )
     case closed
@@ -6148,36 +6456,36 @@ public struct FfiConverterTypeSessionEnding: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionEnding {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .exited(status: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 2: return .closed
-
+        
         case 3: return .lost(cause: try FfiConverterString.read(from: &buf)
         )
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: SessionEnding, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .exited(status):
             writeInt(&buf, Int32(1))
             FfiConverterUInt32.write(status, into: &buf)
-
-
+            
+        
         case .closed:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case let .lost(cause):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(cause, into: &buf)
-
+            
         }
     }
 }
@@ -6204,7 +6512,7 @@ public func FfiConverterTypeSessionEnding_lower(_ value: SessionEnding) -> RustB
  */
 
 public enum TerminalInput: Equatable, Hashable {
-
+    
     case key(key: KeyPress, modifiers: KeyModifiers
     )
     /**
@@ -6213,6 +6521,14 @@ public enum TerminalInput: Equatable, Hashable {
      * the engine, where the mode that decides it lives.
      */
     case paste(text: String
+    )
+    /**
+     * A pointer event in cells of the visible grid, counted from the top left.
+     *
+     * The engine encodes it in whichever mouse protocol the far side turned
+     * on, and encodes it as nothing when tracking is off.
+     */
+    case pointer(button: PointerButton, phase: PointerPhase, column: UInt16, row: UInt16, modifiers: KeyModifiers
     )
 
 
@@ -6234,31 +6550,43 @@ public struct FfiConverterTypeTerminalInput: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalInput {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .key(key: try FfiConverterTypeKeyPress.read(from: &buf), modifiers: try FfiConverterTypeKeyModifiers.read(from: &buf)
         )
-
+        
         case 2: return .paste(text: try FfiConverterString.read(from: &buf)
         )
-
+        
+        case 3: return .pointer(button: try FfiConverterTypePointerButton.read(from: &buf), phase: try FfiConverterTypePointerPhase.read(from: &buf), column: try FfiConverterUInt16.read(from: &buf), row: try FfiConverterUInt16.read(from: &buf), modifiers: try FfiConverterTypeKeyModifiers.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: TerminalInput, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case let .key(key,modifiers):
             writeInt(&buf, Int32(1))
             FfiConverterTypeKeyPress.write(key, into: &buf)
             FfiConverterTypeKeyModifiers.write(modifiers, into: &buf)
-
-
+            
+        
         case let .paste(text):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(text, into: &buf)
-
+            
+        
+        case let .pointer(button,phase,column,row,modifiers):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypePointerButton.write(button, into: &buf)
+            FfiConverterTypePointerPhase.write(phase, into: &buf)
+            FfiConverterUInt16.write(column, into: &buf)
+            FfiConverterUInt16.write(row, into: &buf)
+            FfiConverterTypeKeyModifiers.write(modifiers, into: &buf)
+            
         }
     }
 }
@@ -6287,11 +6615,11 @@ public func FfiConverterTypeTerminalInput_lower(_ value: TerminalInput) -> RustB
  * shape a consumer matches on — switching SSH libraries must not be a
  * breaking change for an application (spec §18).
  */
-public
+public 
 enum TetherError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-
-
+    
+    
     case Cancelled
     case TimedOut(millis: UInt64
     )
@@ -6341,15 +6669,15 @@ enum TetherError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case Protocol(cause: String
     )
 
+    
 
+    
 
-
-
-
+    
     public var errorDescription: String? {
         String(reflecting: self)
     }
-
+    
 }
 
 #if compiler(>=6)
@@ -6366,22 +6694,22 @@ public struct FfiConverterTypeTetherError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
+        
 
-
-
+        
         case 1: return .Cancelled
         case 2: return .TimedOut(
             millis: try FfiConverterUInt64.read(from: &buf)
             )
         case 3: return .Unreachable(
-            endpoint: try FfiConverterString.read(from: &buf),
+            endpoint: try FfiConverterString.read(from: &buf), 
             cause: try FfiConverterString.read(from: &buf)
             )
         case 4: return .HostRejected(
             endpoint: try FfiConverterString.read(from: &buf)
             )
         case 5: return .AuthenticationFailed(
-            remaining: try FfiConverterSequenceString.read(from: &buf),
+            remaining: try FfiConverterSequenceString.read(from: &buf), 
             skipped: try FfiConverterSequenceTypeSkippedKey.read(from: &buf)
             )
         case 6: return .MoreFactorsNeeded(
@@ -6409,68 +6737,68 @@ public struct FfiConverterTypeTetherError: FfiConverterRustBuffer {
     public static func write(_ value: TetherError, into buf: inout [UInt8]) {
         switch value {
 
+        
 
-
-
-
+        
+        
         case .Cancelled:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case let .TimedOut(millis):
             writeInt(&buf, Int32(2))
             FfiConverterUInt64.write(millis, into: &buf)
-
-
+            
+        
         case let .Unreachable(endpoint,cause):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(endpoint, into: &buf)
             FfiConverterString.write(cause, into: &buf)
-
-
+            
+        
         case let .HostRejected(endpoint):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(endpoint, into: &buf)
-
-
+            
+        
         case let .AuthenticationFailed(remaining,skipped):
             writeInt(&buf, Int32(5))
             FfiConverterSequenceString.write(remaining, into: &buf)
             FfiConverterSequenceTypeSkippedKey.write(skipped, into: &buf)
-
-
+            
+        
         case let .MoreFactorsNeeded(remaining):
             writeInt(&buf, Int32(6))
             FfiConverterSequenceString.write(remaining, into: &buf)
-
-
+            
+        
         case .NothingToOffer:
             writeInt(&buf, Int32(7))
-
-
+        
+        
         case let .ShellRefused(cause):
             writeInt(&buf, Int32(8))
             FfiConverterString.write(cause, into: &buf)
-
-
+            
+        
         case let .Unsupported(what):
             writeInt(&buf, Int32(9))
             FfiConverterString.write(what, into: &buf)
-
-
+            
+        
         case let .Disconnected(cause):
             writeInt(&buf, Int32(10))
             FfiConverterString.write(cause, into: &buf)
-
-
+            
+        
         case .SessionEnded:
             writeInt(&buf, Int32(11))
-
-
+        
+        
         case let .Protocol(cause):
             writeInt(&buf, Int32(12))
             FfiConverterString.write(cause, into: &buf)
-
+            
         }
     }
 }
@@ -6493,7 +6821,7 @@ public func FfiConverterTypeTetherError_lower(_ value: TetherError) -> RustBuffe
 
 
 public enum TmuxAction: Equatable, Hashable {
-
+    
     case newWindow
     case selectWindow(id: UInt32
     )
@@ -6536,111 +6864,111 @@ public struct FfiConverterTypeTmuxAction: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TmuxAction {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .newWindow
-
+        
         case 2: return .selectWindow(id: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 3: return .renameWindow(id: try FfiConverterUInt32.read(from: &buf), name: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 4: return .closeWindow(id: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 5: return .selectPane(id: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 6: return .split(id: try FfiConverterUInt32.read(from: &buf), horizontal: try FfiConverterBool.read(from: &buf)
         )
-
+        
         case 7: return .resizePane(id: try FfiConverterUInt32.read(from: &buf), columns: try FfiConverterUInt16.read(from: &buf), rows: try FfiConverterUInt16.read(from: &buf)
         )
-
+        
         case 8: return .zoomPane(id: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 9: return .closePane(id: try FfiConverterUInt32.read(from: &buf)
         )
-
+        
         case 10: return .resize(columns: try FfiConverterUInt16.read(from: &buf), rows: try FfiConverterUInt16.read(from: &buf)
         )
-
+        
         case 11: return .renameSession(name: try FfiConverterString.read(from: &buf)
         )
-
+        
         case 12: return .endSession
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: TmuxAction, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .newWindow:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case let .selectWindow(id):
             writeInt(&buf, Int32(2))
             FfiConverterUInt32.write(id, into: &buf)
-
-
+            
+        
         case let .renameWindow(id,name):
             writeInt(&buf, Int32(3))
             FfiConverterUInt32.write(id, into: &buf)
             FfiConverterString.write(name, into: &buf)
-
-
+            
+        
         case let .closeWindow(id):
             writeInt(&buf, Int32(4))
             FfiConverterUInt32.write(id, into: &buf)
-
-
+            
+        
         case let .selectPane(id):
             writeInt(&buf, Int32(5))
             FfiConverterUInt32.write(id, into: &buf)
-
-
+            
+        
         case let .split(id,horizontal):
             writeInt(&buf, Int32(6))
             FfiConverterUInt32.write(id, into: &buf)
             FfiConverterBool.write(horizontal, into: &buf)
-
-
+            
+        
         case let .resizePane(id,columns,rows):
             writeInt(&buf, Int32(7))
             FfiConverterUInt32.write(id, into: &buf)
             FfiConverterUInt16.write(columns, into: &buf)
             FfiConverterUInt16.write(rows, into: &buf)
-
-
+            
+        
         case let .zoomPane(id):
             writeInt(&buf, Int32(8))
             FfiConverterUInt32.write(id, into: &buf)
-
-
+            
+        
         case let .closePane(id):
             writeInt(&buf, Int32(9))
             FfiConverterUInt32.write(id, into: &buf)
-
-
+            
+        
         case let .resize(columns,rows):
             writeInt(&buf, Int32(10))
             FfiConverterUInt16.write(columns, into: &buf)
             FfiConverterUInt16.write(rows, into: &buf)
-
-
+            
+        
         case let .renameSession(name):
             writeInt(&buf, Int32(11))
             FfiConverterString.write(name, into: &buf)
-
-
+            
+        
         case .endSession:
             writeInt(&buf, Int32(12))
-
+        
         }
     }
 }
@@ -6664,7 +6992,7 @@ public func FfiConverterTypeTmuxAction_lower(_ value: TmuxAction) -> RustBuffer 
 
 
 public enum UnderlineStyle: Equatable, Hashable {
-
+    
     case none
     case single
     case double
@@ -6691,50 +7019,50 @@ public struct FfiConverterTypeUnderlineStyle: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnderlineStyle {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .none
-
+        
         case 2: return .single
-
+        
         case 3: return .double
-
+        
         case 4: return .curly
-
+        
         case 5: return .dotted
-
+        
         case 6: return .dashed
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: UnderlineStyle, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .none:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case .single:
             writeInt(&buf, Int32(2))
-
-
+        
+        
         case .double:
             writeInt(&buf, Int32(3))
-
-
+        
+        
         case .curly:
             writeInt(&buf, Int32(4))
-
-
+        
+        
         case .dotted:
             writeInt(&buf, Int32(5))
-
-
+        
+        
         case .dashed:
             writeInt(&buf, Int32(6))
-
+        
         }
     }
 }
@@ -7722,7 +8050,7 @@ public func sshMasterRunning(target: String)async  -> Bool  {
             freeFunc: ffi_tether_ffi_rust_future_free_i8,
             liftFunc: FfiConverterBool.lift,
             errorHandler: nil
-
+            
         )
 }
 
@@ -7868,6 +8196,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_set_palette() != 2490) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_take_clipboard() != 35507) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_terminal_name() != 42426) {

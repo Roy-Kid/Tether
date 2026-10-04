@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Where the hosts come from and where they go: one library, shared through
-/// iCloud, and on a Mac the SSH configuration that feeds it.
+/// The rest of Identities: the library's iCloud copy, and on a Mac the SSH
+/// configuration that feeds it.
 struct SyncSettings: View {
   @Bindable var store: HostStore
 
@@ -25,11 +25,12 @@ struct SyncSettings: View {
         ForEach(store.hosts.filter { $0.routeProblem != nil }) { host in
           LabeledContent(host.label, value: host.routeProblem ?? "")
         }
+        Button("Import") { store.importConfiguration() }
+          .disabled(store.unreadable)
       } header: {
         Text("SSH Configuration")
-      } footer: {
-        Text("Hosts this file names join the library, and an edited stanza updates its host. The file is only read: a change or deletion in Tether stays in Tether, and a stanza taken out of the file leaves its host in place. A private key this Mac uses syncs to the other devices on this Apple ID. Passwords stay on this device.")
       }
+      .help("Import copies this file over the hosts it names. Opening asks first. Hosts the file does not name stay. The file itself is left as it is.")
     #endif
 
     let missing = store.hosts.filter {
@@ -43,9 +44,8 @@ struct SyncSettings: View {
         }
       } header: {
         Text("SSH Keys")
-      } footer: {
-        Text("A key from your other devices arrives with the host. Create one here when none does. The server has to authorize that public key before it can connect.")
       }
+      .help("A key from your other devices arrives with the host. Create one here when none does. The server has to authorize that public key before it can connect.")
     }
   }
 

@@ -89,7 +89,7 @@
       let metrics = FontMetrics(size: 13)
       let frame = ScreenFrame(
         columns: 200, rows: 40, cursorRow: 0, cursorColumn: 0,
-        cursorShape: .hidden, cursorVisible: false, alternateScreen: false,
+        cursorShape: .hidden, cursorVisible: false, alternateScreen: false, mouse: .off,
         viewportOffset: 0, historyLines: 0, title: "",
         lines: [
           ScreenRow(

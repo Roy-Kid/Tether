@@ -14,8 +14,8 @@ import Tether
 /// exercised: one place decides what red means, and a light theme would be a
 /// different instance of this struct rather than a change anywhere else.
 public struct Palette: Equatable, Sendable {
-  let background: Color
-  let foreground: Color
+  public let background: Color
+  public let foreground: Color
   let cursor: Color
   let normal: [Color]
   let bright: [Color]

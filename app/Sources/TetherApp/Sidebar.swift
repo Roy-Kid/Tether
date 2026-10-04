@@ -106,16 +106,11 @@ struct Sidebar: View {
     #endif
     .overlay {
       if store.listed.isEmpty && store.problem == nil {
-        ContentUnavailableView {
-          Label("Hosts", systemImage: "server.rack")
-        } actions: {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .buttonStyle(.borderedProminent)
-        }
+        QuietMark("Hosts", systemImage: "server.rack")
       }
     }
     .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings, onDone: onDone))
-    .navigationTitle(onDone == nil ? "Tether" : "Hosts")
+    .navigationTitle("Hosts")
   }
 }
 
@@ -174,18 +169,7 @@ private struct HostListStyle: ViewModifier {
 /// Settings is not here. On a Mac it sits on the workspace status bar,
 /// opposite the host control. A phone has no preferences window and no
 /// status bar, so the gear stays in the navigation bar and presents a sheet.
-/// The navigation bar draws a toolbar button's title next to its icon.
-/// A custom button style replaces that chrome, so only the icon remains.
-private struct IconOnlyButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label.labelStyle(.iconOnly)
-  }
-}
-
-extension ButtonStyle where Self == IconOnlyButtonStyle {
-  fileprivate static var iconOnly: Self { Self() }
-}
-
+/// Both are the same icon; the name is the tooltip.
 private struct SidebarActions: ViewModifier {
   let store: HostStore
   let onNew: () -> Void
@@ -196,11 +180,12 @@ private struct SidebarActions: ViewModifier {
     #if os(macOS)
       content.safeAreaInset(edge: .bottom) {
         HStack {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .labelStyle(.iconOnly)
-            .help("Add host")
+          Button(action: onNew) {
+            Label("Add host", systemImage: "plus")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Add host")
           SyncButton(store: store)
-            .labelStyle(.iconOnly)
           Spacer()
           if let onDone {
             Button("Done", action: onDone)
@@ -208,25 +193,27 @@ private struct SidebarActions: ViewModifier {
               .keyboardShortcut(.cancelAction)
           }
         }
-        .buttonStyle(.borderless)
         .padding(UIStyle.Space.inset)
         .background(.bar)
       }
     #else
       content.toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Settings", systemImage: "gearshape", action: onSettings)
-            .labelStyle(.iconOnly)
+          Button(action: onSettings) {
+            Label("Settings", systemImage: "gearshape")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Settings")
         }
         ToolbarItem(placement: .topBarTrailing) {
           SyncButton(store: store)
-            .labelStyle(.iconOnly)
         }
         ToolbarItem(placement: .topBarTrailing) {
           Button(action: onNew) {
             Label("Add host", systemImage: "plus")
           }
           .buttonStyle(.iconOnly)
+          .help("Add host")
         }
         if let onDone {
           ToolbarItem(placement: .confirmationAction) {
@@ -256,6 +243,7 @@ struct SyncButton: View {
       Label("Sync", systemImage: "arrow.triangle.2.circlepath")
         .symbolEffect(.rotate, options: .repeating, isActive: store.syncing)
     }
+    .buttonStyle(.iconOnly)
     .disabled(store.syncing)
     .help("Sync")
     .dialog(for: failure) { shown in

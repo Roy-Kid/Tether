@@ -81,7 +81,6 @@ together. Read it before touching architecture.
 ./scripts/tether.sh --build-app                   # macOS Tether.app
 ./scripts/tether.sh --build-app-ios               # simulator Tether.app + install
 ./scripts/tether.sh --build-xcframework           # TetherFFI.xcframework + bindings
-./scripts/tether.sh --test-tmux                   # loopback OpenSSH + real tmux
 ./scripts/tether.sh --verify-consumer             # PATH-stripped consumer build
 
 cargo build
@@ -90,7 +89,7 @@ cargo tree -p tether-terminal    # must show no russh
 cargo tree -p tether-local       # must show no russh either
 
 swift test --package-path swift                        # the SDK's Swift facade
-swift test --package-path app/Packages/TetherFrontend  # frontend, incl. render cost
+swift test --package-path app/Packages/TetherFrontend  # frontend
 swift test --package-path app/Packages/TetherPluginHost # web plugin host
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
@@ -163,13 +162,14 @@ same Apple ID is trusted — no review. Private keys travel with that library,
 so the other device logs in with the same key; a host with none gets one
 from Create SSH Key, and that key syncs too. Passwords stay on the device
 that saved them. A deleted host takes its keys out of the keychain. On a Mac
-`~/.ssh/config`
-feeds the library (`ConfigImport`): a new stanza is added, an edited stanza
-updates its host, a stanza taken out leaves its host in place. Nothing under
-`~/.ssh` is ever written: a change or deletion in Tether stays in Tether, and
-a stanza nobody touched never undoes it. The sync button reads the whole
-library through iCloud again. `~/.ssh/known_hosts` vouches for keys ssh
-already trusts, and objects to ones it does not.
+`~/.ssh/config` is read, never written. On launch, when the file would
+change a host, a dialog asks whether to import it; agreeing copies the file
+over the hosts it names. Declining leaves the library until the next open,
+or until Import in Settings, which overwrites those hosts without asking
+again. A host the file does not name stays. A quiet read (`ConfigImport`)
+still updates a stanza someone edited and never undoes an untouched one.
+`~/.ssh/known_hosts` is still only read. The sync button reads the whole
+library through iCloud again.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the

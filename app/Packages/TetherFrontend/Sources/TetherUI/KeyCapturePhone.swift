@@ -29,9 +29,11 @@
     var onFocus: () -> Void = {}
     /// Lines to move the viewport; positive goes back into history.
     var onScroll: (Int32) -> Void = { _ in }
+    var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
     var latch = Latch()
+    var mouse: MouseTracking = .off
 
     func makeUIView(context: Context) -> KeyCaptureView {
       let view = KeyCaptureView()
@@ -55,11 +57,13 @@
       view.onInput = onInput
       view.onFocus = onFocus
       view.onScroll = onScroll
+      view.claimsWheel = claimsWheel
       view.lineHeight = lineHeight
       view.wantsFocus = active
       view.links = links
       view.geometry = geometry
       view.latch = latch
+      view.mouse = mouse
     }
   }
 
@@ -68,10 +72,16 @@
     var onFocus: (() -> Void)?
     var onInput: ((TerminalInput) -> Void)?
     var onScroll: ((Int32) -> Void)?
+    var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
     var lineHeight: CGFloat = 17
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
     var latch = Latch()
+    var mouse: MouseTracking = .off
+    /// The cell a drag last reported, so a finger that stays put is quiet.
+    private var reported: (row: UInt16, column: UInt16)?
+    /// Lines already sent for a two-finger wheel.
+    private var wheeled: Int32 = 0
     /// A terminal is not prose. The software keyboard's replacements —
     /// capitals, smart quotes, the predictive bar — rewrite what was typed
     /// and change the keyboard's height while they do it.
@@ -91,8 +101,6 @@
     override init(frame: CGRect) {
       super.init(frame: frame)
       isUserInteractionEnabled = true
-      addGestureRecognizer(
-        UITapGestureRecognizer(target: self, action: #selector(takeFocus)))
       // The drag belongs to this view rather than to a transparent layer
       // over it: a SwiftUI gesture above a `UIView` takes the touches the
       // view needs to become first responder, and a terminal you cannot
@@ -100,6 +108,14 @@
       let pan = UIPanGestureRecognizer(target: self, action: #selector(dragged))
       pan.maximumNumberOfTouches = 1
       addGestureRecognizer(pan)
+      // A tap waits out the drag, so a click is not also the start of a scroll.
+      let tap = UITapGestureRecognizer(target: self, action: #selector(takeFocus(_:)))
+      tap.require(toFail: pan)
+      addGestureRecognizer(tap)
+      let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled))
+      wheel.minimumNumberOfTouches = 2
+      wheel.maximumNumberOfTouches = 2
+      addGestureRecognizer(wheel)
       // A long-press on a path is a context menu with the file above it —
       // the gesture the rest of the system uses for "show me this".
       addInteraction(UIContextMenuInteraction(delegate: self))
@@ -128,12 +144,20 @@
       return accepted
     }
 
-    @objc private func takeFocus() {
+    @objc private func takeFocus(_ gesture: UITapGestureRecognizer) {
       becomeFirstResponder()
       onFocus?()
+      guard mouse != .off, gesture.state == .ended else { return }
+      guard let cell = geometry.cell(at: gesture.location(in: self)) else { return }
+      point(.press, button: .left, cell: cell)
+      point(.release, button: .left, cell: cell)
     }
 
     @objc private func dragged(_ gesture: UIPanGestureRecognizer) {
+      if mouse != .off {
+        dragPointer(gesture)
+        return
+      }
       switch gesture.state {
       case .changed:
         // Whole lines only: a terminal's history has no half-rows to stop
@@ -148,6 +172,56 @@
       default:
         break
       }
+    }
+
+    /// One finger is the mouse a program asked for. Two fingers are its wheel.
+    private func dragPointer(_ gesture: UIPanGestureRecognizer) {
+      let point = gesture.location(in: self)
+      switch gesture.state {
+      case .began:
+        becomeFirstResponder()
+        reported = nil
+        guard let cell = geometry.cell(at: point) else { return }
+        self.point(.press, button: .left, cell: cell)
+        reported = cell
+      case .changed:
+        guard mouse == .drag || mouse == .any, let cell = geometry.clampedCell(at: point) else { return }
+        guard reported?.row != cell.row || reported?.column != cell.column else { return }
+        reported = cell
+        self.point(.move, button: .left, cell: cell)
+      case .ended, .cancelled, .failed:
+        if reported != nil, let cell = geometry.clampedCell(at: point) {
+          self.point(.release, button: .left, cell: cell)
+        }
+        reported = nil
+      default:
+        break
+      }
+    }
+
+    @objc private func wheeled(_ gesture: UIPanGestureRecognizer) {
+      guard mouse != .off else { return }
+      switch gesture.state {
+      case .changed:
+        let lines = Int32((gesture.translation(in: self).y / lineHeight).rounded())
+        guard lines != wheeled else { return }
+        let step = lines - wheeled
+        wheeled = lines
+        guard let cell = geometry.clampedCell(at: gesture.location(in: self)) else { return }
+        if claimsWheel(step, cell.column, cell.row) { return }
+        let button: PointerButton = step > 0 ? .wheelUp : .wheelDown
+        for _ in 0..<Int(abs(step)) {
+          point(.press, button: button, cell: cell)
+        }
+      case .ended, .cancelled, .failed:
+        wheeled = 0
+      default:
+        break
+      }
+    }
+
+    private func point(_ phase: PointerPhase, button: PointerButton, cell: (row: UInt16, column: UInt16)) {
+      onInput?(.pointer(button: button, phase: phase, column: cell.column, row: cell.row))
     }
 
     // MARK: - The software keyboard

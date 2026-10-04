@@ -52,13 +52,10 @@ enum LastTabPreference {
 
 /// Settings, as a sidebar and a titled page.
 ///
-/// The Mac window is the shape a Mac preferences window takes today: a
-/// tinted icon in the sidebar, a title and a subtitle over a grouped form,
-/// and a titlebar that only keeps the traffic lights. A tab strip puts every
-/// section on screen at once and then hides all but one.
-///
-/// A phone has no room for two columns. The same sections are a list that
-/// pushes its pane.
+/// The sidebar names each section beside its tinted mark. The page title
+/// sits over a grouped form, and the Mac titlebar keeps only the traffic
+/// lights. A phone has no room for two columns, so the same rows are the
+/// list that pushes a pane.
 struct AppSettings: View {
   let registry: PluginRegistry
   let known: KnownHosts
@@ -78,7 +75,6 @@ struct AppSettings: View {
     case appearance
     case security
     case identities
-    case sync
     case extensions
 
     var id: String { rawValue }
@@ -89,7 +85,6 @@ struct AppSettings: View {
       case .appearance: "Appearance"
       case .security: "Security"
       case .identities: "Identities"
-      case .sync: "Sync"
       case .extensions: "Extensions"
       }
     }
@@ -100,19 +95,7 @@ struct AppSettings: View {
       case .appearance: "paintpalette.fill"
       case .security: "lock.shield.fill"
       case .identities: "person.badge.key.fill"
-      case .sync: "arrow.triangle.2.circlepath"
       case .extensions: "puzzlepiece.extension.fill"
-      }
-    }
-
-    var subtitle: String {
-      switch self {
-      case .general: "What opens when Tether launches"
-      case .appearance: "Window, terminal, and drawing"
-      case .security: "Host keys and saved passwords"
-      case .identities: "Hosts, keys, and trusted devices"
-      case .sync: "iCloud and your SSH configuration"
-      case .extensions: "Accessories on a terminal tab"
       }
     }
 
@@ -122,7 +105,6 @@ struct AppSettings: View {
       case .appearance: .indigo
       case .security: .orange
       case .identities: .teal
-      case .sync: .blue
       case .extensions: .purple
       }
     }
@@ -142,7 +124,10 @@ struct AppSettings: View {
             .accessibilityLabel(item.title)
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 168, ideal: 184, max: 210)
+        .navigationSplitViewColumnWidth(
+          min: Chrome.settingsSidebarMin,
+          ideal: Chrome.settingsSidebarIdeal,
+          max: Chrome.settingsSidebarMax)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           settingsFooter
         }
@@ -151,6 +136,7 @@ struct AppSettings: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
       .navigationSplitViewStyle(.balanced)
+      .toolbar(removing: .sidebarToggle)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
       .frame(minWidth: Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
       .background { SettingsWindowChrome() }
@@ -193,6 +179,8 @@ struct AppSettings: View {
       }
       .padding(.horizontal, UIStyle.Space.inset)
       .padding(.vertical, UIStyle.panelRadius)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("Tether \(appVersion)")
     }
     .background(.ultraThinMaterial)
   }
@@ -205,9 +193,16 @@ struct AppSettings: View {
         .interpolation(.high)
         .aspectRatio(contentMode: .fit)
     #else
-      Image(systemName: "terminal.fill")
-        .font(UIStyle.symbol)
-        .foregroundStyle(Theme.subtle)
+      if let image = Bundle.main.appIcon {
+        Image(uiImage: image)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fit)
+      } else {
+        Image(systemName: "terminal.fill")
+          .font(UIStyle.symbol)
+          .foregroundStyle(Theme.subtle)
+      }
     #endif
   }
 
@@ -217,11 +212,13 @@ struct AppSettings: View {
 
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
-    SettingsPage(title: section.title, subtitle: section.subtitle) {
+    SettingsPage(title: section.title) {
       form(section)
     }
     #if os(iOS)
-      .navigationTitle(section.title)
+      // The page already shows the section title, the same as the Mac pane
+      // under a titlebar that keeps only the traffic lights. A second copy
+      // in the navigation bar is the title written twice.
       .navigationBarTitleDisplayMode(.inline)
     #endif
   }
@@ -232,7 +229,7 @@ struct AppSettings: View {
       case .identities:
         IdentitySettings(store: store, connections: connections)
         DeviceSettings(store: store, known: known)
-      case .sync: SyncSettings(store: store)
+        SyncSettings(store: store)
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
@@ -271,24 +268,17 @@ private struct SettingsSidebarLabel: View {
 
 private struct SettingsPage<Content: View>: View {
     let title: String
-    let subtitle: String
     @ViewBuilder var content: Content
 
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
-        VStack(alignment: .leading, spacing: UIStyle.Space.small) {
-          Text(title)
-            .font(.title2.weight(.semibold))
-            .accessibilityAddTraits(.isHeader)
-
-          Text(subtitle)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, UIStyle.Space.wide)
-        .padding(.top, UIStyle.Space.page)
-        .padding(.bottom, UIStyle.panelRadius)
+        Text(title)
+          .font(.title2.weight(.semibold))
+          .accessibilityAddTraits(.isHeader)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, UIStyle.Space.wide)
+          .padding(.top, UIStyle.Space.page)
+          .padding(.bottom, UIStyle.panelRadius)
 
         content
           .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -303,16 +293,9 @@ private struct PreferenceToggleRow: View {
   @Binding var isOn: Bool
 
   var body: some View {
-    Toggle(isOn: $isOn) {
-      VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-        Text(title)
-        Text(description)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .toggleStyle(.switch)
+    Toggle(title, isOn: $isOn)
+      .toggleStyle(.switch)
+      .help(description)
   }
 }
 
@@ -400,13 +383,7 @@ private struct ExtensionSettings: View {
             get: { registry.isEnabled(plugin.metadata.id) },
             set: { registry.setEnabled($0, id: plugin.metadata.id) })
         ) {
-          VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-            Label(plugin.metadata.name, systemImage: plugin.metadata.symbol)
-            Text(plugin.metadata.summary)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
+          Label(plugin.metadata.name, systemImage: plugin.metadata.symbol)
         }
         .toggleStyle(.switch)
         .help(plugin.metadata.summary)
@@ -534,3 +511,18 @@ private struct SecuritySettings: View {
     }
   }
 }
+
+#if os(iOS)
+  extension Bundle {
+    /// The same mark the Mac footer takes from `NSApp.applicationIconImage`.
+    fileprivate var appIcon: UIImage? {
+      guard
+        let icons = object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any],
+        let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+        let files = primary["CFBundleIconFiles"] as? [String],
+        let name = files.last
+      else { return nil }
+      return UIImage(named: name)
+    }
+  }
+#endif

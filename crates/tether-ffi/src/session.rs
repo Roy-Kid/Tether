@@ -408,6 +408,15 @@ impl Session {
         crate::FrameUpdate::from_delta(&self.inner.take_frame_delta())
     }
 
+    /// Text a remote program asked to place on the local clipboard (`OSC 52`).
+    ///
+    /// `None` when it asked for nothing since the last call. A program that
+    /// asked to *read* the clipboard is refused: the clipboard belongs to
+    /// the machine the person is using, and remote data is untrusted.
+    pub fn take_clipboard(&self) -> Option<String> {
+        self.inner.take_clipboard()
+    }
+
     /// Drops scrollback above `keep` lines for the rest of this session.
     pub fn release_history(&self, keep: u32) {
         self.inner.release_history(keep as usize);

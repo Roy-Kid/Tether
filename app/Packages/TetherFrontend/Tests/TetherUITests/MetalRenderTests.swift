@@ -24,7 +24,8 @@ struct MetalRenderTests {
   private func frame(_ rows: [ScreenRow], columns: UInt32 = 12, cursor: CaretShape = .hidden) -> ScreenFrame {
     ScreenFrame(
       columns: columns, rows: UInt32(rows.count), cursorRow: 0, cursorColumn: 0, cursorShape: cursor,
-      cursorVisible: cursor != .hidden, alternateScreen: false, viewportOffset: 0, historyLines: 0, title: "",
+      cursorVisible: cursor != .hidden, alternateScreen: false, mouse: .off,
+      viewportOffset: 0, historyLines: 0, title: "",
       lines: rows)
   }
 

@@ -21,7 +21,7 @@ struct SessionView: View {
 
   var body: some View {
     ZStack {
-      Theme.terminal
+      palette.background
       switch tab.stage {
       case .connecting, .asking:
         ProgressView()
@@ -34,13 +34,14 @@ struct SessionView: View {
       case .ended(let reason):
         if tab.problem != nil {
           EmptyView()
-        } else if let reason, !reason.isEmpty {
-          ContentUnavailableView("Session Ended", systemImage: "stop.circle", description: Text(reason))
         } else {
-          ContentUnavailableView("Session Ended", systemImage: "stop.circle")
+          QuietMark("Session Ended", systemImage: "stop.circle", detail: reason)
         }
       }
     }
+    // Marks and the spinner follow the terminal, so a dark grid in a light
+    // window still has light chrome on it.
+    .environment(\.colorScheme, palette == .dark ? .dark : .light)
     // The far side is told what this window draws with, and told again when
     // that changes: a program asks once, at the start, and paints itself for
     // the answer it got.
@@ -56,6 +57,7 @@ struct SessionView: View {
         onInput: { tab.send($0) },
         onResize: { tab.resize(columns: $0, rows: $1) },
         onScroll: { tab.scroll($0) },
+        onClaimWheel: { tab.claimWheel($0, column: $1, row: $2) },
         links: links)
     }
   }

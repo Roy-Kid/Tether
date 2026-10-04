@@ -40,4 +40,20 @@ struct FilePreviewTests {
 
     #expect(FilePreview.textSnippet(at: url) == "")
   }
+
+  @Test("a peek follows the file's modification time")
+  func loadIDFollowsModificationTime() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("preview-\(UUID().uuidString).png")
+    try Data("one".utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: url.path)
+    let first = FilePreview.loadID(for: url)
+    try Data("two-x".utf8).write(to: url)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_700_000_005)], ofItemAtPath: url.path)
+    #expect(FilePreview.loadID(for: url) != first)
+    #expect(FilePreview.loadID(for: nil) == "")
+  }
 }

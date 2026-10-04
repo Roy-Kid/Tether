@@ -206,6 +206,12 @@ impl TerminalSession {
         self.shared.terminal.lock().expect("terminal lock poisoned").take_frame_delta()
     }
 
+    /// Text a program asked to copy onto the local clipboard since the last
+    /// call. The consumer writes it; this session has no clipboard of its own.
+    pub fn take_clipboard(&self) -> Option<String> {
+        self.shared.terminal.lock().expect("terminal lock poisoned").take_clipboard()
+    }
+
     /// Drops scrollback above `keep` lines for the rest of the session.
     pub fn release_history(&self, keep: usize) {
         {

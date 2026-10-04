@@ -5,16 +5,27 @@ import Tether
 /// Where copies of remote files live on this machine while they are looked at.
 ///
 /// Keyed by the far side's path, size and modification time, so a file that
-/// has not changed is not fetched again and one that has is. Per host,
-/// because `/home/ada/plot.png` on two machines is two files. In the caches
-/// directory, which the system may empty: everything here can be fetched
-/// again.
+/// has not changed is not fetched again and one that has is. The time is the
+/// one the caller just read — a listing from before the write still names the
+/// old copy. Per host,
+/// because `/home/ada/plot.png` on two machines is two files. On a Mac the
+/// copies sit in `/tmp`, which the system may empty: everything here can be
+/// fetched again, and a download moves the copy out rather than fetching it
+/// twice. A phone uses its own temporary directory, the sandbox's `/tmp`.
 struct FileCache: Sendable {
   let root: URL
 
+  /// Where preview copies go when nobody hands the cache a directory.
+  static var previewRoot: URL {
+    #if os(macOS)
+      URL(fileURLWithPath: "/tmp", isDirectory: true)
+    #else
+      FileManager.default.temporaryDirectory
+    #endif
+  }
+
   init(host: UUID, base: URL? = nil) {
-    let caches =
-      base ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let caches = base ?? Self.previewRoot
     root = caches.appendingPathComponent("Tether Files", isDirectory: true)
       .appendingPathComponent(host.uuidString, isDirectory: true)
   }
@@ -25,6 +36,24 @@ struct FileCache: Sendable {
     let folder = root.appendingPathComponent(key(for: entry), isDirectory: true)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     return folder.appendingPathComponent(Names.local(entry.name))
+  }
+
+  /// Moves the cached copy of `entry` to `destination` and forgets it.
+  ///
+  /// False when there is no copy, or the move did not land — the caller
+  /// fetches instead. A move across volumes still copies on disk; it does
+  /// not fetch the file again.
+  func move(_ entry: FileEntry, to destination: URL) -> Bool {
+    guard let url = cached(entry) else { return false }
+    do {
+      try FileManager.default.moveItem(at: url, to: destination)
+    } catch {
+      return false
+    }
+    let folder = url.deletingLastPathComponent()
+    let left = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+    if left.isEmpty { try? FileManager.default.removeItem(at: folder) }
+    return true
   }
 
   /// The copy of `entry`, if one is already here and still the same file.

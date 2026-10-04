@@ -2,6 +2,7 @@ import Foundation
 
 /// A question put to a person: a title, at most one line more, the fields
 /// it needs typed, and the verbs that answer it (law: app-ui-chrome).
+/// `detail` is data shown with the question — a diff — never a second sentence.
 ///
 /// One description for every dialog the app and its plugins show, whoever is
 /// asking — a view whose state holds a pending question, or a handshake
@@ -14,14 +15,17 @@ public struct Dialog: Identifiable {
   public var title: String
   /// Only when the consequence is not already the button.
   public var message: String?
+  /// Data that belongs with the question, such as a diff. Not a sentence.
+  public var detail: String?
   public var fields: [Field]
   /// In the order a person reads them. The first `.confirm` is what Return
   /// does; a `.cancel` is what Escape does.
   public var actions: [Action]
 
-  public init(title: String, message: String? = nil, fields: [Field] = [], actions: [Action]) {
+  public init(title: String, message: String? = nil, detail: String? = nil, fields: [Field] = [], actions: [Action]) {
     self.title = title
     self.message = message.flatMap { $0.isEmpty ? nil : $0 }
+    self.detail = detail.flatMap { $0.isEmpty ? nil : $0 }
     self.fields = fields
     self.actions = actions
   }
@@ -77,11 +81,11 @@ public struct Dialog: Identifiable {
 
   /// A yes-or-no question: the verb, and Cancel.
   public static func confirm(
-    _ title: String, message: String? = nil, verb: String, role: Action.Role = .confirm,
+    _ title: String, message: String? = nil, detail: String? = nil, verb: String, role: Action.Role = .confirm,
     cancel: @escaping @MainActor () -> Void = {}, perform: @escaping @MainActor () -> Void
   ) -> Dialog {
     Dialog(
-      title: title, message: message,
+      title: title, message: message, detail: detail,
       actions: [.cancel(perform: cancel), Action(verb, role: role) { _ in perform() }])
   }
 

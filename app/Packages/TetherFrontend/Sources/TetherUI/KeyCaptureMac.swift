@@ -19,6 +19,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var active = true
   var onFocus: () -> Void = {}
   var onScroll: (Int32) -> Void = { _ in }
+  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
   var lineHeight: CGFloat = 17
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
@@ -26,6 +27,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var onHover: (TerminalLink?) -> Void = { _ in }
   var onSelection: (SelectionUpdate) -> Void = { _ in }
   var selection: GridSelection?
+  var mouse: MouseTracking = .off
 
   func makeNSView(context: Context) -> KeyCaptureView {
     let view = KeyCaptureView()
@@ -43,6 +45,7 @@ struct MacKeyCapture: NSViewRepresentable {
     view.onInput = onInput
     view.onFocus = onFocus
     view.onScroll = onScroll
+    view.claimsWheel = claimsWheel
     view.lineHeight = lineHeight
     view.wantsFocus = active
     view.links = links
@@ -51,6 +54,7 @@ struct MacKeyCapture: NSViewRepresentable {
     view.onHover = onHover
     view.onSelection = onSelection
     view.selection = selection
+    view.mouse = mouse
   }
 }
 
@@ -61,6 +65,8 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var onInput: ((TerminalInput) -> Void)?
   /// Positive goes back into history, matching a wheel pushed away.
   var onScroll: ((Int32) -> Void)?
+  /// `true` takes a wheel that would otherwise be reported to the program.
+  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
   /// How tall a row is, so a trackpad's point deltas become lines.
   var lineHeight: CGFloat = 17
   /// Fractional lines left over from the last wheel event.
@@ -77,6 +83,16 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var onSelection: (SelectionUpdate) -> Void = { _ in }
   /// The selection on screen. Shift-click extends its anchor; ⌘C copies it.
   var selection: GridSelection?
+  /// What the far side asked to hear. `off` keeps selection and local history.
+  var mouse: MouseTracking = .off {
+    didSet {
+      if mouse != oldValue { window?.invalidateCursorRects(for: self) }
+    }
+  }
+  /// The button held for a report. Nil while a drag is selecting text instead.
+  private var held: PointerButton?
+  /// The last move already sent, so a pointer that stays in one cell is quiet.
+  private var reportedCell: (row: UInt16, column: UInt16)?
   /// The link under the pointer while ⌘ is held.
   private var hovered: TerminalLink?
   /// Where a drag began, and how it chooses text. A click that never moves
@@ -111,6 +127,8 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
 
   override func mouseMoved(with event: NSEvent) {
     hover(event.modifierFlags.contains(.command) ? link(at: event.locationInWindow) : nil)
+    guard mouse == .any, held == nil, !event.modifierFlags.contains(.shift) else { return }
+    report(.move, button: .none, at: event.locationInWindow, event: event)
   }
 
   override func flagsChanged(with event: NSEvent) {
@@ -161,7 +179,14 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
 
   override func resetCursorRects() {
     discardCursorRects()
-    addCursorRect(bounds, cursor: hovered == nil ? .iBeam : .pointingHand)
+    let pointer: NSCursor = if mouse != .off {
+      .arrow
+    } else if hovered == nil {
+      .iBeam
+    } else {
+      .pointingHand
+    }
+    addCursorRect(bounds, cursor: pointer)
   }
 
   /// The link under a point in window coordinates.
@@ -198,6 +223,17 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// Without this, Tab moves focus to the next control and an arrow scrolls
   /// a parent — a terminal that cannot send Tab is not a terminal.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    // ⌘C copies the selection onto this machine's pasteboard. The menu's
+    // Copy item does not reliably reach an `NSView` inside SwiftUI, and
+    // returning false here lets that miss leave the selection uncopied.
+    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      .subtracting(.capsLock)
+    if window?.firstResponder === self, flags == .command,
+      event.charactersIgnoringModifiers?.lowercased() == "c", selection != nil
+    {
+      copy(nil)
+      return true
+    }
     // Command chords are the application's: ⌘Q, ⌘V and the rest must keep
     // working, and a terminal has nothing to send for them anyway.
     guard !hasMarkedText(), window?.firstResponder === self, !event.modifierFlags.contains(.command)
@@ -248,6 +284,23 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     let lines = carried.rounded(.towardZero)
     guard lines != 0 else { return }
     carried -= lines
+    // Shift keeps the wheel for this terminal's own history, which is how
+    // text is still readable inside a program that took the mouse.
+    // Something standing on the shell can take the lines first: reporting
+    // every notch makes a program that scrolls five rows per notch jump,
+    // and a notch on its status row changes window.
+    if mouse != .off, !event.modifierFlags.contains(.shift) {
+      let button: PointerButton = lines > 0 ? .wheelUp : .wheelDown
+      if let cell = clampedCell(at: event.locationInWindow),
+        claimsWheel(Int32(lines), cell.column, cell.row)
+      {
+        return
+      }
+      for _ in 0..<Int(abs(lines)) {
+        report(.press, button: button, at: event.locationInWindow, event: event, clamp: true)
+      }
+      return
+    }
     onScroll(Int32(lines))
   }
 
@@ -266,6 +319,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
       if let link = link(at: event.locationInWindow) { links.open(link) }
       return
     }
+    if reportPress(.left, event: event) { return }
     guard let cell = cell(at: event.locationInWindow) else { return }
     let point = gridPoint(cell)
     if event.clickCount >= 3 {
@@ -293,6 +347,12 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func mouseDragged(with event: NSEvent) {
+    if let held {
+      if mouse == .drag || mouse == .any {
+        report(.move, button: held, at: event.locationInWindow, event: event, clamp: true)
+      }
+      return
+    }
     guard let anchor = dragAnchor else { return }
     let moved = hypot(event.locationInWindow.x - dragStart.x, event.locationInWindow.y - dragStart.y)
     if !dragArmed, moved < dragSlop { return }
@@ -304,6 +364,12 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func mouseUp(with event: NSEvent) {
+    if let button = held {
+      held = nil
+      report(.release, button: button, at: event.locationInWindow, event: event, clamp: true)
+      reportedCell = nil
+      return
+    }
     let armed = dragArmed
     let kind = dragKind
     let anchor = dragAnchor
@@ -316,6 +382,90 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
       return
     }
     onSelection(.copy(kind, anchor, head ?? anchor))
+  }
+
+  override func rightMouseDown(with event: NSEvent) {
+    window?.makeFirstResponder(self)
+    // A link's menu stays a menu. Everywhere else, a program that asked for
+    // the mouse hears the right button.
+    if link(at: event.locationInWindow) == nil, reportPress(.right, event: event) { return }
+    super.rightMouseDown(with: event)
+  }
+
+  override func rightMouseDragged(with event: NSEvent) {
+    guard held == .right else {
+      super.rightMouseDragged(with: event)
+      return
+    }
+    if mouse == .drag || mouse == .any {
+      report(.move, button: .right, at: event.locationInWindow, event: event, clamp: true)
+    }
+  }
+
+  override func rightMouseUp(with event: NSEvent) {
+    guard held == .right else {
+      super.rightMouseUp(with: event)
+      return
+    }
+    held = nil
+    report(.release, button: .right, at: event.locationInWindow, event: event, clamp: true)
+    reportedCell = nil
+  }
+
+  override func otherMouseDown(with event: NSEvent) {
+    window?.makeFirstResponder(self)
+    if reportPress(.middle, event: event) { return }
+    super.otherMouseDown(with: event)
+  }
+
+  override func otherMouseDragged(with event: NSEvent) {
+    guard held == .middle else {
+      super.otherMouseDragged(with: event)
+      return
+    }
+    if mouse == .drag || mouse == .any {
+      report(.move, button: .middle, at: event.locationInWindow, event: event, clamp: true)
+    }
+  }
+
+  override func otherMouseUp(with event: NSEvent) {
+    guard held == .middle else {
+      super.otherMouseUp(with: event)
+      return
+    }
+    held = nil
+    report(.release, button: .middle, at: event.locationInWindow, event: event, clamp: true)
+    reportedCell = nil
+  }
+
+  /// Starts a report for `button` when the far side wants the pointer and
+  /// Shift is not holding it back for a local selection. Returns whether it did.
+  private func reportPress(_ button: PointerButton, event: NSEvent) -> Bool {
+    guard mouse != .off, !event.modifierFlags.contains(.shift),
+      cell(at: event.locationInWindow) != nil
+    else { return false }
+    held = button
+    reportedCell = nil
+    dragAnchor = nil
+    report(.press, button: button, at: event.locationInWindow, event: event)
+    return true
+  }
+
+  private func report(
+    _ phase: PointerPhase, button: PointerButton, at location: NSPoint, event: NSEvent,
+    clamp: Bool = false
+  ) {
+    let point = surfacePoint(location)
+    guard let cell = clamp ? geometry.clampedCell(at: point) : geometry.cell(at: point) else { return }
+    if phase == .move, reportedCell?.row == cell.row, reportedCell?.column == cell.column { return }
+    if phase == .move { reportedCell = cell }
+    let flags = event.modifierFlags
+    onInput?(
+      .pointer(
+        button: button, phase: phase, column: cell.column, row: cell.row,
+        modifiers: KeyModifiers(
+          shift: flags.contains(.shift), alt: flags.contains(.option),
+          control: flags.contains(.control))))
   }
 
   /// ⌘C. The menu's Copy item finds this because the view is first responder.
