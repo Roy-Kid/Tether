@@ -127,6 +127,7 @@ jobs:
         run: |
           leaks=$(grep -rnE '\.alert\(|\.confirmationDialog\(|UIAlertController|NSAlert\b' \
             app/Sources app/Plugins/*/Sources app/Packages/TetherFrontend/Sources \
+            app/Packages/TetherPluginHost/Sources \
             | grep -v 'TetherUI/DialogSurface' || true)
           if [ -n "$leaks" ]; then
             echo "::error::a dialog presented outside DialogPresenter (CLAUDE.md, One dialog path)"
@@ -172,6 +173,7 @@ jobs:
         run: |
           swift test --package-path swift
           swift test --package-path app/Packages/TetherFrontend --skip RenderCost
+          swift test --package-path app/Packages/TetherPluginHost
           swift test --package-path app/Plugins/Tmux
           swift test --package-path app/Plugins/Files
           swift test --package-path app

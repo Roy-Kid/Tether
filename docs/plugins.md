@@ -1,11 +1,13 @@
 # Frontend extensions
 
-Tether's frontend loads extensions at compile time. A plugin is an independent
+Built-in extensions are compiled into the app. A plugin is an independent
 Swift package depending on `TetherPluginKit`; import `TetherUI` for a terminal
 surface and for the window's chrome vocabulary (`Theme`, `UIStyle`,
 `ChromeButtonStyle`), so what a plugin draws matches what the window draws.
 Built-in plugins live in `app/Plugins/`; `app/Plugins/Tmux` is the working
 example, and the app reaches it only through the kit.
+
+Software installed after shipment is a different host. See [Web plugin host](#web-plugin-host).
 
 A plugin takes one of two shapes.
 
@@ -49,6 +51,19 @@ Turning a plugin off closes its tabs and attachments before deactivation.
 `app/Plugins/Tmux/Tests` verifies tmux without a server. This interface is a
 Swift source API, not a binary ABI or a permission sandbox.
 
+# Web plugin host
+
+`app/Packages/TetherPluginHost` installs web software beside the built-in
+plugins. A package is a manifest plus HTML, CSS, and JavaScript. Install
+registers contributions and does not run the page. Activation loads the
+page in an isolated WebKit view. The page reaches the app through the
+capability API (`document.read`, `storage.plugin`, `host.notify`). The host
+rejects native binaries, dynamic libraries, and install scripts. The
+canonical note is `.claude/notes/web-plugin-host.md`.
+
+Built-in plugins do not go through this host, and this host does not name
+them. Nothing here is wired into the window yet.
+
 # Using tmux
 
 Open a local shell or connect to a host, then right-click the terminal's tab and choose tmux sessions. Clicking the selected tab opens the same picker.
@@ -89,6 +104,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 swift test --package-path swift
 ./scripts/tether.sh --test-tmux # loopback OpenSSH + real tmux end-to-end
 swift test --package-path app/Packages/TetherFrontend
+swift test --package-path app/Packages/TetherPluginHost
 swift test --package-path app/Plugins/Tmux
 ./scripts/tether.sh --build-app
 ```

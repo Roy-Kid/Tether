@@ -21,7 +21,8 @@ together. Read it before touching architecture.
   an empty crate for a future phase is a layer added "because it may be useful
   later", which the spec forbids (§22).
 - `app/` — the app, a consumer like any other. `app/Packages/TetherFrontend`
-  is the plugin kit and shared UI; `app/Plugins/` holds the built-in plugins.
+  is the plugin kit and shared UI; `app/Packages/TetherPluginHost` is the
+  web plugin host; `app/Plugins/` holds the built-in plugins.
   Everything tmux the app shows is in `app/Plugins/Tmux`, and the app reaches
   it only through `TetherPluginKit`.
 - `.claude/notes/` — the specification and durable project knowledge.
@@ -59,6 +60,10 @@ together. Read it before touching architecture.
   no sentences in the window; compact, not decorated
   (`.claude/notes/law.md`, app-ui-chrome). Native menus and the command
   palette still use words. Alerts are a title and a verb.
+- **Web plugins are web software.** A plugin installed after shipment is a
+  manifest plus HTML, CSS, and JavaScript in an isolated web view. The host
+  does not load downloaded native code. Host access goes through the
+  capability API (`.claude/notes/law.md`, web-plugin-host).
 - **One dialog path.** Every alert, confirmation and question — the app's,
   a plugin's, a handshake's — is a TetherUI `Dialog` shown by
   `DialogPresenter`: `.dialog(for:)` from a view, `DialogPresenter.ask` from
@@ -86,6 +91,7 @@ cargo tree -p tether-local       # must show no russh either
 
 swift test --package-path swift                        # the SDK's Swift facade
 swift test --package-path app/Packages/TetherFrontend  # frontend, incl. render cost
+swift test --package-path app/Packages/TetherPluginHost # web plugin host
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
 swift test --package-path app                          # the app's own state
