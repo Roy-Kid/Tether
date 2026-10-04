@@ -43,7 +43,7 @@ struct KeyBinding: Codable, Hashable {
 
   var label: String {
     #if os(macOS)
-      modifierLabels.map(\.symbol).joined() + keyLabel
+      (modifierLabels.map(\.symbol) + [keyLabel]).joined(separator: " ")
     #else
       legacyLabel
     #endif
@@ -56,7 +56,7 @@ struct KeyBinding: Codable, Hashable {
 
   /// Display notation must not make shortcuts harder to find by typing.
   var searchLabels: [String] {
-    [label, accessibilityLabel, legacyLabel,
+    [label, modifierLabels.map(\.symbol).joined() + keyLabel, accessibilityLabel, legacyLabel,
      legacyLabel.replacingOccurrences(of: "Alt+", with: "Option+")
        .replacingOccurrences(of: "⌘+", with: "Cmd+")]
   }

@@ -133,7 +133,7 @@ struct KeyBindingTests {
     #expect(KeyBinding("space", .control).isValid)
     #expect(KeyBinding("left", .option).isValid)
     #if os(macOS)
-      #expect(KeyBinding("x", [.control, .option, .shift]).label == "⌃⌥⇧X")
+      #expect(KeyBinding("x", [.control, .option, .shift]).label == "⌃ ⌥ ⇧ X")
     #else
       #expect(KeyBinding("x", [.control, .option, .shift]).label == "Ctrl+Alt+Shift+X")
     #endif
