@@ -4,11 +4,45 @@ import SwiftUI
 import Testing
 import Tether
 import TetherPluginKit
+import TetherUI
 @testable import TmuxPlugin
 
 @MainActor
 @Suite("Picker keyboard actions", .serialized)
 struct PickerKeyTests {
+  private func field(in view: NSView) -> NSTextField? {
+    if let field = view as? NSTextField, field.isEditable { return field }
+    return view.subviews.lazy.compactMap { field(in: $0) }.first
+  }
+
+  @Test("new-session input keeps its width when empty, long and resized")
+  func createInputLayout() async throws {
+    _ = NSApplication.shared
+    let tab = TabContext(id: UUID(), plugin: PluginContext(connection: nil, hostLabel: "test",
+      hostID: UUID(), openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
+      focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {})
+    let model = TmuxTab(tab: tab, owner: { _ in nil }, onClose: {})
+    let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000,
+      width: UIStyle.menuWidth, height: UIStyle.menuHeight),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = NSHostingView(rootView: CreateTmuxSheet(model: model, onCancel: {}, onCreate: {}))
+    window.orderFrontRegardless()
+    defer { window.orderOut(nil); model.close() }
+    for text in ["", String(repeating: "session", count: 40)] {
+      model.draftName = text
+      for width in [UIStyle.menuWidth, UIStyle.menuWidth + 200, UIStyle.menuWidth] {
+        window.setContentSize(NSSize(width: width, height: UIStyle.menuHeight))
+        try await Task.sleep(for: .milliseconds(200))
+        let content = try #require(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let input = try #require(field(in: content))
+        #expect(input.bounds.width >= 80)
+        #expect(input.bounds.height >= 14)
+        #expect(input.visibleRect.width >= 80)
+      }
+    }
+  }
+
   @Test("keyboard navigation, hierarchy, confirmation and cancellation work without a server")
   func actions() async throws {
     _ = NSApplication.shared

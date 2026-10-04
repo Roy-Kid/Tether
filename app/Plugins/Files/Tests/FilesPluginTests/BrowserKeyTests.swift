@@ -23,10 +23,57 @@
         focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {})
     }
 
+    @Test("file renaming retains an editable field at any depth in a narrow inspector", arguments: [0, 24, 80])
+    func nestedRenameLayout(depth: Int) async throws {
+      var tree: [String: FileKind] = ["/": .directory, "/home": .directory, "/home/ada": .directory]
+      var path = "/home/ada"
+      for index in 0..<depth {
+        path += "/folder\(index)"
+        tree[path] = .directory
+      }
+      path += "/notes.txt"
+      tree[path] = .file
+      let source = StubSource(tree)
+      let base = FileManager.default.temporaryDirectory.appendingPathComponent("layout-\(UUID())")
+      let model = FilesTab(tab: context(), cache: FileCache(host: UUID(), base: base), open: { _ in source })
+      defer { model.close(); try? FileManager.default.removeItem(at: base) }
+      await model.go(to: "/home/ada")
+      var folder = "/home/ada"
+      for index in 0..<depth {
+        folder += "/folder\(index)"
+        await model.expand(try #require(model.entry(folder)))
+      }
+      let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 240, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.orderFrontRegardless()
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(200))
+      model.selection = [path]
+      model.renaming = path
+      for width in [240, 480, 240] {
+        window.setContentSize(NSSize(width: width, height: 400))
+        try await Task.sleep(for: .milliseconds(200))
+        let content = try #require(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let field = try #require(editableField(in: content))
+        #expect(field.bounds.width >= 80)
+        #expect(field.bounds.height >= 14)
+        #expect(field.visibleRect.width >= 80, "the editor must stay inside the inspector")
+        let rect = field.convert(field.bounds, to: content)
+        #expect(rect.minX >= 0 && rect.maxX <= content.bounds.width)
+      }
+    }
+
     private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
       if let hit = view as? T { return hit }
       for sub in view.subviews { if let hit = find(type, in: sub) { return hit } }
       return nil
+    }
+
+    private func editableField(in view: NSView) -> NSTextField? {
+      if let field = view as? NSTextField, field.isEditable { return field }
+      return view.subviews.lazy.compactMap { editableField(in: $0) }.first
     }
 
     private func findButton(titled title: String, in view: NSView) -> NSButton? {

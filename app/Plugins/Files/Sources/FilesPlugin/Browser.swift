@@ -249,44 +249,22 @@ private struct FileRow: View {
   @FocusState private var editing: Bool
 
   var body: some View {
-    HStack(spacing: UIStyle.Space.inline) {
+    Group {
       #if os(macOS)
-        disclosure
+        GeometryReader { geometry in
+          // Deep paths must give up indentation before they consume the name
+          // editor. Reserve room for the name, icons and a transfer indicator.
+          let indentation = min(CGFloat(depth) * FileRow.indent,
+            max(0, geometry.size.width - FileRow.contentWidth))
+          content
+            .padding(.leading, indentation)
+            .frame(maxHeight: .infinity)
+        }
+        .frame(height: UIStyle.rowHeight)
+      #else
+        content
       #endif
-      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
-        .font(UIStyle.symbol)
-        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
-        .frame(width: UIStyle.Mark.glyph)
-      if model.renaming == entry.path {
-        TextField("Name", text: $draft)
-          .textFieldStyle(.plain)
-          .font(UIStyle.title)
-          .focused($editing)
-          .onAppear {
-            draft = entry.name
-            editing = true
-          }
-          .onSubmit { Task { await model.rename(entry, to: draft) } }
-          #if os(macOS)
-            .onExitCommand { model.renaming = nil }
-          #endif
-      } else {
-        Text(Names.display(entry.name))
-          .font(UIStyle.title)
-          .adaptiveRowText()
-          .truncationMode(.middle)
-      }
-      Spacer(minLength: 0)
-      if let transfer = model.transfers.item(for: entry.path) {
-        ProgressView(value: transfer.fraction)
-          .progressViewStyle(.circular)
-          .controlSize(.mini)
-      }
     }
-    #if os(macOS)
-      .padding(.leading, CGFloat(depth) * FileRow.indent)
-      .frame(minHeight: UIStyle.rowHeight)
-    #endif
     .help(detail)
     .accessibilityElement(children: .combine)
     .accessibilityValue(detail)
@@ -310,6 +288,44 @@ private struct FileRow: View {
         }
       }
     #endif
+  }
+
+  private var content: some View {
+    HStack(spacing: UIStyle.Space.inline) {
+      #if os(macOS)
+        disclosure
+      #endif
+      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
+        .font(UIStyle.symbol)
+        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
+        .frame(width: UIStyle.Mark.glyph)
+      if model.renaming == entry.path {
+        TextField("Name", text: $draft)
+          .textFieldStyle(.plain)
+          .font(UIStyle.title)
+          .focused($editing)
+          .onAppear {
+            draft = entry.name
+            editing = true
+          }
+          .onSubmit { Task { await model.rename(entry, to: draft) } }
+          #if os(macOS)
+            .frame(minWidth: FileRow.nameWidth, maxWidth: .infinity)
+            .onExitCommand { model.renaming = nil }
+          #endif
+      } else {
+        Text(Names.display(entry.name))
+          .font(UIStyle.title)
+          .adaptiveRowText()
+          .truncationMode(.middle)
+      }
+      Spacer(minLength: 0)
+      if let transfer = model.transfers.item(for: entry.path) {
+        ProgressView(value: transfer.fraction)
+          .progressViewStyle(.circular)
+          .controlSize(.mini)
+      }
+    }
   }
 
   #if os(macOS)
@@ -339,6 +355,9 @@ private struct FileRow: View {
 
     static let indent: CGFloat = 12
     static let chevron = UIStyle.Mark.chevron
+    static let nameWidth: CGFloat = 80
+    static let contentWidth = nameWidth + chevron + UIStyle.Mark.glyph
+      + UIStyle.controlHeight + 4 * UIStyle.Space.inline
   #endif
 
   /// Size and date, for the tooltip and VoiceOver: the window itself shows

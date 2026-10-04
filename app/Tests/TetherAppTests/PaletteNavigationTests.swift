@@ -4,6 +4,7 @@ import SwiftUI
 import Testing
 @testable import TetherApp
 
+extension MacUITests {
 @MainActor
 @Suite("Unix picker navigation", .serialized)
 struct PaletteNavigationTests {
@@ -87,5 +88,6 @@ struct PaletteNavigationTests {
     try await press("\u{07}", base: "g", code: 5, flags: .control)
     #expect(cancelled)
   }
+}
 }
 #endif
