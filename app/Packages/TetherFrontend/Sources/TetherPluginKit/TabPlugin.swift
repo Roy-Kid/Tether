@@ -196,6 +196,9 @@ public protocol TabAttachment: AnyObject {
   /// One line under the tab's close confirmation, when closing leaves
   /// something behind a person would otherwise wonder about.
   var closeNote: String? { get }
+  /// Work closing would interrupt, such as an active file transfer.
+  /// A session that merely detaches and keeps running need not ask.
+  var requiresCloseConfirmation: Bool { get }
   /// For the menu bar and the palette, under the plugin's name.
   var commands: [PluginCommand] { get }
   /// Drawn in place of the shell while `isShowing`.
@@ -218,6 +221,7 @@ public protocol TabAttachment: AnyObject {
 }
 
 extension TabAttachment {
+  public var requiresCloseConfirmation: Bool { false }
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
 }

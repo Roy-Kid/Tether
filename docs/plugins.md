@@ -85,6 +85,15 @@ its × button; reset a modified row to restore its defaults. Duplicate bindings
 are rejected across both slots and all known commands, including disabled plugins.
 The menu shows the first assigned shortcut; the command palette shows both.
 
+Closing a terminal checks its processes. An idle shell or ended session closes
+without confirmation; foreground, background and stopped jobs prompt before
+closing, with the process names and a warning about interrupted work. If the
+process check fails, times out or cannot identify the remote terminal, closing
+still asks and explains that the process state is unknown. Active file transfers
+also require confirmation; a tmux attachment that only detaches does not.
+Plugins report interruptible work through `requiresCloseConfirmation` and describe
+the consequences in `closeNote`.
+
 The close-tab confirmation accepts Enter (including keypad Enter) or Cmd+W to
 close the tab. Escape cancels. Holding a confirmation key does not count as a
 second press; these shortcuts apply only while that confirmation is visible.

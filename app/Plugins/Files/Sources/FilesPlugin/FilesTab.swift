@@ -91,6 +91,7 @@ public final class FilesTab: TabAttachment {
   public var isShowing: Bool { false }
   public var subtitle: String { "" }
   public var isDisconnected: Bool { false }
+  public var requiresCloseConfirmation: Bool { transfers.running > 0 }
   public var closeNote: String? {
     switch transfers.running {
     case 0: nil

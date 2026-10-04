@@ -80,6 +80,10 @@ final class TabSet {
   var accessories: [PluginAccessory] = []
   var palette: Palette?
   var pendingClose: SessionTab.ID?
+  private(set) var checkingClose: SessionTab.ID?
+  private var closeCheck: Task<Void, Never>?
+  private var closeActivity: ShellActivity = .idle
+  private let inspectActivity: @MainActor (SessionTab) async -> ShellActivity
   var renaming: SessionTab.ID?
   var intent: WorkspaceIntent?
   var paletteQuery = ""
@@ -97,8 +101,14 @@ final class TabSet {
   private var terminalSerial: [UUID: Int] = [:]
   private let defaults: UserDefaults
 
-  init(defaults: UserDefaults = .standard) {
+  init(
+    defaults: UserDefaults = .standard,
+    inspectActivity: @escaping @MainActor (SessionTab) async -> ShellActivity = {
+      await $0.activityForClose()
+    }
+  ) {
     self.defaults = defaults
+    self.inspectActivity = inspectActivity
     tabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
       ?? TabBarPreference.default
   }
@@ -304,6 +314,9 @@ final class TabSet {
   var onEmptied: (() -> Void)?
 
   func closeAll() {
+    closeCheck?.cancel()
+    closeCheck = nil
+    checkingClose = nil
     tabs.forEach { $0.close() }
     extensions.forEach { $0.workspace.close() }
     tabs.removeAll()
@@ -327,13 +340,7 @@ final class TabSet {
     for tab in tabs { tab.detach(pluginID) }
   }
 
-  /// Asks before closing anything.
-  ///
-  /// Every time, not only for a live session: what a tab holds is the
-  /// scrollback as much as the connection, closing is not undoable, and on a
-  /// phone the button is under a thumb that is already over the screen.
-  /// A selector that is open is dismissed first — it is what the gesture
-  /// was aimed at.
+  /// Checks for work before closing a terminal. Open selectors dismiss first.
   func requestClose(_ id: SessionTab.ID) {
     if tabMenu == id {
       tabMenu = nil
@@ -343,7 +350,39 @@ final class TabSet {
       accessory = nil
       return
     }
-    pendingClose = id
+    guard pendingClose == nil, checkingClose != id else { return }
+    closeCheck?.cancel()
+    closeCheck = nil
+    checkingClose = nil
+    closeActivity = .idle
+    guard let tab = tabs.first(where: { $0.id == id }) else {
+      if extensions.contains(where: { $0.id == id }) { pendingClose = id }
+      return
+    }
+    guard tab.isLive else {
+      finishCloseRequest(id, activity: .idle)
+      return
+    }
+    checkingClose = id
+    let inspect = inspectActivity
+    closeCheck = Task { [weak self] in
+      let activity = await inspect(tab)
+      guard !Task.isCancelled, let self, self.checkingClose == id else { return }
+      self.checkingClose = nil
+      self.closeCheck = nil
+      self.finishCloseRequest(id, activity: tab.isLive ? activity : .idle)
+    }
+  }
+
+  private func finishCloseRequest(_ id: SessionTab.ID, activity: ShellActivity) {
+    guard let tab = tabs.first(where: { $0.id == id }) else { return }
+    let pluginIsBusy = tab.attachments.contains { $0.attachment.requiresCloseConfirmation }
+    if activity == .idle && !pluginIsBusy {
+      close(id)
+    } else {
+      closeActivity = activity
+      pendingClose = id
+    }
   }
 
   /// The confirmation's title: what is being closed, and the verb.
@@ -356,10 +395,12 @@ final class TabSet {
     return "Close \(name)?"
   }
 
-  /// The one extra line under the question, when a plugin on the tab leaves
-  /// something behind.
+  /// Why closing needs confirmation, followed by any plugin consequences.
   var closeNote: String? {
-    tabs.first { $0.id == pendingClose }?.attachments.lazy.compactMap(\.attachment.closeNote).first
+    guard let tab = tabs.first(where: { $0.id == pendingClose }) else { return nil }
+    let notes = [closeActivity.closeMessage].compactMap { $0 }
+      + tab.attachments.compactMap(\.attachment.closeNote)
+    return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
   }
 
   func requestCloseSelected() {
@@ -390,6 +431,11 @@ final class TabSet {
   }
 
   func close(_ id: SessionTab.ID) {
+    if checkingClose == id {
+      closeCheck?.cancel()
+      closeCheck = nil
+      checkingClose = nil
+    }
     if tabMenu == id { tabMenu = nil }
     if accessory?.tab == id { accessory = nil }
     if sheet?.tab == id { sheet = nil }

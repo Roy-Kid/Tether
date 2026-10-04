@@ -438,6 +438,18 @@ final class SessionTab: Identifiable {
   var workingDirectory: String? { session?.workingDirectory }
   var terminalName: String? { session?.terminalName ?? shellTTY }
 
+  /// Checks this session at the close gesture, without writing into its input.
+  func activityForClose() async -> ShellActivity {
+    guard isLive else { return .idle }
+    guard let session, let connection = session.connection else { return .unknown }
+    let activity = await ShellActivity.check(
+      on: connection, terminal: terminalName, columns: columns, rows: rows, matchSize: sized)
+    guard isLive else { return .idle }
+    // A reconnect while the query was in flight makes its answer obsolete.
+    guard self.session === session else { return .unknown }
+    return activity
+  }
+
   /// Moves the viewport over the scrollback.
   ///
   /// The repaint loop wakes on the same change and publishes on the next

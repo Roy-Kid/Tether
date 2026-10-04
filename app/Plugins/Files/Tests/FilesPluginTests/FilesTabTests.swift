@@ -270,16 +270,19 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     #expect(model.closeNote == nil)
+    #expect(!model.requiresCloseConfirmation)
 
     let fetching = Task { await model.preview([model.entries.first { $0.name == "A.png" }!]) }
     try await settle(model) { model.transfers.running == 1 }
     #expect(model.closeNote == "1 transfer stops.")
+    #expect(model.requiresCloseConfirmation)
     // Progress arrives on a later hop to the main actor than the row does.
     try await settle(model) { model.transfers.items.first?.done == 1 }
 
     model.close()
     await fetching.value
     #expect(model.transfers.items.isEmpty, "a stopped copy is not a failure to show")
+    #expect(!model.requiresCloseConfirmation)
     #expect(model.previewed.isEmpty)
   }
 

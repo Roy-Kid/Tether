@@ -73,35 +73,35 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.selected == nil)
   }
 
-  @Test("a live tab asks before closing")
-  func liveTabConfirms() {
+  @Test("a live tab with unknown process state asks before closing")
+  func liveTabConfirms() async {
     let tabs = makeTabs()
     tabs.adopt(tab(.local, name: "Terminal 1", live: true))
     let id = tabs.selected!
     tabs.requestClose(id)
+    while tabs.checkingClose != nil { await Task.yield() }
     #expect(tabs.pendingClose == id)
     #expect(tabs.tabs.count == 1)
     tabs.confirmClose()
     #expect(tabs.tabs.isEmpty)
   }
 
-  @Test("an ended tab asks too: the scrollback is still there")
-  func endedTabConfirms() {
+  @Test("an ended tab closes without confirmation")
+  func endedTabCloses() {
     let tabs = makeTabs()
     tabs.adopt(tab(.local, name: "Terminal 1", live: false))
     let id = tabs.selected!
     tabs.requestClose(id)
-    #expect(tabs.pendingClose == id)
-    #expect(tabs.tabs.count == 1)
-    tabs.confirmClose()
+    #expect(tabs.pendingClose == nil)
     #expect(tabs.tabs.isEmpty)
   }
 
   @Test("cancelling the question keeps the tab")
-  func cancelledCloseKeepsTab() {
+  func cancelledCloseKeepsTab() async {
     let tabs = makeTabs()
     tabs.adopt(tab(.local, name: "Terminal 1"))
     tabs.requestClose(tabs.selected!)
+    while tabs.checkingClose != nil { await Task.yield() }
     tabs.pendingClose = nil
     #expect(tabs.tabs.count == 1)
   }
@@ -123,11 +123,12 @@ struct WorkspaceOwnershipTests {
   }
 
   @Test("the question names the terminal, and the verb is the button")
-  func questionNamesTheTab() {
+  func questionNamesTheTab() async {
     let tabs = makeTabs()
     #expect(tabs.closeQuestion == "Close?")
     tabs.adopt(tab(.local, name: "Terminal 2"))
     tabs.requestClose(tabs.selected!)
+    while tabs.checkingClose != nil { await Task.yield() }
     #expect(tabs.closeQuestion == "Close Terminal 2?")
   }
 
@@ -328,15 +329,16 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.sheet == nil)
   }
 
-  @Test("a plugin's note is the one line under the close question")
-  func closeNoteComesFromThePlugin() {
+  @Test("plugin consequences accompany the process warning")
+  func closeNoteComesFromThePlugin() async {
     let tabs = makeTabs()
     let first = tab(.local, name: "Terminal 1")
     tabs.adopt(first)
     tabs.requestClose(first.id)
-    #expect(tabs.closeNote == nil)
+    while tabs.checkingClose != nil { await Task.yield() }
+    #expect(tabs.closeNote == ShellActivity.unknown.closeMessage)
     first.attach(StubAttachment(closeNote: "Kept on the host."), for: "test.tab")
-    #expect(tabs.closeNote == "Kept on the host.")
+    #expect(tabs.closeNote == ShellActivity.unknown.closeMessage! + "\n\nKept on the host.")
   }
 
   @Test("clicking the selected tab opens the first accessory")
