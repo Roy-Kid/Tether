@@ -31,6 +31,11 @@ struct TerminalShortcut: Hashable {
   let key: String
   let modifiers: NSEvent.ModifierFlags
 
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(key)
+    hasher.combine(modifiers.rawValue)
+  }
+
   init?(_ text: String) {
     let parts = text.lowercased().split(separator: "+", omittingEmptySubsequences: false)
       .map { $0.trimmingCharacters(in: .whitespaces) }

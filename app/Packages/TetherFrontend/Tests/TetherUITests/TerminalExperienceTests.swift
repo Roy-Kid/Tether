@@ -36,6 +36,7 @@ struct TerminalExperienceTests {
   @Test func shortcutsValidateAsASet() {
     #expect(TerminalShortcuts.validate(TerminalShortcuts.defaults) == nil)
     #expect(TerminalShortcut(" shift + cmd + c ") == TerminalShortcut("Cmd+Shift+C"))
+    #expect(Set([TerminalShortcut("shift+cmd+c"), TerminalShortcut("Cmd+Shift+C"), TerminalShortcut("Ctrl+Shift+C")]).count == 2)
     for text in ["C", "Shift+C", "Cmd+Cmd+C", "Cmd+", "Cmd++", "Cmd+Unknown"] {
       #expect(TerminalShortcut(text) == nil)
     }
