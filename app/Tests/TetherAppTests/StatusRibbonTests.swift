@@ -16,6 +16,16 @@ struct StatusRibbonTests {
     #expect(StatusRibbon.stops(for: [Self.segment(0xFF0000, 0)]).isEmpty, "a zero share draws nothing")
   }
 
+  @Test("invalid shares are ignored and large finite shares keep their proportions")
+  func unusualWeights() {
+    let invalid = [Double.nan, .infinity, -.infinity, -1, 0].map { Self.segment(0xFF0000, $0) }
+    #expect(StatusRibbon.stops(for: invalid).isEmpty)
+    let large = Double.greatestFiniteMagnitude
+    let stops = StatusRibbon.stops(for: [Self.segment(0xFF0000, large), Self.segment(0x0000FF, large)])
+    #expect(stops == StatusRibbon.stops(for: [Self.segment(0xFF0000, 1), Self.segment(0x0000FF, 1)]))
+    #expect(stops.allSatisfy { $0.location.isFinite })
+  }
+
   @Test("one segment fills the band")
   func single() {
     #expect(StatusRibbon.stops(for: [Self.segment(0x00FF00, 3)]) == [

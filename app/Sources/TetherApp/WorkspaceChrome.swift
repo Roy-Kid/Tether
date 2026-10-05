@@ -445,12 +445,18 @@ struct HostPicker: View {
   @FocusState private var searchFocused: Bool
 
   var body: some View {
+    let matches = filtered
+    let grouping = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let connected = grouping ? connected(in: matches) : []
+    let connectedIDs = Set(connected.map(\.id))
+    let idle = matches.filter { !connectedIDs.contains($0.id) }
+    let ordered = grouping ? connected + idle : matches
     VStack(alignment: .leading, spacing: UIStyle.Space.group) {
       TextField("Find a host…", text: $query)
         .textFieldStyle(.plain)
         .focused($searchFocused)
         .onSubmit {
-          if let host = orderedHosts.first(where: { $0.id == selection.id }) { choose(host) }
+          if let host = ordered.first(where: { $0.id == selection.id }) { choose(host) }
         }
         .font(UIStyle.title)
         .padding(.horizontal, UIStyle.Space.group)
@@ -461,7 +467,6 @@ struct HostPicker: View {
         Text(problem).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
       }
 
-      let matches = filtered
       if matches.isEmpty {
         Text("No matching hosts.")
           .font(UIStyle.title)
@@ -470,7 +475,7 @@ struct HostPicker: View {
       }
       if matches.count > 8 {
         ScrollViewReader { proxy in
-          ScrollView { list(matches) }
+          ScrollView { list(ordered, connectedCount: connected.count) }
             .frame(maxHeight: UIStyle.listHeight)
             .scrollIndicators(.visible)
             .onChange(of: selection.id) { _, id in
@@ -478,7 +483,7 @@ struct HostPicker: View {
             }
         }
       } else {
-        list(matches)
+        list(ordered, connectedCount: connected.count)
       }
 
       Divider()
@@ -518,24 +523,20 @@ struct HostPicker: View {
       guard !Task.isCancelled else { return }
       searchFocused = true
     }
-    .onChange(of: orderedHosts.map(\.id), initial: true) { _, ids in
+    .onChange(of: ordered.map(\.id), initial: true) { _, ids in
       selection.reconcile(ids)
     }
     .onPickerCancel {
       tabs.hostPicker = false
     }
     .onPickerNavigation { movement in
-      selection.navigate(movement, in: orderedHosts.map(\.id))
+      selection.navigate(movement, in: ordered.map(\.id))
     }
-    .onPickerQuickSelection(count: orderedHosts.count) { index in
-      let hosts = orderedHosts
+    .onPickerQuickSelection(count: ordered.count) { index in
+      let hosts = ordered
       guard hosts.indices.contains(index) else { return }
       choose(hosts[index])
     }
-  }
-
-  private var orderedHosts: [Host] {
-    query.isEmpty ? connected + idle : filtered
   }
 
   private func choose(_ host: Host) {
@@ -549,7 +550,7 @@ struct HostPicker: View {
   }
 
   private var filtered: [Host] {
-    let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !q.isEmpty else { return store.listed }
     return store.listed.filter {
       $0.label.lowercased().contains(q)
@@ -558,43 +559,24 @@ struct HostPicker: View {
     }
   }
 
-  private var connected: [Host] {
-    let live = tabs.connectedHosts(in: filtered)
-    if let current = tabs.currentHost, filtered.contains(where: { $0.id == current.id }) {
+  private func connected(in matches: [Host]) -> [Host] {
+    let live = tabs.connectedHosts(in: matches)
+    if let current = tabs.currentHost, matches.contains(where: { $0.id == current.id }) {
       return [current] + live.filter { $0.id != current.id }
     }
     return live
   }
 
-  private var idle: [Host] {
-    let skip = Set(connected.map(\.id))
-    return filtered.filter { !skip.contains($0.id) }
-  }
-
-  @ViewBuilder
-  private func list(_ matches: [Host]) -> some View {
+  private func list(_ matches: [Host], connectedCount: Int) -> some View {
     VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-      if query.isEmpty {
-        if !connected.isEmpty {
-          ForEach(connected) { host in
-            row(host)
-          }
-        }
-        if !idle.isEmpty {
-          if !connected.isEmpty { Divider() }
-          ForEach(idle) { host in
-            row(host)
-          }
-        }
-      } else {
-        ForEach(matches) { host in
-          row(host)
-        }
+      ForEach(Array(matches.enumerated()), id: \.element.id) { index, host in
+        if index == connectedCount && connectedCount > 0 { Divider() }
+        row(host, index: index)
       }
     }
   }
 
-  private func row(_ host: Host) -> some View {
+  private func row(_ host: Host, index: Int) -> some View {
     let current = tabs.currentHost?.id == host.id
     let live = tabs.isLive(host: host)
     return Button {
@@ -609,7 +591,7 @@ struct HostPicker: View {
           .foregroundStyle(Theme.text)
           .lineLimit(1)
         Spacer(minLength: 0)
-        PickerShortcutHint(index: orderedHosts.firstIndex { $0.id == host.id })
+        PickerShortcutHint(index: index)
         Image(systemName: "checkmark")
           .font(UIStyle.accessory)
           .foregroundStyle(current ? Theme.text : .clear)

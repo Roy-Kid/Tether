@@ -27,6 +27,7 @@ public struct TerminalView: View {
   let metrics: FontMetrics
   let palette: Palette
   var cache: RowPictureCache?
+  @Environment(\.displayScale) private var displayScale
 
   public var body: some View {
     Canvas(rendersAsynchronously: false) { context, size in
@@ -74,6 +75,8 @@ public struct TerminalView: View {
     let visibleRows = min(frame.lines.count, max(0, Int(size.height / metrics.lineHeight) + 1))
 
     let pictures = cache
+    pictures?.prepare(columns: frame.columns, rows: visibleRows, metrics: metrics,
+                      palette: palette, scale: displayScale)
     for index in 0..<visibleRows {
       let row = frame.lines[index]
       let y = metrics.lineHeight * CGFloat(index)
@@ -254,14 +257,34 @@ public struct FontMetrics: Equatable, Sendable {
   }
 }
 
-/// Measurements keyed by font size. A frame asks for the same size again;
-/// measuring `"M"` and a wide character each time was work the grid does
-/// not depend on changing.
 /// Pictures of rows that have not changed. A keystroke rebuilds the rows
 /// the damage named; the rest are drawn from here.
 @MainActor
 final class RowPictureCache {
   private var entries: [Int: (line: ScreenRow, image: CGImage)] = [:]
+  private struct Configuration: Equatable {
+    let columns: UInt32
+    let metrics: FontMetrics
+    let palette: Palette
+    let scale: CGFloat
+  }
+  private var configuration: Configuration?
+  private var retainedRows = 0
+
+  /// Damage describes cells, not font, colour or display changes. Those
+  /// invalidate every picture even when the session reports no dirty rows.
+  func prepare(columns: UInt32, rows: Int, metrics: FontMetrics, palette: Palette, scale: CGFloat) {
+    let next = Configuration(columns: columns, metrics: metrics, palette: palette, scale: scale)
+    if configuration != next {
+      clear()
+      configuration = next
+    }
+    // A smaller window must not keep images for rows it no longer draws.
+    if rows < retainedRows {
+      for row in rows..<retainedRows { entries[row] = nil }
+    }
+    retainedRows = rows
+  }
 
   func clear() {
     entries.removeAll()
@@ -273,14 +296,14 @@ final class RowPictureCache {
     if !fresh, let cached = entries[row], cached.line == line {
       return cached.image
     }
-    guard let image = RowPictureCache.rasterize(line: line, columns: columns, metrics: metrics, palette: palette)
-    else { return entries[row]?.image }
+    guard let image = RowPictureCache.rasterize(line: line, columns: columns, metrics: metrics, palette: palette, scale: configuration?.scale ?? 1)
+    else { return nil }
     entries[row] = (line, image)
     return image
   }
 
   private static func rasterize(
-    line: ScreenRow, columns: UInt32, metrics: FontMetrics, palette: Palette
+    line: ScreenRow, columns: UInt32, metrics: FontMetrics, palette: Palette, scale: CGFloat
   ) -> CGImage? {
     let width = max(columns, 1)
     let frame = ScreenFrame(
@@ -289,7 +312,7 @@ final class RowPictureCache {
       title: "", lines: [line])
     let view = TerminalView(frame: frame, metrics: metrics, palette: palette)
     let renderer = ImageRenderer(content: view)
-    renderer.scale = 1
+    renderer.scale = scale
     renderer.proposedSize = ProposedViewSize(
       width: metrics.cellWidth * CGFloat(width), height: metrics.lineHeight)
     return renderer.cgImage
