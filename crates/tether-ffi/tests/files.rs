@@ -54,6 +54,8 @@ async fn files() -> Option<Arc<RemoteFiles>> {
         columns: 80,
         rows: 24,
         scrollback_lines: 100,
+        history: None,
+        shell: None,
     })
     .await
     .expect("a local shell");
