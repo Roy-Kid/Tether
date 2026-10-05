@@ -93,6 +93,10 @@ public struct TabContext {
   /// Types `text` at this tab's prompt, as a paste: the person still presses
   /// return. The host owns the terminal; a plugin never writes to it.
   public let insertText: (String) -> Void
+  /// Types `line` at the prompt and presses Return, so it runs in the
+  /// terminal on screen. One line, with no newline of its own: the host
+  /// sends the Return.
+  public let runInTerminal: (String) -> Void
   /// The directory the tab's shell last reported, if it reports one. What
   /// a relative path printed in the terminal is most likely relative to.
   public let workingDirectory: () -> String?
@@ -100,9 +104,7 @@ public struct TabContext {
   /// to show something the person asked for from the terminal.
   public let showAccessory: () -> Void
   /// Everything the tab's plugins offer for a link, combined the way the
-  /// host's own terminal combines them. For a plugin that draws a terminal
-  /// of its own — tmux's panes — so pointing there works as it does in the
-  /// shell, without the plugin knowing who answers.
+  /// host's own terminal combines them.
   public let linkActions: (PointedLink) -> LinkActions?
   /// The host's other terminals on this machine. Empty when there is only this one.
   public let shells: () -> [ShellChoice]
@@ -110,18 +112,29 @@ public struct TabContext {
   public let openShell: (UUID) -> Void
   /// Opens another shell on this host.
   public let newShell: () -> Void
+  /// Moves the shell's own history by this many lines. Positive goes back.
+  /// A plugin holds a wheel while it learns whose it is, and gives the
+  /// lines back when they belong to the shell.
+  public let scrollBy: (Int32) -> Void
+  /// Reports a wheel to the program in the terminal. A plugin holds one
+  /// while it learns which pane is under the pointer, and gives the lines
+  /// back when that program asked to hear them. Positive goes back.
+  public let reportWheel: (Int32, UInt16, UInt16) -> Void
 
   public init(
     id: UUID, plugin: PluginContext, terminalName: @escaping () -> String? = { nil },
     focus: @escaping () -> Void, dismissAccessory: @escaping () -> Void,
     present: @escaping (AnyView) -> Void, dismissSheet: @escaping () -> Void,
     insertText: @escaping (String) -> Void = { _ in },
+    runInTerminal: @escaping (String) -> Void = { _ in },
     workingDirectory: @escaping () -> String? = { nil },
     showAccessory: @escaping () -> Void = {},
     linkActions: @escaping (PointedLink) -> LinkActions? = { _ in nil },
     shells: @escaping () -> [ShellChoice] = { [] },
     openShell: @escaping (UUID) -> Void = { _ in },
-    newShell: @escaping () -> Void = {}
+    newShell: @escaping () -> Void = {},
+    scrollBy: @escaping (Int32) -> Void = { _ in },
+    reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in }
   ) {
     self.id = id
     self.plugin = plugin
@@ -131,12 +144,15 @@ public struct TabContext {
     self.present = present
     self.dismissSheet = dismissSheet
     self.insertText = insertText
+    self.runInTerminal = runInTerminal
     self.workingDirectory = workingDirectory
     self.showAccessory = showAccessory
     self.linkActions = linkActions
     self.shells = shells
     self.openShell = openShell
     self.newShell = newShell
+    self.scrollBy = scrollBy
+    self.reportWheel = reportWheel
   }
 }
 
@@ -222,6 +238,25 @@ public protocol TabAttachment: AnyObject {
   /// for nothing. Asked when a person points, and answered at once: anything
   /// slow — checking the path exists — happens inside the actions.
   func actions(for pointed: PointedLink) -> LinkActions?
+  /// A wheel over the shell, in lines. Positive goes back.
+  ///
+  /// `true` takes the lines, and the shell's own history is left where it
+  /// is. A full-screen program can be keeping that history on its side,
+  /// where this terminal has none to move. `fullScreen` is that case.
+  func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool
+  /// A wheel the program asked to hear, in lines. Positive goes back.
+  /// `column` and `row` are the cell under the pointer, on the live grid.
+  ///
+  /// `true` takes the lines, and the caller does not also report them as
+  /// pointer events. A pane that is keeping its own history is left to
+  /// hear the wheel.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool
+  /// The shell is showing another program's history, so a key has to wait
+  /// until that program is back at its prompt. Otherwise the key lands in
+  /// the history and reads as if it was ignored.
+  var shellInputWaits: Bool { get }
+  /// Puts the shell back at its live prompt. The host sends the key after.
+  func restoreShellForInput() async
 }
 
 extension TabAttachment {
@@ -230,4 +265,8 @@ extension TabAttachment {
   public func restore(from state: Data) {}
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
+  public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool { false }
+  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool { false }
+  public var shellInputWaits: Bool { false }
+  public func restoreShellForInput() async {}
 }

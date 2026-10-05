@@ -3,9 +3,10 @@ import Testing
 @testable import TetherApp
 import struct TetherApp.Host
 
-/// One library, fed by a Mac's `~/.ssh/config`, against real files. The file
-/// is only ever read: whatever happens in Tether, it is byte for byte what the
-/// person wrote.
+/// One library, fed by a Mac's `~/.ssh/config`, against real files.
+///
+/// Import never writes. A change in Tether stays in the library until a
+/// person agrees to align the file; these tests do not ask them to.
 @MainActor
 @Suite("SSH configuration into the library")
 struct HostImportTests {
@@ -25,6 +26,7 @@ struct HostImportTests {
     let location = temporaryFile("config")
     try text.write(to: location, atomically: true, encoding: .utf8)
     let store = HostStore(location: location, secrets: secrets, credentials: DeviceCredentialStore(secrets: MemorySecrets()))
+    store.reconcile()
     return (store, location)
   }
 
@@ -32,6 +34,17 @@ struct HostImportTests {
     try text.write(to: location, atomically: true, encoding: .utf8)
     store.reload()
     store.reconcile()
+  }
+
+  /// The path the offer titles itself with.
+  static func shown(_ location: URL) -> String {
+    HostStore.abbreviate(location.path)
+  }
+
+  /// When the file was last written, as the offer says it.
+  static func written(_ location: URL) -> String? {
+    let date = (try? FileManager.default.attributesOfItem(atPath: location.path)[.modificationDate]) as? Date
+    return date?.formatted(date: .abbreviated, time: .shortened)
   }
 
   /// Nothing but the person's own file, in the directory Tether reads it from.
@@ -125,5 +138,80 @@ struct HostImportTests {
     try Self.edit(location, Self.original.replacingOccurrences(of: "Host lab", with: "Host lab-gpu"), store)
     #expect(store.hosts.map(\.label) == ["lab-gpu"])
     #expect(store.hosts.first?.id == id)
+  }
+
+  /// Opening asks before the file replaces a host. Agreeing copies the file
+  /// over the library and leaves the file where it is.
+  @Test func openingImportsOverTheLibraryWhenAsked() throws {
+    let (store, location) = try Self.mac()
+    defer { removeDirectory(of: location) }
+    let before = try String(contentsOf: location, encoding: .utf8)
+    var lab = try #require(store.hosts.first)
+    lab.hostname = "gpu.example.org"
+    #expect(store.save(lab))
+
+    store.offerConfigurationImport()
+    let asked = try #require(store.pendingImport)
+    #expect(asked.title == Self.shown(location))
+    #expect(asked.message == Self.written(location))
+    #expect(asked.diff == " Host lab\n-  HostName gpu.example.org\n+  HostName login.example.org")
+    #expect(asked.names == ["lab"])
+    #expect(store.pendingAlignment == nil)
+
+    store.declineConfigurationImport()
+    #expect(store.pendingImport == nil)
+    #expect(store.hosts.first?.hostname == "gpu.example.org")
+    store.offerConfigurationImport()
+    #expect(store.pendingImport == nil, "the same difference is not asked again this launch")
+
+    var edited = try #require(store.hosts.first)
+    edited.hostname = "other.example.org"
+    #expect(store.save(edited))
+    store.offerConfigurationImport()
+    #expect(store.pendingImport?.diff == " Host lab\n-  HostName other.example.org\n+  HostName login.example.org")
+
+    store.importConfiguration()
+    #expect(store.hosts.first?.hostname == "login.example.org")
+    #expect(store.hosts.map(\.label) == ["lab"])
+    #expect(try String(contentsOf: location, encoding: .utf8) == before)
+  }
+
+  /// A library that has not read the file yet stays empty until they agree.
+  @Test func aFreshLibraryWaitsForTheImport() throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    try Self.original.write(to: location, atomically: true, encoding: .utf8)
+    let store = HostStore(location: location, secrets: MemorySecrets(), credentials: DeviceCredentialStore(secrets: MemorySecrets()))
+    #expect(store.hosts.isEmpty)
+
+    store.offerConfigurationImport()
+    #expect(store.pendingImport?.names == ["lab"])
+    #expect(store.pendingImport?.title == Self.shown(location))
+    #expect(store.pendingImport?.diff == """
+    +Host lab
+    +  HostName login.example.org
+    +  User ada
+    +  IdentityFile ~/.ssh/personal
+    """)
+    store.acceptConfigurationImport()
+    #expect(store.hosts.map(\.label) == ["lab"])
+    #expect(store.hosts.first?.hostname == "login.example.org")
+    #expect(store.pendingImport == nil)
+    #expect(try String(contentsOf: location, encoding: .utf8) == Self.original)
+  }
+
+  /// Import replaces the hosts the file names and leaves the rest.
+  @Test func importOverwritesNamedHostsOnly() throws {
+    let (store, location) = try Self.mac()
+    defer { removeDirectory(of: location) }
+    #expect(store.save(Host(label: "gpu", hostname: "10.0.0.8", port: 22, username: "ada", keyPath: nil)))
+    var lab = try #require(store.hosts.first { $0.label == "lab" })
+    lab.hostname = "gpu.example.org"
+    #expect(store.save(lab))
+
+    store.importConfiguration()
+    #expect(store.hosts.first { $0.label == "lab" }?.hostname == "login.example.org")
+    #expect(store.hosts.contains { $0.label == "gpu" })
+    #expect(try String(contentsOf: location, encoding: .utf8) == Self.original)
   }
 }

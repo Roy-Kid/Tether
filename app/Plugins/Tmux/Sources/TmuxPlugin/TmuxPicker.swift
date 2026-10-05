@@ -121,13 +121,17 @@ struct TmuxPicker: View {
         ScrollView {
           level.padding(UIStyle.Space.inset)
         }
-        .navigationTitle("tmux sessions")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
-            Button("Close", systemImage: "xmark") { model.tab.dismissAccessory() }
-              .labelStyle(.iconOnly)
-              .keyboardShortcut(.cancelAction)
+            Button {
+              model.tab.dismissAccessory()
+            } label: {
+              Label("Close", systemImage: "xmark")
+            }
+            .buttonStyle(.iconOnly)
+            .help("Close")
+            .keyboardShortcut(.cancelAction)
           }
         }
       }
@@ -152,18 +156,18 @@ struct TmuxPicker: View {
       let shells = model.tab.shells()
       if shells.count > 1 {
         ForEach(shells) { shell in
-          row(id: "shell:\(shell.id)", title: shell.title, selected: shell.current && !model.showing) {
+          row(id: "shell:\(shell.id)", title: shell.title, selected: shell.current && model.shellSessionID == nil) {
             model.tab.openShell(shell.id)
             model.tab.dismissAccessory()
           }
         }
       }
 
-      if shells.count < 2 || model.showing {
+      if shells.count < 2 || model.shellSessionID != nil {
         row(
           id: "shell",
           title: model.tab.plugin.shellLabel,
-          selected: !model.showing && model.shellSessionID == nil
+          selected: model.shellSessionID == nil
         ) {
           model.showShell()
         }
@@ -230,9 +234,7 @@ struct TmuxPicker: View {
         row(
           id: "window:\(window.id)",
           title: tmuxWindowLine(window),
-          selected: window.active
-            && ((model.session?.id == session.id && model.showing)
-              || (!model.showing && model.shellSessionID == session.id)),
+          selected: window.active && model.shellSessionID == session.id,
           // The last window is the session; that one ends from the level above.
           end: listed.count > 1 ? RowEnd("End window") { model.windowToEnd = window } : nil
         ) {
@@ -247,18 +249,18 @@ struct TmuxPicker: View {
         }
       }
 
-      if model.session?.id == session.id {
+      if model.shellSessionID == session.id {
         row(id: "new-window", title: "New window", selected: false) {
-          model.perform(.newWindow)
+          model.newWindow()
         }
-        .disabled(model.busy || model.ended)
+        .disabled(model.busy)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func sessionRow(_ session: TmuxSessionInfo) -> some View {
-    let owned = model.session?.id == session.id
+    let owned = model.shellSessionID == session.id
     let listed = model.windows(for: session)
     // A chevron is a promise that there is another level behind it. One
     // window is not another level: that row attaches, which is what the
@@ -267,8 +269,7 @@ struct TmuxPicker: View {
     return row(
       id: "session:\(session.id)",
       title: tmuxSessionLine(session, windows: listed, owned: owned),
-      selected: (owned && model.showing)
-        || (!model.showing && model.shellSessionID == session.id),
+      selected: owned,
       chevron: deeper,
       end: RowEnd("End session") { model.sessionToEnd = session }
     ) {
@@ -343,8 +344,8 @@ struct TmuxPicker: View {
       items += model.windows(for: session).map { window in
         KeyboardItem(id: "window:\(window.id)") { model.choose(session, windowID: window.id) }
       }
-      if model.session?.id == session.id && !model.ended {
-        items.append(KeyboardItem(id: "new-window") { model.perform(.newWindow) })
+      if model.shellSessionID == session.id {
+        items.append(KeyboardItem(id: "new-window") { model.newWindow() })
       }
       return items
     }
@@ -359,7 +360,9 @@ struct TmuxPicker: View {
         }
       }
     }
-    if shells.count < 2 || model.showing { items.append(KeyboardItem(id: "shell", run: model.showShell)) }
+    if shells.count < 2 || model.shellSessionID != nil {
+      items.append(KeyboardItem(id: "shell", run: model.showShell))
+    }
     items.append(KeyboardItem(id: "new-shell") { model.tab.newShell(); model.tab.dismissAccessory() })
     items += model.sessions.map { session in
       KeyboardItem(id: "session:\(session.id)") {
@@ -547,5 +550,27 @@ struct CreateTmuxSheet: View {
   private func create() {
     guard canCreate else { return }
     model.create(onSuccess: onCreate)
+  }
+}
+
+/// The same menu the tab carries, beside the terminal when the inspector is open.
+struct TmuxInspector: View {
+  @Bindable var model: TmuxTab
+  var body: some View {
+    Form {
+      Section {
+        LabeledContent("Host", value: model.tab.plugin.hostLabel)
+        LabeledContent("Session", value: model.subtitle.isEmpty ? model.tab.plugin.shellLabel : model.subtitle)
+      }
+      if !model.commands.isEmpty {
+        Section {
+          ForEach(model.commands) { command in
+            Button(command.title, systemImage: command.symbol, action: command.action)
+          }
+        }
+        .disabled(model.busy)
+      }
+    }
+    .formStyle(.grouped)
   }
 }

@@ -285,7 +285,7 @@ final class RowPictureCache {
     let width = max(columns, 1)
     let frame = ScreenFrame(
       columns: width, rows: 1, cursorRow: 0, cursorColumn: 0, cursorShape: .hidden,
-      cursorVisible: false, alternateScreen: false, viewportOffset: 0, historyLines: 0,
+      cursorVisible: false, alternateScreen: false, mouse: .off, viewportOffset: 0, historyLines: 0,
       title: "", lines: [line])
     let view = TerminalView(frame: frame, metrics: metrics, palette: palette)
     let renderer = ImageRenderer(content: view)

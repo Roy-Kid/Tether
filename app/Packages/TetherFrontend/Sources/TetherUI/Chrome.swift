@@ -234,10 +234,69 @@ extension Color {
   }
 }
 
-// There is deliberately no `toolbarIconOnly()` helper here.
-//
-// `labelStyle` inherits down the whole view tree, so applying it once at the
-// container was not a convenience — it stripped the text from every `Label`
-// below it, and the tab strip lost its titles: a row of identical terminal
-// icons with no way to tell one session from another. Each button says
-// `.labelStyle(.iconOnly)` for itself, where the effect is visible.
+/// An empty place in the window: one symbol, its name on hover.
+///
+/// A title and a description under a large icon is a second layout. The name
+/// stays available to the pointer and to accessibility. `detail` is data —
+/// a reason that arrived from elsewhere — and is the only line of text.
+public struct QuietMark: View {
+  public let title: String
+  public let systemImage: String
+  public var detail: String?
+
+  public init(_ title: String, systemImage: String, detail: String? = nil) {
+    self.title = title
+    self.systemImage = systemImage
+    self.detail = detail
+  }
+
+  private var spoken: String {
+    guard let detail, !detail.isEmpty else { return title }
+    return "\(title). \(detail)"
+  }
+
+  public var body: some View {
+    VStack(spacing: UIStyle.Space.group) {
+      Image(systemName: systemImage)
+        .font(.system(size: UIStyle.Mark.tileWidth, weight: .medium))
+        .foregroundStyle(Theme.subtle)
+        .accessibilityHidden(true)
+      if let detail, !detail.isEmpty {
+        Text(detail)
+          .font(UIStyle.detail)
+          .foregroundStyle(Theme.subtle)
+          .multilineTextAlignment(.center)
+          .textSelection(.enabled)
+          .padding(.horizontal, UIStyle.Space.inset)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(spoken)
+    .help(title)
+  }
+}
+
+/// Icon-only chrome. Apply it to the button itself.
+///
+/// `labelStyle` inherits, so a container-level style is not a convenience:
+/// it strips the title from every `Label` under it, and a tab strip becomes
+/// a row of identical terminal icons. A button style does not inherit.
+///
+/// On iOS 26 the navigation bar draws a toolbar item's title beside its
+/// symbol. `.labelStyle(.iconOnly)` on the button never reaches the title
+/// the bar already took. Replacing the label from inside a `ButtonStyle`
+/// does. A button that also needs `ChromeButtonStyle` cannot wear two
+/// styles; that one keeps `.labelStyle(.iconOnly)` on its own label, which
+/// is enough outside a toolbar.
+public struct IconOnlyButtonStyle: ButtonStyle {
+  public init() {}
+
+  public func makeBody(configuration: Configuration) -> some View {
+    configuration.label.labelStyle(.iconOnly)
+  }
+}
+
+extension ButtonStyle where Self == IconOnlyButtonStyle {
+  public static var iconOnly: Self { Self() }
+}

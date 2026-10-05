@@ -174,8 +174,10 @@ struct HostEditor: View {
     } label: {
       VStack(spacing: UIStyle.Space.small) {
         Label(title, systemImage: symbol)
-          .font(selected ? UIStyle.title : UIStyle.detail)
+          .labelStyle(.iconOnly)
+          .font(UIStyle.symbol)
           .foregroundStyle(selected ? Theme.text : Theme.subtle)
+          .accessibilityHidden(true)
         Rectangle()
           .fill(selected ? Theme.text : Theme.stroke.opacity(0.35))
           .frame(height: UIStyle.Mark.hairline)
@@ -183,6 +185,8 @@ struct HostEditor: View {
       .frame(maxWidth: .infinity)
     }
     .buttonStyle(.plain)
+    .help(title)
+    .accessibilityLabel(title)
     .accessibilityAddTraits(selected ? [.isSelected] : [])
   }
 

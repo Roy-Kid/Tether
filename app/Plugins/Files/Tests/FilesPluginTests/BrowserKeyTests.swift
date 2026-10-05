@@ -175,7 +175,7 @@
         cache: FileCache(
           host: UUID(),
           base: FileManager.default.temporaryDirectory.appendingPathComponent("keys-\(UUID())")),
-        open: { _ in source }, present: { shown.append($0) })
+        open: { _ in source }, present: { shown.append($0) }, defaults: cleanDefaults())
       await model.go(to: "/home/ada")
 
       let window = NSWindow(
@@ -219,7 +219,7 @@
         cache: FileCache(
           host: UUID(),
           base: FileManager.default.temporaryDirectory.appendingPathComponent("delete-\(UUID())")),
-        open: { _ in source })
+        open: { _ in source }, defaults: cleanDefaults())
       await model.go(to: "/home/ada")
 
       let window = NSWindow(
@@ -244,6 +244,41 @@
       window.orderOut(nil)
 
       #expect(source.removed == ["/home/ada/notes.txt"])
+    }
+
+    @Test("control-f opens find only once the list has the keyboard")
+    func controlFOpensFind() async throws {
+      let source = StubSource([
+        "/": .directory, "/home": .directory, "/home/ada": .directory,
+        "/home/ada/notes.txt": .file,
+      ])
+      let model = FilesTab(
+        tab: context(),
+        cache: FileCache(
+          host: UUID(),
+          base: FileManager.default.temporaryDirectory.appendingPathComponent("find-\(UUID())")),
+        open: { _ in source }, defaults: cleanDefaults())
+      await model.go(to: "/home/ada")
+
+      let window = NSWindow(
+        contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.orderFrontRegardless()
+      try await Task.sleep(for: .milliseconds(500))
+
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      window.makeFirstResponder(table)
+      try await Task.sleep(for: .milliseconds(200))
+
+      let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "\u{06}",
+        charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
+      window.sendEvent(event)
+      for _ in 0..<50 where !model.finding { try await Task.sleep(for: .milliseconds(20)) }
+      window.orderOut(nil)
+      #expect(model.finding)
     }
   }
 #endif

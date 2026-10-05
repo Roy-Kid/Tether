@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(macOS)
   import AppKit
@@ -349,21 +350,26 @@ struct RootView: View {
     Group {
       if let workspace = extensionWorkspace {
         workspace.content().id(workspace.id)
+          .padding(Chrome.margin)
       } else if let tab = tabs.current {
         if let shown = tab.shown {
           shown.content().id(tab.id)
+            .padding(Chrome.margin)
         } else {
+          // The grid is the column. A window-colored gutter around it read
+          // as a second frame; the glyph margin lives inside the surface.
           SessionView(tab: tab, links: links(for: tab)).id(tab.id)
-            .dropDestination(for: URL.self) { urls, _ in drop(urls, on: tab) }
+            .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
         }
       } else if tabs.currentHost != nil {
         EmptyWorkspace()
+          .padding(Chrome.margin)
       } else {
         welcome
+          .padding(Chrome.margin)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(Chrome.margin)
   }
 
   /// The window's second column, where there is a window to put one in.
@@ -388,7 +394,7 @@ struct RootView: View {
             }
           }.formStyle(.grouped)
         } else {
-          ContentUnavailableView("No workspace selected", systemImage: "sidebar.right")
+          QuietMark("No workspace selected", systemImage: "sidebar.right")
         }
       }
     }
@@ -397,7 +403,7 @@ struct RootView: View {
   private var phoneDetail: some View {
     Group {
       if tabs.tabs.isEmpty && tabs.extensions.isEmpty {
-        ContentUnavailableView("No Open Terminals", systemImage: "terminal")
+        EmptyWorkspace()
       } else if tabs.extensions.isEmpty,
         let tab = tabs.tabs.first(where: { $0.id == tabs.selected }) ?? tabs.visibleTabs.first
       {
@@ -412,14 +418,18 @@ struct RootView: View {
         TabView(selection: phoneTabSelection) {
           ForEach(tabs.tabs) { tab in
             phoneSession(tab)
-              .tabItem { Label(tab.title, systemImage: "terminal") }
+              .tabItem {
+                Image(systemName: "terminal").accessibilityLabel(tab.title)
+              }
               .tag(Optional(tab.id))
           }
           ForEach(tabs.extensions) { entry in
             entry.workspace.content().id(entry.id)
               .terminalInputEnabled(terminalInputAllowed && tabs.selected == entry.id)
               .padding(Chrome.margin)
-              .tabItem { Label(entry.workspace.title, systemImage: entry.workspace.symbol) }
+              .tabItem {
+                Image(systemName: entry.workspace.symbol).accessibilityLabel(entry.workspace.title)
+              }
               .tag(Optional(entry.id))
           }
         }
@@ -446,6 +456,7 @@ struct RootView: View {
             Image(systemName: "plus.rectangle.on.rectangle")
           }
           .accessibilityLabel("Shell")
+          .help("Shell")
           .disabled(tabs.current == nil)
         #endif
         if let tab = tabs.current {
@@ -455,13 +466,21 @@ struct RootView: View {
         }
         if let workspace = extensionWorkspace {
           ForEach(workspace.commands) { command in
-            Button(command.title, systemImage: command.symbol, action: command.action)
-              .labelStyle(.iconOnly)
+            Button(action: command.action) {
+              Label(command.title, systemImage: command.symbol)
+            }
+            .buttonStyle(.iconOnly)
+            .help(command.title)
           }
         }
         if let id = tabs.selected {
-          Button("Close", systemImage: "xmark") { tabs.requestClose(id) }
-            .labelStyle(.iconOnly)
+          Button {
+            tabs.requestClose(id)
+          } label: {
+            Label("Close", systemImage: "xmark")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Close")
         }
       }
     }
@@ -509,10 +528,13 @@ struct RootView: View {
   }
 
   private func accessoryButton(_ plugin: PluginAccessory, on tab: SessionTab) -> some View {
-    Button(plugin.accessory.name, systemImage: plugin.accessory.symbol) {
+    Button {
       tabs.toggleAccessory(plugin.id, on: tab.id)
+    } label: {
+      Label(plugin.accessory.name, systemImage: plugin.accessory.symbol)
     }
-    .labelStyle(.iconOnly)
+    .buttonStyle(.iconOnly)
+    .help(plugin.accessory.name)
     .disabled(!tab.canOpen(plugin.id))
   }
 
@@ -522,12 +544,13 @@ struct RootView: View {
         shown.content()
       } else {
         SessionView(tab: tab)
+          .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
       }
     }
     .id(tab.id)
     .terminalInputEnabled(terminalInputAllowed && tabs.selected == tab.id)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(Chrome.margin)
+    .padding(tab.shown == nil ? 0 : Chrome.margin)
   }
 }
 
@@ -630,6 +653,14 @@ extension RootView {
     .dialog(for: notice) { shown in
       Dialog.notice(shown.title, message: shown.message) { notice = nil }
     }
+    #if os(macOS)
+      .dialog(for: store.pendingImport) { offer in
+        Dialog.confirm(
+          offer.title, message: offer.message, detail: offer.diff, verb: "Import",
+          cancel: { store.declineConfigurationImport() },
+          perform: { store.acceptConfigurationImport() })
+      }
+    #endif
   }
 
   @ViewBuilder
@@ -676,7 +707,12 @@ extension RootView {
           return PluginAccessory(
             id: plugin.metadata.id, title: plugin.metadata.name, accessory: plugin.accessory)
         }
+        attachLiveTabs()
       }
+      // A wheel over the shell is offered to whatever is attached, which has
+      // to exist before the accessory is opened: a full-screen program can
+      // be keeping the history the wheel is asking for.
+      .onChange(of: tabs.tabs.map(\.isLive), initial: true) { _, _ in attachLiveTabs() }
       // On a Mac the accessory is a popover, so the window can present this.
       // A phone's accessory is a sheet, and a sheet's ancestor cannot present a
       // second one over it — so there it is presented from inside that sheet.
@@ -818,6 +854,16 @@ extension RootView {
     }
   }
 
+  /// Attaches every tab plugin on a live tab, once. The accessory used to
+  /// be the first time; a wheel can need the attachment before that opens.
+  private func attachLiveTabs() {
+    for tab in tabs.tabs where tab.isLive {
+      for plugin in tabs.accessories {
+        prepareAttachment(plugin.id, on: tab)
+      }
+    }
+  }
+
   /// Makes the tab's attachment for this plugin the first time its
   /// accessory opens there, and hands an existing one the tab's current
   /// lease — which a reconnect may have replaced since.
@@ -843,6 +889,10 @@ extension RootView {
       present: { view in tabs.sheet = PluginSheet(tab: id, plugin: pluginID, view: view) },
       dismissSheet: { if tabs.sheet?.tab == id { tabs.sheet = nil } },
       insertText: { [weak tab] text in tab?.send(.paste(text)) },
+      runInTerminal: { [weak tab] line in
+        tab?.send(.paste(line))
+        tab?.send(.key(.enter))
+      },
       workingDirectory: { [weak tab] in tab?.workingDirectory },
       showAccessory: { tabs.showAccessory(pluginID, on: id) },
       linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
@@ -850,7 +900,16 @@ extension RootView {
         tabs.visibleTabs.map { ShellChoice(id: $0.id, title: $0.title, current: $0.id == tabs.selected) }
       },
       openShell: { tabs.select($0) },
-      newShell: { tabs.intent = .newTerminal })
+      newShell: { tabs.intent = .newTerminal },
+      scrollBy: { [weak tab] lines in tab?.scrollOwnHistory(by: lines) },
+      reportWheel: { [weak tab] lines, column, row in
+        guard let tab, lines != 0 else { return }
+        let button: PointerButton = lines > 0 ? .wheelUp : .wheelDown
+        let count = min(Int(lines.magnitude), 500)
+        for _ in 0..<count {
+          tab.send(.pointer(button: button, phase: .press, column: column, row: row))
+        }
+      })
   }
 
   /// What pointing at the terminal does on this tab: whatever its plugins
@@ -906,12 +965,60 @@ extension RootView {
     return url
   }
 
-  /// Files dropped on a terminal.
+  /// A path dragged from the files list is pasted as that absolute path.
+  /// Anything else that is a file is handed to `receiveFiles`.
+  private struct TerminalDrop: ViewModifier {
+    let tab: SessionTab
+    let receiveFiles: ([URL]) -> Void
+
+    func body(content: Content) -> some View {
+      content.onDrop(of: [DroppedPath.contentType, .fileURL], isTargeted: nil) { providers in
+        let carried = providers.filter {
+          $0.hasItemConformingToTypeIdentifier(DroppedPath.contentType.identifier)
+        }
+        if !carried.isEmpty {
+          Task { @MainActor in
+            var texts: [String] = []
+            for provider in carried {
+              if let item = await Self.load(DroppedPath.self, from: provider) {
+                texts.append(item.text)
+              }
+            }
+            let text = texts.joined(separator: "\n")
+            guard !text.isEmpty else { return }
+            tab.send(.paste(text))
+          }
+          return true
+        }
+        Task { @MainActor in
+          var urls: [URL] = []
+          for provider in providers {
+            if let url = await Self.load(URL.self, from: provider), url.isFileURL {
+              urls.append(url)
+            }
+          }
+          receiveFiles(urls)
+        }
+        return !providers.isEmpty
+      }
+    }
+
+    private static func load<T: Transferable>(_ type: T.Type, from provider: NSItemProvider) async -> T? {
+      await withCheckedContinuation { continuation in
+        _ = provider.loadTransferable(type: type) { result in
+          continuation.resume(returning: try? result.get())
+        }
+      }
+    }
+  }
+
+  /// Files dropped on a terminal from outside the files list.
   ///
   /// On this machine a terminal types their paths, which is what every
   /// terminal does and all a local shell needs. Anywhere else a local path
   /// means nothing, so the tab's plugins are offered them — the first to
-  /// take them decides what a drop means there.
+  /// take them decides what a drop means there. A path dragged out of the
+  /// files list is not one of these: that drop is the absolute path itself.
   private func drop(_ urls: [URL], on tab: SessionTab) {
     let files = urls.filter(\.isFileURL)
     guard !files.isEmpty else { return }

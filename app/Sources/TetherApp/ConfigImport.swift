@@ -41,11 +41,12 @@ struct ImportLink: Codable, Hashable, Sendable {
 /// How this Mac's SSH configuration feeds the library.
 ///
 /// The library is the one source of truth; the configuration is where hosts
-/// come from on a Mac, never where they go. A stanza the library has not seen
-/// is added; a stanza someone edited updates its host; a host changed or
-/// deleted in Tether stays as Tether left it for as long as its stanza is not
-/// edited again; a stanza taken out of the file takes nothing out of the
-/// library. Nothing is ever written back.
+/// come from on a Mac. A stanza the library has not seen is added; a stanza
+/// someone edited updates its host; a host changed or deleted in Tether stays
+/// as Tether left it for as long as its stanza is not edited again; a stanza
+/// taken out of the file takes nothing out of the library. This direction
+/// never writes. Writing the library back is `ConfigAlign`, after a person
+/// agrees.
 ///
 /// Pure: it looks at what the file says, what the library says and what the
 /// file said last time, and says what to do. `HostStore` does it.

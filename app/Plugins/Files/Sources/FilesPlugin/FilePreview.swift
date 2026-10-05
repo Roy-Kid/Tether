@@ -45,7 +45,7 @@ struct FilePreview: View {
       }
     }
     .frame(minWidth: side * 0.7, minHeight: side * 0.7)
-    .task(id: url) {
+    .task(id: Self.loadID(for: url)) {
       loaded = false
       image = nil
       snippet = nil
@@ -71,6 +71,19 @@ struct FilePreview: View {
         .padding(UIStyle.Space.group)
     }
     .frame(maxHeight: side)
+  }
+
+  /// Path, size and modification time. A peek stays on screen across a
+  /// rewrite only when this changes, which is when the picture has to.
+  ///
+  /// `URL.resourceValues` remembers the first answer for a path, so this
+  /// reads the file again.
+  nonisolated static func loadID(for url: URL?) -> String {
+    guard let url else { return "" }
+    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+    let modified = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+    return "\(url.path) \(size) \(modified)"
   }
 
   /// The head of a text file, with control characters replaced so a remote

@@ -79,6 +79,12 @@ struct NamesTests {
     #expect(!Names.isTextLike("blob"))
   }
 
+  @Test("copied paths are the absolute paths, one a line, with nothing added")
+  func copiedPaths() {
+    #expect(Names.copiedPaths(["/data/run-1/out.csv"]) == "/data/run-1/out.csv")
+    #expect(Names.copiedPaths(["/data/my run/out.csv", "/data/runs"]) == "/data/my run/out.csv\n/data/runs")
+  }
+
   @Test("a path is quoted only when a shell would read something into it")
   func quoting() {
     #expect(Names.shellQuoted("/data/run-1/out.csv") == "/data/run-1/out.csv")
@@ -113,5 +119,29 @@ struct PathsTests {
   func name() {
     #expect(Paths.name("/home/ada/runs") == "runs")
     #expect(Paths.name("/") == "/")
+  }
+
+  @Test("the path menu names the root, and does not list home or the shell twice")
+  func pathMenu() {
+    let inside = PathPlaces(
+      directory: "/home/jicli594/work", home: "/home/jicli594", shell: "/home/jicli594/work")
+    #expect(inside.places == ["/home/jicli594", "/home", "/"])
+    #expect(inside.title("/home/jicli594") == "jicli594")
+    #expect(inside.title("/") == "Root")
+    #expect(inside.symbol("/home/jicli594") == "house")
+    #expect(inside.symbol("/") == "externaldrive")
+    #expect(!inside.showsHome)
+    #expect(!inside.showsShell)
+
+    let elsewhere = PathPlaces(directory: "/tmp/work", home: "/home/jicli594", shell: "/var/run")
+    #expect(elsewhere.showsHome)
+    #expect(elsewhere.showsShell)
+    #expect(elsewhere.symbol("/tmp") == "folder")
+
+    let shellAbove = PathPlaces(
+      directory: "/home/jicli594/work", home: "/srv", shell: "/home")
+    #expect(shellAbove.showsHome)
+    #expect(!shellAbove.showsShell, "the shell is already one of the directories above")
+    #expect(shellAbove.symbol("/home") == "terminal")
   }
 }

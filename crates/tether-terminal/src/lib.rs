@@ -22,10 +22,10 @@ mod terminal;
 
 pub use damage::{Changes, RowSpan, ScreenDamage};
 pub use history::{HistoryEvent, HistoryRow};
-pub use input::{Input, Key, Modifiers};
+pub use input::{Input, Key, Modifiers, PointerButton, PointerPhase};
 pub use link::{Link, LinkSpan, LinkTarget};
 pub use palette::{Palette, Rgb};
-pub use screen::{Cell, Cursor, CursorShape, Modes, Screen};
+pub use screen::{Cell, Cursor, CursorShape, Modes, MouseEncoding, MouseMotion, Screen};
 pub use scroll::{Scroll, Viewport};
 pub use size::{Position, ScreenSize};
 pub use style::{Color, NamedColor, Style, Underline};

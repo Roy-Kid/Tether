@@ -75,6 +75,9 @@ struct TetherApp: App {
         tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
         store.useKeyBindings(tabs.keyBindings)
         store.sweepCredentials()
+        // Ask before copying ~/.ssh/config over the library. The file is
+        // not written. iCloud is a separate read.
+        store.offerConfigurationImport()
         await store.startSync()
         await Task.yield()
         // The command line wins. Someone who typed `--open lab` asked for a
@@ -94,15 +97,16 @@ struct TetherApp: App {
         }
       }
       .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }
-      // `~/.ssh/config` is read again on the way back to the front: a stanza
-      // added or changed in an editor meanwhile reaches the library, and
-      // every device, from here.
+      // Coming forward reads the library through iCloud again. The SSH
+      // file is imported only from the question at open, or from Settings.
       .onChange(of: phase) { _, phase in
         if phase != .active { tabs.checkpointHistory() }
         if phase == .active {
           store.reload()
-          store.reconcile()
-          Task { await store.startSync(); await store.syncNow() }
+          Task {
+            await store.startSync()
+            await store.syncNow()
+          }
         }
       }
       #if os(iOS)

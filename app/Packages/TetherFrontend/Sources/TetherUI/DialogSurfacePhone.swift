@@ -55,7 +55,7 @@
       presentation.returnTo = source
       presentation.gone = gone
 
-      let alert = UIAlertController(title: dialog.title, message: dialog.message, preferredStyle: .alert)
+      let alert = UIAlertController(title: dialog.title, message: Self.message(dialog), preferredStyle: .alert)
       for field in dialog.fields {
         alert.addTextField { Self.configure($0, for: field) }
       }
@@ -106,6 +106,12 @@
       case .password: text.textContentType = .password
       case .code: text.textContentType = .oneTimeCode
       }
+    }
+
+    /// The date line, and a diff under it. A phone alert has no accessory.
+    private static func message(_ dialog: Dialog) -> String? {
+      let lines = [dialog.message, dialog.detail].compactMap { $0 }
+      return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     /// The scene a person is looking at, or any there is: a question that

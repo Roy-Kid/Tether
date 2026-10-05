@@ -8,11 +8,24 @@ struct IdentitySettings: View {
   @State private var selected: Host?
 
   var body: some View {
-    Section("Hosts and Identities") {
+    Section {
       ForEach(store.hosts) { host in
+        let problem = host.connectionProblem ?? host.routeProblem
         Button { selected = host } label: {
-          LabeledContent(host.label, value: host.connectionProblem ?? host.routeProblem ?? "Ready")
+          HStack(spacing: UIStyle.Space.group) {
+            Text(host.label)
+              .foregroundStyle(Theme.text)
+              .adaptiveRowText()
+            Spacer(minLength: UIStyle.Space.small)
+            Image(systemName: problem == nil ? "checkmark" : "exclamationmark.triangle")
+              .font(UIStyle.symbol)
+              .foregroundStyle(problem == nil ? Theme.success : Theme.warning)
+          }
         }
+        .buttonStyle(.borderless)
+        .help(problem ?? "Ready")
+        .accessibilityLabel(host.label)
+        .accessibilityValue(problem ?? "Ready")
       }
       if let problem = store.problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
     }
@@ -28,6 +41,7 @@ struct HostIdentitySettings: View {
   let id: UUID
   var connections: TabSet? = nil
   @State private var seed = ""
+  @State private var confirmingDelete = false
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
@@ -78,8 +92,7 @@ struct HostIdentitySettings: View {
               if let publicKey = binding.publicKey {
                 Text(publicKey).font(.caption.monospaced()).textSelection(.enabled)
                 ShareLink("Export Public Key", item: publicKey)
-                Text("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
-                  .font(.caption).foregroundStyle(.secondary)
+                  .help("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
               } else if let path = binding.keyPath {
                 LabeledContent("SSH Key", value: path)
               } else if binding.defaultKeys == true {
@@ -89,8 +102,7 @@ struct HostIdentitySettings: View {
               }
             } else {
               Button("Create SSH Key") { store.generateKey(for: host) }
-              Text("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
-                .font(.caption).foregroundStyle(.secondary)
+                .help("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
             }
           }
           AuthorizationSettings(store: store, host: host, connections: connections)
@@ -107,7 +119,24 @@ struct HostIdentitySettings: View {
     }
     .formStyle(.grouped)
     .navigationTitle("Identity and Authentication")
-    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Delete", role: .destructive) { confirmingDelete = true }
+          .disabled(store.hosts.first { $0.id == id }?.isManaged != true)
+      }
+      ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+    }
+    .dialog(for: confirmingDelete ? id : nil) { id in
+      let name = store.hosts.first { $0.id == id }?.label ?? "Host"
+      return Dialog.confirm(
+        "Delete \(name)?", verb: "Delete", role: .destructive,
+        cancel: { confirmingDelete = false }
+      ) {
+        if let host = store.hosts.first(where: { $0.id == id }) { store.delete(host) }
+        confirmingDelete = false
+        dismiss()
+      }
+    }
   }
 }
 
@@ -134,8 +163,8 @@ struct DeviceSettings: View {
           if let candidate {
             LabeledContent("Device", value: candidate.name)
             Text(candidate.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
-            Text("Compare this fingerprint with the other device before trusting it. Exchange codes on both devices.")
             Button("Trust This Device") { center.pair(candidate); self.candidate = nil; code = "" }
+              .help("Compare this fingerprint with the other device before trusting it. Exchange codes on both devices.")
           }
           if store.snapshot.trust.localRevoked {
             Text("This device’s approval authority has been revoked.").foregroundStyle(.red)
@@ -148,11 +177,12 @@ struct DeviceSettings: View {
               Text(peer.card.name)
               Spacer()
               if peer.revoked { Text("Revoked").foregroundStyle(.secondary) }
-              else { Button("Revoke", role: .destructive) { center.revoke(peer.id) } }
+              else {
+                Button("Revoke", role: .destructive) { center.revoke(peer.id) }
+                  .help("Revoking a device stops its approvals. A key already on a server stays until that authorization is removed.")
+              }
             }
           }
-          Text("Revoking a device stops its approvals. A key already on a server stays until that authorization is removed.")
-            .font(.caption).foregroundStyle(.secondary)
           Button("Check Approval Requests") { Task { await center.refresh() } }
           ForEach(center.requests) { request in
             VStack(alignment: .leading, spacing: UIStyle.Space.group) {
@@ -206,9 +236,9 @@ struct AuthorizationSettings: View {
       }.disabled(publicKey.isEmpty || deviceLabel.isEmpty)
       Button("Install Public Key on This Host") {
         Task { await install() }
-      }.disabled(applying || publicKey.isEmpty || deviceLabel.isEmpty || connections == nil)
-      Text("Installation requires an existing connection and permission to manage authorized_keys. Administrator-managed hosts need an administrator’s approval.")
-        .font(.caption).foregroundStyle(.secondary)
+      }
+      .disabled(applying || publicKey.isEmpty || deviceLabel.isEmpty || connections == nil)
+      .help("Installation requires an existing connection and permission to manage authorized_keys. Administrator-managed hosts need an administrator’s approval.")
       ForEach(store.snapshot.authorizations.values.filter { $0.hostID == host.id }.sorted { $0.deviceLabel < $1.deviceLabel }) { record in
         VStack(alignment: .leading) {
           LabeledContent(record.deviceLabel, value: record.state.rawValue)

@@ -14,11 +14,18 @@ struct TreeRow: Identifiable, Equatable {
 extension FilesTab {
   /// Every row the tree shows, in order: the root's entries, and under each
   /// open folder whose contents have arrived, its own, one level deeper.
-  var rows: [TreeRow] {
+  var rows: [TreeRow] { treeRows(seeingHidden: showHidden) }
+
+  /// The tree as listed. `seeingHidden` is independent of the Hidden Files
+  /// switch so a find for a dot-name can see those rows without showing them
+  /// the rest of the time.
+  func treeRows(seeingHidden: Bool) -> [TreeRow] {
     guard let directory else { return [] }
     var rows: [TreeRow] = []
     func add(_ path: String, depth: Int) {
-      for entry in shown(listings[path] ?? []) {
+      let listed = listings[path] ?? []
+      let visible = seeingHidden ? listed : listed.filter { !$0.name.hasPrefix(".") }
+      for entry in visible {
         rows.append(TreeRow(entry: entry, depth: depth))
         if entry.kind == .directory, expanded.contains(entry.path) {
           add(entry.path, depth: depth + 1)

@@ -20,6 +20,13 @@ struct WorkspaceTabBar: View {
   /// row of crosses; one that only appears under the pointer is a tab
   /// strip with a way to close a tab.
   @State private var hovering: UUID?
+  @Environment(\.colorScheme) private var scheme
+  @AppStorage("terminalAppearance") private var appearance = "system"
+
+  /// Same choice the grid draws with, so the open tab is the top of that surface.
+  private var palette: TetherUI.Palette {
+    TetherUI.Palette.chosen(setting: appearance, scheme: scheme)
+  }
 
   @ViewBuilder
   var body: some View {
@@ -42,7 +49,15 @@ struct WorkspaceTabBar: View {
     }
     .frame(height: Chrome.tab)
     .background(Theme.sidebar)
-    .overlay(alignment: .bottom) { Divider() }
+    // Behind the chips, so an open terminal tab can cover it and continue
+    // into the grid. An overlay would paint the line back on top.
+    .background(alignment: .bottom) { Divider() }
+  }
+
+  /// A terminal tab shares the grid's colour. An extension does not: its
+  /// page is the window, and the accent rule is what marks it open.
+  private func joinsTerminal(_ id: UUID) -> Bool {
+    tabs.tabs.contains { $0.id == id && $0.shown == nil }
   }
 
   private var tabList: some View {
@@ -73,7 +88,10 @@ struct WorkspaceTabBar: View {
 
   private func tabChip(id: UUID, title: String, subtitle: String, symbol: String?) -> some View {
     let selected = tabs.selected == id
+    let joined = selected && joinsTerminal(id)
     let tab = tabs.tabs.first { $0.id == id }
+    let titleColor = joined ? palette.foreground : (selected ? Theme.text : Theme.subtle)
+    let secondary = joined ? palette.foreground.opacity(0.62) : Theme.subtle
     return HStack(spacing: UIStyle.Space.inline) {
       Button {
         tabs.handleTabClick(id)
@@ -82,7 +100,7 @@ struct WorkspaceTabBar: View {
           if let symbol {
             Image(systemName: symbol)
               .font(UIStyle.symbol)
-              .foregroundStyle(selected ? Theme.text : Theme.subtle)
+              .foregroundStyle(titleColor)
           }
           let labels = layout == .vertical
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
@@ -90,12 +108,12 @@ struct WorkspaceTabBar: View {
           labels {
             Text(title)
               .font(UIStyle.title)
-              .foregroundStyle(selected ? Theme.text : Theme.subtle)
+              .foregroundStyle(titleColor)
               .lineLimit(1)
             if !subtitle.isEmpty {
               Text(subtitle)
                 .font(UIStyle.header)
-                .foregroundStyle(Theme.subtle)
+                .foregroundStyle(secondary)
                 .lineLimit(1)
             }
           }
@@ -114,7 +132,7 @@ struct WorkspaceTabBar: View {
       } label: {
         Image(systemName: "xmark")
           .font(UIStyle.accessory)
-          .foregroundStyle(Theme.subtle)
+          .foregroundStyle(secondary)
           .frame(width: UIStyle.Mark.icon, height: Chrome.tab)
           .contentShape(Rectangle())
       }
@@ -128,7 +146,7 @@ struct WorkspaceTabBar: View {
     .padding(.leading, UIStyle.panelRadius)
     .padding(.trailing, UIStyle.Space.small)
     .frame(height: Chrome.tab)
-    .background(selected ? Theme.raised.opacity(0.85) : .clear)
+    .background(joined ? palette.background : (selected ? Theme.raised.opacity(0.85) : Color.clear))
     .onHover { inside in
       if inside {
         hovering = id
@@ -137,10 +155,13 @@ struct WorkspaceTabBar: View {
       }
     }
     .overlay(alignment: layout == .vertical ? .leading : .bottom) {
-      Rectangle()
-        .fill(selected ? Color.accentColor : .clear)
-        .frame(width: layout == .vertical ? UIStyle.Mark.rule : nil,
-               height: layout == .vertical ? nil : UIStyle.Mark.rule)
+      if selected && !joined {
+        Rectangle()
+          .fill(Color.accentColor)
+          .frame(
+            width: layout == .vertical ? UIStyle.Mark.rule : nil,
+            height: layout == .vertical ? nil : UIStyle.Mark.rule)
+      }
     }
     .accessibilityAddTraits(selected ? .isSelected : [])
     .contextMenu {
@@ -672,7 +693,7 @@ private struct PluginStatusRibbon: View {
 
 struct EmptyWorkspace: View {
   var body: some View {
-    ContentUnavailableView("No Open Terminals", systemImage: "terminal")
+    QuietMark("No Open Terminals", systemImage: "terminal")
   }
 }
 
@@ -828,8 +849,36 @@ struct EmptyWorkspace: View {
             item.isHidden = true
           }
         }
+        // Hide Sidebar does not fit beside the traffic lights, so AppKit clips
+        // it into the overflow chevron at the top right. The sidebar stays put.
+        removeSidebarToggle(from: window)
+        if let frame = window.contentView?.superview {
+          hideToolbarOverflow(in: frame)
+        }
         if let titlebar = window.standardWindowButton(.closeButton)?.superview {
           hideSceneTitle(in: titlebar)
+        }
+      }
+
+      private func removeSidebarToggle(from window: NSWindow) {
+        guard let toolbar = window.toolbar else { return }
+        let indexes = toolbar.items.indices.reversed().filter { index in
+          toolbar.items[index].itemIdentifier.rawValue.hasSuffix("toggleSidebar")
+        }
+        for index in indexes {
+          toolbar.removeItem(at: index)
+        }
+      }
+
+      /// An empty clip menu still draws the chevron until the next layout.
+      private func hideToolbarOverflow(in view: NSView) {
+        let className = String(describing: type(of: view))
+        let label = view.accessibilityLabel() ?? ""
+        if className.contains("ClippedItems") || label == "more toolbar items" {
+          view.isHidden = true
+        }
+        for subview in view.subviews {
+          hideToolbarOverflow(in: subview)
         }
       }
 

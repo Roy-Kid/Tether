@@ -20,6 +20,7 @@ import TetherFFIBindings
 // line of consumer code.
 
 public typealias ScreenFrame = TetherFFIBindings.ScreenFrame
+public typealias MouseTracking = TetherFFIBindings.MouseTracking
 public typealias ScreenRow = TetherFFIBindings.ScreenRow
 public typealias FrameUpdate = TetherFFIBindings.FrameUpdate
 public typealias UpdatedRow = TetherFFIBindings.UpdatedRow
@@ -64,6 +65,16 @@ public struct KeyModifiers: Sendable, Equatable {
   public static let none = KeyModifiers()
 }
 
+/// A mouse button. `none` is a move with nothing held down.
+public enum PointerButton: Sendable, Equatable {
+  case left, middle, right, none, wheelUp, wheelDown
+}
+
+/// Press, release, or a move.
+public enum PointerPhase: Sendable, Equatable {
+  case press, release, move
+}
+
 /// Something the person did.
 public enum TerminalInput: Sendable, Equatable {
   case key(Key, KeyModifiers = .none)
@@ -71,6 +82,13 @@ public enum TerminalInput: Sendable, Equatable {
   /// paste from ending its own bracket — happens in the engine, where the
   /// mode that decides it lives.
   case paste(String)
+  /// A pointer event in cells of the visible grid, from the top left.
+  ///
+  /// The engine writes it in the protocol the far side asked for, and writes
+  /// nothing when that program has not asked. Column and row are zero-based.
+  case pointer(
+    button: PointerButton, phase: PointerPhase, column: UInt16, row: UInt16,
+    modifiers: KeyModifiers = .none)
 }
 
 // MARK: - Colours
@@ -481,6 +499,16 @@ public final class TerminalSession: Sendable {
   public func checkpointHistory() { inner.checkpointHistory() }
   public var historyError: String? { inner.historyError() }
 
+  /// Text a remote program asked to place on the local clipboard since the
+  /// last call (`OSC 52`).
+  ///
+  /// `nil` when it asked for nothing. The caller writes it to this machine's
+  /// pasteboard. A request to read the clipboard is refused and does not
+  /// appear here.
+  public func takeClipboard() -> String? {
+    inner.takeClipboard()
+  }
+
   /// Drops scrollback above `keep` lines and does not grow it back.
   public func releaseHistory(keep: UInt32) {
     inner.releaseHistory(keep: keep)
@@ -618,6 +646,26 @@ func bridged(_ input: TerminalInput) -> TetherFFIBindings.TerminalInput {
       }
     return .key(
       key: press,
+      modifiers: TetherFFIBindings.KeyModifiers(
+        shift: modifiers.shift, alt: modifiers.alt, control: modifiers.control))
+  case .pointer(let button, let phase, let column, let row, let modifiers):
+    let named: TetherFFIBindings.PointerButton =
+      switch button {
+      case .left: .left
+      case .middle: .middle
+      case .right: .right
+      case .none: .none
+      case .wheelUp: .wheelUp
+      case .wheelDown: .wheelDown
+      }
+    let where_: TetherFFIBindings.PointerPhase =
+      switch phase {
+      case .press: .press
+      case .release: .release
+      case .move: .move
+      }
+    return .pointer(
+      button: named, phase: where_, column: column, row: row,
       modifiers: TetherFFIBindings.KeyModifiers(
         shift: modifiers.shift, alt: modifiers.alt, control: modifiers.control))
   }

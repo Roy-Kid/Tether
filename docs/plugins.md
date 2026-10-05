@@ -1,11 +1,13 @@
 # Frontend extensions
 
-Tether's frontend loads extensions at compile time. A plugin is an independent
+Built-in extensions are compiled into the app. A plugin is an independent
 Swift package depending on `TetherPluginKit`; import `TetherUI` for a terminal
 surface and for the window's chrome vocabulary (`Theme`, `UIStyle`,
 `ChromeButtonStyle`), so what a plugin draws matches what the window draws.
 Built-in plugins live in `app/Plugins/`; `app/Plugins/Tmux` is the working
 example, and the app reaches it only through the kit.
+
+Software installed after shipment is a different host. See [Web plugin host](#web-plugin-host).
 
 A plugin takes one of two shapes.
 
@@ -197,44 +199,46 @@ commands remain the shell/editor's responsibility. Input-method composition and
 shortcut recording keep their own keyboard handling. This settings page still
 configures workspace commands; context-specific editing/list keys are defaults.
 
+# Web plugin host
+
+`app/Packages/TetherPluginHost` installs web software beside the built-in
+plugins. A package is a manifest plus HTML, CSS, and JavaScript. Install
+registers contributions and does not run the page. Activation loads the
+page in an isolated WebKit view. The page reaches the app through the
+capability API (`document.read`, `storage.plugin`, `host.notify`). The host
+rejects native binaries, dynamic libraries, and install scripts. The
+canonical note is `.claude/notes/web-plugin-host.md`.
+
+Built-in plugins do not go through this host, and this host does not name
+them. Nothing here is wired into the window yet.
+
 # Using tmux
 
 Open a local shell or connect to a host, then right-click the terminal's tab and choose tmux sessions. Clicking the selected tab opens the same picker.
 The machine running that shell must have `tmux` on its command path. Select an existing
-session or name a new one.
-The toolbar creates windows, splits panes and toggles pane zoom. Click a pane to
-focus it; drag its borders to resize. Window context menus rename or end windows.
-The inspector exposes active-pane actions. Session context menus in the picker
-rename or end sessions.
+session or name a new one. The session is attached in that same terminal: tmux draws
+its own windows, panes and status line. The plugin does not replace the terminal.
 
-The shell row (labelled with the local shell name when known) returns to the tab's
-original terminal. If that terminal is itself attached to a tmux session, the picker
-marks that session and returns to the existing client instead of opening a second one.
+The picker and the Terminal menu create windows, split the current pane and zoom it.
+Window and session menus rename or end them. Detach, or the shell row, leaves tmux
+and returns to the prompt. Choosing the session this terminal is already in stays there.
+The wheel on that client is given to tmux, so tmux's own history moves and the
+status line stays where it is. The next key returns to the live prompt.
 Closing the tab detaches only. Ending remote tasks is a separate confirmed action.
-After a connection loss, Reconnect requests authentication and attaches the previous
-session if it still exists. Missing tmux, rejected commands and connection errors are
-shown in the picker or workspace. Ordinary SSH remains available when tmux is disabled.
-
-Native frames restore existing screen content and a bounded history on attach.
-The wheel scrolls that history. A drag selects text, highlights it, and copies it;
-⌘C copies the selection again. Keyboard input, native text composition and clipboard
-paste work as well. tmux's own copy-mode UI is not emitted over control mode.
-Alternate-screen, cursor-key and paste modes are restored; this is not a promise of
-complete terminal-protocol fidelity for every existing application state. Default
-remote socket only; no automatic reconnect.
+Missing tmux, rejected commands and connection errors are shown in the picker.
+Ordinary SSH remains available when tmux is disabled. Default remote socket only.
 
 # Verification
 
 Use latest stable Rust (`rustup update stable`) and Xcode with Swift 6.2 or later.
-Install tmux locally to run its integration tests.
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/tether.sh --build-xcframework
 swift test --package-path swift
-./scripts/tether.sh --test-tmux # loopback OpenSSH + real tmux end-to-end
 swift test --package-path app/Packages/TetherFrontend
+swift test --package-path app/Packages/TetherPluginHost
 swift test --package-path app/Plugins/Tmux
 ./scripts/tether.sh --build-app
 ```

@@ -21,7 +21,8 @@ together. Read it before touching architecture.
   an empty crate for a future phase is a layer added "because it may be useful
   later", which the spec forbids (§22).
 - `app/` — the app, a consumer like any other. `app/Packages/TetherFrontend`
-  is the plugin kit and shared UI; `app/Plugins/` holds the built-in plugins.
+  is the plugin kit and shared UI; `app/Packages/TetherPluginHost` is the
+  web plugin host; `app/Plugins/` holds the built-in plugins.
   Everything tmux the app shows is in `app/Plugins/Tmux`, and the app reaches
   it only through `TetherPluginKit`.
 - `.claude/notes/` — the specification and durable project knowledge.
@@ -59,6 +60,10 @@ together. Read it before touching architecture.
   no sentences in the window; compact, not decorated
   (`.claude/notes/law.md`, app-ui-chrome). Native menus and the command
   palette still use words. Alerts are a title and a verb.
+- **Web plugins are web software.** A plugin installed after shipment is a
+  manifest plus HTML, CSS, and JavaScript in an isolated web view. The host
+  does not load downloaded native code. Host access goes through the
+  capability API (`.claude/notes/law.md`, web-plugin-host).
 - **One dialog path.** Every alert, confirmation and question — the app's,
   a plugin's, a handshake's — is a TetherUI `Dialog` shown by
   `DialogPresenter`: `.dialog(for:)` from a view, `DialogPresenter.ask` from
@@ -76,7 +81,6 @@ together. Read it before touching architecture.
 ./scripts/tether.sh --build-app                   # macOS Tether.app
 ./scripts/tether.sh --build-app-ios               # simulator Tether.app + install
 ./scripts/tether.sh --build-xcframework           # TetherFFI.xcframework + bindings
-./scripts/tether.sh --test-tmux                   # loopback OpenSSH + real tmux
 ./scripts/tether.sh --verify-consumer             # PATH-stripped consumer build
 
 cargo build
@@ -85,7 +89,8 @@ cargo tree -p tether-terminal    # must show no russh
 cargo tree -p tether-local       # must show no russh either
 
 swift test --package-path swift                        # the SDK's Swift facade
-swift test --package-path app/Packages/TetherFrontend  # frontend, incl. render cost
+swift test --package-path app/Packages/TetherFrontend  # frontend
+swift test --package-path app/Packages/TetherPluginHost # web plugin host
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
 swift test --package-path app                          # the app's own state
@@ -157,13 +162,14 @@ same Apple ID is trusted — no review. Private keys travel with that library,
 so the other device logs in with the same key; a host with none gets one
 from Create SSH Key, and that key syncs too. Passwords stay on the device
 that saved them. A deleted host takes its keys out of the keychain. On a Mac
-`~/.ssh/config`
-feeds the library (`ConfigImport`): a new stanza is added, an edited stanza
-updates its host, a stanza taken out leaves its host in place. Nothing under
-`~/.ssh` is ever written: a change or deletion in Tether stays in Tether, and
-a stanza nobody touched never undoes it. The sync button reads the whole
-library through iCloud again. `~/.ssh/known_hosts` vouches for keys ssh
-already trusts, and objects to ones it does not.
+`~/.ssh/config` is read, never written. On launch, when the file would
+change a host, a dialog asks whether to import it; agreeing copies the file
+over the hosts it names. Declining leaves the library until the next open,
+or until Import in Settings, which overwrites those hosts without asking
+again. A host the file does not name stays. A quiet read (`ConfigImport`)
+still updates a stanza someone edited and never undoes an untouched one.
+`~/.ssh/known_hosts` is still only read. The sync button reads the whole
+library through iCloud again.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the

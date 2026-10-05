@@ -8,7 +8,7 @@
 //!
 //! [`Terminal`]: crate::Terminal
 
-use crate::screen::Modes;
+use crate::screen::{Modes, MouseEncoding, MouseMotion};
 
 /// A key, named by what it is rather than by a scancode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +70,29 @@ impl Modifiers {
     }
 }
 
+/// A mouse button, named by what it is.
+///
+/// `None` is motion with nothing held down, which only any-event tracking
+/// asks to hear. The wheel is a button of its own: programs read it as
+/// button 64 or 65, not as a press of the left button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerButton {
+    Left,
+    Middle,
+    Right,
+    None,
+    WheelUp,
+    WheelDown,
+}
+
+/// Where in a click this report sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerPhase {
+    Press,
+    Release,
+    Move,
+}
+
 /// Something the person did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -79,6 +102,18 @@ pub enum Input {
     },
     /// Text arriving all at once rather than typed.
     Paste(String),
+    /// A pointer event, in cells of the visible grid, counted from the top left.
+    ///
+    /// Column and row are zero-based. Encoding adds one, which is what the
+    /// protocols number. An event the current mouse mode does not want
+    /// encodes as nothing.
+    Pointer {
+        button: PointerButton,
+        phase: PointerPhase,
+        column: u16,
+        row: u16,
+        modifiers: Modifiers,
+    },
 }
 
 impl Input {
@@ -98,7 +133,105 @@ pub(crate) fn encode(input: &Input, modes: Modes) -> Vec<u8> {
     match input {
         Input::Key { key, modifiers } => encode_key(key, *modifiers, modes),
         Input::Paste(text) => encode_paste(text, modes),
+        Input::Pointer { button, phase, column, row, modifiers } => {
+            encode_pointer(*button, *phase, *column, *row, *modifiers, modes)
+        }
     }
+}
+
+/// A pointer report, in the protocol the far side asked for.
+///
+/// Empty when mouse tracking is off, and when the event is a motion the
+/// active tracking level does not include. The caller treats empty as
+/// "nothing to send", the same as a key with no encoding.
+fn encode_pointer(
+    button: PointerButton,
+    phase: PointerPhase,
+    column: u16,
+    row: u16,
+    modifiers: Modifiers,
+    modes: Modes,
+) -> Vec<u8> {
+    if !modes.mouse_reporting {
+        return Vec::new();
+    }
+    // The wheel is one report per notch. A release of it is not a protocol event.
+    if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown)
+        && phase != PointerPhase::Press
+    {
+        return Vec::new();
+    }
+    let button_held =
+        matches!(button, PointerButton::Left | PointerButton::Middle | PointerButton::Right);
+    match (phase, modes.mouse_motion) {
+        (PointerPhase::Move, MouseMotion::Any) => {}
+        (PointerPhase::Move, MouseMotion::Drag) if button_held => {}
+        (PointerPhase::Move, _) => return Vec::new(),
+        _ => {}
+    }
+
+    // Legacy encodings report every release as button 3. SGR names the button
+    // and changes the final byte instead.
+    let mut code = if phase == PointerPhase::Release && modes.mouse_encoding != MouseEncoding::Sgr {
+        3
+    } else {
+        match button {
+            PointerButton::Left => 0,
+            PointerButton::Middle => 1,
+            PointerButton::Right => 2,
+            PointerButton::None => 3,
+            PointerButton::WheelUp => 64,
+            PointerButton::WheelDown => 65,
+        }
+    };
+    if phase == PointerPhase::Move {
+        code += 32;
+    }
+    if modifiers.shift {
+        code += 4;
+    }
+    if modifiers.alt {
+        code += 8;
+    }
+    if modifiers.control {
+        code += 16;
+    }
+
+    let column = axis(column, modes.mouse_encoding);
+    let row = axis(row, modes.mouse_encoding);
+    match modes.mouse_encoding {
+        MouseEncoding::Sgr => {
+            let end = if phase == PointerPhase::Release { b'm' } else { b'M' };
+            let mut out = format!("\u{1b}[<{code};{column};{row}").into_bytes();
+            out.push(end);
+            out
+        }
+        MouseEncoding::Utf8 => {
+            let mut out = b"\x1b[M".to_vec();
+            out.extend(utf8_unit(code));
+            out.extend(utf8_unit(column));
+            out.extend(utf8_unit(row));
+            out
+        }
+        MouseEncoding::Normal => {
+            vec![0x1b, b'[', b'M', legacy(code), legacy(column), legacy(row)]
+        }
+    }
+}
+
+/// A 1-based coordinate. The single-byte protocol cannot name a cell past 223.
+fn axis(cell: u16, encoding: MouseEncoding) -> u16 {
+    let one_based = cell.saturating_add(1);
+    if encoding == MouseEncoding::Normal { one_based.min(223) } else { one_based }
+}
+
+fn legacy(value: u16) -> u8 {
+    value.saturating_add(32).min(255) as u8
+}
+
+fn utf8_unit(value: u16) -> Vec<u8> {
+    let shifted = u32::from(value.saturating_add(32));
+    char::from_u32(shifted).map(|unit| unit.to_string().into_bytes()).unwrap_or_else(|| vec![b'?'])
 }
 
 /// Wraps pasted text so the far side can tell it from typing — but only when

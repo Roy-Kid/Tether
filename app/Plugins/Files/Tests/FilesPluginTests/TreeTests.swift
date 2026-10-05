@@ -26,7 +26,7 @@ struct TreeTests {
       cache: FileCache(
         host: UUID(),
         base: FileManager.default.temporaryDirectory.appendingPathComponent("tree-\(UUID())")),
-      open: { _ in source }, present: { _ in })
+      open: { _ in source }, present: { _ in }, defaults: cleanDefaults())
   }
 
   private func shape(_ model: FilesTab) -> [String] {

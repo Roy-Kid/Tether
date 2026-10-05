@@ -73,22 +73,32 @@
         }
       }
       let boxes = dialog.fields.map(Self.box)
-      if !boxes.isEmpty {
+      if let diff = dialog.detail.map(Self.diffScroll) {
+        let stack = NSStackView(views: [diff] + boxes)
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = UIStyle.Space.inline
+        let fieldWidth = boxes.map { $0.widthAnchor.constraint(equalToConstant: UIStyle.panelWidth) }
+        let fieldHeight = CGFloat(boxes.count) * (UIStyle.controlHeight + stack.spacing)
+        let gap = boxes.isEmpty ? 0 : stack.spacing
+        let height = diff.frame.height + fieldHeight + gap
+        stack.frame = NSRect(x: 0, y: 0, width: UIStyle.panelWidth, height: height)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate(fieldWidth + [
+          stack.widthAnchor.constraint(equalToConstant: UIStyle.panelWidth),
+          stack.heightAnchor.constraint(equalToConstant: height),
+        ])
+        alert.accessoryView = stack
+        alert.window.initialFirstResponder = boxes.first
+      } else if !boxes.isEmpty {
         let stack = NSStackView(views: boxes)
         stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.distribution = .fill
+        stack.alignment = .width
         stack.spacing = UIStyle.Space.inline
-        // Editable fields have no useful intrinsic width. Give the accessory
-        // a width and make every field fill it, including empty secure fields.
-        stack.widthAnchor.constraint(equalToConstant: UIStyle.treeWidth).isActive = true
-        for box in boxes {
-          box.translatesAutoresizingMaskIntoConstraints = false
-          NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            box.heightAnchor.constraint(equalToConstant: UIStyle.controlHeight),
-          ])
-        }
+        // An empty field's intrinsic width is the caret. The alert sizes the
+        // accessory from fittingSize, so pin the field or it draws as a ring.
+        let width = boxes.map { $0.widthAnchor.constraint(equalToConstant: UIStyle.treeWidth) }
+        NSLayoutConstraint.activate(width)
         stack.frame = NSRect(
           x: 0, y: 0, width: UIStyle.treeWidth,
           height: CGFloat(boxes.count) * UIStyle.controlHeight + CGFloat(boxes.count - 1) * UIStyle.Space.inline)
@@ -179,6 +189,63 @@
       let cancel = dialog.cancelAction
       let rest = dialog.actions.indices.filter { $0 != primary && $0 != cancel }
       return [primary, cancel].compactMap { $0 } + rest
+    }
+
+    /// A diff, in a monospaced face. Added lines are green, removed lines red.
+    /// Tall enough for a short change, and scrolling once it is not.
+    private static func diffScroll(_ text: String) -> NSScrollView {
+      let font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+      let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: UIStyle.panelWidth, height: 0))
+      textView.isEditable = false
+      textView.isSelectable = true
+      textView.isRichText = true
+      textView.drawsBackground = false
+      textView.textContainerInset = NSSize(width: UIStyle.Space.small, height: UIStyle.Space.small)
+      textView.isAutomaticQuoteSubstitutionEnabled = false
+      textView.isAutomaticDashSubstitutionEnabled = false
+      textView.isAutomaticTextReplacementEnabled = false
+      textView.textContainer?.widthTracksTextView = true
+      textView.isHorizontallyResizable = false
+      textView.isVerticallyResizable = true
+      textView.textContainer?.containerSize = NSSize(width: UIStyle.panelWidth, height: .greatestFiniteMagnitude)
+      textView.textStorage?.setAttributedString(coloredDiff(text, font: font))
+      if let container = textView.textContainer {
+        textView.layoutManager?.ensureLayout(for: container)
+      }
+      let used = textView.layoutManager?.usedRect(for: textView.textContainer!).height ?? 0
+      let inset = textView.textContainerInset.height * 2
+      let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
+      let fallback = (textView.layoutManager?.defaultLineHeight(for: font) ?? font.boundingRectForFont.height)
+        * CGFloat(lines) + inset
+      let height = min(max(used + inset, fallback, UIStyle.controlHeight * 2), 220)
+
+      let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: UIStyle.panelWidth, height: height))
+      scroll.drawsBackground = false
+      scroll.hasVerticalScroller = true
+      scroll.autohidesScrollers = true
+      scroll.documentView = textView
+      scroll.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        scroll.widthAnchor.constraint(equalToConstant: UIStyle.panelWidth),
+        scroll.heightAnchor.constraint(equalToConstant: height),
+      ])
+      return scroll
+    }
+
+    private static func coloredDiff(_ text: String, font: NSFont) -> NSAttributedString {
+      let result = NSMutableAttributedString()
+      let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+      for (index, line) in lines.enumerated() {
+        let color: NSColor =
+          if line.hasPrefix("+") { .systemGreen }
+          else if line.hasPrefix("-") { .systemRed }
+          else if line.hasPrefix(" ") { .labelColor }
+          else { .secondaryLabelColor }
+        var piece = String(line)
+        if index < lines.count - 1 { piece.append("\n") }
+        result.append(NSAttributedString(string: piece, attributes: [.font: font, .foregroundColor: color]))
+      }
+      return result
     }
 
     private static func box(_ field: Dialog.Field) -> NSTextField {

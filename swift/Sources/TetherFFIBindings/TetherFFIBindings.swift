@@ -2416,6 +2416,15 @@ public protocol SessionProtocol: AnyObject, Sendable {
     func setPalette(palette: TerminalPalette?) throws 
     
     /**
+     * Text a remote program asked to place on the local clipboard (`OSC 52`).
+     *
+     * `None` when it asked for nothing since the last call. A program that
+     * asked to *read* the clipboard is refused: the clipboard belongs to
+     * the machine the person is using, and remote data is untrusted.
+     */
+    func takeClipboard()  -> String?
+    
+    /**
      * The local shell's tty path, for matching tmux clients to this tab.
      */
     func terminalName()  -> String?
@@ -2694,6 +2703,22 @@ open func setPalette(palette: TerminalPalette?)throws   {try rustCallWithError(F
         FfiConverterOptionTypeTerminalPalette.lower(palette),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Text a remote program asked to place on the local clipboard (`OSC 52`).
+     *
+     * `None` when it asked for nothing since the last call. A program that
+     * asked to *read* the clipboard is refused: the clipboard belongs to
+     * the machine the person is using, and remote data is untrusted.
+     */
+open func takeClipboard() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_session_take_clipboard(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
     /**
@@ -4192,6 +4217,11 @@ public struct ScreenFrame: Equatable, Hashable {
      */
     public let alternateScreen: Bool
     /**
+     * What to do with the pointer. Read on every event: a program turns
+     * tracking on without otherwise changing the grid.
+     */
+    public let mouse: MouseTracking
+    /**
      * Lines between the bottom of this frame and the live screen. Zero means
      * new output appears on what is being shown.
      */
@@ -4211,6 +4241,10 @@ public struct ScreenFrame: Equatable, Hashable {
          * A full-screen program is running, so scrollback must not be shown.
          */alternateScreen: Bool, 
         /**
+         * What to do with the pointer. Read on every event: a program turns
+         * tracking on without otherwise changing the grid.
+         */mouse: MouseTracking, 
+        /**
          * Lines between the bottom of this frame and the live screen. Zero means
          * new output appears on what is being shown.
          */viewportOffset: UInt32, 
@@ -4225,6 +4259,7 @@ public struct ScreenFrame: Equatable, Hashable {
         self.cursorShape = cursorShape
         self.cursorVisible = cursorVisible
         self.alternateScreen = alternateScreen
+        self.mouse = mouse
         self.viewportOffset = viewportOffset
         self.historyLines = historyLines
         self.title = title
@@ -4254,6 +4289,7 @@ public struct FfiConverterTypeScreenFrame: FfiConverterRustBuffer {
                 cursorShape: FfiConverterTypeCaretShape.read(from: &buf), 
                 cursorVisible: FfiConverterBool.read(from: &buf), 
                 alternateScreen: FfiConverterBool.read(from: &buf), 
+                mouse: FfiConverterTypeMouseTracking.read(from: &buf), 
                 viewportOffset: FfiConverterUInt32.read(from: &buf), 
                 historyLines: FfiConverterUInt32.read(from: &buf), 
                 title: FfiConverterString.read(from: &buf), 
@@ -4269,6 +4305,7 @@ public struct FfiConverterTypeScreenFrame: FfiConverterRustBuffer {
         FfiConverterTypeCaretShape.write(value.cursorShape, into: &buf)
         FfiConverterBool.write(value.cursorVisible, into: &buf)
         FfiConverterBool.write(value.alternateScreen, into: &buf)
+        FfiConverterTypeMouseTracking.write(value.mouse, into: &buf)
         FfiConverterUInt32.write(value.viewportOffset, into: &buf)
         FfiConverterUInt32.write(value.historyLines, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
@@ -5610,9 +5647,9 @@ public enum FrameUpdate: Equatable, Hashable {
     
     case full(frame: ScreenFrame
     )
-    case rows(rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    case rows(rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32, mouse: MouseTracking
     )
-    case idle(cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32
+    case idle(cursorRow: UInt32, cursorColumn: UInt32, cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32, historyLines: UInt32, mouse: MouseTracking
     )
 
 
@@ -5638,10 +5675,10 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
         case 1: return .full(frame: try FfiConverterTypeScreenFrame.read(from: &buf)
         )
         
-        case 2: return .rows(rows: try FfiConverterSequenceTypeUpdatedRow.read(from: &buf), cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        case 2: return .rows(rows: try FfiConverterSequenceTypeUpdatedRow.read(from: &buf), cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf), mouse: try FfiConverterTypeMouseTracking.read(from: &buf)
         )
         
-        case 3: return .idle(cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf)
+        case 3: return .idle(cursorRow: try FfiConverterUInt32.read(from: &buf), cursorColumn: try FfiConverterUInt32.read(from: &buf), cursorShape: try FfiConverterTypeCaretShape.read(from: &buf), cursorVisible: try FfiConverterBool.read(from: &buf), title: try FfiConverterString.read(from: &buf), viewportOffset: try FfiConverterUInt32.read(from: &buf), historyLines: try FfiConverterUInt32.read(from: &buf), mouse: try FfiConverterTypeMouseTracking.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -5657,7 +5694,7 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
             FfiConverterTypeScreenFrame.write(frame, into: &buf)
             
         
-        case let .rows(rows,cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+        case let .rows(rows,cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines,mouse):
             writeInt(&buf, Int32(2))
             FfiConverterSequenceTypeUpdatedRow.write(rows, into: &buf)
             FfiConverterUInt32.write(cursorRow, into: &buf)
@@ -5667,9 +5704,10 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
             FfiConverterString.write(title, into: &buf)
             FfiConverterUInt32.write(viewportOffset, into: &buf)
             FfiConverterUInt32.write(historyLines, into: &buf)
+            FfiConverterTypeMouseTracking.write(mouse, into: &buf)
             
         
-        case let .idle(cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines):
+        case let .idle(cursorRow,cursorColumn,cursorShape,cursorVisible,title,viewportOffset,historyLines,mouse):
             writeInt(&buf, Int32(3))
             FfiConverterUInt32.write(cursorRow, into: &buf)
             FfiConverterUInt32.write(cursorColumn, into: &buf)
@@ -5678,6 +5716,7 @@ public struct FfiConverterTypeFrameUpdate: FfiConverterRustBuffer {
             FfiConverterString.write(title, into: &buf)
             FfiConverterUInt32.write(viewportOffset, into: &buf)
             FfiConverterUInt32.write(historyLines, into: &buf)
+            FfiConverterTypeMouseTracking.write(mouse, into: &buf)
             
         }
     }
@@ -6076,6 +6115,275 @@ public func FfiConverterTypeLinkKind_lower(_ value: LinkKind) -> RustBuffer {
 
 
 /**
+ * How much of the pointer the far side wants sent back.
+ *
+ * `Off` leaves clicks and the wheel to this app: selection and its own
+ * history. Anything else is a program — an editor, a pager, tmux — that
+ * asked to handle the pointer itself.
+ */
+
+public enum MouseTracking: Equatable, Hashable {
+    
+    case off
+    /**
+     * Presses, releases and the wheel. No motion.
+     */
+    case clicks
+    /**
+     * Motion while a button is held, as well as clicks.
+     */
+    case drag
+    /**
+     * Every move, whether or not a button is held.
+     */
+    case any
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MouseTracking: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMouseTracking: FfiConverterRustBuffer {
+    typealias SwiftType = MouseTracking
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MouseTracking {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .off
+        
+        case 2: return .clicks
+        
+        case 3: return .drag
+        
+        case 4: return .any
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MouseTracking, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .off:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .clicks:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .drag:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .any:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMouseTracking_lift(_ buf: RustBuffer) throws -> MouseTracking {
+    return try FfiConverterTypeMouseTracking.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMouseTracking_lower(_ value: MouseTracking) -> RustBuffer {
+    return FfiConverterTypeMouseTracking.lower(value)
+}
+
+
+
+/**
+ * A mouse button. `None` is motion with nothing held.
+ */
+
+public enum PointerButton: Equatable, Hashable {
+    
+    case left
+    case middle
+    case right
+    case none
+    case wheelUp
+    case wheelDown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PointerButton: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePointerButton: FfiConverterRustBuffer {
+    typealias SwiftType = PointerButton
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PointerButton {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .left
+        
+        case 2: return .middle
+        
+        case 3: return .right
+        
+        case 4: return .none
+        
+        case 5: return .wheelUp
+        
+        case 6: return .wheelDown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PointerButton, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .left:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .middle:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .right:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .none:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .wheelUp:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .wheelDown:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerButton_lift(_ buf: RustBuffer) throws -> PointerButton {
+    return try FfiConverterTypePointerButton.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerButton_lower(_ value: PointerButton) -> RustBuffer {
+    return FfiConverterTypePointerButton.lower(value)
+}
+
+
+
+/**
+ * Press, release, or a move.
+ */
+
+public enum PointerPhase: Equatable, Hashable {
+    
+    case press
+    case release
+    case move
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PointerPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePointerPhase: FfiConverterRustBuffer {
+    typealias SwiftType = PointerPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PointerPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .press
+        
+        case 2: return .release
+        
+        case 3: return .move
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PointerPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .press:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .release:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .move:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerPhase_lift(_ buf: RustBuffer) throws -> PointerPhase {
+    return try FfiConverterTypePointerPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePointerPhase_lower(_ value: PointerPhase) -> RustBuffer {
+    return FfiConverterTypePointerPhase.lower(value)
+}
+
+
+
+/**
  * Where to put the viewport over the scrollback.
  *
  * Named by intent, not by line arithmetic: how much a page is depends on the
@@ -6371,6 +6679,14 @@ public enum TerminalInput: Equatable, Hashable {
      */
     case paste(text: String
     )
+    /**
+     * A pointer event in cells of the visible grid, counted from the top left.
+     *
+     * The engine encodes it in whichever mouse protocol the far side turned
+     * on, and encodes it as nothing when tracking is off.
+     */
+    case pointer(button: PointerButton, phase: PointerPhase, column: UInt16, row: UInt16, modifiers: KeyModifiers
+    )
 
 
 
@@ -6398,6 +6714,9 @@ public struct FfiConverterTypeTerminalInput: FfiConverterRustBuffer {
         case 2: return .paste(text: try FfiConverterString.read(from: &buf)
         )
         
+        case 3: return .pointer(button: try FfiConverterTypePointerButton.read(from: &buf), phase: try FfiConverterTypePointerPhase.read(from: &buf), column: try FfiConverterUInt16.read(from: &buf), row: try FfiConverterUInt16.read(from: &buf), modifiers: try FfiConverterTypeKeyModifiers.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -6415,6 +6734,15 @@ public struct FfiConverterTypeTerminalInput: FfiConverterRustBuffer {
         case let .paste(text):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(text, into: &buf)
+            
+        
+        case let .pointer(button,phase,column,row,modifiers):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypePointerButton.write(button, into: &buf)
+            FfiConverterTypePointerPhase.write(phase, into: &buf)
+            FfiConverterUInt16.write(column, into: &buf)
+            FfiConverterUInt16.write(row, into: &buf)
+            FfiConverterTypeKeyModifiers.write(modifiers, into: &buf)
             
         }
     }
@@ -8058,6 +8386,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_set_palette() != 2490) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_session_take_clipboard() != 35507) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_session_terminal_name() != 42426) {

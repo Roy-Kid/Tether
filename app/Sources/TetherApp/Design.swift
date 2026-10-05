@@ -47,6 +47,10 @@ enum Chrome {
   static let windowMinHeight: CGFloat = 460
   static let settingsMinWidth: CGFloat = 660
   static let settingsMinHeight: CGFloat = 500
+  /// Sidebar column. The section name sits beside the tinted mark.
+  static let settingsSidebarMin: CGFloat = 168
+  static let settingsSidebarIdeal: CGFloat = 184
+  static let settingsSidebarMax: CGFloat = 210
   static let editorWidth: CGFloat = 440
   static let editorHeight: CGFloat = 480
   static let swatchWidth: CGFloat = 76

@@ -124,7 +124,7 @@ struct GridSelectionTests {
   private func screen(_ lines: [ScreenRow], columns: UInt32) -> ScreenFrame {
     ScreenFrame(
       columns: columns, rows: UInt32(lines.count), cursorRow: 0, cursorColumn: 0,
-      cursorShape: .hidden, cursorVisible: false, alternateScreen: false,
+      cursorShape: .hidden, cursorVisible: false, alternateScreen: false, mouse: .off,
       viewportOffset: 0, historyLines: 0, title: "", lines: lines)
   }
 }
