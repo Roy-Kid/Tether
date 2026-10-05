@@ -59,8 +59,12 @@ the master handle so the final output drains and history checkpoints complete.
   implementation here. Windows identities and credential protection are local.
 - Native Quick Look previews and macOS file-cache/tree performance behavior are
   not fully reproduced by Windows text/external-viewer previews.
-- The upstream WebPluginHost package is not yet integrated into either desktop
-  application; it is not represented as a working Windows feature.
+- Windows now loads API 1 web panels dynamically through WebView2, with package
+  validation, exact-origin read-only network access, SSE subscriptions and
+  enable/disable lifecycle. Nerve's independent web package is installed and
+  exercised against the live hub. This preview does not implement viewer routing,
+  storage/document capabilities, package updates or an uninstall UI; Apple's
+  WebPluginHost still has no application window integration.
 
 Windows compilation and shared/native regression tests are exercised locally.
 `dotnet run --project tests/windows-management` exercises structured config edits,

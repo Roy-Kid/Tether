@@ -164,6 +164,27 @@ public sealed partial class SettingsWindow : Window
     private void BuildExtensions()
     {
         ExtensionsPane.Children.Clear();
+        if (_plugins is not null)
+        {
+            var install = EditorDialog.Icon("\uE8B5", "Install web plugin", async () =>
+            {
+                try
+                {
+                    var picker = new Windows.Storage.Pickers.FolderPicker(); picker.FileTypeFilter.Add("*");
+                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+                    if (await picker.PickSingleFolderAsync() is not { } folder) return;
+                    var package = WebPluginPackage.Read(folder.Path);
+                    var access = string.Join("\n", package.Manifest.NetworkOrigins ?? []);
+                    if (await Alerts.ContentAsync("Install " + package.Manifest.Name + "?", access, "Install", null,
+                        SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                    WebPluginCatalog.Install(folder.Path, _plugins); BuildExtensions();
+                }
+                catch (Exception ex) { SaveProblem.Text = ex.Message; }
+            });
+            ExtensionsPane.Children.Add(install);
+            foreach (var problem in WebPluginCatalog.Problems)
+                ExtensionsPane.Children.Add(new TextBlock { Text = problem, TextWrapping = TextWrapping.Wrap });
+        }
         if (_plugins is null || _plugins.Plugins.Count == 0)
         {
             ExtensionsPane.Children.Add(new TextBlock

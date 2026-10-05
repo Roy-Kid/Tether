@@ -22,7 +22,8 @@ sealed class TmuxAttachment : ITabAttachment
     private readonly TabContext _tab;
     private readonly StackPanel _panel = new() { Padding = new Thickness(12), Spacing = 8 };
     private readonly TextBox _query = new() { PlaceholderText = "Find a session…" };
-    private readonly ListView _list = new() { MaxHeight = 400, IsItemClickEnabled = true };
+    private readonly TreeView _list = new() { MaxHeight = 400, SelectionMode = TreeViewSelectionMode.Single };
+    private readonly Dictionary<string, bool> _expanded = new();
     private readonly TextBlock _problem = new() { TextWrapping = TextWrapping.Wrap };
     private readonly CancellationTokenSource _lifetime = new();
     private IReadOnlyList<TmuxSessionInfo> _sessions = [];
@@ -47,13 +48,15 @@ sealed class TmuxAttachment : ITabAttachment
         Add("\uE8A7", "Detach", DetachAsync);
         _panel.Children.Add(buttons);
         _query.TextChanged += (_, _) => Render();
-        _list.ItemClick += async (_, e) => { if (e.ClickedItem is Row row) await RunAsync(() => OpenAsync(row.Session, row.Window)); };
+        _list.ItemInvoked += async (_, e) => { if (e.InvokedItem is TreeViewNode { Content: Row row }) await RunAsync(() => OpenAsync(row.Session, row.Window)); };
+        _list.Expanding += (_, e) => { if (e.Node.Content is Row row) _expanded[row.Session.Id] = true; };
+        _list.Collapsed += (_, e) => { if (e.Node.Content is Row row) _expanded[row.Session.Id] = false; };
         _query.KeyDown += async (_, e) =>
         {
             if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; _tab.Dismiss(); }
-            else if (e.Key == Windows.System.VirtualKey.Enter && _list.SelectedItem is Row row) { e.Handled = true; await RunAsync(() => OpenAsync(row.Session, row.Window)); }
-            else if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up && _list.Items.Count > 0)
-            { e.Handled = true; _list.SelectedIndex = Math.Clamp(_list.SelectedIndex + (e.Key == Windows.System.VirtualKey.Down ? 1 : -1), 0, _list.Items.Count - 1); _list.ScrollIntoView(_list.SelectedItem); }
+            else if (e.Key == Windows.System.VirtualKey.Enter && _list.SelectedNode?.Content is Row row) { e.Handled = true; await RunAsync(() => OpenAsync(row.Session, row.Window)); }
+            else if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up && _list.RootNodes.Count > 0)
+            { e.Handled = true; _list.SelectedNode ??= _list.RootNodes[0]; _list.Focus(FocusState.Keyboard); }
         };
         _tab.Model.SessionChanged += SessionChanged;
     }
@@ -104,18 +107,26 @@ sealed class TmuxAttachment : ITabAttachment
     }
     private sealed record Row(TmuxSessionInfo Session, TmuxWindow? Window)
     {
-        public override string ToString() => Window is null ? Session.Name : $"    {Window.Index}: {Window.Name}";
+        public override string ToString() => Window is null ? Session.Name : $"{Window.Index}: {Window.Name}";
     }
     private void Render()
     {
-        var rows = new List<Row>();
+        var selected = _list.SelectedNode?.Content as Row;
+        _list.RootNodes.Clear();
+        TreeViewNode? selection = null;
         foreach (var session in _sessions.Where(s => (s.Name + " " + string.Join(" ", s.Windows.Select(w => w.Name))).Contains(_query.Text, StringComparison.OrdinalIgnoreCase)))
         {
-            rows.Add(new(session, null));
-            rows.AddRange(session.Windows.Select(w => new Row(session, w)));
+            var node = new TreeViewNode { Content = new Row(session, null), IsExpanded = _expanded.GetValueOrDefault(session.Id, true) };
+            foreach (var window in session.Windows)
+            {
+                var child = new TreeViewNode { Content = new Row(session, window) };
+                node.Children.Add(child);
+                if (selected?.Session.Id == session.Id && selected.Window?.Id == window.Id) selection = child;
+            }
+            _list.RootNodes.Add(node);
+            if (selected?.Session.Id == session.Id && selected.Window is null) selection = node;
         }
-        _list.ItemsSource = rows;
-        _list.SelectedIndex = rows.Count > 0 ? 0 : -1;
+        _list.SelectedNode = selection ?? _list.RootNodes.FirstOrDefault();
     }
     private async Task OpenAsync(TmuxSessionInfo selected, TmuxWindow? window)
     {
@@ -132,7 +143,7 @@ sealed class TmuxAttachment : ITabAttachment
             _tab.Model.Send(new TerminalInput.Key(new KeyPress.Enter(), new KeyModifiers()));
         }
         if (window is not null) await _tab.Model.ExecuteAsync($"tmux select-window -t @{window.Id}", _lifetime.Token);
-        _session = selected.Id; _tab.Dismiss();
+        _session = selected.Id;
     }
     private async Task<string?> NameAsync(string title, string initial)
     {
@@ -150,12 +161,12 @@ sealed class TmuxAttachment : ITabAttachment
     }
     private async Task RenameAsync()
     {
-        if (_list.SelectedItem is not Row row || await NameAsync("Rename Session", row.Session.Name) is not { } name) return;
+        if (_list.SelectedNode?.Content is not Row row || await NameAsync("Rename Session", row.Session.Name) is not { } name) return;
         await _tab.Model.RenameTmuxAsync(row.Session.Id, name); await RefreshAsync();
     }
     private async Task EndAsync()
     {
-        if (_list.SelectedItem is not Row row) return;
+        if (_list.SelectedNode?.Content is not Row row) return;
         if (await Alerts.ContentAsync("End Session?", row.Session.Name, "End", null, _panel.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
         await _tab.Model.EndTmuxAsync(row.Session.Id); await RefreshAsync();
     }
@@ -163,7 +174,7 @@ sealed class TmuxAttachment : ITabAttachment
     {
         if (_tty is null) throw new IOException("Unable to identify this terminal.");
         await _tab.Model.ExecuteAsync("tmux detach-client -t " + Quote(_tty), _lifetime.Token);
-        _session = null; _tab.Dismiss();
+        _session = null;
     }
     private Task PerformAsync(string command) => RunAsync(async () =>
     {

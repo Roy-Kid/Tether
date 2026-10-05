@@ -41,3 +41,8 @@ swift/Artifacts/
 __pycache__/
 
 /artifacts/merged-swift-bindings/
+
+# Side-by-side Windows trial builds and font-render diagnostics.
+/artifacts/windows-*/
+/artifacts/han-*.png
+/artifacts/han-*.ppm

@@ -45,6 +45,7 @@ public sealed class PluginRegistry
             throw new InvalidOperationException($"Duplicate plugin {plugin.Metadata.Id}.");
         _plugins.Add(plugin);
         if (IsEnabled(plugin.Metadata.Id)) plugin.Activate();
+        Changed?.Invoke();
     }
 
     public bool IsEnabled(string id) => !_disabled.Contains(id);

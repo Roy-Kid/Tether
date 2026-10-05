@@ -9,34 +9,72 @@ internal static class HostManager
 {
     private sealed record Row(HostEntry Host) { public override string ToString() => Host.Label + " — " + Host.Target; }
     private sealed record IdentityRow(Guid? Id, string Name) { public override string ToString() => Name; }
-    public static async Task ShowAsync(ElementTheme theme, Func<HostEntry, SessionModel?> connection)
+    public static async Task ShowAsync(ElementTheme theme, Func<HostEntry, SessionModel?> connection, Func<HostEntry, Task> connect)
     {
         var panel = new StackPanel { Spacing = 12 };
         var query = new TextBox { PlaceholderText = "Find a host…" };
         var list = new ListView { Height = 350, SelectionMode = ListViewSelectionMode.Single };
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var busy = false;
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var moreMenu = new MenuFlyout();
+        var contextMenu = new MenuFlyout();
+        var selectionCommands = new List<MenuFlyoutItem>();
+        var newHost = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE710", FontSize = 16 },
+            Width = 32, Height = 32, Padding = new Thickness(6),
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"]
+        };
+        var more = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE712", FontSize = 16 },
+            Width = 32, Height = 32, Padding = new Thickness(6), Flyout = moreMenu
+        };
+        ToolTipService.SetToolTip(newHost, "New host");
+        ToolTipService.SetToolTip(more, "More actions");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(newHost, "New host");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(more, "More actions");
+        buttons.Children.Add(newHost); buttons.Children.Add(more);
+        void UpdateCommands()
+        {
+            foreach (var item in selectionCommands) item.IsEnabled = !busy && list.SelectedItem is Row;
+            newHost.IsEnabled = more.IsEnabled = !busy;
+        }
+        void AddCommand(string glyph, string label, Func<Task> action, bool needsHost = false, bool contextual = false)
+        {
+            MenuFlyoutItem Item()
+            {
+                var item = new MenuFlyoutItem { Text = label, Icon = new FontIcon { Glyph = glyph } };
+                item.Click += async (_, _) => await Run(action);
+                if (needsHost) selectionCommands.Add(item);
+                return item;
+            }
+            moreMenu.Items.Add(Item());
+            if (contextual) contextMenu.Items.Add(Item());
+        }
         void Reload(string? alias = null)
         {
             list.ItemsSource = SshConfig.Filter(SshConfig.Load(), query.Text).Select(h => new Row(h)).ToArray();
             list.SelectedItem = list.Items.Cast<Row>().FirstOrDefault(r => r.Host.Alias == alias) ?? list.Items.Cast<Row>().FirstOrDefault();
         }
-        var busy = false;
         async Task Run(Func<Task> action)
         {
-            if (busy) return; busy = true; foreach (var button in buttons.Children.OfType<Button>()) button.IsEnabled = false;
+            if (busy) return; busy = true; UpdateCommands();
             try { error.Text = ""; await action(); } catch (Exception ex) { error.Text = ex.Message; }
-            finally { busy = false; foreach (var button in buttons.Children.OfType<Button>()) button.IsEnabled = true; }
+            finally { busy = false; UpdateCommands(); }
         }
-        buttons.Children.Add(EditorDialog.Icon("\uE710", "New Host", () => _ = Run(async () => { if (await EditAsync(null) is { } alias) Reload(alias); })));
-        buttons.Children.Add(EditorDialog.Icon("\uE70F", "Edit Host", () => _ = Run(async () => { if (list.SelectedItem is Row row && await EditAsync(row.Host) is { } alias) Reload(alias); })));
-        buttons.Children.Add(EditorDialog.Icon("\uE74D", "Delete Host", () => _ = Run(async () =>
+        newHost.Click += async (_, _) => await Run(async () => { if (await EditAsync(null) is { } alias) Reload(alias); });
+        AddCommand("\uE8A7", "Connect", async () => { if (list.SelectedItem is Row row) await connect(row.Host); }, true, true);
+        AddCommand("\uE70F", "Edit host", async () => { if (list.SelectedItem is Row row && await EditAsync(row.Host) is { } alias) Reload(alias); }, true, true);
+        AddCommand("\uE74D", "Delete host", async () =>
         {
             if (list.SelectedItem is not Row row || await Alerts.ContentAsync("Delete Host?", row.Host.Label, "Delete", null, theme, _ => { }) != ContentDialogResult.Primary) return;
             var original = ReadConfig();
             SshConfigEditor.Save(original, SshConfigEditor.Update(original, row.Host.Alias, null)); IdentityStore.Current.Unbind(row.Host.Alias); Reload();
-        })));
-        buttons.Children.Add(EditorDialog.Icon("\uE8B5", "Import SSH Config", () => _ = Run(async () =>
+        }, true, true);
+        moreMenu.Items.Add(new MenuFlyoutSeparator());
+        AddCommand("\uE8B5", "Import SSH config…", async () =>
         {
             var picker = new FileOpenPicker(); picker.FileTypeFilter.Add("*");
             WinRT.Interop.InitializeWithWindow.Initialize(picker, (Application.Current as App)?.MainWindowHandle ?? 0);
@@ -54,13 +92,33 @@ internal static class HostManager
                 updated = SshConfigEditor.Import(original, source, selected.Select(r => r.Host.Alias), Path.GetDirectoryName(file.Path)!);
                 SshConfigEditor.Save(original, updated); Reload(); return Task.CompletedTask;
             }, "Import");
-        })));
-        buttons.Children.Add(EditorDialog.Icon("\uE77B", "Manage Identities", () => _ = Run(() => IdentityManager.ShowAsync(theme))));
-        buttons.Children.Add(EditorDialog.Icon("\uE72E", "Remote Authorization", () => _ = Run(async () => { if (list.SelectedItem is Row row) await AuthorizationManager.ShowAsync(row.Host, theme, connection); })));
+        });
+        AddCommand("\uE77B", "Manage identities…", () => IdentityManager.ShowAsync(theme));
+        AddCommand("\uE72E", "Remote authorization…", async () => { if (list.SelectedItem is Row row) await AuthorizationManager.ShowAsync(row.Host, theme, connection); }, true, true);
         query.TextChanged += (_, _) => { try { Reload(); } catch (Exception ex) { error.Text = ex.Message; } };
-        list.DoubleTapped += (_, _) => { if (list.SelectedItem is Row row) _ = Run(async () => { if (await EditAsync(row.Host) is { } alias) Reload(alias); }); };
-        panel.Children.Add(query); panel.Children.Add(buttons); panel.Children.Add(list); panel.Children.Add(error);
-        Reload(); await EditorDialog.ShowAsync("Manage Hosts", panel, () => busy ? throw new IOException("Finish the current host operation first.") : Task.CompletedTask, "Done", () => busy);
+        list.DoubleTapped += async (_, _) => { if (list.SelectedItem is Row row) await Run(() => connect(row.Host)); };
+        list.SelectionChanged += (_, _) => UpdateCommands();
+        list.RightTapped += (_, e) =>
+        {
+            var element = e.OriginalSource as DependencyObject;
+            while (element is not null && element is not ListViewItem) element = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(element);
+            if (element is ListViewItem item) list.SelectedItem = list.ItemFromContainer(item);
+            UpdateCommands(); contextMenu.ShowAt(list, e.GetPosition(list)); e.Handled = true;
+        };
+        list.KeyDown += async (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter && list.SelectedItem is Row row) { e.Handled = true; await Run(() => connect(row.Host)); }
+        };
+        list.ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load("""
+            <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <StackPanel Spacing="3" Margin="0,6">
+                <TextBlock Text="{Binding Host.Label}" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding Host.Target}" FontSize="12" Opacity="0.65" />
+              </StackPanel>
+            </DataTemplate>
+            """);
+        panel.Children.Add(buttons); panel.Children.Add(query); panel.Children.Add(list); panel.Children.Add(error);
+        Reload(); UpdateCommands(); await EditorDialog.ShowAsync("Manage Hosts", panel, () => busy ? throw new IOException("Finish the current host operation first.") : Task.CompletedTask, "Done", () => busy);
     }
     private static string ReadConfig() => File.Exists(SshConfig.DefaultPath) ? File.ReadAllText(SshConfig.DefaultPath) : "";
     private static string? RawJump(string text, string alias)

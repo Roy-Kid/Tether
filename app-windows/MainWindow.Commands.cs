@@ -197,7 +197,7 @@ public sealed partial class MainWindow
     {
         _connecting = true;
         try { await HostManager.ShowAsync(WorkspaceRoot.ActualTheme, host => _workspace.Tabs.Select(t => t.Model).FirstOrDefault(m =>
-            m.IsLive && m.IsRemote && m.RemoteHost is { } current && IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host))); }
+            m.IsLive && m.IsRemote && m.RemoteHost is { } current && IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host)), ChooseHostAsync); }
         finally { _connecting = false; _workspace.Active?.Surface.FocusTerminal(); }
     }
     private async Task ShowIdentitiesAsync()

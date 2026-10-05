@@ -210,7 +210,75 @@ rejects native binaries, dynamic libraries, and install scripts. The
 canonical note is `.claude/notes/web-plugin-host.md`.
 
 Built-in plugins do not go through this host, and this host does not name
-them. Nothing here is wired into the window yet.
+them. The Apple host is not wired into the window yet. Windows now has a
+runtime WebView2 panel adapter; see below.
+
+## Windows runtime web panels (preview)
+
+Settings → Extensions has an icon-only **Install web plugin** action. Choose
+a directory containing `manifest.json` and its web assets. The installer
+shows the plugin name and declared network origins, validates the package,
+and copies it into `%LOCALAPPDATA%\Tether\Plugins\<id>`. The manifest is
+discovered at startup without running the page. The inspector opens it on
+demand, and the existing extension toggle unloads every attachment when disabled.
+No project reference or product registration line is needed.
+
+This Windows preview supports API 1, runtime `web`, a `panel` contribution,
+optional `command` contributions, and the `network` permission. The optional
+`networkOrigins` field is a list of exact origins, including ports; HTTP is
+accepted only for literal loopback IPs, otherwise HTTPS is required. Optional
+`glyph`, `summary` and contribution `title` fields supply Windows chrome and
+command metadata. Other capabilities, viewer routing, package updates and
+uninstall UI are not implemented in this preview. The Apple manifest reader
+ignores these extra fields but has no network gateway yet.
+
+Each activation uses an isolated InPrivate WebView2 profile and a private
+virtual asset origin. The page has no native host objects, direct network,
+file navigation, downloads, popups or permission grants. Package validation
+rejects path escapes, reparse points, native binary signatures/extensions and
+installation scripts. There is no arbitrary process-launch or terminal capability. `service.local` permits `service.ensure` for declared `services` only when the host has registered that service for this plugin. Executable and arguments are host-controlled; health is checked first and a cross-process lock coordinates startup.
+
+The transport is `window.chrome.webview`. On load the host sends
+`{api:1,type:"ready",session,context:{hostLabel,theme}}`. Requests use
+`{api:1,session,id,method,payload}`; replies use
+`{api:1,type:"response",id,result}` or `error`. Session and source checks bind
+requests to that view. Supported methods:
+
+| Method | Payload | Result |
+| --- | --- | --- |
+| `network.get` | `{url}` | `{text}` |
+| `network.subscribe` | `{url}` | `{subscription}` |
+| `network.unsubscribe` | `{subscription}` | null |
+
+All network operations are GET-only, with no cookies, credentials, proxies
+or redirects, and only declared origins. SSE `data:` frames arrive as
+`{api:1,type:"event",subscription,text}`; disconnects return `error`. Requests
+and event frames are bounded. Reloading, disabling or closing the attachment
+cancels its streams. Theme/host changes arrive as `type:"context"`; command
+invocations arrive as `{api:1,type:"command",id}`.
+
+Command-line installation and opening use the same package checks:
+
+```powershell
+TetherApp.Windows.exe --install-plugin C:\path\package --open-plugin publisher.plugin
+# Already installed:
+TetherApp.Windows.exe --open-plugin publisher.plugin
+```
+
+The first integrated package is Nerve's `surfaces/tether-web/package` in its
+own repository. It reads the existing local hub without a native plugin or
+changes to the terminal SDK. Start Nerve or `nerve-hub serve` first; the web
+package requests the host-approved installed hub through `service.ensure` when opened or reconnecting. Its preview is display-only and connects as
+`tether-web` so other notifying surfaces retain election priority.
+
+Validation:
+
+```powershell
+dotnet test tests/plugins/PluginTests.csproj
+# Read-only integration against a running local hub:
+$env:TETHER_TEST_WEB_PACKAGE = 'C:\path\nerve\surfaces\tether-web\package'
+dotnet test tests/plugins/PluginTests.csproj --filter FullyQualifiedName~RealHubTests
+```
 
 # Using tmux
 

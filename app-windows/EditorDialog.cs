@@ -17,7 +17,8 @@ internal static class EditorDialog
         root.Children.Add(new ScrollViewer { Content = fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         var problem = new TextBlock { TextWrapping = TextWrapping.Wrap }; Grid.SetRow(problem, 1); root.Children.Add(problem);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        var cancel = new Button { Content = "Cancel" }; var apply = new Button { Content = verb };
+        var cancel = new Button { Content = "Cancel", Visibility = verb == "Done" ? Visibility.Collapsed : Visibility.Visible };
+        var apply = new Button { Content = verb == "Done" ? "Close" : verb };
         cancel.Click += (_, _) => window.Close();
         async Task Apply()
         {

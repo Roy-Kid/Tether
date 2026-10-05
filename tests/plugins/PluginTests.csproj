@@ -10,6 +10,9 @@
   <ItemGroup>
     <Compile Include="..\..\app-windows\Plugins\PluginRegistry.cs" />
     <Compile Include="..\..\app-windows\Plugins\FilesPaths.cs" />
+    <Compile Include="..\..\app-windows\Plugins\WebPluginPackage.cs" />
+    <Compile Include="..\..\app-windows\Plugins\WebPluginNetwork.cs" />
+    <Compile Include="..\..\app-windows\Plugins\WebPluginServices.cs" />
   </ItemGroup>
 
   <ItemGroup>

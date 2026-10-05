@@ -75,6 +75,8 @@ public sealed partial class MainWindow : Window
     private async Task OpenFirstTabAsync()
     {
         await _workspace.AddAsync();
+        if (App.CommandLineValue("--open-plugin") is { } id && App.Plugins.Plugins.Any(p => p.Metadata.Id == id) && App.Plugins.IsEnabled(id))
+            ToggleInspector(id);
     }
 
     private void ApplyAppearance()

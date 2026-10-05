@@ -267,6 +267,7 @@ pub struct TerminalRenderer {
     font_family: String,
     wide_font_family: String,
     size: SurfaceSize,
+    baseline_cache: Option<(u32, u32, f32)>,
 }
 
 impl TerminalRenderer {
@@ -395,6 +396,7 @@ impl TerminalRenderer {
             fonts: FontSystem::new(),
             font_family: String::new(),
             wide_font_family: String::new(),
+            baseline_cache: None,
             swash: SwashCache::new(),
             atlas,
             text,
@@ -441,6 +443,24 @@ impl TerminalRenderer {
         // runs keep the buffer shaped last frame.
         self.sync_buffers(&list.texts);
 
+        // All fragments in a terminal row share the primary font's baseline.
+        // Independently centering fallback fonts makes mixed text jump vertically.
+        let baseline = list
+            .texts
+            .first()
+            .map(|run| {
+                let key = (run.font_size.to_bits(), run.height.to_bits());
+                if let Some((size, height, baseline)) = self.baseline_cache
+                    && (size, height) == key
+                {
+                    return baseline;
+                }
+                let baseline =
+                    font_baseline(&mut self.fonts, run.font_size, run.height, &self.font_family);
+                self.baseline_cache = Some((key.0, key.1, baseline));
+                baseline
+            })
+            .unwrap_or(0.0);
         let areas: Vec<TextArea<'_>> = list
             .texts
             .iter()
@@ -448,7 +468,7 @@ impl TerminalRenderer {
             .map(|(run, buffer)| TextArea {
                 buffer,
                 left: run.x,
-                top: run.y,
+                top: text_top(run, buffer, baseline),
                 scale: 1.0,
                 bounds: TextBounds {
                     left: run.x.floor() as i32,
@@ -546,6 +566,7 @@ impl TerminalRenderer {
         if self.font_family == primary && self.wide_font_family == wide {
             return;
         }
+        self.baseline_cache = None;
         self.font_family = primary;
         self.wide_font_family = wide;
         self.buffers.clear();
@@ -618,6 +639,18 @@ impl BufferKey {
             italic: run.italic,
         }
     }
+}
+
+// Measure once per grid/font change, using the same centering as the shaper.
+fn font_baseline(fonts: &mut FontSystem, size: f32, height: f32, primary: &str) -> f32 {
+    let mut buffer = Buffer::new(fonts, Metrics::new(size, height));
+    buffer.set_text("Mg", &Attrs::new().family(family(primary)), Shaping::Advanced, None);
+    buffer.shape_until_scroll(fonts, false);
+    buffer.layout_runs().next().map_or(size, |line| line.line_y)
+}
+
+fn text_top(run: &TextRun, buffer: &Buffer, baseline: f32) -> f32 {
+    run.y + baseline - buffer.layout_runs().next().map_or(baseline, |line| line.line_y)
 }
 
 /// One run shaped into a buffer, spaced to the grid.
@@ -739,6 +772,8 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
     let primary = "Consolas";
     let wide = "Microsoft YaHei UI";
     let measured = measure_font(&mut fonts, 26.0, primary, wide);
+    let font_baseline_value =
+        font_baseline(&mut fonts, measured.size, measured.line_height, primary);
     let mut pixels = vec![250u8; 1200 * 150 * 3];
     let mut cache = SwashCache::new();
     for (row, text, columns_per_character, expected_family) in [
@@ -786,13 +821,14 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
                 }
             }
         }
+        let draw_top = text_top(&run, &buffer, font_baseline_value).round() as i32;
         #[allow(deprecated)]
         buffer.draw(&mut fonts, &mut cache, Color::rgb(30, 33, 38), |x, y, w, h, color| {
             let [r, g, b, a] = color.as_rgba();
             for py in 0..h {
                 for px in 0..w {
                     let x = x + px as i32 + run.x as i32;
-                    let y = y + py as i32 + run.y as i32;
+                    let y = y + py as i32 + draw_top;
                     if !(0..1200).contains(&x) || !(0..150).contains(&y) {
                         continue;
                     }
@@ -810,5 +846,43 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
         let mut image = b"P6\n1200 150\n255\n".to_vec();
         image.extend(pixels);
         std::fs::write(path, image).expect("font preview");
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn mixed_font_fragments_share_the_row_baseline() {
+    let mut fonts = FontSystem::new();
+    for size in [13.0, 19.5, 26.0, 32.0] {
+        let measured = measure_font(&mut fonts, size, "Consolas", "Microsoft YaHei UI");
+        let baseline = font_baseline(&mut fonts, size, measured.line_height, "Consolas");
+        for (text, columns) in [("A", 1.0), ("中文", 2.0), ("，", 2.0), ("É", 1.0), ("汉", 2.0)]
+        {
+            for (bold, italic) in [(false, false), (true, false), (false, true)] {
+                let run = TextRun {
+                    font_size: size,
+                    cell_width: measured.cell_width,
+                    x: 0.0,
+                    y: 37.0,
+                    width: text.graphemes(true).count() as f32 * columns * measured.cell_width,
+                    height: measured.line_height,
+                    text: text.into(),
+                    color: Rgba::new(0.0, 0.0, 0.0, 1.0),
+                    tracking: 0.0,
+                    bold,
+                    italic,
+                    underline: false,
+                    underline_color: None,
+                    strikethrough: false,
+                };
+                let buffer = build_buffer(&mut fonts, &run, "Consolas", "Microsoft YaHei UI");
+                let line = buffer.layout_runs().next().expect("shaped fragment");
+                let actual = text_top(&run, &buffer, baseline) + line.line_y;
+                assert!((actual - (run.y + baseline)).abs() < 0.001, "{text} at {size}: {actual}");
+                for glyph in line.glyphs {
+                    assert_eq!(glyph.font_size, size, "{text} must retain its size");
+                }
+            }
+        }
     }
 }
