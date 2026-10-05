@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Tether
@@ -57,6 +58,24 @@ struct LocalSessionTests {
     let session = try await TerminalSession.local()
     defer { session.close() }
     #expect(session.ending() == nil)
+  }
+
+  @Test("history crosses the Swift boundary and reopens as displayed content")
+  func persistentHistory() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "tether-history-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let history = try SessionHistory(directory: directory, lineLimit: nil)
+    let first = try await TerminalSession.local(LocalShell(columns: 80, rows: 24, history: history))
+    try first.send(.paste("printf '\\033[31mffi''-history\\033[0m\\n'\n"))
+    _ = await settle(first, "the archived marker") { $0.contains("ffi-history") }
+    first.close()
+    #expect(history.error == nil)
+    let reopened = try SessionHistory(directory: directory, lineLimit: nil, restoring: true)
+    let second = try await TerminalSession.local(LocalShell(columns: 80, rows: 24, history: reopened))
+    defer { second.close() }
+    // Restoring should show recent content immediately, before any scrolling.
+    #expect(Self.text(second.frame()).contains("ffi-history"))
+    #expect(second.historyError == nil)
   }
 
   @Test("draws what the shell writes")

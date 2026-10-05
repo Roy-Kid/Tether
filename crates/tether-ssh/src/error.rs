@@ -24,6 +24,12 @@ pub enum SshError {
     #[error("the person declined to answer")]
     Declined,
 
+    /// A private key could not be used — it was locked and every passphrase
+    /// offered was wrong. Its own words, because "authentication failed"
+    /// would send a person to check an account that was never asked about.
+    #[error("the key could not be used: {0}")]
+    Key(#[from] crate::key::KeyError),
+
     #[error("the server refused to open a shell: {cause}")]
     ShellRefused { cause: String },
 

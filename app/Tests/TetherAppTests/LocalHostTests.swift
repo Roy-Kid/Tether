@@ -22,7 +22,7 @@ import struct TetherApp.Host
 struct LocalHostTests {
   static func store() -> (HostStore, URL) {
     let location = temporaryFile("config")
-    return (HostStore(location: location, secrets: MemorySecrets()), location)
+    return (HostStore(location: location, secrets: MemorySecrets(), credentials: DeviceCredentialStore(secrets: MemorySecrets())), location)
   }
 
   static func host(_ label: String = "lab") -> Host {
@@ -56,7 +56,8 @@ struct LocalHostTests {
 
     let written = (try? String(contentsOf: location, encoding: .utf8)) ?? ""
     #expect(!written.contains("localhost"))
-    #expect(written.contains("Host lab"))
+    #expect(store.snapshot.records.values.contains { $0.profile.label == "lab" })
+    #expect(store.snapshot.records[Host.localID] == nil)
   }
 
   @Test("cannot be deleted out of the list")
@@ -154,5 +155,25 @@ struct LaunchPreferenceTests {
 
     defaults.set(false, forKey: LaunchPreference.key)
     #expect(defaults.object(forKey: LaunchPreference.key) as? Bool == false)
+  }
+}
+
+@MainActor
+@Suite("The last-tab preference")
+struct LastTabPreferenceTests {
+  @Test("keeps the empty window unless someone chose to quit")
+  func defaultsToStay() {
+    #expect(LastTabPreference.default == LastTabPreference.stay)
+    let defaults = UserDefaults.standard
+    let original = defaults.object(forKey: LastTabPreference.key)
+    defer {
+      if let original {
+        defaults.set(original, forKey: LastTabPreference.key)
+      } else {
+        defaults.removeObject(forKey: LastTabPreference.key)
+      }
+    }
+    defaults.removeObject(forKey: LastTabPreference.key)
+    #expect(LastTabPreference.chosen == LastTabPreference.stay)
   }
 }

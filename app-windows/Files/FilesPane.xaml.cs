@@ -252,6 +252,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
             case VirtualKey.Enter: e.Handled = true; await OpenSelectedAsync(); break;
             case VirtualKey.F2: e.Handled = true; await RenameAsync(); break;
             case VirtualKey.Delete: e.Handled = true; await DeleteAsync(); break;
+            case VirtualKey.Space: e.Handled = true; await PreviewSelectedAsync(); break;
             case VirtualKey.F5: e.Handled = true; await RunAsync(RefreshAsync); break;
         }
     }
@@ -390,9 +391,14 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     private async void Download_Click(object sender, RoutedEventArgs e) => await RunAsync(async t =>
     {
         var selected = Selected(); if (selected.Length == 0) return;
-        var picker = new FolderPicker(); InitPicker(picker); picker.FileTypeFilter.Add("*");
-        if (await picker.PickSingleFolderAsync() is not { } folder) return;
-        foreach (var entry in selected) await DownloadItemAsync(entry, folder.Path, t);
+        var directory = AppSettings.Current.DownloadDirectory;
+        if (!Directory.Exists(directory))
+        {
+            var picker = new FolderPicker(); InitPicker(picker); picker.FileTypeFilter.Add("*");
+            if (await picker.PickSingleFolderAsync() is not { } folder) return;
+            directory = folder.Path;
+        }
+        foreach (var entry in selected) await DownloadItemAsync(entry, directory, t);
     });
     private static string SafeName(string name)
     {
@@ -433,6 +439,41 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
             else await _source!.DownloadAsync(entry.Path, path, TransferProgress(name), token);
         }
     }
+    private async Task<bool> ConfirmLargeFileAsync(FileEntry entry)
+    {
+        var limit = AppSettings.Current.FilesPromptMegabytes;
+        if (limit > ulong.MaxValue / 1_000_000 || entry.Size <= limit * 1_000_000) return true;
+        return await DialogAsync("Download this file?", $"{entry.Size / 1_000_000.0:N1} MB", "Download") == ContentDialogResult.Primary;
+    }
+
+    private async void Preview_Click(object sender, RoutedEventArgs e) => await PreviewSelectedAsync();
+
+    private Task PreviewSelectedAsync() => RunAsync(async token =>
+    {
+        if (Selected() is not [var entry] || entry.Kind != FileKind.File) return;
+        if (_source is SftpSource && !await ConfirmLargeFileAsync(entry)) return;
+        // Inline previews are bounded; an external viewer handles larger files.
+        if (entry.Size > 2_000_000) { await OpenFileAsync(entry, token); return; }
+        var temporary = Path.Combine(Path.GetTempPath(), "tether-preview-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string path;
+            if (_source is LocalFileSource local) path = local.NativePath(entry.Path);
+            else { await _source!.DownloadAsync(entry.Path, temporary, TransferProgress(entry.Name), token); path = temporary; }
+            var bytes = new byte[2 * 1024 * 1024 + 1];
+            int count;
+            using (var stream = File.OpenRead(path)) count = await stream.ReadAtLeastAsync(bytes, bytes.Length, throwOnEndOfStream: false, cancellationToken: token);
+            if (count == bytes.Length) { await OpenFileAsync(entry, token); return; }
+            Array.Resize(ref bytes, count);
+            if (bytes.Take(8192).Contains((byte)0)) { await OpenFileAsync(entry, token); return; }
+            var text = System.Text.Encoding.UTF8.GetString(bytes);
+            var preview = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true,
+                TextWrapping = TextWrapping.NoWrap, Height = 220, MinWidth = 360 };
+            await DialogAsync(entry.Name, preview, "Close");
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    });
+
     private void Entries_DragOver(object sender, DragEventArgs e)
     { if (!_busy && e.DataView.Contains(StandardDataFormats.StorageItems)) { e.AcceptedOperation = DataPackageOperation.Copy; e.Handled = true; } }
     private async void Entries_Drop(object sender, DragEventArgs e)
@@ -460,6 +501,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         }
         else
         {
+            if (!await ConfirmLargeFileAsync(entry)) return;
             // Each remote copy keeps its filename and file association.
             // External apps may read it long after launch returns.
             var directory = Path.Combine(Path.GetTempPath(), "Tether", "OpenedFiles", Guid.NewGuid().ToString("N"));

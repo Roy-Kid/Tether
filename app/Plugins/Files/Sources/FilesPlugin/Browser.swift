@@ -1,5 +1,6 @@
 import SwiftUI
 import Tether
+import TetherPluginKit
 import TetherUI
 import UniformTypeIdentifiers
 
@@ -22,12 +23,24 @@ struct Browser: View {
   var body: some View {
     content
       .task { model.appear() }
+      .onChange(of: model.query) { previous, next in
+        let cleaned = next.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+        if cleaned != next {
+          model.query = cleaned
+          return
+        }
+        model.noteQueryChange(from: previous)
+      }
+      .onChange(of: model.finding) { _, open in
+        if !open, !model.query.isEmpty { model.query = "" }
+      }
       .fileImporter(
         isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true
       ) { result in
         guard case .success(let files) = result, let target = model.targetDirectory else { return }
         Task { await model.upload(files, into: target) }
       }
+      .modifier(DownloadPicker(model: model))
       .modifier(Confirmations(model: model))
   }
 
@@ -46,6 +59,11 @@ struct Browser: View {
           .navigationBarTitleDisplayMode(.inline)
           .toolbarTitleMenu { PathMenu(model: model) }
           .toolbar { PhoneToolbar(model: model, importing: $importing) }
+          .searchable(
+            text: $model.query, isPresented: $model.finding,
+            placement: .navigationBarDrawer(displayMode: .automatic), prompt: ""
+          )
+          .onSubmit(of: .search) { model.commitFind() }
           .refreshable { if let directory = model.directory { await model.go(to: directory, remember: false) } }
           .safeAreaInset(edge: .bottom) { TransferList(transfers: model.transfers) }
       }
@@ -69,8 +87,19 @@ struct Browser: View {
 /// The entries of the current directory.
 private struct FileList: View {
   @Bindable var model: FilesTab
+  @FocusState private var listFocused: Bool
+  @State private var listHeight = UIStyle.listHeight
 
   var body: some View {
+    ScrollViewReader { proxy in
+      listing
+        .onChange(of: model.selection) { _, paths in
+          if paths.count == 1, let path = paths.first { proxy.scrollTo(path) }
+        }
+    }
+  }
+
+  private var listing: some View {
     List(selection: $model.selection) {
       if let problem = model.problem {
         Label(problem, systemImage: "exclamationmark.triangle")
@@ -79,14 +108,15 @@ private struct FileList: View {
       }
       #if os(macOS)
         // A tree, as an editor's explorer is: folders open in place.
-        ForEach(model.rows) { row in
+        ForEach(model.displayedRows) { row in
           FileRow(model: model, entry: row.entry, depth: row.depth)
             .tag(row.entry.path)
             .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
         }
       #else
         // A phone drills down: one directory a screen.
-        ForEach(model.visible, id: \.path) { entry in
+        ForEach(model.displayed, id: \.path) { entry in
           FileRow(model: model, entry: entry)
             .tag(entry.path)
         }
@@ -94,13 +124,19 @@ private struct FileList: View {
     }
     #if os(macOS)
       .listStyle(.inset)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+      .focused($listFocused)
+      .background { ListKeyboardClaim() }
+      .onAppear { listFocused = true }
+      .onChange(of: model.listTicket) { _, _ in listFocused = true }
       .environment(\.defaultMinListRowHeight, UIStyle.rowHeight)
       .contextMenu(forSelectionType: String.self) { paths in
         EntryMenu(model: model, entries: paths.compactMap(model.entry))
       } primaryAction: { paths in
         if paths.count == 1, let entry = paths.first.flatMap(model.entry) {
-          // A double-clicked folder opens in place; a file opens.
-          if entry.kind == .directory { model.toggle(entry) } else { model.open(entry) }
+          // A double-click opens the row. A folder becomes the root;
+          // the chevron is what expands it in place.
+          model.open(entry)
         } else {
           Task { await model.preview(paths.compactMap(model.entry)) }
         }
@@ -116,15 +152,38 @@ private struct FileList: View {
         model.previewSelection()
         return .handled
       }
-      .onKeyPress(.return) {
-        guard model.renaming == nil, model.selection.count == 1 else { return .ignored }
+      .onPickerSubmit(enabled: model.renaming == nil && model.selection.count == 1) {
         model.renaming = model.selection.first
+      }
+      .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+        guard model.renaming == nil, !model.selection.isEmpty else { return .ignored }
+        model.requestDelete(model.selected)
         return .handled
       }
       .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
         guard model.renaming == nil, press.modifiers.isEmpty else { return .ignored }
         if press.key == .rightArrow { model.expandOrDescend() } else { model.collapseOrAscend() }
         return .handled
+      }
+      // Control+F/B arrive as control codes, so a key of "f" never sees them.
+      // A selected folder takes them, the same as the arrows. Find takes
+      // Control+F when the selection is not a folder.
+      .onKeyPress(phases: .down) { press in
+        guard model.renaming == nil, let chord = treeChord(press) else { return .ignored }
+        guard chord == .back || model.selection.first.flatMap(model.entry)?.kind == .directory
+        else { return .ignored }
+        if chord == .forward { model.expandOrDescend() } else { model.collapseOrAscend() }
+        return .handled
+      }
+      .onPickerNavigation(enabled: model.renaming == nil) { movement in
+        switch movement {
+        case .first, .last:
+          let row = movement == .first ? model.rows.first : model.rows.last
+          model.selection = row.map { [$0.id] } ?? []
+        default:
+          let offset = movement.offset(pageSize: max(1, Int(listHeight / UIStyle.rowHeight)))
+          model.moveSelection(forward: offset > 0, steps: abs(offset))
+        }
       }
       .onKeyPress(keys: [.upArrow, .downArrow]) { press in
         guard press.modifiers.contains(.command) else { return .ignored }
@@ -133,6 +192,24 @@ private struct FileList: View {
         } else if model.selection.count == 1, let entry = model.selection.first.flatMap(model.entry) {
           model.open(entry)
         }
+        return .handled
+      }
+      .onKeyPress(.escape) {
+        guard model.finding else { return .ignored }
+        model.closeFind()
+        return .handled
+      }
+      // On the list, not the window: ⌃F while the terminal has the keyboard
+      // is still forward-char for the shell.
+      .onKeyPress(phases: .down) { press in
+        guard findChord(press) else { return .ignored }
+        // The folder row keeps Control+F as Right Arrow. Find is the other case.
+        if model.renaming == nil, model.selection.count == 1,
+          model.selection.first.flatMap(model.entry)?.kind == .directory
+        {
+          return .ignored
+        }
+        model.beginFind()
         return .handled
       }
       .onDeleteCommand { model.requestDelete(model.selected) }
@@ -151,6 +228,58 @@ private struct FileList: View {
   }
 }
 
+#if os(macOS)
+  /// A click in the list selects a row and leaves the keyboard where it was,
+  /// which is the terminal. This view does not take the click; it moves the
+  /// first responder onto the list the click landed in.
+  private struct ListKeyboardClaim: NSViewRepresentable {
+    func makeNSView(context: Context) -> ListKeyboardClaimView { ListKeyboardClaimView() }
+    func updateNSView(_ view: ListKeyboardClaimView, context: Context) {}
+  }
+
+  private final class ListKeyboardClaimView: NSView {
+    private var monitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+      guard window != nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
+        [weak self] event in
+        self?.takeKeyboard(event)
+        return event
+      }
+    }
+
+    private func takeKeyboard(_ event: NSEvent) {
+      guard let window, event.window === window else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(point) else { return }
+      let hit = window.contentView?.hitTest(event.locationInWindow)
+      if hit is NSTextView { return }
+      var table: NSTableView?
+      var fallback: NSView?
+      var view: NSView? = hit
+      while let current = view {
+        if let found = current as? NSTableView {
+          table = found
+          break
+        }
+        if fallback == nil, current.acceptsFirstResponder { fallback = current }
+        view = current.superview
+      }
+      if let table {
+        window.makeFirstResponder(table)
+      } else if let fallback {
+        window.makeFirstResponder(fallback)
+      }
+    }
+  }
+#endif
+
 /// One entry: its symbol and its name, or a field while it is renamed.
 private struct FileRow: View {
   @Bindable var model: FilesTab
@@ -161,46 +290,26 @@ private struct FileRow: View {
   @FocusState private var editing: Bool
 
   var body: some View {
-    HStack(spacing: UIStyle.Space.inline) {
+    Group {
       #if os(macOS)
-        disclosure
+        GeometryReader { geometry in
+          // Deep paths must give up indentation before they consume the name
+          // editor. Reserve room for the name, icons and a transfer indicator.
+          let indentation = min(CGFloat(depth) * FileRow.indent,
+            max(0, geometry.size.width - FileRow.contentWidth))
+          content
+            .padding(.leading, indentation)
+            .frame(maxHeight: .infinity)
+        }
+        .frame(height: UIStyle.rowHeight)
+      #else
+        content
       #endif
-      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
-        .font(UIStyle.symbol)
-        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
-        .frame(width: 16)
-      if model.renaming == entry.path {
-        TextField("Name", text: $draft)
-          .textFieldStyle(.plain)
-          .font(UIStyle.title)
-          .focused($editing)
-          .onAppear {
-            draft = entry.name
-            editing = true
-          }
-          .onSubmit { Task { await model.rename(entry, to: draft) } }
-          #if os(macOS)
-            .onExitCommand { model.renaming = nil }
-          #endif
-      } else {
-        Text(Names.display(entry.name))
-          .font(UIStyle.title)
-          .adaptiveRowText()
-          .truncationMode(.middle)
-      }
-      Spacer(minLength: 0)
-      if let transfer = model.transfers.item(for: entry.path) {
-        ProgressView(value: transfer.fraction)
-          .progressViewStyle(.circular)
-          .controlSize(.mini)
-      }
     }
     .help(detail)
     .accessibilityElement(children: .combine)
     .accessibilityValue(detail)
-    .draggable(RemoteFile(model: model, entry: entry)) {
-      Label(Names.display(entry.name), systemImage: Names.symbol(for: entry.name, kind: entry.kind))
-    }
+    .modifier(EntryDrag(model: model, entry: entry))
     .modifier(FolderDrop(model: model, entry: entry))
     #if !os(macOS)
       .contentShape(Rectangle())
@@ -220,34 +329,76 @@ private struct FileRow: View {
     #endif
   }
 
+  private var content: some View {
+    HStack(spacing: UIStyle.Space.inline) {
+      #if os(macOS)
+        disclosure
+      #endif
+      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
+        .font(UIStyle.symbol)
+        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
+        .frame(width: UIStyle.Mark.glyph)
+      if model.renaming == entry.path {
+        TextField("Name", text: $draft)
+          .textFieldStyle(.plain)
+          .font(UIStyle.title)
+          .focused($editing)
+          .onAppear {
+            draft = entry.name
+            editing = true
+          }
+          .onSubmit { Task { await model.rename(entry, to: draft) } }
+          #if os(macOS)
+            .frame(minWidth: FileRow.nameWidth, maxWidth: .infinity)
+            .onExitCommand { model.renaming = nil }
+          #endif
+      } else {
+        Text(Names.display(entry.name))
+          .font(UIStyle.title)
+          .adaptiveRowText()
+          .truncationMode(.middle)
+      }
+      Spacer(minLength: 0)
+      if let transfer = model.transfers.item(for: entry.path) {
+        ProgressView(value: transfer.fraction)
+          .progressViewStyle(.circular)
+          .controlSize(.mini)
+      }
+    }
+  }
+
   #if os(macOS)
     /// The indent, and a chevron on a folder that turns as it opens. A file
     /// gets the chevron's width, so names line up under their folder.
     @ViewBuilder private var disclosure: some View {
-      Color.clear.frame(width: CGFloat(depth) * FileRow.indent, height: 1)
       if entry.kind == .directory {
-        Group {
-          if model.opening.contains(entry.path) {
-            ProgressView().controlSize(.mini)
-          } else {
-            Image(systemName: "chevron.right")
-              .font(UIStyle.accessory)
-              .foregroundStyle(Theme.subtle)
-              .rotationEffect(.degrees(model.isExpanded(entry) ? 90 : 0))
+        Button { model.toggle(entry) } label: {
+          Group {
+            if model.opening.contains(entry.path) {
+              ProgressView().controlSize(.mini).accessibilityLabel("Loading files")
+            } else {
+              Image(systemName: "chevron.right")
+                .font(UIStyle.accessory)
+                .foregroundStyle(Theme.subtle)
+                .rotationEffect(.degrees(model.isExpanded(entry) ? 90 : 0))
+            }
           }
+          .frame(width: FileRow.chevron, height: UIStyle.rowHeight)
+          .contentShape(Rectangle())
         }
-        .frame(width: FileRow.chevron, height: UIStyle.rowHeight)
-        .contentShape(Rectangle())
-        .onTapGesture { model.toggle(entry) }
-        .accessibilityLabel(model.isExpanded(entry) ? "Collapse" : "Expand")
-        .accessibilityAddTraits(.isButton)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(model.isExpanded(entry) ? "Collapse" : "Expand") \(Names.display(entry.name))")
+        .accessibilityValue(model.opening.contains(entry.path) ? "Loading" : (model.isExpanded(entry) ? "Expanded" : "Collapsed"))
       } else {
-        Color.clear.frame(width: FileRow.chevron, height: 1)
+        Color.clear.frame(width: FileRow.chevron, height: UIStyle.Mark.hairline)
       }
     }
 
     static let indent: CGFloat = 12
-    static let chevron: CGFloat = 12
+    static let chevron = UIStyle.Mark.chevron
+    static let nameWidth: CGFloat = 80
+    static let contentWidth = nameWidth + chevron + UIStyle.Mark.glyph
+      + UIStyle.controlHeight + 4 * UIStyle.Space.inline
   #endif
 
   /// Size and date, for the tooltip and VoiceOver: the window itself shows
@@ -263,6 +414,43 @@ private struct FileRow: View {
           .formatted(date: .abbreviated, time: .shortened))
     }
     return parts.joined(separator: " · ")
+  }
+}
+
+/// Dragging a row carries the absolute path Copy Path would copy. A file
+/// also offers its bytes, so a drop outside this app can still take the file.
+private struct EntryDrag: ViewModifier {
+  let model: FilesTab
+  let entry: FileEntry
+
+  func body(content: Content) -> some View {
+    let text = model.draggedPathText(entry)
+    if entry.kind == .file {
+      content.draggable(DraggedFile(text: text, file: RemoteFile(model: model, entry: entry))) {
+        preview
+      }
+    } else {
+      content.draggable(DroppedPath(text: text)) { preview }
+    }
+  }
+
+  private var preview: some View {
+    Label(Names.display(entry.name), systemImage: Names.symbol(for: entry.name, kind: entry.kind))
+  }
+}
+
+/// A file row's drag: the absolute path, and the bytes when something asks.
+struct DraggedFile: Transferable {
+  let text: String
+  let file: RemoteFile
+
+  static var transferRepresentation: some TransferRepresentation {
+    ProxyRepresentation { DroppedPath(text: $0.text) }
+    FileRepresentation(exportedContentType: .data) { item in
+      SentTransferredFile(
+        try await item.file.model.local(item.file.entry), allowAccessingOriginalFile: false)
+    }
+    .suggestedFileName { Names.local($0.file.entry.name) }
   }
 }
 
@@ -306,10 +494,8 @@ private struct EntryMenu: View {
         if !openable.isEmpty {
           Button("Open", systemImage: "arrow.up.forward.app") { model.openExternally(openable) }
         }
-        Button("Save to Downloads", systemImage: "arrow.down.circle") {
-          model.saveToDownloads(files)
-        }
       #endif
+      Button("Download", systemImage: "arrow.down.circle") { model.download(files) }
     }
     #if !os(macOS)
       if files.count == 1, let file = files.first {
@@ -322,14 +508,13 @@ private struct EntryMenu: View {
     if entries.count == 1, let entry = entries.first {
       Button("Rename", systemImage: "pencil") { model.renaming = entry.path }
     }
-    Button("Copy Path", systemImage: "doc.on.doc") { copy(entries.map(\.path)) }
+    Button("Copy Path", systemImage: "doc.on.doc") { copy(Names.copiedPaths(entries.map(\.path))) }
     Button("Insert Path", systemImage: "terminal") { model.insertPaths(entries) }
     Divider()
     Button("Delete", systemImage: "trash", role: .destructive) { model.requestDelete(entries) }
   }
 
-  private func copy(_ paths: [String]) {
-    let text = paths.joined(separator: "\n")
+  private func copy(_ text: String) {
     #if os(macOS)
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(text, forType: .string)
@@ -340,61 +525,199 @@ private struct EntryMenu: View {
 
 }
 
-/// The directories above this one, deepest first, as Finder's title menu
-/// lists them; and the switches that belong to the whole listing.
+/// Where the browser can go from here, then the switches for the listing.
+///
+/// Enclosing directories come nearest first. A directory that is already in
+/// that list is not repeated as Home or Shell: the account home under
+/// `/home` would otherwise read as `home` and then Home.
 private struct PathMenu: View {
   @Bindable var model: FilesTab
 
   var body: some View {
-    if let directory = model.directory {
-      ForEach(Paths.ancestors(directory).reversed().dropFirst(), id: \.self) { path in
-        Button(Names.display(Paths.name(path)), systemImage: "folder") {
-          Task { await model.go(to: path) }
+    let places = model.pathPlaces
+    if !places.places.isEmpty {
+      Section {
+        ForEach(places.places, id: \.self) { path in
+          Button {
+            Task { await model.go(to: path) }
+          } label: {
+            Label(places.title(path), systemImage: places.symbol(path))
+          }
+          .help(Names.display(path))
         }
       }
     }
-    Button("Home", systemImage: "house") { model.goHome() }
-    Divider()
-    Toggle("Hidden Files", isOn: $model.showHidden)
+    if places.showsHome || places.showsShell {
+      Section {
+        if places.showsHome {
+          Button("Home", systemImage: "house") { model.goHome() }
+            .help(places.home.map(Names.display) ?? "Home")
+        }
+        if places.showsShell, let shell = places.shell {
+          Button("Shell", systemImage: "terminal") { model.goToShell() }
+            .help(Names.display(shell))
+        }
+      }
+    }
+    Section {
+      Toggle(isOn: $model.showHidden) {
+        Label("Hidden Files", systemImage: "eye")
+      }
+    }
   }
+}
+
+/// Control+B/F for the file tree. The character with Control held is the
+/// control code, not the letter.
+private enum TreeChord { case forward, back }
+
+private func treeChord(_ press: KeyPress) -> TreeChord? {
+  guard press.modifiers.contains(.control),
+    !press.modifiers.contains(.command),
+    !press.modifiers.contains(.option),
+    !press.modifiers.contains(.shift)
+  else { return nil }
+  switch press.characters {
+  case "f", "F", "\u{06}": return .forward
+  case "b", "B", "\u{02}": return .back
+  default: return nil
+  }
+}
+
+/// ⌃F, and not ⌃⇧F or a command chord. The character with Control held is
+/// the control code, not "f".
+private func findChord(_ press: KeyPress) -> Bool {
+  guard press.modifiers.contains(.control),
+    !press.modifiers.contains(.command),
+    !press.modifiers.contains(.option),
+    !press.modifiers.contains(.shift)
+  else { return false }
+  return press.characters == "f" || press.characters == "\u{06}"
 }
 
 #if os(macOS)
   /// The inspector's one row of controls.
+  ///
+  /// The directory name is the flexible middle: it gives way before the
+  /// trailing cluster, so a long path shrinks the label rather than pushing
+  /// Refresh / New Folder / Upload out of a 240pt column. Find uses that
+  /// same slot. The shell glyph sits in it too, and only when the shell is
+  /// somewhere else, so the trailing cluster never gains a control.
   private struct MacHeader: View {
     @Bindable var model: FilesTab
     @Binding var importing: Bool
+    @FocusState private var findFocused: Bool
 
     var body: some View {
       HStack(spacing: UIStyle.Space.tight) {
         icon("Back", "chevron.left", enabled: !model.history.isEmpty) { model.back() }
-        icon("Enclosing Folder", "arrow.up", enabled: model.directory != "/") { model.up() }
+        icon("Enclosing Folder", "arrow.up", enabled: model.directory != nil && model.directory != "/") { model.up() }
+        middle
+        // Loading occupies the refresh slot, so directory text never jumps.
+        ZStack {
+          icon("Refresh", "arrow.clockwise", enabled: model.directory != nil) { model.refresh() }
+            .opacity(model.loading ? 0 : 1)
+            .allowsHitTesting(!model.loading)
+            .accessibilityHidden(model.loading)
+          if model.loading {
+            ProgressView().controlSize(.mini).accessibilityLabel("Loading files")
+          }
+        }
+        .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
         Menu {
-          PathMenu(model: model)
+          Button("New Folder", systemImage: "folder.badge.plus") { model.newFolder() }
+          Button("Upload", systemImage: "square.and.arrow.up") { importing = true }
         } label: {
-          Text(model.directory.map(Paths.name).map(Names.display) ?? "")
-            .font(UIStyle.title)
-            .lineLimit(1)
-            .truncationMode(.middle)
+          Image(systemName: "plus")
+            .font(UIStyle.symbol)
+            .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
         }
         .menuStyle(.borderlessButton)
-        .menuIndicator(.visible)
-        .fixedSize(horizontal: false, vertical: true)
-        .help(model.directory.map(Names.display) ?? "")
-        Spacer(minLength: UIStyle.Space.small)
-        if model.loading {
-          ProgressView().controlSize(.mini)
-        }
-        icon("Refresh", "arrow.clockwise", enabled: model.directory != nil) { model.refresh() }
-        icon("New Folder", "folder.badge.plus", enabled: model.directory != nil) {
-          model.newFolder()
-        }
-        icon("Upload", "square.and.arrow.up", enabled: model.directory != nil) {
-          importing = true
-        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(model.directory == nil)
+        .help("Add files or folder")
+        .accessibilityLabel("Add files or folder")
       }
       .padding(.horizontal, UIStyle.Space.group)
       .frame(height: UIStyle.controlHeight + UIStyle.Space.group)
+      .frame(maxWidth: .infinity)
+      .background(Theme.sidebar)
+      .onChange(of: model.findTicket) { _, _ in findFocused = true }
+    }
+
+    /// The name, or the field that replaces it. The shell glyph is part of
+    /// this slot: it appears when the browser has left the shell, and it is
+    /// gone while finding, whose own symbol says which directory a path uses.
+    private var middle: some View {
+      HStack(spacing: UIStyle.Space.tight) {
+        if model.shellDirectory != nil, !model.finding {
+          Button("Shell", systemImage: "terminal") { model.goToShell() }
+            .labelStyle(.iconOnly)
+            .font(UIStyle.symbol)
+            .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
+            .buttonStyle(ChromeButtonStyle())
+            .fixedSize()
+            .help("Shell")
+            .accessibilityLabel("Shell")
+        }
+        if model.finding {
+          findField
+        } else {
+          Menu {
+            PathMenu(model: model)
+          } label: {
+            Text(model.directory.map(Paths.name).map(Names.display) ?? "")
+              .font(UIStyle.title)
+              .lineLimit(1)
+              .truncationMode(.middle)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.visible)
+          .frame(minWidth: 0, maxWidth: .infinity)
+          .clipped()
+          .help(model.directory.map(Names.display) ?? "")
+        }
+      }
+      .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    private var findField: some View {
+      HStack(spacing: UIStyle.Space.tight) {
+        Image(systemName: model.findSymbol)
+          .font(UIStyle.symbol)
+          .foregroundStyle(Theme.subtle)
+          .accessibilityHidden(true)
+        TextField("", text: $model.query)
+          .textFieldStyle(.plain)
+          .font(UIStyle.title)
+          .focused($findFocused)
+          .accessibilityLabel("Find")
+          .autocorrectionDisabled()
+          .onSubmit { model.commitFind() }
+          .onExitCommand { model.closeFind() }
+          .onKeyPress(.upArrow) {
+            guard model.findingByName else { return .ignored }
+            model.moveMatch(by: -1)
+            return .handled
+          }
+          .onKeyPress(.downArrow) {
+            guard model.findingByName else { return .ignored }
+            model.moveMatch(by: 1)
+            return .handled
+          }
+          .onKeyPress(.escape) {
+            model.closeFind()
+            return .handled
+          }
+          .onKeyPress(phases: .down) { press in
+            guard findChord(press) else { return .ignored }
+            model.beginFind()
+            return .handled
+          }
+      }
+      .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 
     private func icon(
@@ -407,6 +730,7 @@ private struct PathMenu: View {
         .buttonStyle(ChromeButtonStyle())
         .disabled(!enabled)
         .help(name)
+        .layoutPriority(1)
     }
   }
 #else
@@ -418,19 +742,32 @@ private struct PathMenu: View {
 
     var body: some ToolbarContent {
       ToolbarItemGroup(placement: .topBarLeading) {
-        Button("Enclosing Folder", systemImage: "arrow.up") { model.up() }
-          .labelStyle(.iconOnly)
+        icon("Back", "chevron.left") { model.back() }
+          .disabled(model.history.isEmpty)
+        icon("Enclosing Folder", "arrow.up") { model.up() }
           .disabled(model.directory == nil || model.directory == "/")
       }
       ToolbarItemGroup(placement: .topBarTrailing) {
-        Menu("Add", systemImage: "plus") {
+        if model.shellDirectory != nil, !model.finding {
+          icon("Shell", "terminal") { model.goToShell() }
+        }
+        if model.loading {
+          ProgressView()
+        } else {
+          icon("Refresh", "arrow.clockwise") { model.refresh() }
+            .disabled(model.directory == nil)
+        }
+        Menu {
           Button("New Folder", systemImage: "folder.badge.plus") { model.newFolder() }
           Button("Upload from Files", systemImage: "folder") { importing = true }
           PhotosPicker(selection: $photos, matching: .any(of: [.images, .videos])) {
             Label("Upload from Photos", systemImage: "photo")
           }
+        } label: {
+          Image(systemName: "plus")
         }
-        .labelStyle(.iconOnly)
+        .help("Add files or folder")
+        .accessibilityLabel("Add files or folder")
         .disabled(model.directory == nil)
         .onChange(of: photos) { _, chosen in
           guard !chosen.isEmpty, let directory = model.directory else { return }
@@ -438,6 +775,18 @@ private struct PathMenu: View {
           Task { await upload(chosen, into: directory) }
         }
       }
+    }
+
+    /// Same symbols as the Mac header. The name is the tooltip; the bar
+    /// would otherwise draw it beside the icon.
+    private func icon(
+      _ name: String, _ symbol: String, action: @escaping () -> Void
+    ) -> some View {
+      Button(action: action) {
+        Label(name, systemImage: symbol)
+      }
+      .buttonStyle(.iconOnly)
+      .help(name)
     }
 
     /// Photos are handed over as copies in this app's temporary directory,
@@ -460,21 +809,23 @@ private struct PathMenu: View {
   private struct EntryPreview: View {
     let model: FilesTab
     let entry: FileEntry
+    /// The copy that matches the file's modification time now, when one is
+    /// already here. A listing from before the write is not used.
+    @State private var url: URL?
 
     var body: some View {
-      Group {
-        if entry.kind == .file, let url = model.cache.cached(entry),
-          let image = UIImage(contentsOfFile: url.path)
-        {
-          Image(uiImage: image).resizable().scaledToFit()
-        } else {
-          Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
-            .font(.system(size: 64))
-            .foregroundStyle(Theme.subtle)
-            .padding(48)
+      FilePreview(name: entry.name, kind: entry.kind, url: url, side: 240)
+        .frame(minWidth: UIStyle.compactHeight, minHeight: UIStyle.compactHeight)
+        .task {
+          guard entry.kind == .file, let source = try? await model.source() else { return }
+          let current = await model.identities([entry], from: source)
+          guard let file = current.first else { return }
+          if source.isLocal {
+            url = model.localPreviewCopy(file) ?? URL(fileURLWithPath: file.path)
+          } else {
+            url = model.cache.cached(file)
+          }
         }
-      }
-      .frame(minWidth: 200, minHeight: 200)
     }
   }
 
@@ -515,7 +866,7 @@ private struct TransferList: View {
             Text(item.name).font(UIStyle.detail).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: UIStyle.Space.small)
             if item.failure == nil {
-              ProgressView(value: item.fraction).frame(width: 60).controlSize(.mini)
+              ProgressView(value: item.fraction).frame(width: UIStyle.Mark.progress).controlSize(.mini)
             }
             Button(item.failure != nil ? "Dismiss" : "Stop", systemImage: "xmark") {
               transfers.cancel(item.id)
@@ -534,67 +885,115 @@ private struct TransferList: View {
   }
 }
 
-/// The questions the browser asks: a title and a verb (law: app-ui-chrome).
-private struct Confirmations: ViewModifier {
+/// A folder for a download, asked when none has been set. The files are copied
+/// out before the panel closes, so a cancel and a choice both see them.
+private struct DownloadPicker: ViewModifier {
   @Bindable var model: FilesTab
+  @State private var presented = false
+  @State private var saving: [FileEntry] = []
 
   func body(content: Content) -> some View {
     content
-      .alert(
-        deletionTitle,
-        isPresented: Binding(
-          get: { !model.pendingDeletion.isEmpty },
-          set: { if !$0 { model.pendingDeletion = [] } })
-      ) {
-        Button("Delete", role: .destructive) { Task { await model.confirmDelete() } }
-        Button("Cancel", role: .cancel) { model.pendingDeletion = [] }
+      .onChange(of: model.pendingSave.map(\.path)) { _, paths in
+        guard !paths.isEmpty else { return }
+        saving = model.pendingSave
+        presented = true
       }
-      .alert(
-        conflictTitle,
-        isPresented: Binding(
-          get: { !model.conflicts.isEmpty },
-          set: { _ in })
-      ) {
-        if let conflict = model.conflicts.first {
-          Button("Replace", role: .destructive) {
-            Task { await model.resolve(conflict, .replace) }
+      .background {
+        Color.clear
+          .fileImporter(
+            isPresented: $presented, allowedContentTypes: [.folder], allowsMultipleSelection: false
+          ) { result in
+            let files = saving
+            saving = []
+            model.pendingSave = []
+            guard case .success(let urls) = result, let folder = urls.first, !files.isEmpty else {
+              return
+            }
+            Task { await model.save(files, to: folder) }
           }
-          Button("Keep Both") { Task { await model.resolve(conflict, .keepBoth) } }
-          Button("Skip", role: .cancel) { Task { await model.resolve(conflict, .skip) } }
-        }
-      }
-      .alert(
-        largeTitle,
-        isPresented: Binding(
-          get: { model.pendingLarge != nil },
-          set: { if !$0 { model.pendingLarge = nil } })
-      ) {
-        Button("Download") {
-          guard let large = model.pendingLarge else { return }
-          model.pendingLarge = nil
-          Task { await model.preview([large], confirmed: true) }
-        }
-        Button("Cancel", role: .cancel) { model.pendingLarge = nil }
+          #if os(macOS)
+            .fileDialogDefaultDirectory(model.preferredDownloadDirectory)
+          #endif
       }
   }
+}
 
-  private var deletionTitle: String {
-    let doomed = model.pendingDeletion
+/// The questions the browser asks: a title and a verb (law: app-ui-chrome).
+///
+/// One at a time, deletion first. Each answer settles its own question, and
+/// the next one — another name already taken — follows as its own dialog.
+private struct Confirmations: ViewModifier {
+  @Bindable var model: FilesTab
+
+  /// Which question is open, as something that changes when it does.
+  private enum Question: Hashable {
+    case delete([String])
+    case conflict(UUID)
+    case download(String)
+  }
+
+  private var question: Question? {
+    if !model.pendingDeletion.isEmpty { return .delete(model.pendingDeletion.map(\.path)) }
+    if let conflict = model.conflicts.first { return .conflict(conflict.id) }
+    if let large = model.pendingLarge { return .download(large.path) }
+    return nil
+  }
+
+  func body(content: Content) -> some View {
+    content.dialog(for: question) { _ in dialog }
+  }
+
+  private var dialog: Dialog {
+    if !model.pendingDeletion.isEmpty {
+      let doomed = model.pendingDeletion
+      return .confirm(
+        deletionTitle(doomed), verb: "Delete", role: .destructive, cancel: { model.pendingDeletion = [] }
+      ) {
+        model.pendingDeletion = []
+        Task { await model.confirmDelete(doomed) }
+      }
+    }
+    if let conflict = model.conflicts.first {
+      let settle: (Conflict.Choice) -> Void = { choice in
+        Task { await model.resolve(conflict, choice) }
+      }
+      return Dialog(
+        title: "Replace “\(Names.display(conflict.name))”?",
+        actions: [
+          Dialog.Action("Replace", role: .destructive) { _ in settle(.replace) },
+          Dialog.Action("Keep Both") { _ in settle(.keepBoth) },
+          .cancel("Skip") { settle(.skip) },
+        ])
+    }
+    let fetch = model.pendingFetch
+    let large = model.pendingLarge
+    let size = ByteCountFormatter.string(fromByteCount: Int64(large?.size ?? 0), countStyle: .file)
+    return .confirm(
+      "Download \(size)?", verb: "Download",
+      cancel: {
+        model.pendingLarge = nil
+        model.pendingFetch = nil
+      }
+    ) {
+      model.pendingLarge = nil
+      model.pendingFetch = nil
+      switch fetch {
+      case .preview(let files):
+        Task { await model.preview(files, confirmed: true) }
+      case .open(let files):
+        Task { await model.openFetched(files, confirmed: true) }
+      case nil:
+        if let large { Task { await model.preview([large], confirmed: true) } }
+      }
+    }
+  }
+
+  private func deletionTitle(_ doomed: [FileEntry]) -> String {
     if doomed.count == 1, let only = doomed.first {
       return "Delete “\(Names.display(only.name))”?"
     }
     return "Delete \(doomed.count) items?"
-  }
-
-  private var conflictTitle: String {
-    guard let conflict = model.conflicts.first else { return "" }
-    return "Replace “\(Names.display(conflict.name))”?"
-  }
-
-  private var largeTitle: String {
-    guard let large = model.pendingLarge else { return "" }
-    let size = ByteCountFormatter.string(fromByteCount: Int64(large.size), countStyle: .file)
-    return "Download \(size)?"
   }
 }
 

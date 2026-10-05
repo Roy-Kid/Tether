@@ -61,8 +61,32 @@ pub struct TmuxSessionInfo {
     pub attached: bool,
     pub windows: Vec<TmuxListedWindow>,
 }
+/// Bounded output from a command on an authenticated connection.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct CommandOutput {
+    pub status: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl RemoteConnection {
+    /// Executes without creating a terminal or performing another authentication.
+    /// Both output size and duration are bounded at this public boundary.
+    pub async fn execute(
+        &self,
+        command: String,
+        cancellation: Arc<CancellationToken>,
+    ) -> Result<CommandOutput, TetherError> {
+        tokio::select! {
+            _ = cancellation.inner.cancelled() => Err(error("Cancelled")),
+            result = tokio::time::timeout(ANSWER_TIMEOUT, self.inner.capture(&command, ANSWER_LIMIT)) => {
+                let capture = result.map_err(|_| error("Command timed out"))?.map_err(error)?;
+                Ok(CommandOutput { status: capture.status, stdout: capture.stdout, stderr: capture.stderr })
+            }
+        }
+    }
+
     pub async fn tmux_sessions(
         &self,
         cancellation: Arc<CancellationToken>,
@@ -90,14 +114,15 @@ impl RemoteConnection {
                     Err(error) => return Err(error),
                 };
                 // Windows for every session, still a capture — not attach.
-                let windows = match self.query(
-                    "tmux list-windows -a -F '#{session_id}|#{window_id}|#{window_index}|#{window_active}|#{window_panes}|#{window_name}'",
-                )
-                .await
-                {
-                    Ok(text) => text,
-                    Err(_) => String::new(),
-                };
+                // An empty listing on error: the session list above already
+                // decided this call is answerable, and windows that cannot be
+                // listed are shown as none rather than failing the whole view.
+                let windows = self
+                    .query(
+                        "tmux list-windows -a -F '#{session_id}|#{window_id}|#{window_index}|#{window_active}|#{window_panes}|#{window_name}'",
+                    )
+                    .await
+                    .unwrap_or_default();
                 assemble_sessions(&text, &windows)
             } => result,
         }
@@ -137,13 +162,19 @@ impl RemoteConnection {
     pub async fn create_tmux(
         &self,
         name: String,
+        directory: Option<String>,
         cancellation: Arc<CancellationToken>,
     ) -> Result<TmuxSessionInfo, TetherError> {
         let quoted = tether_tmux::quote(&name).map_err(error)?;
         if name.trim().is_empty() {
             return Err(error("Enter a session name"));
         }
-        let command = format!("tmux new-session -d -P -F '#{{session_id}}' -s {quoted}");
+        let start_directory =
+            directory.map(|directory| tether_tmux::quote(&directory).map_err(error)).transpose()?;
+        let directory_option =
+            start_directory.map(|directory| format!("-c {directory} ")).unwrap_or_default();
+        let command =
+            format!("tmux new-session -d -P -F '#{{session_id}}' {directory_option}-s {quoted}");
         tokio::select! {
             _ = cancellation.inner.cancelled() => Err(error("Cancelled")),
             result = self.query(&command) => {
@@ -182,6 +213,7 @@ impl RemoteConnection {
         columns: u16,
         rows: u16,
         scrollback_lines: u32,
+        history: Option<Arc<crate::SessionHistory>>,
         cancellation: Arc<CancellationToken>,
     ) -> Result<Arc<crate::session::Session>, TetherError> {
         let size = tether_core::terminal::ScreenSize::new(columns, rows);
@@ -190,11 +222,37 @@ impl RemoteConnection {
         tokio::select! {
             biased;
             _ = cancellation.inner.cancelled() => Err(TetherError::Cancelled),
-            result = self.inner.shell(&term, size, options) => {
+            result = self.inner.shell_recorded(&term, size, options, history.map(|h| h.inner.clone())) => {
                 let session = result.map_err(|error| TetherError::ShellRefused { cause: error.cause })?;
                 Ok(crate::session::Session::wrap(session))
             }
         }
+    }
+
+    /// Finds the tmux session attached to a particular terminal, if any.
+    pub async fn tmux_session_for_client(
+        &self,
+        tty: String,
+    ) -> Result<Option<String>, TetherError> {
+        let text = match self.query("tmux list-clients -F '#{client_tty}|#{session_id}'").await {
+            Ok(text) => text,
+            Err(TetherError::Protocol { cause })
+                if cause.contains("no server running")
+                    || cause.contains("no clients")
+                    || cause.contains("No such file or directory") =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        for line in text.lines() {
+            let Some((client_tty, session_id)) = line.split_once('|') else { continue };
+            if client_tty == tty {
+                validate_session(session_id)?;
+                return Ok(Some(session_id.to_owned()));
+            }
+        }
+        Ok(None)
     }
 }
 impl RemoteConnection {
@@ -532,6 +590,9 @@ impl TmuxWorkspace {
             Resolved::Literal(text) => self.inner.write(pane, text.into_bytes()),
         }
         .map_err(error)
+    }
+    pub async fn scroll(&self, pane: u32, lines: i32) -> Result<(), TetherError> {
+        self.inner.scroll(pane, lines).map_err(error)
     }
     pub async fn perform(&self, action: TmuxAction) -> Result<(), TetherError> {
         let action = match action {

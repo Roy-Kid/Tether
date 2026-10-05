@@ -26,6 +26,7 @@ public partial class App : Application
             AppSettings.Current.DisabledPlugins,
             disabled => (AppSettings.Current with { DisabledPlugins = disabled.ToArray() }).Save());
         Plugins.Register(new Plugins.FilesPlugin());
+        Plugins.Register(new Plugins.TmuxPlugin());
         _window = new MainWindow();
         _window.Activate();
     }

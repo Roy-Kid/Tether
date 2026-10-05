@@ -8,6 +8,9 @@
    <NavigationViewItem Content="Startup" Tag="startup" Icon="Play" IsSelected="True" />
    <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
    <NavigationViewItem Content="Terminal" Tag="terminal" Icon="Keyboard" />
+   <NavigationViewItem Content="Key Bindings" Tag="keys" Icon="Keyboard" />
+   <NavigationViewItem Content="History" Tag="history" Icon="Clock" />
+   <NavigationViewItem Content="Files" Tag="files" Icon="Folder" />
    <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
   </NavigationView.MenuItems>
   <ScrollViewer Padding="{StaticResource SettingsPageInset}">
@@ -63,6 +66,9 @@
      </StackPanel>
     </Border>
     <StackPanel x:Name="TerminalPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="KeysPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="HistoryPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="FilesPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="ExtensionsPane" Visibility="Collapsed" Spacing="{StaticResource SpaceGroup}" />
     <TextBlock x:Name="SaveProblem" Foreground="{ThemeResource ChromeSubtleBrush}"
      TextWrapping="Wrap" Visibility="Collapsed" />

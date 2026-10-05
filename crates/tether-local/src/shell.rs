@@ -75,14 +75,52 @@ const SETTLING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// `/etc/zshrc_Apple_Terminal` and replays a saved Terminal.app session, so
 /// the first thing a person sees is somebody else's old output. Measured, not
 /// imagined — it was the first thing on screen the first time this ran.
+/// `TMUX` and `TMUX_PANE` are the same kind of claim: if Tether was launched
+/// from tmux, its shell and local tmux commands must not attach to the
+/// launcher's client or refuse a nested attach.
 ///
 /// Removed rather than corrected, because there is no honest value to write.
 /// A component may not name its consumer, so it cannot answer "which terminal
 /// is this?"; a consumer that wants to advertise itself can set these on the
 /// far side, having earned the claim. `TERM` is different and is set: it
 /// describes what can be *drawn*, which is a question this crate can answer.
-pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 3] =
-    ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"];
+pub(crate) const FOREIGN_TERMINAL_CLAIMS: [&str; 5] =
+    ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "TMUX", "TMUX_PANE"];
+
+/// Read the working directory of a live local shell process.
+#[cfg(target_os = "macos")]
+pub fn process_current_directory(pid: u32) -> Option<String> {
+    use std::ffi::CStr;
+
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::pid_t,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+            std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int,
+        )
+    };
+    if size != std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int {
+        return None;
+    }
+    let path = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+    let path = path.to_str().ok()?;
+    path.starts_with('/').then(|| path.to_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn process_current_directory(pid: u32) -> Option<String> {
+    let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    let path = path.to_str()?;
+    path.starts_with('/').then(|| path.to_owned())
+}
+
+#[cfg(not(unix))]
+pub fn process_current_directory(_pid: u32) -> Option<String> {
+    None
+}
 
 /// A shell running on a pseudo-terminal of its own.
 ///
@@ -93,7 +131,11 @@ pub struct Shell {
     ///
     /// Shared, because [`hold_size`] speaks through it too — and `Weak`, on
     /// that side, so a settling thread cannot keep a closed terminal alive.
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    /// The controlling tty path, when the platform exposes it.
+    tty_name: Option<String>,
+    /// PID of the shell process group leader, for reading its live cwd.
+    process_id: Option<u32>,
     /// The size this terminal is supposed to be, for [`hold_size`] to defend.
     wanted: Arc<Mutex<PtySize>>,
     /// Behind a lock because a write happens on a blocking thread, and
@@ -130,6 +172,11 @@ impl Shell {
         let pair = native_pty_system()
             .openpty(pty_size(size))
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
+        #[cfg(unix)]
+        let tty_name = pair.master.tty_name().map(|path| path.to_string_lossy().into_owned());
+
+        #[cfg(not(unix))]
+        let tty_name = None;
 
         let mut builder = CommandBuilder::new(program);
         for argument in arguments {
@@ -150,6 +197,9 @@ impl Shell {
         let mut child = pair.slave.spawn_command(builder).map_err(|error| {
             LocalError::NotStarted { program: program.to_owned(), cause: error.to_string() }
         })?;
+        // Before spawning, the PTY has no foreground process group. Keep the
+        // actual child PID so cwd follows the shell even while a job is in front.
+        let process_id = child.process_id();
 
         // The slave must go now. While this process still holds one, the
         // kernel sees a reader on the terminal and the master never reports
@@ -178,6 +228,10 @@ impl Shell {
             .spawn(move || pump_output(reader, bytes))
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
 
+        let wanted = Arc::new(Mutex::new(pty_size(size)));
+        let master = Arc::new(Mutex::new(Some(pair.master)));
+        #[cfg(windows)]
+        let closing_master = Arc::clone(&master);
         let (reaped, exit) = tokio::sync::oneshot::channel();
         std::thread::Builder::new()
             .name("tether-local reaper".to_owned())
@@ -186,12 +240,17 @@ impl Shell {
                 // process. The status is the useful part; the reaping is the
                 // necessary part, and it happens either way.
                 let status = child.wait().map(|status| status.exit_code()).unwrap_or_default();
+                // ConPTY retains its output pipe until the pseudo-console
+                // closes, even after the child exits. The reader keeps draining
+                // while ClosePseudoConsole flushes the final output.
+                #[cfg(windows)]
+                {
+                    let console = closing_master.lock().ok().and_then(|mut master| master.take());
+                    drop(console);
+                }
                 let _ = reaped.send(status);
             })
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
-
-        let wanted = Arc::new(Mutex::new(pty_size(size)));
-        let master = Arc::new(Mutex::new(pair.master));
 
         // A shell writes its own idea of the size back while it is starting.
         // Holding the requested size across that window is the difference
@@ -208,6 +267,8 @@ impl Shell {
 
         Ok(Self {
             master,
+            tty_name,
+            process_id,
             wanted,
             writer: Arc::new(Mutex::new(writer)),
             killer,
@@ -223,6 +284,21 @@ impl Shell {
     /// The size last requested.
     pub fn size(&self) -> WindowSize {
         self.size
+    }
+
+    /// The path of this shell's controlling tty, when available.
+    pub fn tty_name(&self) -> Option<&str> {
+        self.tty_name.as_deref()
+    }
+
+    /// The process group leader, when this PTY backend exposes it.
+    pub fn process_id(&self) -> Option<u32> {
+        self.process_id
+    }
+
+    /// The shell process's current directory, even when it does not emit OSC 7.
+    pub fn current_directory(&self) -> Option<String> {
+        self.process_id.and_then(process_current_directory)
     }
 
     /// Sends bytes to the shell's input.
@@ -275,7 +351,11 @@ impl Shell {
         // new size rather than the one it was started with.
         *self.wanted.lock().map_err(|_| LocalError::Ended)? = wanted;
 
-        master.resize(wanted).map_err(|error| LocalError::Resize { cause: error.to_string() })?;
+        master
+            .as_ref()
+            .ok_or(LocalError::Ended)?
+            .resize(wanted)
+            .map_err(|error| LocalError::Resize { cause: error.to_string() })?;
         drop(master);
 
         self.size = size;
@@ -376,7 +456,10 @@ impl std::fmt::Debug for Shell {
 /// undoes it lands *after* the one that worked: there is nothing to detect at
 /// the time, only something to correct afterwards. It stops as soon as the
 /// shell does, and altogether when the terminal is dropped.
-fn hold_size(master: &std::sync::Weak<Mutex<Box<dyn MasterPty + Send>>>, wanted: &Mutex<PtySize>) {
+fn hold_size(
+    master: &std::sync::Weak<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    wanted: &Mutex<PtySize>,
+) {
     let until = std::time::Instant::now() + SETTLING;
 
     while std::time::Instant::now() < until {
@@ -386,6 +469,7 @@ fn hold_size(master: &std::sync::Weak<Mutex<Box<dyn MasterPty + Send>>>, wanted:
         let Some(master) = master.upgrade() else { return };
         let (Ok(master), Ok(wanted)) = (master.lock(), wanted.lock()) else { return };
 
+        let Some(master) = master.as_ref() else { return };
         match master.get_size() {
             Ok(seen) if seen.rows == wanted.rows && seen.cols == wanted.cols => continue,
             // Something else set the size. Nothing else is entitled to: the

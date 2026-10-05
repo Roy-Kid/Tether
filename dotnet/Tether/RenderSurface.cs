@@ -67,7 +67,7 @@ public sealed class TerminalSurface : IAsyncDisposable, IDisposable
 
     private static Gen.ScreenFrame Lower(ScreenFrame f) => new(
         f.Columns, f.Rows, f.CursorRow, f.CursorColumn,
-        Lower(f.CursorShape), f.CursorVisible, f.AlternateScreen,
+        Lower(f.CursorShape), f.CursorVisible, f.AlternateScreen, (Gen.MouseTracking)f.Mouse,
         f.ViewportOffset, f.HistoryLines, f.Title,
         f.Lines.Select(Lower).ToArray());
 

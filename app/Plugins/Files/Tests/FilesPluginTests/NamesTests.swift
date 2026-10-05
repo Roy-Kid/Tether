@@ -53,6 +53,36 @@ struct NamesTests {
     #expect(Names.symbol(for: "main.rs", kind: .file) == "doc.text")
     #expect(Names.symbol(for: "latest", kind: .link) == "arrow.up.right.square")
     #expect(Names.symbol(for: "blob", kind: .file) == "doc")
+    // Config and lab tables this system may not register are still text.
+    #expect(Names.symbol(for: "config.toml", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "trajectory.xyz", kind: .file) == "atom")
+    #expect(Names.symbol(for: "Makefile", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "Dockerfile", kind: .file) == "doc.text")
+    #expect(Names.symbol(for: "notes.json", kind: .file) == "curlybrackets")
+  }
+
+  @Test("text a person can read as a snippet is text-like")
+  func textLike() {
+    #expect(Names.isTextLike("notes.md"))
+    #expect(Names.isTextLike("run.log"))
+    #expect(Names.isTextLike("trajectory.xyz"))
+    #expect(Names.isTextLike("crystal.cif"))
+    #expect(Names.isTextLike("protein.pdb"))
+    #expect(Names.isTextLike("topol.top"))
+    #expect(Names.isTextLike("Makefile"))
+    #expect(Names.isTextLike("Dockerfile"))
+    #expect(Names.isTextLike("config.yaml"))
+    #expect(Names.isTextLike("data.csv"))
+    #expect(!Names.isTextLike("plot.png"))
+    #expect(!Names.isTextLike("movie.mp4"))
+    #expect(!Names.isTextLike("archive.zip"))
+    #expect(!Names.isTextLike("blob"))
+  }
+
+  @Test("copied paths are the absolute paths, one a line, with nothing added")
+  func copiedPaths() {
+    #expect(Names.copiedPaths(["/data/run-1/out.csv"]) == "/data/run-1/out.csv")
+    #expect(Names.copiedPaths(["/data/my run/out.csv", "/data/runs"]) == "/data/my run/out.csv\n/data/runs")
   }
 
   @Test("a path is quoted only when a shell would read something into it")
@@ -89,5 +119,29 @@ struct PathsTests {
   func name() {
     #expect(Paths.name("/home/ada/runs") == "runs")
     #expect(Paths.name("/") == "/")
+  }
+
+  @Test("the path menu names the root, and does not list home or the shell twice")
+  func pathMenu() {
+    let inside = PathPlaces(
+      directory: "/home/jicli594/work", home: "/home/jicli594", shell: "/home/jicli594/work")
+    #expect(inside.places == ["/home/jicli594", "/home", "/"])
+    #expect(inside.title("/home/jicli594") == "jicli594")
+    #expect(inside.title("/") == "Root")
+    #expect(inside.symbol("/home/jicli594") == "house")
+    #expect(inside.symbol("/") == "externaldrive")
+    #expect(!inside.showsHome)
+    #expect(!inside.showsShell)
+
+    let elsewhere = PathPlaces(directory: "/tmp/work", home: "/home/jicli594", shell: "/var/run")
+    #expect(elsewhere.showsHome)
+    #expect(elsewhere.showsShell)
+    #expect(elsewhere.symbol("/tmp") == "folder")
+
+    let shellAbove = PathPlaces(
+      directory: "/home/jicli594/work", home: "/srv", shell: "/home")
+    #expect(shellAbove.showsHome)
+    #expect(!shellAbove.showsShell, "the shell is already one of the directories above")
+    #expect(shellAbove.symbol("/home") == "terminal")
   }
 }

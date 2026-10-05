@@ -1,6 +1,6 @@
 //! Semantic input out to bytes.
 
-use tether_terminal::{Input, Key, Modifiers, ScreenSize, Terminal};
+use tether_terminal::{Input, Key, Modifiers, PointerButton, PointerPhase, ScreenSize, Terminal};
 
 fn terminal() -> Terminal {
     Terminal::new(ScreenSize::new(80, 24))
@@ -37,11 +37,33 @@ fn plain_characters_go_out_as_themselves() {
 
 #[test]
 fn control_chords_become_control_characters() {
+    for letter in b'a'..=b'z' {
+        assert_eq!(key(Key::Char(letter as char), Modifiers::control()), vec![letter - b'a' + 1]);
+    }
     assert_eq!(key(Key::Char('c'), Modifiers::control()), vec![0x03]);
     assert_eq!(key(Key::Char('C'), Modifiers::control()), vec![0x03], "case does not matter");
     assert_eq!(key(Key::Char('d'), Modifiers::control()), vec![0x04]);
     assert_eq!(key(Key::Char(' '), Modifiers::control()), vec![0x00]);
     assert_eq!(key(Key::Char('['), Modifiers::control()), vec![0x1b]);
+}
+
+#[test]
+fn unix_navigation_chords_remain_distinct_from_arrow_sequences() {
+    let mut term = terminal();
+    // Even application cursor mode must not turn Control letters into arrows:
+    // the shell or editor owns the meaning of these bytes.
+    for mode in [b"\x1b[?1l", b"\x1b[?1h"] {
+        term.feed(mode);
+        for (letter, byte) in [('p', 0x10), ('n', 0x0e), ('f', 0x06), ('b', 0x02)] {
+            assert_eq!(
+                term.encode(&Input::Key {
+                    key: Key::Char(letter),
+                    modifiers: Modifiers::control()
+                }),
+                vec![byte]
+            );
+        }
+    }
 }
 
 /// A chord with no defined control character must still send the keystroke.
@@ -160,4 +182,68 @@ fn a_paste_cannot_smuggle_its_own_terminator() {
     assert_eq!(text.matches("\x1b[201~").count(), 1, "exactly one terminator, ours");
     assert!(text.ends_with("\x1b[201~"));
     assert!(text.contains("rm -rf /"), "the text is still delivered, just not as typing");
+}
+
+fn pointer(
+    term: &Terminal,
+    button: PointerButton,
+    phase: PointerPhase,
+    column: u16,
+    row: u16,
+) -> Vec<u8> {
+    term.encode(&Input::Pointer { button, phase, column, row, modifiers: Modifiers::NONE })
+}
+
+/// Nothing is sent until a program asks. A click then still selects text here.
+#[test]
+fn mouse_events_are_silent_until_tracking_is_on() {
+    let term = terminal();
+    assert!(pointer(&term, PointerButton::Left, PointerPhase::Press, 0, 0).is_empty());
+}
+
+/// Normal tracking, one byte per value plus 32. Cell (0, 0) is protocol (1, 1).
+#[test]
+fn a_click_is_the_normal_mouse_protocol() {
+    let mut term = terminal();
+    term.feed(b"\x1b[?1000h");
+
+    assert_eq!(pointer(&term, PointerButton::Left, PointerPhase::Press, 0, 0), b"\x1b[M !!");
+    assert_eq!(pointer(&term, PointerButton::Left, PointerPhase::Release, 0, 0), b"\x1b[M#!!");
+    assert!(
+        pointer(&term, PointerButton::Left, PointerPhase::Move, 1, 0).is_empty(),
+        "click tracking does not report motion"
+    );
+}
+
+#[test]
+fn sgr_tracking_names_the_button_and_the_cell() {
+    let mut term = terminal();
+    term.feed(b"\x1b[?1000h\x1b[?1006h");
+
+    assert_eq!(pointer(&term, PointerButton::Left, PointerPhase::Press, 2, 3), b"\x1b[<0;3;4M");
+    assert_eq!(pointer(&term, PointerButton::Left, PointerPhase::Release, 2, 3), b"\x1b[<0;3;4m");
+    assert_eq!(pointer(&term, PointerButton::WheelUp, PointerPhase::Press, 0, 0), b"\x1b[<64;1;1M");
+    assert!(pointer(&term, PointerButton::WheelUp, PointerPhase::Release, 0, 0).is_empty());
+}
+
+#[test]
+fn drag_and_any_motion_are_different_modes() {
+    let mut term = terminal();
+    term.feed(b"\x1b[?1002h\x1b[?1006h");
+    assert!(pointer(&term, PointerButton::None, PointerPhase::Move, 0, 0).is_empty());
+    assert_eq!(pointer(&term, PointerButton::Left, PointerPhase::Move, 0, 0), b"\x1b[<32;1;1M");
+
+    term.feed(b"\x1b[?1003h");
+    assert_eq!(pointer(&term, PointerButton::None, PointerPhase::Move, 4, 5), b"\x1b[<35;5;6M");
+}
+
+/// The single-byte protocol stops at 223. A wider screen still reports a cell
+/// rather than a byte that wrapped.
+#[test]
+fn the_normal_protocol_clamps_a_wide_screen() {
+    let mut term = terminal();
+    term.feed(b"\x1b[?1000h");
+    let encoded = pointer(&term, PointerButton::Left, PointerPhase::Press, 400, 0);
+    assert_eq!(encoded.len(), 6);
+    assert_eq!(encoded[4], 255, "column 223, plus the 32 the protocol adds");
 }

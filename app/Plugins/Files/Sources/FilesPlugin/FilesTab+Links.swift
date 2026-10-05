@@ -27,16 +27,15 @@ extension FilesTab {
       },
     ]
     #if os(macOS)
-      commands += [
+      commands.append(
         PluginCommand(id: "open", title: "Open", symbol: "arrow.up.forward.app") { [weak self] in
           Task { await self?.withResolved(printed) { self?.openExternally([$0]) } }
-        },
-        PluginCommand(id: "save", title: "Save to Downloads", symbol: "arrow.down.circle") {
-          [weak self] in
-          Task { await self?.withResolved(printed) { self?.saveToDownloads([$0]) } }
-        },
-      ]
+        })
     #endif
+    commands.append(
+      PluginCommand(id: "download", title: "Download", symbol: "arrow.down.circle") { [weak self] in
+        Task { await self?.withResolved(printed) { self?.download([$0]) } }
+      })
     return LinkActions(
       open: { [weak self] in Task { await self?.look(at: printed) } },
       preview: { [weak self] in AnyView(LinkPreview(model: self, printed: printed)) },
@@ -104,13 +103,31 @@ extension FilesTab {
     if entry.kind == .directory {
       await reveal(printed)
     } else {
+      tab.focus()
+      tab.showAccessory()
       await preview([entry])
     }
+  }
+
+  /// Return, or a paste, in the find field. The same lookup a printed path
+  /// gets: the shell's directory, then the browser's, then home. Found, the
+  /// field gives its slot back. Not found, it stays, and the tree stays.
+  func revealQuery(_ text: String, commit: Int) async {
+    let printed = Printed.at(text, in: tab.workingDirectory())
+    guard await resolve(printed) != nil else {
+      guard commit == findCommit else { return }
+      return missing()
+    }
+    guard commit == findCommit else { return }
+    await reveal(printed)
+    guard commit == findCommit, finding else { return }
+    closeFind()
   }
 
   /// Shows the path in the browser: its directory, with it selected.
   func reveal(_ printed: Printed) async {
     guard let entry = await resolve(printed) else { return missing() }
+    tab.focus()
     tab.showAccessory()
     #if os(macOS)
       // A tree: opened down to it, the root left where it was when it is
@@ -161,19 +178,21 @@ struct LinkPreview: View {
   let model: FilesTab?
   let printed: Printed
   @State private var entry: FileEntry?
-  @State private var image: CGImage?
+  @State private var url: URL?
   @State private var looked = false
 
   var body: some View {
     VStack(spacing: UIStyle.Space.group) {
-      if let image {
-        Image(decorative: image, scale: 2).resizable().scaledToFit()
-      } else if looked {
-        Image(systemName: Names.symbol(for: entry?.name ?? printed.path, kind: entry?.kind ?? .file))
-          .font(.system(size: 56))
-          .foregroundStyle(Theme.subtle)
-      } else {
+      if !looked {
         ProgressView()
+          .frame(minWidth: UIStyle.compactWidth, minHeight: UIStyle.compactHeight)
+      } else {
+        FilePreview(
+          name: entry?.name ?? Paths.name(printed.path),
+          kind: entry?.kind ?? .file,
+          url: url,
+          side: 320
+        )
       }
       Text(Names.display(entry?.name ?? Paths.name(printed.path)))
         .font(UIStyle.detail)
@@ -181,15 +200,13 @@ struct LinkPreview: View {
         .truncationMode(.middle)
     }
     .padding(UIStyle.Space.section)
-    .frame(minWidth: 240, minHeight: 200)
+    .frame(minWidth: UIStyle.compactWidth, minHeight: UIStyle.compactHeight)
     .task {
       defer { looked = true }
       guard let model, let found = await model.resolve(printed) else { return }
       entry = found
-      guard found.kind == .file, found.size <= LinkPreview.fetchLimit,
-        let url = try? await model.local(found)
-      else { return }
-      image = await QuickLook.thumbnail(of: url, side: 320)
+      guard found.kind == .file, found.size <= LinkPreview.fetchLimit else { return }
+      url = try? await model.local(found)
     }
   }
 }

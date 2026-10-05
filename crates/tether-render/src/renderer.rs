@@ -51,7 +51,12 @@ fn family(name: &str) -> Family<'_> {
     if name.is_empty() { Family::Monospace } else { Family::Name(name) }
 }
 
-fn measure_font(fonts: &mut FontSystem, size: f32, primary: &str, wide_family: &str) -> FontMetrics {
+fn measure_font(
+    fonts: &mut FontSystem,
+    size: f32,
+    primary: &str,
+    wide_family: &str,
+) -> FontMetrics {
     let metrics = Metrics::new(size, size * 1.2);
 
     let measure = |fonts: &mut FontSystem, text: &str, name: &str| -> f32 {
@@ -91,11 +96,7 @@ struct QuadPipeline {
 /// colour are ours to convert.
 fn linear(color: Rgba) -> Rgba {
     let channel = |c: f32| {
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
     };
     Rgba::new(channel(color.red), channel(color.green), channel(color.blue), color.alpha)
 }
@@ -182,16 +183,18 @@ impl QuadPipeline {
             mapped_at_creation: false,
         });
 
-        Self {
-            pipeline,
-            vertices,
-            capacity,
-            instances: Vec::new(),
-            srgb: format.is_srgb(),
-        }
+        Self { pipeline, vertices, capacity, instances: Vec::new(), srgb: format.is_srgb() }
     }
 
-    fn push_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgba, screen: (f32, f32)) {
+    fn push_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: Rgba,
+        screen: (f32, f32),
+    ) {
         let (sw, sh) = screen;
         if sw <= 0.0 || sh <= 0.0 {
             return;
@@ -205,10 +208,7 @@ impl QuadPipeline {
         let e = normalise(x + width, y + height);
         for (p0, p1, p2) in [(a, b, d), (b, e, d)] {
             for position in [p0, p1, p2] {
-                self.instances.push(QuadVertex {
-                    position,
-                    color: c,
-                });
+                self.instances.push(QuadVertex { position, color: c });
             }
         }
     }
@@ -302,9 +302,12 @@ impl TerminalRenderer {
     ) -> Result<Self, RenderError> {
         use std::num::NonZeroIsize;
 
-        use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
+        use raw_window_handle::{
+            RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
+        };
 
-        let hwnd = NonZeroIsize::new(hwnd).ok_or_else(|| RenderError::Surface("null hwnd".into()))?;
+        let hwnd =
+            NonZeroIsize::new(hwnd).ok_or_else(|| RenderError::Surface("null hwnd".into()))?;
         let mut window = Win32WindowHandle::new(hwnd);
         // Vulkan will not make a surface without the module that owns the
         // window. Leave it out and wgpu falls back to GL without a word —
@@ -408,10 +411,7 @@ impl TerminalRenderer {
     }
 
     pub fn resize(&mut self, size: SurfaceSize) {
-        self.size = SurfaceSize {
-            width: size.width.max(1),
-            height: size.height.max(1),
-        };
+        self.size = SurfaceSize { width: size.width.max(1), height: size.height.max(1) };
         self.config.width = self.size.width;
         self.config.height = self.size.height;
         self.surface.configure(&self.device, &self.config);
@@ -429,16 +429,12 @@ impl TerminalRenderer {
         let screen = (self.config.width as f32, self.config.height as f32);
         self.viewport.update(
             &self.queue,
-            Resolution {
-                width: self.config.width,
-                height: self.config.height,
-            },
+            Resolution { width: self.config.width, height: self.config.height },
         );
 
         self.quads.clear();
         for rect in &list.rects {
-            self.quads
-                .push_rect(rect.x, rect.y, rect.width, rect.height, rect.color, screen);
+            self.quads.push_rect(rect.x, rect.y, rect.width, rect.height, rect.color, screen);
         }
 
         // Glyphs. One `Buffer` per run, placed by `left`/`top`. Unchanged
@@ -496,27 +492,21 @@ impl TerminalRenderer {
             // The compositor is not asking for a frame right now. Skip and
             // try again on the next wake — not an error (0006: a frame that
             // costs nothing is still a frame we did not have to draw).
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
             wgpu::CurrentSurfaceTexture::Outdated
             | wgpu::CurrentSurfaceTexture::Lost
             | wgpu::CurrentSurfaceTexture::Validation => {
                 return Err(RenderError::Surface("surface outdated or lost".into()));
             }
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let clear = if self.config.format.is_srgb() {
-            linear(list.background)
-        } else {
-            list.background
-        };
-        let mut encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("tether-render"),
-                });
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let clear =
+            if self.config.format.is_srgb() { linear(list.background) } else { list.background };
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("tether-render"),
+        });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -553,7 +543,9 @@ impl TerminalRenderer {
     }
 
     pub fn set_fonts(&mut self, primary: String, wide: String) {
-        if self.font_family == primary && self.wide_font_family == wide { return; }
+        if self.font_family == primary && self.wide_font_family == wide {
+            return;
+        }
         self.font_family = primary;
         self.wide_font_family = wide;
         self.buffers.clear();
@@ -575,7 +567,8 @@ impl TerminalRenderer {
                 continue;
             }
             let key = BufferKey::of(run);
-            let buffer = build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family);
+            let buffer =
+                build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family);
             if index < self.buffers.len() {
                 self.buffers[index] = buffer;
                 self.buffer_keys[index] = key;
@@ -603,7 +596,9 @@ struct BufferKey {
 
 impl BufferKey {
     fn matches(&self, run: &TextRun) -> bool {
-        self.font_size == run.font_size && self.cell_width == run.cell_width && self.text == run.text
+        self.font_size == run.font_size
+            && self.cell_width == run.cell_width
+            && self.text == run.text
             && self.width == run.width
             && self.height == run.height
             && self.color == run.color.to_bytes()
@@ -641,7 +636,13 @@ fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str
     // size makes the snap grid one column.
     buffer.set_monospace_width(Some(pitch * font_size));
 
-    let mut attrs = Attrs::new().family(family(if pitch > run.cell_width * 1.5 && !wide.is_empty() { wide } else { primary })).color(glyph_color(run.color));
+    let mut attrs = Attrs::new()
+        .family(family(if pitch > run.cell_width * 1.5 && !wide.is_empty() {
+            wide
+        } else {
+            primary
+        }))
+        .color(glyph_color(run.color));
     if run.bold {
         attrs = attrs.weight(Weight::BOLD);
     }
@@ -690,10 +691,7 @@ fn shaped_glyphs_stay_on_the_cell_pitch() {
     let xs = glyph_xs("PS C:\\Users\\Roy> hello", pitch, height);
     for (i, x) in xs.iter().enumerate() {
         let expect = i as f32 * pitch;
-        assert!(
-            (x - expect).abs() < 0.51,
-            "glyph {i} at {x} expected {expect}"
-        );
+        assert!((x - expect).abs() < 0.51, "glyph {i} at {x} expected {expect}");
     }
     let wide = glyph_xs("你好", pitch * 2.0, height);
     assert_eq!(wide.len(), 2, "wide xs {wide:?}");
@@ -724,7 +722,11 @@ fn window_instance(_hwnd: isize) -> Option<std::num::NonZeroIsize> {
 /// Families available to the shaping engine, including user-installed fonts.
 pub fn font_families() -> Vec<String> {
     let fonts = FontSystem::new();
-    let mut names: Vec<String> = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
+    let mut names: Vec<String> = fonts
+        .db()
+        .faces()
+        .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+        .collect();
     names.sort();
     names.dedup();
     names
@@ -745,36 +747,63 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
         (2, "operator_config  molab.config  API keys  ->", 1.0, primary),
     ] {
         let run = TextRun {
-            font_size: measured.size, cell_width: measured.cell_width,
-            x: 16.0, y: 12.0 + row as f32 * 40.0,
-            width: text.graphemes(true).count() as f32 * columns_per_character * measured.cell_width,
-            height: measured.line_height, text: text.into(), color: Rgba::new(0.12, 0.13, 0.15, 1.0),
-            tracking: 0.0, bold: false, italic: false, underline: false, underline_color: None,
+            font_size: measured.size,
+            cell_width: measured.cell_width,
+            x: 16.0,
+            y: 12.0 + row as f32 * 40.0,
+            width: text.graphemes(true).count() as f32
+                * columns_per_character
+                * measured.cell_width,
+            height: measured.line_height,
+            text: text.into(),
+            color: Rgba::new(0.12, 0.13, 0.15, 1.0),
+            tracking: 0.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            underline_color: None,
             strikethrough: false,
         };
         let mut buffer = build_buffer(&mut fonts, &run, primary, wide);
-        assert_eq!(buffer.metrics().font_size, measured.size, "drawing must not shrink the measured font");
-        let installed = fonts.db().faces().any(|face| face.families.iter().any(|(name, _)| name == expected_family));
+        assert_eq!(
+            buffer.metrics().font_size,
+            measured.size,
+            "drawing must not shrink the measured font"
+        );
+        let installed = fonts
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == expected_family));
         if installed {
             for layout in buffer.layout_runs() {
                 for glyph in layout.glyphs {
                     let face = fonts.db().face(glyph.font_id).expect("shaped font");
-                    assert!(face.families.iter().any(|(name, _)| name == expected_family), "unexpected fallback: {:?}", face.families);
+                    assert!(
+                        face.families.iter().any(|(name, _)| name == expected_family),
+                        "unexpected fallback: {:?}",
+                        face.families
+                    );
                 }
             }
         }
         #[allow(deprecated)]
         buffer.draw(&mut fonts, &mut cache, Color::rgb(30, 33, 38), |x, y, w, h, color| {
             let [r, g, b, a] = color.as_rgba();
-            for py in 0..h { for px in 0..w {
-                let x = x + px as i32 + run.x as i32;
-                let y = y + py as i32 + run.y as i32;
-                if !(0..1200).contains(&x) || !(0..150).contains(&y) { continue; }
-                let index = (y as usize * 1200 + x as usize) * 3;
-                for (channel, value) in [r, g, b].into_iter().enumerate() {
-                    pixels[index + channel] = ((value as u32 * a as u32 + pixels[index + channel] as u32 * (255 - a as u32)) / 255) as u8;
+            for py in 0..h {
+                for px in 0..w {
+                    let x = x + px as i32 + run.x as i32;
+                    let y = y + py as i32 + run.y as i32;
+                    if !(0..1200).contains(&x) || !(0..150).contains(&y) {
+                        continue;
+                    }
+                    let index = (y as usize * 1200 + x as usize) * 3;
+                    for (channel, value) in [r, g, b].into_iter().enumerate() {
+                        pixels[index + channel] = ((value as u32 * a as u32
+                            + pixels[index + channel] as u32 * (255 - a as u32))
+                            / 255) as u8;
+                    }
                 }
-            }}
+            }
         });
     }
     if let Ok(path) = std::env::var("TETHER_FONT_PREVIEW") {

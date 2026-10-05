@@ -35,9 +35,14 @@ public sealed class TabContext
     public required Action<bool> Overlay { get; init; }
 }
 
+public sealed record PluginCommand(string Id, string Title, Func<Task> Run);
+
 public interface ITabAttachment : IAsyncDisposable
 {
     UIElement View { get; }
+    IReadOnlyList<PluginCommand> Commands => [];
+    string? RestorationState => null;
+    Task RestoreAsync(string state) => Task.CompletedTask;
     /// <summary>One line under a close confirmation, when closing would stop work.</summary>
     string? CloseNote { get; }
     Task ShownAsync();

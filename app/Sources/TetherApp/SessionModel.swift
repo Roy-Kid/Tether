@@ -2,43 +2,17 @@ import Foundation
 import Observation
 import Tether
 import TetherPluginKit
+import TetherUI
 
 /// What a tab is currently doing.
 enum Stage {
   case connecting
   /// The handshake is waiting on a person: a host to trust, or answers to
   /// give. The connection is genuinely blocked until it is resolved.
-  case asking(Question)
+  case asking
   case connected
   case failed(String)
   case ended(String?)
-}
-
-/// Something the session needs a person to decide.
-///
-/// Data with a continuation rather than a callback into the view: both
-/// questions arrive on a background task and must be answered from the UI.
-struct Question: Identifiable {
-  let id = UUID()
-  let kind: Kind
-
-  enum Kind {
-    case trust(host: HostIdentity, why: TrustQuestion, answer: (Bool) -> Void)
-    case prompts(instruction: String, prompts: [AuthPrompt], answer: ([String]) -> Void)
-  }
-
-  /// Answers in the negative, for when there is no longer anyone to ask.
-  ///
-  /// The handshake is parked on a continuation until this is called. A tab
-  /// closed mid-question would otherwise leave that task suspended for the
-  /// life of the process, holding its connection open — a leak with no
-  /// symptom until there are enough of them.
-  func decline() {
-    switch kind {
-    case .trust(_, _, let answer): answer(false)
-    case .prompts(_, _, let answer): answer([])
-    }
-  }
 }
 
 /// A tab plugin's attachment, and whose it is.
@@ -52,12 +26,20 @@ struct TabAttachmentEntry {
 @Observable
 final class SessionTab: Identifiable {
   let id = UUID()
-  let host: Host
+  /// The host as it was when this tab last dialled.
+  private(set) var host: Host
   /// Stable work-position name (`Terminal 1`), not the remote title.
-  var name: String
+  var name: String { didSet { onHistoryChanged?() } }
+  var historyID: UUID?
+  var history: SessionHistory?
+  var onHistoryChanged: (() -> Void)?
+  private var reportedHistoryError = false
+  private var lastHistoryUpdate = Date.distantPast
 
   private(set) var stage: Stage = .connecting
   private(set) var frame: ScreenFrame?
+  /// `nil` means every row is new. An empty set means only the cursor moved.
+  private(set) var dirtyRows: Set<Int>?
   private(set) var remoteTitle: String = ""
 
   /// Primary tab label. Identity is `id`, never this string.
@@ -70,6 +52,19 @@ final class SessionTab: Identifiable {
 
   /// What tab plugins keep on this tab, in the order they first opened here.
   private(set) var attachments: [TabAttachmentEntry] = []
+
+  /// Something the person has to be told, until they have been.
+  private(set) var problem: SessionProblem?
+  /// A password that has just worked and could be kept, until answered.
+  private(set) var passwordOffer: PasswordOffer?
+  /// Whether a working password may be offered to be kept. Off once the
+  /// person has said no for this host.
+  var offersToSave = true {
+    didSet { if !offersToSave { passwordOffer = nil } }
+  }
+  /// Called when the person declined a question this tab's login asked:
+  /// a decision, not a failure, and nothing is left for the tab to show.
+  var onDeclined: (() -> Void)?
 
   /// The attachment standing in for the shell, if one is.
   var shown: (any TabAttachment)? {
@@ -95,24 +90,42 @@ final class SessionTab: Identifiable {
   private var ready: [CheckedContinuation<RemoteConnection, Error>] = []
   private var pump: Task<Void, Never>?
   private var dialTask: Task<Void, Never>?
+  private var authentication: AuthenticationCoordinator?
+  private var startingDirectory: String?
 
   private var columns: UInt16 = 80
   private var rows: UInt16 = 24
+  /// The far-side tty, once a listing has named it. A local shell already
+  /// has one on the session; this is only for a connection that does not.
+  private var shellTTY: String?
+  private var ttySearch: Task<Void, Never>?
+  /// Set when the view has reported a size. Until then the pty is still the
+  /// 80×24 it was opened at, which cannot pick this shell out of several.
+  private var sized = false
+  /// The tab on screen, and the app in front. A hidden tab still waits on
+  /// the session, so a burst is not lost, but it does not copy a frame
+  /// until someone is looking at it.
+  private var publishesFrames = false
+  /// Keys waiting on an attachment to put the shell back at its prompt,
+  /// and how many have been queued. Later keys stay in order behind them.
+  private var keyQueue: Task<Void, Never>?
+  private var keySerial = 0
   /// What the window draws with, held so a session that opens later is told
   /// the same thing the one before it was.
   private var palette: TerminalPalette?
 
   private let known: KnownHosts
-  /// Held only for the handshake, so a keyboard-interactive "Password:"
-  /// round can be answered with what the person already typed. Cleared
-  /// once the session is up or the attempt fails.
-  fileprivate var offeredPassword: String = ""
+  /// Whether the password handed to the dial was typed just now, rather
+  /// than read from the keychain: typed, it is worth offering to keep.
+  private var typedNow = false
 
-  init(host: Host, password: String, known: KnownHosts, name: String) {
+  init(host: Host, password: String, typedNow: Bool = false, known: KnownHosts, name: String,
+       directory: String? = nil) {
     self.host = host
     self.known = known
     self.name = name
-    self.offeredPassword = password
+    self.typedNow = typedNow
+    self.startingDirectory = directory
     dialTask = Task { await dial(password) }
   }
 
@@ -132,121 +145,68 @@ final class SessionTab: Identifiable {
     self.stage = live ? .connected : .ended(nil)
   }
 
-  /// Reads the keys this host will offer.
-  ///
-  /// At connect time rather than at save time, so a key that was moved or
-  /// had its permissions tightened is noticed now, when there is a person
-  /// to tell. `~/.ssh/id_ed25519` is how a path is written down, because
-  /// that is how it is written down in an ssh config; expanding it is this
-  /// side's job, at the moment of opening the file.
-  private func keyCredentials() -> [Credential] {
-    keys(at: identityFiles(for: host))
-  }
-
-  /// Each hop is a separate login. Its key is not the destination's, and the
-  /// password typed for the destination is not offered here — a prompt is,
-  /// because a bastion that wants a passphrase has to be able to ask.
-  private func jumpCredentials() throws -> [Jump] {
-    try host.jumps.map { hop in
-      let paths = identityFiles(keyPath: hop.keyPath)
-      let keys = keys(at: paths)
-      if let path = hop.keyPath, !path.isEmpty, keys.isEmpty {
-        throw NSError(
-          domain: "Tether", code: 1,
-          userInfo: [NSLocalizedDescriptionKey: "Could not read the key at \(path)."])
-      }
-      return Jump(
-        host: hop.hostname,
-        port: hop.port,
-        user: hop.username,
-        credentials: keys + [.interactive(Prompter(tab: self))])
-    }
-  }
-
-  private func keys(at paths: [String]) -> [Credential] {
-    paths.compactMap { path in
-      guard let pem = try? String(contentsOfFile: expandingTilde(path), encoding: .utf8) else {
-        return nil
-      }
-      return .privateKey(pem: pem, passphrase: nil)
-    }
-  }
-
   private func dial(_ password: String) async {
-    // The only branch in the whole app. Below this line a local session and
-    // a remote one are the same object: the same frames, the same input, the
-    // same ending. Everything that follows — the repaint loop, scrolling,
-    // resizing, closing — was written once and does not know which it got.
-    if host.isLocal {
-      await open()
+    if host.isLocal { await open(); return }
+    if let issue = host.connectionProblem {
+      fail(IdentityError.storage(issue)); return
+    }
+    if host.allowsMasterReuse, await TerminalSession.sshMasterIsRunning(host.sshTarget) {
+      do { adopt(try await TerminalSession.connectOverSsh(host.sshTarget, columns: columns, rows: rows, history: history)) }
+      catch { fail(error) }
       return
     }
-
-    if await TerminalSession.sshMasterIsRunning(host.sshTarget) {
-      do {
-        let session = try await TerminalSession.connectOverSsh(
-          host.sshTarget,
-          columns: columns,
-          rows: rows)
-        adopt(session)
-      } catch {
-        fail(error)
-      }
-      return
-    }
-
-    if let problem = host.jumpProblem {
-      fail(described: problem)
-      return
-    }
-
-    let destination = Destination(
-      host: host.hostname,
-      port: host.port,
-      user: host.username,
-      columns: columns,
-      rows: rows)
-
-    let keys = keyCredentials()
-    if let path = host.keyPath, !path.isEmpty, keys.isEmpty {
-      fail(described: "Could not read the key at \(path).")
-      return
-    }
-
-    let jumps: [Jump]
+    // The coordinator holds the password for the handshake, and only the
+    // coordinator: it is gone from memory once the attempt ends either way.
+    let coordinator = AuthenticationCoordinator(host: host, password: password, known: known,
+      ask: { [weak self] question, shown in await self?.ask(question, shown: shown) })
+    authentication = coordinator
+    defer { coordinator.cancel(); authentication = nil }
     do {
-      jumps = try jumpCredentials()
-    } catch {
-      fail(error)
-      return
-    }
-
-    do {
-      // Key first, then password, then interactive. The order is the
-      // offer order, and each is tried only if the server is still
-      // asking — which is also how "a key, then a one-time code" works
-      // without any special case for it.
-      // A key that is accepted as the first factor (Arrhenius) leaves the
-      // connection in partial success waiting for keyboard-interactive.
-      // Offering SSH password auth in between would spend that state on a
-      // method the server does not list. Password is kept for kbd-int
-      // "Password:" rounds via `offeredPassword`.
-      var credentials: [Credential] = keys
-      if keys.isEmpty, !password.isEmpty {
-        credentials.append(.password(password))
-      }
-      credentials.append(.interactive(Prompter(tab: self)))
-
-      let session = try await TerminalSession.connect(
-        to: destination,
-        trusting: Trust(tab: self),
-        offering: credentials,
-        through: jumps)
-
-      adopt(session)
+      adopt(try await coordinator.connect(columns: columns, rows: rows, history: history))
+      // Only a password the login is known to have used: one typed at the
+      // server's own prompt, or the one given before dialling when nothing
+      // else could have logged in. A key that got there first proves nothing.
+      offer(coordinator.typedPassword ?? (typedNow && coordinator.passwordProven ? password : nil))
     } catch {
       fail(error)
     }
+  }
+
+  /// Dials again in this tab: after a failure, or after the shell went away.
+  /// `host` is the host as it is now — a label edited or a password kept
+  /// since this tab opened belongs to the next attempt.
+  func redial(host: Host, password: String, typedNow: Bool) {
+    guard !closed, host.id == self.host.id else { return }
+    self.host = host
+    problem = nil
+    passwordOffer = nil
+    pump?.cancel()
+    pump = nil
+    session?.close()
+    session = nil
+    ttySearch?.cancel()
+    shellTTY = nil
+    frame = nil
+    dirtyRows = nil
+    stage = .connecting
+    self.typedNow = typedNow
+    dialTask = Task { await dial(password) }
+  }
+
+  /// The person has read the problem.
+  func acknowledge() {
+    problem = nil
+  }
+
+  /// A password that worked, offered to be kept.
+  func offer(_ password: String?) {
+    guard offersToSave, !host.isLocal, !closed, let password, !password.isEmpty else { return }
+    passwordOffer = PasswordOffer(password: password)
+  }
+
+  /// The offer was answered, either way. The password leaves memory here.
+  func settlePasswordOffer() {
+    passwordOffer = nil
   }
 
   /// Opens a shell on a lease that has already been authenticated.
@@ -255,7 +215,7 @@ final class SessionTab: Identifiable {
   /// the server asked were spent getting the connection this tab is holding.
   private func attach(_ connection: RemoteConnection) async {
     do {
-      let session = try await connection.openShell(columns: columns, rows: rows)
+      let session = try await connection.openShell(columns: columns, rows: rows, history: history)
       adopt(session)
     } catch {
       fail(error)
@@ -271,8 +231,13 @@ final class SessionTab: Identifiable {
   /// of `dial`, down to handing out the same lease.
   private func open() async {
     do {
+      // The folder may have been removed after closing the tab.
+      var isDirectory: ObjCBool = false
+      let directory = startingDirectory.flatMap {
+        FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue ? $0 : nil
+      }
       let session = try await TerminalSession.local(
-        LocalShell(term: "xterm-256color", columns: columns, rows: rows))
+        LocalShell(directory: directory, term: "xterm-256color", columns: columns, rows: rows, history: history))
       adopt(session)
     } catch {
       fail(error)
@@ -285,70 +250,215 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
-    offeredPassword = ""
+    reportHistoryError()
     // Before the first byte where possible: a program can ask what the
     // background is in its first breath, and an unanswered question is
     // answered by the convention that a terminal is dark.
     try? session.setPalette(palette)
+    identifyShellTTY()
+    // One wrapper for everyone waiting on this lease. A later read of
+    // `connection` builds another, so the object handed out here is the
+    // one a plugin can recognise as the lease it was given.
     if let connection = session.connection {
       ready.forEach { $0.resume(returning: connection) }
       ready.removeAll()
+      // The shell was dialled again in this same tab. Attachments still
+      // hold the lease that died — the files browser in particular — and
+      // nothing else tells them the one in `session` replaced it.
+      for entry in attachments {
+        entry.attachment.connectionChanged(connection)
+      }
     }
     stage = .connected
     frame = session.frame()
     startPumping(session)
   }
 
-  private func fail(described message: String) {
-    fail(NSError(domain: "Tether", code: 1, userInfo: [NSLocalizedDescriptionKey: message]))
-  }
-
-  private func fail(_ error: Error) {
-    offeredPassword = ""
+  /// Every failure is told, once, by name — except the person's own no,
+  /// which ends the tab without a word.
+  func fail(_ error: Error) {
     stage = .failed(message(for: error))
     ready.forEach { $0.resume(throwing: error) }
     ready.removeAll()
+    guard !closed else { return }
+    if error is CancellationError {
+      onDeclined?()
+      return
+    }
+    problem = SessionProblem(
+      kind: .couldNotConnect, reason: message(for: error), refusedLogin: Self.refusesLogin(error))
   }
+
+  /// The server turned down what it was offered, as opposed to never being
+  /// reached or refusing a shell.
+  private static func refusesLogin(_ error: Error) -> Bool {
+    switch error as? TetherError {
+    case .authenticationFailed, .moreFactorsNeeded, .nothingToOffer: true
+    default: false
+    }
+  }
+
+  /// Bumped by a resize. A repaint already in flight may have copied the
+  /// screen from before it, and publishing that copy would put the old
+  /// grid back. The resize itself has already drawn the screen as it is.
+  private var resizeEpoch = 0
 
   /// Repaints when the screen changes, and not otherwise.
   ///
-  /// No timer: the session wakes this loop on the first byte, and costs
-  /// nothing while the screen is still.
+  /// No timer while the screen is still: the session wakes this loop on the
+  /// first byte. A burst is then folded into one snapshot per refresh.
+  /// Copying the grid on the main actor is what made a `cat` or `btop` drop
+  /// frames — the lock and the Swift strings were competing with the keyboard.
   private func startPumping(_ session: TerminalSession) {
     pump = Task { [weak self] in
       while await session.awaitChange() {
         guard let self, !Task.isCancelled else { return }
-        await MainActor.run {
-          let frame = session.frame()
-          self.frame = frame
-          self.remoteTitle = frame.title
+        let pause = ProcessInfo.processInfo.isLowPowerModeEnabled ? 33 : 8
+        do { try await Task.sleep(for: .milliseconds(pause)) } catch { return }
+        guard !Task.isCancelled else { return }
+        if self.onHistoryChanged != nil, Date().timeIntervalSince(self.lastHistoryUpdate) >= 1 {
+          self.lastHistoryUpdate = Date()
+          self.onHistoryChanged?()
         }
+        self.reportHistoryError()
+        // A program's copy (`OSC 52`) is delivered on the same wake as the
+        // bytes that carried it. Taken even when this tab is hidden, so a
+        // later show does not dump a stale copy onto the pasteboard. Written
+        // only while this tab is the one on screen.
+        let copied = await Self.takeClipboard(session)
+        if self.publishesFrames, let copied { copyToPasteboard(copied) }
+        // The wake is consumed either way. Showing the tab later copies
+        // whatever the screen is then, rather than every intermediate one.
+        guard self.publishesFrames else { continue }
+        let epoch = self.resizeEpoch
+        let update = await Self.copyUpdate(session)
+        guard !Task.isCancelled, self.publishesFrames else { continue }
+        // A resize landed while this copy was in flight. The copy may be
+        // the grid from before it; the screen now is the one to draw.
+        if self.resizeEpoch != epoch {
+          self.frame = session.frame()
+          self.dirtyRows = nil
+          continue
+        }
+        self.publish(update, session: session)
       }
 
       // One last repaint. The final frame is announced before the
       // ending is, so stopping here would leave a program's last line
       // undrawn.
-      guard let self, !Task.isCancelled else { return }
-      await MainActor.run {
-        self.frame = session.frame()
-        self.finish(session.ending())
-      }
+      guard let self else { return }
+      let copied = await Self.takeClipboard(session)
+      if self.publishesFrames, let copied { copyToPasteboard(copied) }
+      self.publish(await Self.copyUpdate(session), session: session)
+      self.finish(session.ending())
     }
+  }
+
+  /// The grid copy, off the main actor. `TerminalSession` is `Sendable`;
+  /// the lock that makes that true lives in Rust.
+  private nonisolated static func copyUpdate(_ session: TerminalSession) async -> FrameUpdate {
+    await Task.detached(priority: .userInitiated) { session.update() }.value
+  }
+
+  /// A remote copy, off the main actor. Same lock as the grid, taken
+  /// separately so a clipboard request is not dropped with the damage.
+  private nonisolated static func takeClipboard(_ session: TerminalSession) async -> String? {
+    await Task.detached(priority: .userInitiated) { session.takeClipboard() }.value
+  }
+
+  /// Applies a partial update onto the frame already on screen. A full
+  /// update replaces it. With no frame yet, the whole screen is taken,
+  /// because a list of dirty rows has nothing to patch.
+  private func publish(_ update: FrameUpdate, session: TerminalSession) {
+    switch update {
+    case .full(let frame):
+      self.frame = frame
+      dirtyRows = nil
+      remoteTitle = frame.title
+    case .rows(let rows, let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
+      guard let current = frame else {
+        self.frame = session.frame()
+        dirtyRows = nil
+        remoteTitle = self.frame?.title ?? title
+        return
+      }
+      self.frame = patched(
+        current, rows: rows, cursorRow: cursorRow, cursorColumn: cursorColumn,
+        cursorShape: cursorShape, cursorVisible: cursorVisible, title: title,
+        viewportOffset: viewportOffset, historyLines: historyLines, mouse: mouse)
+      dirtyRows = Set(rows.map { Int($0.row) })
+      remoteTitle = title
+    case .idle(let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
+      guard let current = frame else { return }
+      self.frame = ScreenFrame(
+        columns: current.columns, rows: current.rows, cursorRow: cursorRow,
+        cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
+        alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
+        historyLines: historyLines, title: title, lines: current.lines)
+      dirtyRows = []
+      remoteTitle = title
+    }
+  }
+
+  /// Turns copying on for the tab someone is looking at, and pulls the
+  /// screen it has now. Hidden tabs keep their last frame until then.
+  func setPublishesFrames(_ publishing: Bool) {
+    guard publishing != publishesFrames else { return }
+    publishesFrames = publishing
+    guard publishing, let session, !closed else { return }
+    Task { [weak self] in
+      let update = await Self.copyUpdate(session)
+      guard let self, self.publishesFrames, !self.closed else { return }
+      self.publish(update, session: session)
+    }
+  }
+
+  private func patched(
+    _ current: ScreenFrame, rows: [UpdatedRow], cursorRow: UInt32, cursorColumn: UInt32,
+    cursorShape: CaretShape, cursorVisible: Bool, title: String, viewportOffset: UInt32,
+    historyLines: UInt32, mouse: MouseTracking
+  ) -> ScreenFrame {
+    var lines = current.lines
+    for row in rows {
+      let index = Int(row.row)
+      guard lines.indices.contains(index) else { continue }
+      lines[index] = row.line
+    }
+    return ScreenFrame(
+      columns: current.columns, rows: current.rows, cursorRow: cursorRow,
+      cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
+      alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
+      historyLines: historyLines, title: title, lines: lines)
+  }
+
+  /// Drops history above 200 lines. The cap stays for the life of the session.
+  func releaseHistory() {
+    session?.releaseHistory(keep: 200)
+  }
+
+  func pauseReading() {
+    session?.pause()
+  }
+
+  func resumeReading() {
+    session?.resume()
   }
 
   private func finish(_ ending: SessionEnding?) {
     let reason: String? =
       switch ending {
-      case .lost(let cause): "Connection lost: \(cause)"
-      case .exited(let status): "Exited (\(status))"
-      case .closed: "Closed"
-      case nil: "Ended"
+      case .lost(let cause): cause
+      case .exited(let status) where status != 0:
+        "The shell exited with status \(status)."
+      default: nil
       }
     stage = .ended(reason)
+    session = nil
+    guard case .lost(let cause) = ending, !closed else { return }
+    problem = SessionProblem(kind: .lost, reason: cause)
   }
 
   func send(_ input: TerminalInput) {
-    guard isLive else { return }
     // Shift-Page Up reads the history; Page Up on its own goes to the far
     // side, because a pager expects it. This is the split every terminal
     // makes, and making it here keeps the engine free of a keyboard
@@ -362,7 +472,29 @@ final class SessionTab: Identifiable {
       default: break
       }
     }
-    try? session?.send(input)
+    // A key typed while the shell is showing something else's history has
+    // to land on the live prompt. The wait is only that restoration;
+    // everything else is written straight through, and keys keep their order.
+    let restore = attachments.contains(where: \.attachment.shellInputWaits)
+    if !restore, keyQueue == nil {
+      try? session?.send(input)
+      return
+    }
+    keySerial += 1
+    let serial = keySerial
+    let pending = attachments
+    let session = session
+    let previous = keyQueue
+    keyQueue = Task { @MainActor [weak self] in
+      await previous?.value
+      if restore {
+        for item in pending where item.attachment.shellInputWaits {
+          await item.attachment.restoreShellForInput()
+        }
+      }
+      try? session?.send(input)
+      if self?.keySerial == serial { self?.keyQueue = nil }
+    }
   }
 
   /// What the text at a cell names, if anything. Asked when a person points.
@@ -372,14 +504,48 @@ final class SessionTab: Identifiable {
 
   /// The directory the shell last reported, if it reports one.
   var workingDirectory: String? { session?.workingDirectory }
+  var terminalName: String? { session?.terminalName ?? shellTTY }
+
+  /// Checks this session at the close gesture, without writing into its input.
+  func activityForClose() async -> ShellActivity {
+    guard isLive else { return .idle }
+    guard let session, let connection = session.connection else { return .unknown }
+    let activity = await ShellActivity.check(
+      on: connection, terminal: terminalName, columns: columns, rows: rows, matchSize: sized)
+    guard isLive else { return .idle }
+    // A reconnect while the query was in flight makes its answer obsolete.
+    guard self.session === session else { return .unknown }
+    return activity
+  }
 
   /// Moves the viewport over the scrollback.
+  ///
+  /// The repaint loop wakes on the same change and publishes on the next
+  /// refresh. Pulling a second copy here made a drag cost two grids per line.
+  /// A wheel can belong to whatever is standing on this shell instead: a
+  /// full-screen program keeps its own history, and the alternate screen
+  /// here has none.
   func scroll(_ to: ScrollTo) {
+    if case .lines(let lines) = to {
+      let fullScreen = frame?.alternateScreen == true
+      if attachments.contains(where: { $0.attachment.scrollShell(lines, fullScreen: fullScreen) }) {
+        return
+      }
+    }
     session?.scroll(to)
-    // The frame is pulled rather than waited for: the repaint loop wakes on
-    // the change too, but a scroll should not lag a frame behind the finger
-    // that asked for it.
-    if let session { frame = session.frame() }
+  }
+
+  /// A wheel the program asked to hear. `true` means an attachment took the
+  /// lines, so the view does not also report them as pointer events.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool {
+    attachments.contains { $0.attachment.claimWheel(lines, column: column, row: row) }
+  }
+
+  /// Moves this shell's own history, without offering the lines to a plugin
+  /// again. Positive goes back.
+  func scrollOwnHistory(by lines: Int32) {
+    guard lines != 0 else { return }
+    session?.scroll(.lines(lines))
   }
 
   /// Tells the far side what this window draws with.
@@ -395,10 +561,43 @@ final class SessionTab: Identifiable {
 
   func resize(columns: UInt16, rows: UInt16) {
     guard columns > 0, rows > 0 else { return }
+    // The shell leaves the tree while a plugin stands in for it, and the
+    // view reports the size it collapses through on the way out. Applying
+    // that shrinks the pty, and a client already running on it then pins
+    // the window to a corner of this one.
+    guard shown == nil else { return }
+    sized = true
+    identifyShellTTY()
     guard columns != self.columns || rows != self.rows else { return }
     self.columns = columns
     self.rows = rows
+    resizeEpoch += 1
     try? session?.resize(columns: columns, rows: rows)
+    // The engine has already reflowed. Draw that screen now: waiting for
+    // the next byte left the old grid up until something else was printed.
+    guard publishesFrames, let session else { return }
+    frame = session.frame()
+    dirtyRows = nil
+  }
+
+  /// Names this shell's far-side tty, when the session itself has none.
+  /// One search at a time: a resize while the previous listing is in flight
+  /// drops that listing, so an 80×24 answer cannot arrive after the real one.
+  private func identifyShellTTY() {
+    guard shellTTY == nil, session?.terminalName == nil, let connection = session?.connection
+    else { return }
+    let columns = self.columns
+    let rows = self.rows
+    let matchSize = sized
+    ttySearch?.cancel()
+    ttySearch = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(200))
+      guard let self, !Task.isCancelled else { return }
+      let found = await ShellTTY.find(
+        on: connection, columns: columns, rows: rows, matchSize: matchSize)
+      guard !Task.isCancelled, self.shellTTY == nil else { return }
+      self.shellTTY = found
+    }
   }
 
   func connectionReady() async throws -> RemoteConnection {
@@ -415,14 +614,29 @@ final class SessionTab: Identifiable {
     return try await withCheckedThrowingContinuation { ready.append($0) }
   }
 
+  func checkpointHistory() {
+    session?.checkpointHistory()
+    reportHistoryError()
+  }
+
+  private func reportHistoryError() {
+    guard !reportedHistoryError, let error = history?.error else { return }
+    reportedHistoryError = true
+    problem = SessionProblem(kind: .history, reason: error)
+  }
+
   func close() {
     closed = true
+    problem = nil
+    passwordOffer = nil
     dialTask?.cancel()
+    ttySearch?.cancel()
     ready.forEach { $0.resume(throwing: CancellationError()) }
     ready.removeAll()
-    // Anyone still waiting on an answer is told no, before the state that
-    // holds their continuation goes away.
-    if case .asking(let question) = stage { question.decline() }
+    // A question on screen is withdrawn, and the handshake waiting on it is
+    // told no — rather than left suspended for the life of the process,
+    // holding its connection open.
+    authentication?.cancel()
 
     pump?.cancel()
     attachments.forEach { $0.attachment.close() }
@@ -445,148 +659,31 @@ final class SessionTab: Identifiable {
   func attach(_ attachment: any TabAttachment, for pluginID: String) {
     precondition(self.attachment(for: pluginID) == nil, "One attachment per plugin per tab")
     attachments.append(TabAttachmentEntry(pluginID: pluginID, attachment: attachment))
+    onHistoryChanged?()
   }
 
   /// Closes and forgets one plugin's attachment, as when it is turned off.
   func detach(_ pluginID: String) {
     attachments.filter { $0.pluginID == pluginID }.forEach { $0.attachment.close() }
     attachments.removeAll { $0.pluginID == pluginID }
+    onHistoryChanged?()
   }
 
   // MARK: - Questions
 
-  fileprivate func ask(_ kind: Question.Kind) {
-    let question = Question(kind: kind)
-    guard !closed else {
-      question.decline()
-      return
-    }
-    stage = .asking(question)
-    HandshakeAlert.present(question)
+  /// Puts a handshake's question to the person, and waits.
+  fileprivate func ask(_ question: HandshakeQuestion, shown: @escaping @MainActor () -> Void) async -> [String]? {
+    guard !closed else { return nil }
+    stage = .asking
+    // Back to `.connecting`: the handshake is still open, now waiting on the
+    // answer just given rather than on the person.
+    defer { if case .asking = stage { stage = .connecting } }
+    let reply = await DialogPresenter.ask(question.dialog, shown: shown)
+    // Nowhere to show it, or taken away by the platform: not the person's
+    // no, and not to be closed as if it were.
+    if reply == nil, !Task.isCancelled { authentication?.questionWentUnanswered() }
+    return question.answers(from: reply)
   }
-
-  /// Back to `.connecting`: the handshake is still open, now waiting on the
-  /// answer that was just given rather than on the person.
-  fileprivate func answered() {
-    if case .asking = stage { stage = .connecting }
-  }
-
-  fileprivate var knownHosts: KnownHosts { known }
-}
-
-// MARK: - Bridges to the SDK's callbacks
-
-private struct Trust: HostTrust {
-  let tab: SessionTab
-
-  func trusts(_ host: HostIdentity) async -> Bool {
-    // Nobody is asked about a key they already vouched for. Asking again
-    // trains a person to accept without reading, which is exactly what the
-    // prompt exists to prevent.
-    guard let why = await tab.knownHosts.question(for: host) else { return true }
-
-    let accepted = await withCheckedContinuation {
-      (continuation: CheckedContinuation<Bool, Never>) in
-      let once = Once(continuation)
-      Task { @MainActor in
-        tab.ask(.trust(host: host, why: why) { once.resume($0) })
-      }
-    }
-
-    if accepted { await tab.knownHosts.remember(host) }
-    await tab.answered()
-    return accepted
-  }
-}
-
-/// Resumes a continuation at most once. System alerts can fire both
-/// Continue and Cancel on the same tap; the second resume would trap.
-private final class Once<Value: Sendable>: @unchecked Sendable {
-  private var continuation: CheckedContinuation<Value, Never>?
-  init(_ continuation: CheckedContinuation<Value, Never>) {
-    self.continuation = continuation
-  }
-  func resume(_ value: Value) {
-    continuation?.resume(returning: value)
-    continuation = nil
-  }
-}
-
-private struct Prompter: AuthPrompter {
-  let tab: SessionTab
-
-  func answer(instruction: String, prompts: [AuthPrompt]) async -> [String] {
-    let password = await MainActor.run { tab.offeredPassword }
-    var answers = Array(repeating: "", count: prompts.count)
-    var leftover: [AuthPrompt] = []
-    var leftoverAt: [Int] = []
-    for (index, prompt) in prompts.enumerated() {
-      if !password.isEmpty, isAccountPasswordPrompt(prompt) {
-        answers[index] = password
-      } else {
-        leftover.append(prompt)
-        leftoverAt.append(index)
-      }
-    }
-
-    if leftover.isEmpty { return answers }
-
-    let toAsk = leftover
-    let filled = await withCheckedContinuation {
-      (continuation: CheckedContinuation<[String], Never>) in
-      let once = Once(continuation)
-      Task { @MainActor in
-        tab.ask(
-          .prompts(instruction: instruction, prompts: toAsk) {
-            once.resume($0)
-          })
-      }
-    }
-    await tab.answered()
-    // Empty is decline, not an empty verification code. Sending "" as a
-    // code is how a dialog that never appeared used to fail the login.
-    if filled.isEmpty { return [] }
-    for (offset, index) in leftoverAt.enumerated() {
-      if offset < filled.count { answers[index] = filled[offset] }
-    }
-    return answers
-  }
-}
-
-/// What a failure says to the person in front of it.
-///
-/// Internal rather than private because these sentences are the app's voice
-/// at the worst moment it has, and a sentence nothing asserts is a sentence
-/// that drifts into jargon.
-/// Whether this prompt is the account password we may already have.
-///
-/// Keyboard-interactive is generic (spec §10). A verification code, a
-/// token, or a "one-time password" is not filled from the saved password.
-func isAccountPasswordPrompt(_ prompt: AuthPrompt) -> Bool {
-  guard !prompt.echo else { return false }
-  let folded = prompt.text.lowercased()
-  if folded.contains("one-time") || folded.contains("verification")
-    || folded.contains("otp") || folded.contains("token")
-    || folded.contains("passcode") || folded.contains("authenticator")
-    || folded.contains("challenge")
-  {
-    return false
-  }
-  let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
-    .trimmingCharacters(in: CharacterSet(charactersIn: ":："))
-    .trimmingCharacters(in: .whitespacesAndNewlines)
-  return trimmed == "password" || trimmed.hasPrefix("password ")
-    || trimmed.hasSuffix(" password")
-}
-
-/// The server's prompt, without a trailing colon, for a dialog title.
-func promptDialogTitle(_ prompt: AuthPrompt) -> String {
-  var text = prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)
-  while text.hasSuffix(":") || text.hasSuffix("：") {
-    text.removeLast()
-  }
-  text = text.trimmingCharacters(in: .whitespaces)
-  return text.isEmpty ? "Continue" : text
 }
 
 func message(for error: Error) -> String {
@@ -595,4 +692,3 @@ func message(for error: Error) -> String {
   let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
   return text.isEmpty ? "\(error)" : text
 }
-

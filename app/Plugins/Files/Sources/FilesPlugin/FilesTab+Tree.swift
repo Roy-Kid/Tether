@@ -14,11 +14,18 @@ struct TreeRow: Identifiable, Equatable {
 extension FilesTab {
   /// Every row the tree shows, in order: the root's entries, and under each
   /// open folder whose contents have arrived, its own, one level deeper.
-  var rows: [TreeRow] {
+  var rows: [TreeRow] { treeRows(seeingHidden: showHidden) }
+
+  /// The tree as listed. `seeingHidden` is independent of the Hidden Files
+  /// switch so a find for a dot-name can see those rows without showing them
+  /// the rest of the time.
+  func treeRows(seeingHidden: Bool) -> [TreeRow] {
     guard let directory else { return [] }
     var rows: [TreeRow] = []
     func add(_ path: String, depth: Int) {
-      for entry in shown(listings[path] ?? []) {
+      let listed = listings[path] ?? []
+      let visible = seeingHidden ? listed : listed.filter { !$0.name.hasPrefix(".") }
+      for entry in visible {
         rows.append(TreeRow(entry: entry, depth: depth))
         if entry.kind == .directory, expanded.contains(entry.path) {
           add(entry.path, depth: depth + 1)
@@ -46,12 +53,25 @@ extension FilesTab {
   func expand(_ entry: FileEntry) async {
     guard entry.kind == .directory else { return }
     expanded.insert(entry.path)
-    guard listings[entry.path] == nil else { return }
+    guard listings[entry.path] == nil, openingRequests[entry.path] == nil else { return }
+    let request = UUID()
+    let mine = generation
+    openingRequests[entry.path] = request
     opening.insert(entry.path)
-    defer { opening.remove(entry.path) }
+    defer {
+      if openingRequests[entry.path] == request {
+        openingRequests[entry.path] = nil
+        opening.remove(entry.path)
+      }
+    }
     do {
-      listings[entry.path] = FilesTab.sorted(try await source().list(entry.path))
+      let listed = try await source().list(entry.path)
+      guard mine == generation, openingRequests[entry.path] == request,
+        expanded.contains(entry.path), !Task.isCancelled else { return }
+      listings[entry.path] = FilesTab.sorted(listed)
     } catch {
+      guard mine == generation, openingRequests[entry.path] == request,
+        !Task.isCancelled else { return }
       expanded.remove(entry.path)
       problem = describe(error)
     }
@@ -62,6 +82,19 @@ extension FilesTab {
   func collapse(_ entry: FileEntry) {
     forget(entry.path)
     selection = selection.filter { !$0.hasPrefix(entry.path + "/") }
+  }
+
+  /// Moves through visible rows, including children of expanded folders.
+  func moveSelection(forward: Bool, steps: Int = 1) {
+    let visible = rows.map(\.id)
+    guard !visible.isEmpty else { selection = []; return }
+    let selected = visible.indices.filter { selection.contains(visible[$0]) }
+    guard let index = forward ? selected.last : selected.first else {
+      selection = [forward ? visible[0] : visible[visible.count - 1]]
+      return
+    }
+    let next = min(visible.count - 1, max(0, index + (forward ? max(1, steps) : -max(1, steps))))
+    selection = [visible[next]]
   }
 
   /// → : opens the selected folder, or moves into it once it is open.
@@ -122,6 +155,8 @@ extension FilesTab {
 
   /// Drops a folder, and everything open under it, from the tree.
   func forget(_ path: String) {
+    openingRequests = openingRequests.filter { key, _ in key != path && !key.hasPrefix(path + "/") }
+    opening = opening.filter { $0 != path && !$0.hasPrefix(path + "/") }
     expanded = expanded.filter { $0 != path && !$0.hasPrefix(path + "/") }
     listings = listings.filter { key, _ in key == directory || (key != path && !key.hasPrefix(path + "/")) }
   }

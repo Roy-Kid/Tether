@@ -24,7 +24,7 @@ import Tether
 /// reach it. Collapsing them is why some clients show a list of IP addresses.
 /// In `~/.ssh/config` the two are the stanza's name and its `HostName`, which
 /// is the same distinction drawn by the people who invented the file.
-struct Host: Identifiable, Hashable {
+struct Host: Identifiable, Hashable, Codable {
   var id = UUID()
   var label: String
   var hostname: String
@@ -36,25 +36,69 @@ struct Host: Identifiable, Hashable {
   /// this file holds nothing a person would mind being read (spec §18).
   var remembersPassword = false
 
-  /// Where the private key lives, when this host uses one.
-  ///
-  /// A path, not the key: the file stays where the person put it, with the
-  /// permissions they gave it, and Tether reads it at the moment of
-  /// connecting rather than keeping a copy (spec §18).
+  /// The key file this device logs in with: an `IdentityFile` from
+  /// `~/.ssh/config`, read where it lies at the moment of connecting.
   var keyPath: String?
+  var profile: HostProfile?
+  /// A key this device keeps in its own keychain instead — one picked in the
+  /// editor, whose file may live somewhere this app can reach only once, or
+  /// one generated here. Never both this and `keyPath`.
+  var credentialSecretID: UUID?
+  /// Log in with `ssh`'s default key files, as the ssh-config entry this
+  /// host was added from did.
+  var usesDefaultKeys = false
+  /// How this device logged in to the host when it was read, so a save from
+  /// a sheet opened earlier cannot undo a key made since.
+  var credentialBinding: LocalCredentialBinding?
+  var otpSecretID: UUID?
+  var passwordSecretID: UUID?
+  var passwordID: UUID { passwordSecretID ?? id }
+  var connectionProblem: String?
+  var accountScope: String = "local"
+  var configurationVersion: String?
 
-  /// Hops visited before this machine, first to last. Empty when `ssh` would
-  /// dial it directly.
-  var jumps: [JumpTarget] = []
+  var isManaged: Bool { profile != nil }
 
-  /// Set when `ProxyJump` cannot be followed — a cycle, a token that is not
-  /// a host. Connecting anyway would reach a different machine than `ssh`.
-  var jumpProblem: String? = nil
+  /// Whether a connection the person's own `ssh` already holds may carry
+  /// this session. Only on a Mac, and only for a host whose settings ask for
+  /// nothing that path would skip: a confirmation, a one-time code, an
+  /// approval from another device.
+  var allowsMasterReuse: Bool {
+    #if os(macOS)
+      guard connectionProblem == nil else { return false }
+      guard let authentication = profile?.authentication else { return true }
+      return authentication.confirmation == .automatic && authentication.otp == nil
+        && authentication.remoteApprovalDevice == nil
+    #else
+      false
+    #endif
+  }
 
-  /// An `IdentityFile` in the ssh config is already a credential, so a
-  /// password is not required to start the handshake. `ssh host` would not
-  /// ask for one either.
+  /// A setting this host's SSH configuration has that Tether cannot follow,
+  /// said so. Only `ssh` itself can reach such a host, through a connection
+  /// it already holds.
+  var routeProblem: String? {
+    guard let unsupported = profile?.unsupported, !unsupported.isEmpty else { return nil }
+    return "Uses \(unsupported.joined(separator: ", ")), which Tether cannot follow yet."
+  }
+  var allowsConnectionReuse: Bool {
+    connectionProblem == nil && profile?.authentication.confirmation != .confirmConnection
+  }
+
+  /// An open session stays only while the security decision is the same one.
+  ///
+  /// A renamed label is still that host. A changed endpoint, route, policy,
+  /// or a review that appeared after the session opened is not.
+  func sameSessionTarget(as previous: Host) -> Bool {
+    id == previous.id && accountScope == previous.accountScope
+      && profile?.securityDigest == previous.profile?.securityDigest
+      && connectionProblem == previous.connectionProblem
+  }
+
+  /// A key on this device is already a credential, so a password is not
+  /// required to start the handshake. `ssh host` would not ask for one either.
   var offersConfiguredKey: Bool {
+    if credentialSecretID != nil { return true }
     guard let keyPath else { return false }
     return !keyPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
@@ -109,15 +153,6 @@ extension Host {
   var isLocal: Bool { id == Host.localID }
 }
 
-/// One hop in front of a saved host. The username is already resolved,
-/// including the account name `ssh` would use when the stanza names none.
-struct JumpTarget: Hashable {
-  var hostname: String
-  var port: UInt16
-  var username: String
-  var keyPath: String?
-}
-
 extension Host {
   /// The identity of the host a stanza names.
   ///
@@ -131,266 +166,629 @@ extension Host {
   /// item and a window's state is a fixed-width value with no punctuation in
   /// it, and so the type stays a `UUID` for everything that already holds one.
   static func id(forAlias alias: String) -> UUID {
-    var digest = Array(SHA256.hash(data: Data(("ssh-config:" + alias).utf8)).prefix(16))
-    // Marked as a name-based UUID rather than a random one, which is what it
-    // is. Version 5 in the high nibble of byte 6, variant in byte 8.
-    digest[6] = (digest[6] & 0x0F) | 0x50
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    return UUID(uuid: (
-      digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-      digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]
-    ))
+    nameBasedUUID("ssh-config:" + alias)
   }
 }
 
-/// The saved hosts: `~/.ssh/config`, and nothing else.
-///
-/// One file, and not one of ours. A person who keeps machines in an ssh
-/// config already has them written down somewhere that `ssh`, `scp`, `rsync`
-/// and their editor all read; a second list inside this app would be a copy
-/// of that, and a copy is a thing that goes out of date. So a host added here
-/// is a stanza added there, and a host added there appears here.
-///
-/// No passwords and no keys. Those live in the keychain, behind
-/// [`SecretStore`] — a file pretending to be a keychain would be worse than
-/// asking every time, because it looks like security to the person trusting
-/// it (spec §18).
+/// The hosts: one library — the one source of truth — synchronized through
+/// iCloud, and on a Mac fed by `~/.ssh/config` (`HostStore+Import`). The file
+/// is written back only when a person agrees (`HostStore+Align`). There is one
+/// kind of host. A host that arrives from
+/// another device on the same Apple ID is already trusted. Private keys
+/// travel with the library; passwords stay on the device that saved them.
 @MainActor
 @Observable
 final class HostStore {
   private(set) var hosts: [Host] = []
-  var search: String = ""
-
-  /// Why the file could not be read or written, for the one place that says
-  /// so. Silence would mean a person adds a host, sees nothing happen, and
-  /// has no way to find out that their config is read-only.
+  var search = ""
   private(set) var problem: String?
-
-  private let location: URL
+  private(set) var syncStatus = "Saved on this device"
+  /// Why the last attempt to synchronize could not, when it could not.
+  private(set) var syncFailure: String?
+  private(set) var lastSynced: Date?
+  /// A sync the person asked for is running.
+  private(set) var syncing = false
+  private(set) var scope = "local"
+  private(set) var accountGeneration = 0
+  private(set) var snapshot = IdentitySnapshot()
+  private var database: IdentityDatabase?
+  /// This Mac's `~/.ssh/config`, or the file a test gave instead.
+  let location: URL
   private let secrets: any SecretStore
-  /// The file as it was last read, so an edit rewrites the lines it owns
-  /// rather than replacing everything the person put there.
-  private var config = SSHConfig("")
-  /// Set when the file exists and could not be read. Nothing is written while
-  /// it is: an edit would replace a config this app never saw with one built
-  /// from an empty file, and there is no other copy of it.
-  private var unreadable = false
+  let credentials: DeviceCredentialStore
+  private(set) var config = SSHConfig("")
+  private(set) var unreadable = false
+  /// A difference between the library and `~/.ssh/config` waiting on an
+  /// answer. Nothing is written until they give one.
+  var pendingAlignment: ConfigAlign.Plan?
+  /// The difference they declined. Not asked again until it changes.
+  var declinedAlignment: ConfigAlign.Plan?
+  /// Hosts an import from `~/.ssh/config` would overwrite, waiting on an
+  /// answer. The file is never written.
+  var pendingImport: ConfigurationImport?
+  /// The diff they declined this launch. Not asked again until the
+  /// difference changes, or the app is opened again.
+  var declinedImport: String?
+  private var cloud: HostCloudSync?
+  private(set) var keyBindings: KeyBindingStore?
+  private(set) var continuity: ContinuityService?
+  private let allowCloud: Bool
+  private var swept = false
 
-  /// Every host a person can open, the local machine first.
-  ///
-  /// Built rather than stored. The local machine is not a saved host and must
-  /// not become one: writing it to `hosts.json` would mean a file that has to
-  /// be migrated when the account name changes, and a row a person could
-  /// delete to make their own computer unreachable.
-  ///
-  /// It is absent where the system does not allow it. iOS has no `fork`/`exec`
-  /// outside the sandbox, and offering a row that could only ever fail would
-  /// be worse than not offering one.
-  var listed: [Host] {
-    TerminalSession.isLocalAvailable ? [.local] + hosts : hosts
-  }
-
+  var listed: [Host] { TerminalSession.isLocalAvailable ? [.local] + hosts : hosts }
   var filtered: [Host] {
     let query = search.trimmingCharacters(in: .whitespaces).lowercased()
-    guard !query.isEmpty else { return listed }
-    return listed.filter {
-      $0.label.lowercased().contains(query)
-        || $0.hostname.lowercased().contains(query)
+    return query.isEmpty ? listed : listed.filter {
+      $0.label.lowercased().contains(query) || $0.hostname.lowercased().contains(query)
         || $0.username.lowercased().contains(query)
     }
   }
-
-  init(location override: URL? = nil, secrets: any SecretStore = Keychain()) {
-    self.secrets = secrets
-    location = override ?? Self.sshConfig
-    load()
-  }
-
-  /// Where OpenSSH looks, which is the only reason this is the path.
   static var sshConfig: URL {
-    URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-      .appending(path: ".ssh", directoryHint: .isDirectory)
-      .appending(path: "config")
+    URL(fileURLWithPath: NSHomeDirectory()).appending(path: ".ssh/config")
+  }
+  var locationDescription: String { "Tether Library" }
+  static var databaseLocation: URL {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appending(path: "Tether/identity.sqlite")
   }
 
-  /// What to call the file in the one place that names it.
-  var locationDescription: String {
-    location.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+  init(location override: URL? = nil, secrets: any SecretStore = Keychain(),
+    credentials: DeviceCredentialStore = DeviceCredentialStore(), databaseURL: URL? = nil) {
+    self.secrets = secrets
+    self.credentials = credentials
+    location = override ?? Self.sshConfig
+    allowCloud = override == nil && databaseURL == nil
+    do {
+      let database = try IdentityDatabase(location: databaseURL ?? override?.appendingPathExtension("sqlite") ?? Self.databaseLocation)
+      self.database = database
+      // The last known account's offline library stays available until CloudKit
+      // reports a sign-out or switch. Never move it into another account.
+      scope = try database.read(String.self, scope: "active-account") ?? "local"
+      snapshot = try database.read(IdentitySnapshot.self, scope: scope) ?? IdentitySnapshot()
+    } catch { problem = error.localizedDescription }
+    reload()
+    trustArrivedSettings()
   }
 
-  /// Reads the file again.
-  ///
-  /// Called when the app comes back to the front, because the file is shared:
-  /// a host added with an editor while this was in the background is a host
-  /// this should be showing.
-  func reload() {
-    load()
+  func startSync() async {
+    guard allowCloud, database != nil else { return }
+    if cloud == nil { cloud = HostCloudSync(store: self) }
+    await cloud?.start()
+    if continuity == nil { continuity = ContinuityService(store: self, database: cloud?.continuityDatabase) }
+    else { continuity?.useDatabase(cloud?.continuityDatabase) }
   }
 
-  func save(_ host: Host, password: String? = nil) {
-    // There is nothing to save about the machine this is running on, and
-    // nothing to edit either: a label, a hostname, a port and a user are four
-    // answers it already knows. Refused here as well as hidden in the
-    // interface, so a future caller cannot write one into the file by
-    // accident.
-    guard !host.isLocal, !unreadable else { return }
+  func useKeyBindings(_ bindings: KeyBindingStore) {
+    keyBindings = bindings
+    bindings.switchAccount(scope)
+    bindings.onChange = { [weak self] in self?.cloud?.enqueue() }
+  }
+  func syncNow() async { await cloud?.synchronize() }
 
-    let alias = Self.alias(of: host)
-    guard !alias.isEmpty else { return }
-    let previous = hosts.first { $0.id == host.id }.map(Self.alias(of:))
+  /// `failure` is what went wrong, for a person who asked to sync.
+  func setSyncStatus(_ text: String, failure: String? = nil) {
+    syncLog.info("\(text, privacy: .public) \(failure ?? "", privacy: .public)")
+    syncStatus = text
+    syncFailure = failure
+  }
 
-    config.write(
-      SSHConfig.Entry(
-        alias: alias,
-        hostName: host.hostname,
-        user: host.username.isEmpty ? nil : host.username,
-        port: host.port,
-        identityFile: host.keyPath.map(contractingHome)),
-      replacing: previous)
+  func didSync() {
+    lastSynced = Date()
+    syncFailure = nil
+  }
 
-    // A renamed host is a differently identified one, because the name *is*
-    // the identity in an ssh config. The password someone asked this app to
-    // keep follows the host they meant rather than the string they changed.
-    if let previous, previous != alias {
-      var renamed = host
-      renamed.id = Host.id(forAlias: alias)
-      renamed.label = alias
-      move(secret: Host.id(forAlias: previous), to: renamed)
+  /// The sync button reads the whole library through iCloud again.
+  /// `~/.ssh/config` is a separate import, and only when they ask.
+  func syncEverything() async {
+    guard !syncing else { return }
+    syncing = true
+    defer { syncing = false }
+    if cloud == nil { await startSync() } else { await cloud?.resynchronize() }
+  }
+
+  func switchAccount(_ account: String) throws {
+    guard account != scope else { return }
+    guard let database else { throw IdentityError.storage("Identity database unavailable.") }
+    let next = try database.read(IdentitySnapshot.self, scope: account) ?? IdentitySnapshot()
+    try database.write(account, scope: "active-account")
+    continuity?.stop()
+    continuity = nil
+    scope = account
+    snapshot = next
+    keyBindings?.switchAccount(account)
+    accountGeneration += 1
+    reload()
+  }
+
+  /// Every change to the library goes through here, and so does letting go
+  /// of what a change leaves behind: a key or password nothing points at any
+  /// more is removed from the keychain once the library no longer needs it —
+  /// never before, so a failed write cannot leave a host without its key.
+  func update(skippingUnchanged: Bool = false, _ change: (inout IdentitySnapshot) throws -> Void) throws {
+    guard let database else { throw IdentityError.storage("Identity database unavailable.") }
+    var next = snapshot
+    try change(&next)
+    next.prune()
+    if skippingUnchanged {
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = .sortedKeys
+      if try encoder.encode(next) == encoder.encode(snapshot) { return }
     }
-    persist()
-
-    // After the file write: `persist` reloads from disk and would otherwise
-    // clear a keychain error set here. The editor's host may still carry a
-    // random `blank()` id — the item has to live under the stanza name, or
-    // the next launch would ask again. `nil` leaves whatever was stored.
-    if let password {
-      var identified = host
-      identified.id = Host.id(forAlias: alias)
-      identified.label = alias
-      do {
-        if password.isEmpty {
-          try secrets.forget(identified.id)
-        } else {
-          try secrets.remember(password, for: identified)
+    try database.write(next, scope: scope)
+    var released = snapshot.credentialSecrets.subtracting(next.credentialSecrets)
+    var forgotten = snapshot.passwordSecrets.subtracting(next.passwordSecrets)
+    snapshot = next
+    if !released.isEmpty || !forgotten.isEmpty {
+      // Another account's library may point at the same item — a copy made
+      // before libraries moved rather than copied. Unsure means keep it.
+      if let others = try? otherLibraries() {
+        for library in others {
+          released.subtract(library.credentialSecrets)
+          forgotten.subtract(library.passwordSecrets)
         }
-        load()
+      } else {
+        released = []
+        forgotten = []
+      }
+    }
+    release(credentials: released, passwords: forgotten)
+    reload()
+  }
+
+  /// Every library but the active one.
+  private func otherLibraries() throws -> [IdentitySnapshot] {
+    guard let database else { return [] }
+    return try database.scopes().filter { $0 != "active-account" && $0 != scope }.compactMap {
+      try database.read(IdentitySnapshot.self, scope: $0)
+    }
+  }
+
+  private func release(credentials released: Set<UUID>, passwords forgotten: Set<UUID>) {
+    // Each on its own: one item the keychain refuses to delete is no reason
+    // to keep the others.
+    for (id, store) in released.map({ ($0, credentials.secrets) }) + forgotten.map({ ($0, secrets) }) {
+      do { try store.forget(id) } catch { problem = error.localizedDescription }
+    }
+  }
+
+  /// Keychain items no library points at, left by earlier versions that let
+  /// go of a host without letting go of its key. Once per launch, before any
+  /// editor could be holding a key it has not saved yet, and only when every
+  /// library could be read — one that could not might be the one using it.
+  func sweepCredentials() {
+    // A store opened on another file sees only its own libraries, and would
+    // take the real ones' keys for strays.
+    guard allowCloud, !swept, let database else { return }
+    swept = true
+    do {
+      var referenced: Set<UUID> = []
+      for scope in try database.scopes() where scope != "active-account" {
+        guard let library = try database.read(IdentitySnapshot.self, scope: scope) else { continue }
+        referenced.formUnion(library.credentialSecrets)
+      }
+      for item in try credentials.saved() where !referenced.contains(item.id) {
+        try credentials.forget(item.id)
+      }
+    } catch { problem = error.localizedDescription }
+  }
+
+  func reload() {
+    if FileManager.default.fileExists(atPath: location.path) {
+      do {
+        config = try SSHConfig.read(location)
+        unreadable = false
       } catch {
-        problem = error.localizedDescription
+        unreadable = true
+        problem = "Could not read SSH configuration: \(error.localizedDescription)"
       }
-    }
-  }
-
-  func delete(_ host: Host) {
-    // Deleting the local machine would mean a person could make their own
-    // computer unreachable from an app running on it, and nothing would
-    // bring it back.
-    guard !host.isLocal, !unreadable else { return }
-
-    config.remove(alias: Self.alias(of: host))
-    // A host that no longer exists must not leave a password behind. If the
-    // keychain refuses, the item survives as an entry with no host — which is
-    // exactly what the saved-passwords list in settings shows and lets a
-    // person delete. A failure here is visible somewhere rather than nowhere.
-    try? secrets.forget(host.id)
-    persist()
-  }
-
-  /// The stanza name for a host: what a person called it, or the address when
-  /// they called it nothing.
-  private static func alias(of host: Host) -> String {
-    let label = host.label.trimmingCharacters(in: .whitespaces)
-    return label.isEmpty ? host.hostname.trimmingCharacters(in: .whitespaces) : label
-  }
-
-  private func move(secret previous: UUID, to host: Host) {
-    guard let password = try? secrets.password(for: previous) else { return }
-    try? secrets.remember(password, for: host)
-    try? secrets.forget(previous)
-  }
-
-  private func load() {
-    guard FileManager.default.fileExists(atPath: location.path) else {
-      // Not a failure. Someone who has never used ssh from this account has
-      // an empty list and a file that will be written the first time they
-      // add a host.
-      config = SSHConfig("")
-      hosts = []
-      problem = nil
-      unreadable = false
-      return
-    }
-
-    do {
-      config = SSHConfig(try String(contentsOf: location, encoding: .utf8))
-      problem = nil
-      unreadable = false
-    } catch {
-      // Left exactly as it is. The alternative — starting from an empty file
-      // — would mean the next host added replaces a person's whole ssh
-      // config, and there is no other copy of it.
-      problem = "Could not read \(locationDescription): \(error.localizedDescription)"
-      unreadable = true
-      return
-    }
-
+    } else { config = SSHConfig(""); unreadable = false }
     let remembered = Set((try? secrets.saved())?.map(\.id) ?? [])
-    hosts = config.entries.map { entry in
-      let route = route(for: entry.alias)
-      return Host(
-        id: Host.id(forAlias: entry.alias),
-        label: entry.alias,
-        hostname: entry.hostName,
-        port: entry.port ?? 22,
-        username: entry.user ?? defaultUserName(),
-        remembersPassword: remembered.contains(Host.id(forAlias: entry.alias)),
-        keyPath: entry.identityFile,
-        jumps: route.hops,
-        jumpProblem: route.problem)
+    var result: [Host] = []
+    for record in snapshot.records.values where !record.deleted {
+      let p = record.profile
+      let primary = snapshot.bindings[p.authentication.primary.id]
+      let otp = p.authentication.otp.flatMap { snapshot.bindings[$0.id] }
+      var issue: String?
+      if !record.conflicts.isEmpty { issue = "Resolve configuration conflict" }
+      else if !p.jumpHosts.isEmpty { issue = IdentityError.unsupportedRoute.localizedDescription }
+      // No key or code seed on this device is not a problem to block on: the
+      // login asks the person for what this device cannot answer itself.
+      result.append(Host(id: p.id, label: p.label, hostname: p.hostname, port: p.port,
+        username: p.username, remembersPassword: snapshot.passwordBindings[p.id].map(remembered.contains) ?? false, keyPath: primary?.keyPath,
+        profile: p, credentialSecretID: primary?.secretID, usesDefaultKeys: primary?.defaultKeys == true,
+        credentialBinding: primary, otpSecretID: otp?.secretID,
+        passwordSecretID: snapshot.passwordBindings[p.id], connectionProblem: issue, accountScope: scope,
+        configurationVersion: p.versionDigest))
     }
+    hosts = result.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
   }
 
-  /// The hops in front of `alias`, or why they cannot be followed.
-  private func route(for alias: String) -> (hops: [JumpTarget], problem: String?) {
-    switch config.jumps(for: alias) {
-    case .success(let hops):
-      let targets = hops.map { hop in
-        JumpTarget(
-          hostname: hop.hostName,
-          port: hop.port,
-          username: hop.user ?? defaultUserName(),
-          keyPath: hop.identityFile)
-      }
-      return (targets, nil)
-    case .failure(let error):
-      return ([], message(for: error, alias: alias))
-    }
+  /// The password an ssh-config entry had saved, copied to be the host's
+  /// too when the host has none yet. Copied, not moved: the entry is still
+  /// the person's, and still usable on its own.
+  func carryPassword(of entry: SSHConfig.Entry, to id: UUID) throws -> UUID? {
+    guard snapshot.passwordBindings[id] == nil,
+      let password = try secrets.password(for: Host.id(forAlias: entry.alias)) else { return nil }
+    let copy = UUID()
+    try secrets.remember(password, for: Host(id: copy, label: entry.alias, hostname: entry.hostName,
+      port: entry.port ?? 22, username: entry.user ?? defaultUserName()))
+    return copy
   }
 
-  private func message(for error: SSHConfig.JumpError, alias: String) -> String {
-    switch error {
-    case .cycle(let name):
-      return "ProxyJump for \(alias) cycles through \(name)."
-    case .tooLong:
-      return "ProxyJump for \(alias) is too long."
-    case .malformed(let token):
-      return "ProxyJump for \(alias) has an unreadable hop (\(token))."
-    }
-  }
-
-  private func persist() {
+  @discardableResult
+  func save(_ host: Host, password: String? = nil) -> Bool {
+    guard !host.isLocal else { return false }
     do {
-      try FileManager.default.createDirectory(
-        at: location.deletingLastPathComponent(), withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700])
-      try config.text.write(to: location, atomically: true, encoding: .utf8)
-      // ssh refuses a config anyone else can write, and a file this app
-      // created with the default mask is one it would then refuse.
-      try? FileManager.default.setAttributes(
-        [.posixPermissions: 0o600], ofItemAtPath: location.path)
+      var p: HostProfile
+      if let existing = host.profile {
+        guard host.accountScope == scope,
+          host.configurationVersion == snapshot.records[host.id]?.profile.versionDigest,
+          // A key made or chosen elsewhere since this copy was read is not
+          // this save's to undo.
+          host.credentialBinding == snapshot.bindings[existing.authentication.primary.id] else {
+          throw IdentityError.storage("This host changed while it was open. Reopen its settings before saving.")
+        }
+        p = existing
+      } else {
+        p = Self.newProfile(id: host.id, label: host.label.isEmpty ? host.hostname : host.label,
+          hostname: host.hostname, username: host.username, port: host.port, key: host.offersConfiguredKey)
+      }
+      p.label = host.label.isEmpty ? host.hostname : host.label
+      p.hostname = host.hostname.trimmingCharacters(in: .whitespaces)
+      p.username = host.username.trimmingCharacters(in: .whitespaces)
+      p.port = host.port
+      if p != host.profile { p.modified = Date() }
+      try p.validate()
+      // A rejected Keychain write must not make the UI report a successful save.
+      let passwordID = snapshot.passwordBindings[p.id] ?? UUID()
+      if let password, !password.isEmpty {
+        var target = host; target.id = passwordID; try secrets.remember(password, for: target)
+      }
+      let profile = p
+      try update { state in
+        if let password { state.passwordBindings[profile.id] = password.isEmpty ? nil : passwordID }
+        var record = state.records[profile.id] ?? SharedHostRecord(profile: profile)
+        guard !record.deleted else { throw IdentityError.storage("This host was deleted. Create a new host to restore it.") }
+        guard record.conflicts.isEmpty else { throw IdentityError.needsReview }
+        if record.profile != profile || state.records[profile.id] == nil {
+          record.profile = profile
+          record.dirty = true
+        }
+        let credential = profile.authentication.primary.id
+        let previous = state.bindings[credential]
+        let binding = Self.binding(for: host, credential: credential, previous: previous)
+        state.bindings[credential] = binding
+        if Self.keyChoiceChanged(from: previous, to: binding) {
+          // The key is shared with the other devices on this Apple ID. The
+          // profile — where the host is, and how it authenticates — is not
+          // what changed.
+          record.dirty = true
+          record.syncedKeyDigest = nil
+          record.forgetSharedKey = Self.hasKey(binding) ? nil : true
+        }
+        state.records[profile.id] = record
+        state.approvals[profile.id] = profile.securityDigest
+      }
       problem = nil
-    } catch {
-      problem = "Could not write \(locationDescription): \(error.localizedDescription)"
+      reconcile()
+      cloud?.enqueue()
+      return true
+    } catch { problem = error.localizedDescription; return false }
+  }
+
+  /// How this device logs in to a host: a key in its keychain, a key file,
+  /// or — with neither — whatever the server asks for.
+  private static func binding(for host: Host, credential: UUID, previous: LocalCredentialBinding?) -> LocalCredentialBinding? {
+    if let secretID = host.credentialSecretID {
+      return LocalCredentialBinding(credentialID: credential, secretID: secretID,
+        publicKey: previous?.secretID == secretID ? previous?.publicKey : nil)
     }
-    load()
+    if let path = host.keyPath, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return LocalCredentialBinding(credentialID: credential, keyPath: path)
+    }
+    if host.usesDefaultKeys { return LocalCredentialBinding(credentialID: credential, defaultKeys: true) }
+    return nil
+  }
+
+  /// A host as Tether starts one: how `ssh` would treat it — no extra
+  /// confirmation, no second factor — until someone says otherwise.
+  nonisolated static func newProfile(id: UUID, label: String, hostname: String, username: String, port: UInt16,
+    key: Bool) -> HostProfile {
+    let identity = AccountIdentity(name: label)
+    let credential = CredentialDescriptor(identityID: identity.id, purpose: key ? .ssh : .password)
+    var authentication = AuthenticationProfile(identity: identity, primary: credential)
+    authentication.confirmation = .automatic
+    var profile = HostProfile(id: id, label: label, hostname: hostname, port: port, username: username,
+      authentication: authentication)
+    profile.modified = Date()
+    return profile
+  }
+
+  /// A host as an SSH configuration names it. Every identifier comes from
+  /// its name, so two Macs adding the same stanza before they have
+  /// synchronized add the same host, not two that then have to be told
+  /// apart — unless that name belonged to a host someone deleted, whose
+  /// tombstone a new stanza must not be mistaken for.
+  func importedProfile(for entry: SSHConfig.Entry) -> HostProfile {
+    let named = nameBasedUUID("host:" + entry.alias)
+    let id = snapshot.records[named] == nil ? named : UUID()
+    let identity = AccountIdentity(id: nameBasedUUID("identity:" + id.uuidString), name: entry.alias)
+    let credential = CredentialDescriptor(id: nameBasedUUID("credential:" + id.uuidString), identityID: identity.id,
+      purpose: .ssh)
+    var authentication = AuthenticationProfile(id: nameBasedUUID("authentication:" + id.uuidString),
+      identity: identity, primary: credential)
+    authentication.confirmation = .automatic
+    return HostProfile(id: id, label: entry.alias, hostname: entry.hostName, port: entry.port ?? 22,
+      username: entry.user ?? defaultUserName(), authentication: authentication)
+  }
+
+  /// Its key, code seed and password go with it: `update` lets go of
+  /// whatever the deleted host was the last thing pointing at.
+  func delete(_ host: Host) {
+    guard host.isManaged else { return }
+    do {
+      try update { state in
+        guard var record = state.records[host.id] else { return }
+        record.deleted = true; record.dirty = true; record.conflicts = [:]
+        state.records[host.id] = record
+      }
+      reconcile()
+      cloud?.enqueue()
+      problem = nil
+    } catch { problem = error.localizedDescription }
+  }
+
+  func resolve(_ id: UUID, useRemote: Bool) {
+    do {
+      try update { state in
+        guard var record = state.records[id] else { return }
+        let before = record.profile
+        try record.resolve(useRemote: useRemote)
+        state.records[id] = record
+        Self.rebind(from: before, to: record.profile, in: &state)
+        Self.trust(id, in: &state)
+      }
+      cloud?.enqueue()
+    } catch { problem = error.localizedDescription }
+  }
+
+  func receive(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String? = nil) throws {
+    try update { state in
+      if var existing = state.records[profile.id] {
+        let before = existing.profile
+        try existing.merge(profile, deleted: deleted, systemFields: systemFields)
+        state.records[profile.id] = existing
+        Self.rebind(from: before, to: existing.profile, in: &state)
+      } else {
+        try profile.validate()
+        state.records[profile.id] = SharedHostRecord(profile: profile, base: profile, deleted: deleted,
+          dirty: false, systemFields: systemFields)
+      }
+      // The private database is this Apple ID. A host that arrived through
+      // it is this person's host; nothing further is asked before connecting.
+      Self.trust(profile.id, in: &state)
+      if !deleted { try self.take(privateKey, for: profile.id, in: &state) }
+    }
+  }
+
+  /// Hosts already in the library when review went away. The same trust
+  /// `receive` gives a host that arrives now.
+  private func trustArrivedSettings() {
+    let stale = snapshot.records.contains { id, record in
+      !record.deleted && record.conflicts.isEmpty && snapshot.approvals[id] != record.profile.securityDigest
+    }
+    guard stale else { return }
+    try? update { state in
+      for id in state.records.keys { Self.trust(id, in: &state) }
+    }
+  }
+
+  private static func trust(_ id: UUID, in state: inout IdentitySnapshot) {
+    guard let record = state.records[id], !record.deleted, record.conflicts.isEmpty else { return }
+    state.approvals[id] = record.profile.securityDigest
+  }
+
+  /// Hosts kept while no iCloud account was signed in join the account that
+  /// signs in, instead of vanishing behind it. Moved, not copied: a library
+  /// left behind would be handed to the next account to sign in as well.
+  /// Called when an account becomes active; the keychain items stay where
+  /// they are, now pointed at by the account's library.
+  /// Settings from another device can name this host's credentials by other
+  /// identifiers than the ones this device bound its key and code seed to.
+  /// The secret is the same one, so it follows the setting rather than being
+  /// let go of.
+  private static func rebind(from old: HostProfile, to new: HostProfile, in state: inout IdentitySnapshot) {
+    let pairs: [(UUID?, UUID?)] = [
+      (old.authentication.primary.id, new.authentication.primary.id),
+      (old.authentication.otp?.id, new.authentication.otp?.id),
+    ]
+    for case let (from?, to?) in pairs where from != to && state.bindings[to] == nil {
+      guard var binding = state.bindings.removeValue(forKey: from) else { continue }
+      binding.credentialID = to
+      state.bindings[to] = binding
+    }
+  }
+
+  /// Hosts iCloud removed on its own — a purged library, records gone
+  /// without a tombstone — rather than a person deleting them. They go,
+  /// and nothing they held is given back to another device's copy, but the
+  /// keys this device made for them stay in its keychain.
+  func vanish(_ ids: [UUID]? = nil) throws {
+    try update { state in
+      for id in ids ?? Array(state.records.keys) {
+        guard var record = state.records[id], !record.deleted else { continue }
+        record.deleted = true
+        record.dirty = false
+        record.vanished = true
+        state.records[id] = record
+      }
+    }
+  }
+
+  /// After an encrypted-data reset the zone is gone but nothing was meant
+  /// to be deleted, so this device's copy goes back up whole.
+  func prepareReupload() throws {
+    try update { state in
+      for id in Array(state.records.keys) {
+        guard var record = state.records[id] else { continue }
+        record.systemFields = nil
+        record.base = nil
+        record.dirty = true
+        // The zone these keys were sent to is gone.
+        record.syncedKeyDigest = nil
+        state.records[id] = record
+      }
+    }
+  }
+
+  func importLocalLibrary() {
+    guard scope.hasPrefix("icloud:"), let database else { return }
+    do {
+      guard let source = try database.read(IdentitySnapshot.self, scope: "local"),
+        !source.records.isEmpty else { return }
+      try update { state in
+        for (id, record) in source.records where !record.deleted && state.records[id] == nil {
+          var imported = record; imported.base = nil; imported.systemFields = nil; imported.dirty = true
+          state.records[id] = imported
+          state.approvals[id] = source.approvals[id]
+          state.passwordBindings[id] = source.passwordBindings[id]
+          for credential in [record.profile.authentication.primary.id, record.profile.authentication.otp?.id].compactMap({ $0 }) {
+            state.bindings[credential] = source.bindings[credential]
+          }
+        }
+        for (alias, id) in source.adoptedAliases where state.records[id] != nil { state.adoptedAliases[alias] = id }
+        var links = state.imports ?? [:]
+        for (alias, link) in source.imports ?? [:] where state.records[link.id] != nil { links[alias] = link }
+        state.imports = links
+      }
+      var emptied = source
+      emptied.records = [:]
+      emptied.bindings = [:]
+      emptied.approvals = [:]
+      emptied.passwordBindings = [:]
+      emptied.adoptedAliases = [:]
+      emptied.imports = nil
+      try database.write(emptied, scope: "local")
+      scheduleSync()
+    } catch { recordProblem(error) }
+  }
+
+  func scheduleSync() { cloud?.enqueue() }
+
+  func recordProblem(_ error: Error) { problem = error.localizedDescription }
+
+  /// The private key this device would log in with, when it is one the
+  /// other devices on this Apple ID should have too. A password is not.
+  /// Nothing here is logged.
+  func sharedPrivateKey(for profile: HostProfile) -> String? {
+    privateKeyMaterial(profile: profile, bindings: snapshot.bindings)
+  }
+
+  /// A key this device has and has not yet sent. Marks the host so the next
+  /// sync carries the key. A file that has not changed marks nothing.
+  func noteKeysAwaitingSync() {
+    do {
+      try update(skippingUnchanged: true) { state in
+        for id in state.records.keys {
+          guard var record = state.records[id], !record.deleted, record.conflicts.isEmpty,
+            record.forgetSharedKey != true else { continue }
+          guard let pem = self.privateKeyMaterial(profile: record.profile, bindings: state.bindings) else { continue }
+          if record.syncedKeyDigest != Self.keyDigest(pem) {
+            record.dirty = true
+            state.records[id] = record
+          }
+        }
+      }
+    } catch { recordProblem(error) }
+  }
+
+  /// Where a shared key is kept on every device: one id per host, so a key
+  /// that arrives twice lands on the item the first copy already uses.
+  static func syncedKeyID(for host: UUID) -> UUID { nameBasedUUID("synced-key:" + host.uuidString) }
+
+  /// Digest of a private key. Hex, so it can sit in the library beside the
+  /// host and still not be the key.
+  static func keyDigest(_ pem: String) -> String {
+    SHA256.hash(data: Data(pem.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
+  static let clearedKey = "cleared"
+
+  static func looksLikePrivateKey(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.utf8.count <= 64 * 1024
+      && trimmed.contains("-----BEGIN ")
+      && trimmed.contains("PRIVATE KEY")
+      && trimmed.contains("-----END ")
+  }
+
+  private func privateKeyMaterial(profile: HostProfile, bindings: [UUID: LocalCredentialBinding]) -> String? {
+    let binding = bindings[profile.authentication.primary.id]
+    if let id = binding?.secretID {
+      guard let pem = try? credentials.read(id), Self.looksLikePrivateKey(pem) else { return nil }
+      return pem
+    }
+    let paths: [String]
+    if let path = binding?.keyPath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+      paths = [path]
+    } else if binding?.defaultKeys == true {
+      paths = defaultIdentityFiles
+    } else {
+      return nil
+    }
+    for path in paths {
+      guard let pem = try? String(contentsOfFile: expandingTilde(path), encoding: .utf8),
+        Self.looksLikePrivateKey(pem) else { continue }
+      return pem
+    }
+    return nil
+  }
+
+  /// `nil` leaves whatever key this device already has. `""` withdraws the
+  /// shared one. Anything else is the key, installed unless this device
+  /// logs in with a file of its own — that file is what gets sent, and a
+  /// copy arriving back must not replace it.
+  private func take(_ privateKey: String?, for id: UUID, in state: inout IdentitySnapshot) throws {
+    guard var record = state.records[id], !record.deleted, let privateKey else { return }
+    let credential = record.profile.authentication.primary.id
+    let trimmed = privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+      if state.bindings[credential]?.secretID == Self.syncedKeyID(for: id) {
+        state.bindings[credential] = nil
+      }
+      record.forgetSharedKey = nil
+      record.syncedKeyDigest = Self.clearedKey
+      state.records[id] = record
+      return
+    }
+    guard Self.looksLikePrivateKey(privateKey) else { return }
+    record.syncedKeyDigest = Self.keyDigest(privateKey)
+    record.forgetSharedKey = nil
+    state.records[id] = record
+    if Self.keepsOwnKeyFile(state.bindings[credential]) { return }
+    let secretID = Self.syncedKeyID(for: id)
+    if (try? credentials.read(secretID)) != privateKey {
+      try credentials.write(privateKey, id: secretID, label: record.profile.label)
+    }
+    let publicKey = state.bindings[credential]?.secretID == secretID ? state.bindings[credential]?.publicKey : nil
+    state.bindings[credential] = LocalCredentialBinding(credentialID: credential, secretID: secretID, publicKey: publicKey)
+  }
+
+  private static func keepsOwnKeyFile(_ binding: LocalCredentialBinding?) -> Bool {
+    guard let binding else { return false }
+    if let path = binding.keyPath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty { return true }
+    return binding.defaultKeys == true
+  }
+
+  private static func hasKey(_ binding: LocalCredentialBinding?) -> Bool {
+    guard let binding else { return false }
+    if binding.secretID != nil { return true }
+    if let path = binding.keyPath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty { return true }
+    return binding.defaultKeys == true
+  }
+
+  private static func keyChoiceChanged(from previous: LocalCredentialBinding?, to binding: LocalCredentialBinding?) -> Bool {
+    previous?.secretID != binding?.secretID || previous?.keyPath != binding?.keyPath
+      || previous?.defaultKeys != binding?.defaultKeys
   }
 }

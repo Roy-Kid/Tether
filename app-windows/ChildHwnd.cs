@@ -21,7 +21,7 @@ using Windows.System;
 namespace TetherApp;
 
 /// <summary>What the pointer did, in the child window's client pixels.</summary>
-public enum ChildPointerKind { LeftDown, Move, LeftUp, RightUp, Wheel }
+public enum ChildPointerKind { LeftDown, Move, LeftUp, RightDown, RightUp, MiddleDown, MiddleUp, Wheel }
 
 /// <summary>One pointer message from the render window. <see cref="X"/> and <see cref="Y"/> are client pixels; <see cref="Delta"/> is the wheel notch in the units Windows reports (usually ±120).</summary>
 public readonly record struct ChildPointer(ChildPointerKind Kind, int X, int Y, int Delta);
@@ -36,6 +36,9 @@ public sealed class ChildHwnd : IDisposable
     private const int WM_MOUSEMOVE = 0x0200;
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_RBUTTONDOWN = 0x0204;
+    private const int WM_MBUTTONDOWN = 0x0207;
+    private const int WM_MBUTTONUP = 0x0208;
     private const int WM_RBUTTONUP = 0x0205;
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int WM_KEYDOWN = 0x0100;
@@ -253,7 +256,10 @@ public sealed class ChildHwnd : IDisposable
                 child._pointerInput = true;
                 // The right button opens the menu on release, the same moment
                 // XAML's RightTapped fires. A down must not also start a drag.
-                if (PointerButton(wParam) == PointerButtonKind.Right) return 0;
+                if (PointerButton(wParam) == PointerButtonKind.Right)
+                { child.DispatchPointer(hWnd, ChildPointerKind.RightDown, lParam, screenPoint: true); return 0; }
+                if (PointerButton(wParam) == PointerButtonKind.Middle)
+                { child.DispatchPointer(hWnd, ChildPointerKind.MiddleDown, lParam, screenPoint: true); return 0; }
                 SetCapture(hWnd);
                 child.DispatchPointer(hWnd, ChildPointerKind.LeftDown, lParam, screenPoint: true);
                 return 0;
@@ -261,7 +267,7 @@ public sealed class ChildHwnd : IDisposable
                 child._pointerInput = true;
                 var up = PointerButton(wParam) == PointerButtonKind.Right
                     ? ChildPointerKind.RightUp
-                    : ChildPointerKind.LeftUp;
+                    : PointerButton(wParam) == PointerButtonKind.Middle ? ChildPointerKind.MiddleUp : ChildPointerKind.LeftUp;
                 if (up == ChildPointerKind.LeftUp) ReleaseCapture();
                 child.DispatchPointer(hWnd, up, lParam, screenPoint: true);
                 return 0;
@@ -283,6 +289,12 @@ public sealed class ChildHwnd : IDisposable
             case WM_MOUSEMOVE when !child._pointerInput:
                 child.DispatchPointer(hWnd, ChildPointerKind.Move, lParam, screenPoint: false);
                 return 0;
+            case WM_RBUTTONDOWN when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.RightDown, lParam, screenPoint: false); return 0;
+            case WM_MBUTTONDOWN when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.MiddleDown, lParam, screenPoint: false); return 0;
+            case WM_MBUTTONUP when !child._pointerInput:
+                child.DispatchPointer(hWnd, ChildPointerKind.MiddleUp, lParam, screenPoint: false); return 0;
             case WM_RBUTTONUP when !child._pointerInput:
                 child.DispatchPointer(hWnd, ChildPointerKind.RightUp, lParam, screenPoint: false);
                 return 0;
@@ -318,10 +330,10 @@ public sealed class ChildHwnd : IDisposable
     private static PointerButtonKind PointerButton(nint wParam)
     {
         var flags = (int)((wParam >> 16) & 0xffff);
-        return (flags & POINTER_FLAG_SECONDBUTTON) != 0 ? PointerButtonKind.Right : PointerButtonKind.Left;
+        return (flags & POINTER_FLAG_SECONDBUTTON) != 0 ? PointerButtonKind.Right : (flags & 0x0040) != 0 ? PointerButtonKind.Middle : PointerButtonKind.Left;
     }
 
-    private enum PointerButtonKind { Left, Right }
+    private enum PointerButtonKind { Left, Right, Middle }
 
     /// <summary>
     /// One UTF-16 unit of typed text. A control character whose key press

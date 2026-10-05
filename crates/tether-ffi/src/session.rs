@@ -12,6 +12,7 @@ use tether_core::terminal::{Options, ScreenSize, Scroll};
 use tether_core::{Credential, Dial, Ending, Local, SshClient, TerminalSession};
 
 use crate::input::{Resolved, TerminalInput};
+use crate::keys::{ForeignUnlocker, PassphrasePrompter};
 use crate::screen::ScreenFrame;
 use crate::{AuthPrompt, InteractivePrompter, TetherError};
 
@@ -98,9 +99,15 @@ pub enum Secret {
     },
     /// PEM text, so a key held in a keychain item never has to be written to
     /// a file to be used.
+    ///
+    /// A key protected by a passphrase is unlocked with `passphrase` when one
+    /// is given, and otherwise by asking `unlock` — only once the server has
+    /// said it would take the key. With neither, it is left out and named in
+    /// the error if the login fails.
     PrivateKey {
         pem: String,
         passphrase: Option<String>,
+        unlock: Option<Arc<dyn PassphrasePrompter>>,
     },
     /// Answers whatever the server asks, for as many rounds as it asks.
     Interactive {
@@ -134,6 +141,7 @@ pub struct Destination {
     pub columns: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+    pub history: Option<Arc<crate::SessionHistory>>,
 }
 
 /// Connects, authenticates and opens a shell.
@@ -173,6 +181,7 @@ pub async fn connect(
     .term(destination.term)
     .size(size)
     .options(Options { scrollback_lines: destination.scrollback_lines as usize })
+    .history(destination.history.map(|h| h.inner.clone()))
     .connect(secrets.into_iter().map(credential).collect())
     .await?;
 
@@ -198,7 +207,12 @@ pub async fn connect_cancellable(
 fn credential(secret: Secret) -> Credential {
     match secret {
         Secret::Password { password } => Credential::Password(password),
-        Secret::PrivateKey { pem, passphrase } => Credential::PrivateKey { pem, passphrase },
+        Secret::PrivateKey { pem, passphrase, unlock } => Credential::PrivateKey {
+            pem,
+            passphrase,
+            unlock: unlock
+                .map(|p| Arc::new(ForeignUnlocker(p)) as Arc<dyn tether_core::ssh::KeyUnlocker>),
+        },
         Secret::Interactive { prompter } => {
             Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
         }
@@ -231,6 +245,7 @@ pub struct LocalShell {
     /// `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
     /// fills this in; the SDK does not know which one a consumer offers.
     pub shell: Option<String>,
+    pub history: Option<Arc<crate::SessionHistory>>,
 }
 
 /// Whether this platform lets an application start a shell.
@@ -265,11 +280,16 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
 
     let mut local = Local::running(command)
         .size(size)
-        .options(Options { scrollback_lines: shell.scrollback_lines as usize });
+        .options(Options { scrollback_lines: shell.scrollback_lines as usize })
+        .history(shell.history.map(|h| h.inner.clone()));
 
-    // An empty string is how a record with no optionality left would say
-    // "unset", and honouring it as a path would start every shell in `/`.
-    if let Some(directory) = shell.directory.filter(|path| !path.is_empty()) {
+    // A local shell starts in the user's home, regardless of the working
+    // directory inherited by an app launched from Finder or the Dock.
+    let directory = shell
+        .directory
+        .filter(|path| !path.is_empty())
+        .or_else(|| std::env::var("HOME").ok().filter(|path| path.starts_with('/')));
+    if let Some(directory) = directory {
         local = local.directory(directory);
     }
 
@@ -281,7 +301,7 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
 ///
 /// A live master is a handshake that has already been spent. The
 /// application attaches through OpenSSH instead of offering credentials
-/// again (Decisions/0010).
+/// again.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn ssh_master_running(target: String) -> bool {
     SshClient::new(target).master_running().await
@@ -295,7 +315,12 @@ pub async fn connect_over_ssh_client(
 ) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(shell.columns, shell.rows);
     let session = SshClient::new(target)
-        .connect(shell.term, size, Options { scrollback_lines: shell.scrollback_lines as usize })
+        .connect_recorded(
+            shell.term,
+            size,
+            Options { scrollback_lines: shell.scrollback_lines as usize },
+            shell.history.map(|h| h.inner.clone()),
+        )
         .await
         .map_err(|error| TetherError::ShellRefused { cause: error.cause })?;
     Ok(Arc::new(Session { inner: session }))
@@ -404,6 +429,20 @@ impl Session {
         self.inner.connection().map(|inner| Arc::new(crate::RemoteConnection { inner }))
     }
 
+    /// The local shell's tty path, for matching tmux clients to this tab.
+    pub fn terminal_name(&self) -> Option<String> {
+        self.inner.terminal_name().map(str::to_owned)
+    }
+
+    /// The local shell's live working directory, if available.
+    pub fn local_process_id(&self) -> Option<u32> {
+        self.inner.local_process_id()
+    }
+
+    pub fn current_directory(&self) -> Option<String> {
+        self.inner.current_directory()
+    }
+
     /// Tells the engine what this consumer draws with, so that a program
     /// asking for a colour is answered.
     ///
@@ -418,6 +457,43 @@ impl Session {
     /// Everything needed to draw the screen once.
     pub fn frame(&self) -> ScreenFrame {
         ScreenFrame::of(&self.inner.screen(), self.inner.title())
+    }
+
+    /// What changed since the last call. Rows that did not change are absent.
+    pub fn update(&self) -> crate::FrameUpdate {
+        crate::FrameUpdate::from_delta(&self.inner.take_frame_delta())
+    }
+
+    pub fn checkpoint_history(&self) {
+        self.inner.checkpoint_history();
+    }
+
+    pub fn history_error(&self) -> Option<String> {
+        self.inner.history_error()
+    }
+
+    /// Text a remote program asked to place on the local clipboard (`OSC 52`).
+    ///
+    /// `None` when it asked for nothing since the last call. A program that
+    /// asked to *read* the clipboard is refused: the clipboard belongs to
+    /// the machine the person is using, and remote data is untrusted.
+    pub fn take_clipboard(&self) -> Option<String> {
+        self.inner.take_clipboard()
+    }
+
+    /// Drops scrollback above `keep` lines for the rest of this session.
+    pub fn release_history(&self, keep: u32) {
+        self.inner.release_history(keep as usize);
+    }
+
+    /// Stops reading the far side until [`resume`](Self::resume).
+    pub fn pause(&self) {
+        self.inner.pause();
+    }
+
+    /// Reads the far side again.
+    pub fn resume(&self) {
+        self.inner.resume();
     }
 
     /// What the text at a cell names, if anything, and where it is drawn.

@@ -20,6 +20,7 @@ struct Sidebar: View {
   var onDone: (() -> Void)? = nil
 
   @State private var selection: Host.ID?
+  @State private var identityHost: Host?
 
   var body: some View {
     List(selection: $selection) {
@@ -39,12 +40,12 @@ struct Sidebar: View {
             selection = host.id
             onOpen(host)
           } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: UIStyle.panelRadius) {
               Image(systemName: "server.rack")
                 .font(.body.weight(.medium))
                 .foregroundStyle(Theme.tile(for: host.label))
-                .frame(width: 30, height: 34)
-              VStack(alignment: .leading, spacing: 3) {
+                .frame(width: UIStyle.Mark.tileWidth, height: UIStyle.Mark.tileHeight)
+              VStack(alignment: .leading, spacing: UIStyle.rowPadding) {
                 Text(host.label.isEmpty ? host.hostname : host.label).font(.body.weight(.medium))
                   .adaptiveRowText()
                   .foregroundStyle(.primary)
@@ -58,7 +59,7 @@ struct Sidebar: View {
             #if os(iOS)
               .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !host.isLocal {
-                  Button("Edit…", systemImage: "pencil") { onEdit(host) }
+                  Button("Identity…", systemImage: "person.badge.key") { identityHost = host }
                     .tint(Theme.accent)
                 }
               }
@@ -71,6 +72,7 @@ struct Sidebar: View {
               // computer out of a list they are reading on it. Not a second
               // kind of host — a host with nothing left to decide.
               if !host.isLocal {
+                Button("Identity and Authentication…") { identityHost = host }
                 Button("Edit…") { onEdit(host) }
                 Button("Delete host", role: .destructive) { store.delete(host) }
               }
@@ -82,11 +84,26 @@ struct Sidebar: View {
         }
       }
     }
+    .sheet(item: $identityHost) { host in
+      NavigationStack { HostIdentitySettings(store: store, id: host.id) }
+        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
+    }
     .modifier(HostListStyle())
     // This list is also used in a sheet, where `.sidebar` search placement
     // promotes the field into an unrelated window toolbar. Keep Mac search
     // inside the content; explicitly anchor phone search below the title.
     #if os(macOS)
+      .onPickerNavigation { movement in
+        var choice = PickerSelection(id: selection)
+        choice.navigate(movement, in: store.filtered.map(\.id))
+        selection = choice.id
+      }
+      .onPickerSubmit(enabled: selection != nil) {
+        if let host = store.filtered.first(where: { $0.id == selection }) { onOpen(host) }
+      }
+      .onPickerCancel {
+        if !store.search.isEmpty { store.search = "" } else { onDone?() }
+      }
       .safeAreaInset(edge: .top, spacing: 0) {
         HostSearchField(text: $store.search)
           .frame(height: UIStyle.controlHeight)
@@ -100,16 +117,11 @@ struct Sidebar: View {
     #endif
     .overlay {
       if store.listed.isEmpty && store.problem == nil {
-        ContentUnavailableView {
-          Label("Hosts", systemImage: "server.rack")
-        } actions: {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .buttonStyle(.borderedProminent)
-        }
+        QuietMark("Hosts", systemImage: "server.rack")
       }
     }
-    .modifier(SidebarActions(onNew: onNew, onSettings: onSettings, onDone: onDone))
-    .navigationTitle(onDone == nil ? "Tether" : "Hosts")
+    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings, onDone: onDone))
+    .navigationTitle("Hosts")
   }
 }
 
@@ -137,7 +149,9 @@ private struct HostSearchField: NSViewRepresentable {
   final class Coordinator: NSObject {
     var text: Binding<String>
     init(text: Binding<String>) { self.text = text }
-    @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
+    // The action arrives from the field on the main thread; reading
+    // `stringValue` and writing the binding both belong there.
+    @MainActor @objc func changed(_ field: NSSearchField) { text.wrappedValue = field.stringValue }
   }
 }
 #endif
@@ -166,7 +180,9 @@ private struct HostListStyle: ViewModifier {
 /// Settings is not here. On a Mac it sits on the workspace status bar,
 /// opposite the host control. A phone has no preferences window and no
 /// status bar, so the gear stays in the navigation bar and presents a sheet.
+/// Both are the same icon; the name is the tooltip.
 private struct SidebarActions: ViewModifier {
+  let store: HostStore
   let onNew: () -> Void
   let onSettings: () -> Void
   let onDone: (() -> Void)?
@@ -175,9 +191,12 @@ private struct SidebarActions: ViewModifier {
     #if os(macOS)
       content.safeAreaInset(edge: .bottom) {
         HStack {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .labelStyle(.iconOnly)
-            .help("Add host")
+          Button(action: onNew) {
+            Label("Add host", systemImage: "plus")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Add host")
+          SyncButton(store: store)
           Spacer()
           if let onDone {
             Button("Done", action: onDone)
@@ -185,19 +204,27 @@ private struct SidebarActions: ViewModifier {
               .keyboardShortcut(.cancelAction)
           }
         }
-        .buttonStyle(.borderless)
         .padding(UIStyle.Space.inset)
         .background(.bar)
       }
     #else
       content.toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Settings", systemImage: "gearshape", action: onSettings)
-            .labelStyle(.iconOnly)
+          Button(action: onSettings) {
+            Label("Settings", systemImage: "gearshape")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Settings")
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Add host", systemImage: "plus", action: onNew)
-            .labelStyle(.iconOnly)
+          SyncButton(store: store)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button(action: onNew) {
+            Label("Add host", systemImage: "plus")
+          }
+          .buttonStyle(.iconOnly)
+          .help("Add host")
         }
         if let onDone {
           ToolbarItem(placement: .confirmationAction) {
@@ -207,4 +234,38 @@ private struct SidebarActions: ViewModifier {
       }
     #endif
   }
+}
+
+/// Brings this device up to date now: on a Mac, its SSH configuration into
+/// the library first, then the library through iCloud both ways. A person
+/// who asked is told when it could not, in the one way the app tells anyone
+/// anything.
+struct SyncButton: View {
+  let store: HostStore
+  @State private var failure: SyncFailure?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    Button {
+      Task {
+        await store.syncEverything()
+        if let reason = store.syncFailure { failure = SyncFailure(message: reason) }
+      }
+    } label: {
+      Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+        .symbolEffect(.rotate, options: .repeating, isActive: store.syncing && !reduceMotion)
+    }
+    .buttonStyle(.iconOnly)
+    .disabled(store.syncing)
+    .help(store.syncing ? "Syncing" : "Sync")
+    .accessibilityValue(store.syncing ? "Syncing" : "Idle")
+    .dialog(for: failure) { shown in
+      Dialog.notice("Could not sync", message: shown.message) { failure = nil }
+    }
+  }
+}
+
+struct SyncFailure: Hashable {
+  let id = UUID()
+  let message: String
 }

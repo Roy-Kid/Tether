@@ -40,13 +40,7 @@ impl FontMetrics {
         // Nearest, not up: rounding up added most of a point per column at
         // 13pt, and the text then had to be stretched by that much to keep up.
         let cell_width = narrow_advance.round().max(1.0);
-        Self {
-            size,
-            cell_width,
-            line_height: line_height.max(1.0),
-            narrow_advance,
-            wide_advance,
-        }
+        Self { size, cell_width, line_height: line_height.max(1.0), narrow_advance, wide_advance }
     }
 
     /// The font's own advance for a one-column and a two-column character.
@@ -137,10 +131,7 @@ mod tests {
         let metrics = thirteen();
         let drawn = metrics.tracked_width(80, 80);
         let grid = metrics.cell_width * 80.0;
-        assert!(
-            (drawn - grid).abs() <= 1.0,
-            "eighty columns drew {drawn} against a {grid} grid"
-        );
+        assert!((drawn - grid).abs() <= 1.0, "eighty columns drew {drawn} against a {grid} grid");
     }
 
     #[test]

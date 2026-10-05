@@ -58,7 +58,22 @@ public sealed class SessionModel : IAsyncDisposable
         Path.GetFileNameWithoutExtension(LocalProfile).Equals("wsl", StringComparison.OrdinalIgnoreCase);
     public string LocalProfile { get; private set; } = "pwsh";
     public event Action? SessionChanged;
-    public string? WorkingDirectory => _session?.WorkingDirectory();
+    public ushort Columns => _columns;
+    public ushort Rows => _rows;
+    public SessionHistory? History { get; set; }
+    public string? WorkingDirectory => _session?.WorkingDirectory() ?? _session?.CurrentDirectory;
+    public uint? LocalProcessId => _session?.LocalProcessId;
+    public string? TerminalName => _session?.TerminalName;
+    public void CheckpointHistory() => _session?.CheckpointHistory();
+    public Task<string> ExecuteAsync(string command, CancellationToken token) =>
+        _session?.ExecuteAsync(command, token) ?? throw new IOException("No live connection.");
+    public Task<IReadOnlyList<TmuxSessionInfo>> TmuxSessionsAsync(CancellationToken token) =>
+        _session?.TmuxSessionsAsync(token) ?? throw new IOException("No live session.");
+    public Task<TmuxSessionInfo> CreateTmuxAsync(string name, string? directory, CancellationToken token) =>
+        _session?.CreateTmuxAsync(name, directory, token) ?? throw new IOException("No live session.");
+    public Task RenameTmuxAsync(string id, string name) => _session?.RenameTmuxAsync(id, name) ?? Task.CompletedTask;
+    public Task EndTmuxAsync(string id) => _session?.EndTmuxAsync(id) ?? Task.CompletedTask;
+    public Task<string?> TmuxSessionForClientAsync(string tty) => _session?.TmuxSessionForClientAsync(tty) ?? Task.FromResult<string?>(null);
     public Task<RemoteFiles> OpenFilesAsync(CancellationToken token) =>
         _session?.OpenFilesAsync(token) ?? throw new InvalidOperationException("No live session.");
 
@@ -88,7 +103,7 @@ public sealed class SessionModel : IAsyncDisposable
         try
         {
             var session = await TerminalSession.ConnectOverSshAsync(
-                alias, _columns, _rows, cancellationToken: token).ConfigureAwait(true);
+                alias, _columns, _rows, cancellationToken: token, history: History).ConfigureAwait(true);
             if (attempt != _attempt)
             {
                 session.Dispose();
@@ -181,7 +196,7 @@ public sealed class SessionModel : IAsyncDisposable
         try
         {
             var session = await TerminalSession.ConnectAsync(
-                destination,
+                destination with { History = History },
                 new TrustDialog(root, this),
                 secrets,
                 jumps ?? Array.Empty<Tether.Jump>(),
@@ -222,7 +237,7 @@ public sealed class SessionModel : IAsyncDisposable
     /// terminal with nothing in it is a missing feature, and every other
     /// terminal on this machine starts here too.
     /// </summary>
-    public async Task<bool> OpenLocalAsync(string? shell = null, CancellationToken cancellationToken = default)
+    public async Task<bool> OpenLocalAsync(string? shell = null, CancellationToken cancellationToken = default, string? directory = null)
     {
         if (!TerminalSession.LocalShellAvailable)
         {
@@ -232,7 +247,7 @@ public sealed class SessionModel : IAsyncDisposable
         try
         {
             var session = await TerminalSession.OpenLocalAsync(
-                shell: AppSettings.ResolveShellProgram(shell ?? AppSettings.Current.Shell)).ConfigureAwait(true);
+                directory: directory, shell: AppSettings.ResolveShellProgram(shell ?? AppSettings.Current.Shell), history: History).ConfigureAwait(true);
             IsRemote = false;
             LocalProfile = shell ?? AppSettings.Current.Shell;
             Adopt(session);
@@ -369,6 +384,7 @@ public sealed class SessionModel : IAsyncDisposable
         var previous = _session;
         _session = null;
         Generation++;
+        previous?.CheckpointHistory();
         previous?.Dispose();
         Apply(RemoteBar.Closed(), null);
     }
@@ -487,7 +503,7 @@ public sealed class SessionModel : IAsyncDisposable
     }
 
     /// <summary>Keyboard-interactive as a dialog. Echo is honoured (spec §10).</summary>
-    public sealed class PromptDialog(XamlRoot root, SessionModel? model = null) : IAuthPrompter
+    public sealed class PromptDialog(XamlRoot root, SessionModel? model = null) : IAuthPrompter, IPassphrasePrompter
     {
         private readonly Microsoft.UI.Dispatching.DispatcherQueue _queue = root.Content.DispatcherQueue;
 
@@ -504,6 +520,13 @@ public sealed class SessionModel : IAsyncDisposable
             {
                 model?.NoteDialing();
             }
+        }
+
+        public async Task<string?> PassphraseAsync(LockedKey key, uint attempt)
+        {
+            var answers = await AnswerAsync(attempt > 1 ? "Incorrect passphrase" : "Unlock Private Key",
+                [new AuthPrompt(key.Fingerprint ?? key.Comment, false)], model?.DialToken ?? CancellationToken.None);
+            return answers.Count == 1 ? answers[0] : null;
         }
 
         public Task<IReadOnlyList<string>> AnswerAsync(

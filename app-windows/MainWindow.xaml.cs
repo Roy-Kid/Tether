@@ -40,6 +40,12 @@ public sealed partial class MainWindow : Window
         };
         TabStrip.SizeChanged += (_, _) => QueueSelectedTabReveal();
         Closed += (_, _) => CompositionTarget.Rendering -= RevealSelectedTab;
+        AppWindow.Closing += (sender, e) =>
+        {
+            if (_windowCloseApproved) return;
+            e.Cancel = true;
+            _ = RequestWindowCloseAsync();
+        };
         Closed += async (_, _) => await _workspace.DisposeAsync();
         BuildPluginButtons();
         App.Plugins.Changed += OnPluginsChanged;
@@ -76,6 +82,7 @@ public sealed partial class MainWindow : Window
         WorkspaceRoot.RequestedTheme = Appearance.RequestedTheme;
         ApplyTerminalPalette();
         UpdateTitleBar();
+        ApplyWorkspaceVisibility();
     }
 
     private void ApplyTerminalPalette()
@@ -147,6 +154,7 @@ public sealed partial class MainWindow : Window
                 ToolTipService.SetToolTip(item, tab.Title);
             }
             TabStrip.SelectedIndex = _workspace.ActiveIndex;
+            RefreshVerticalTabs();
         }
         finally { _refreshingTabs = false; }
         var current = _workspace.Active;
@@ -161,7 +169,9 @@ public sealed partial class MainWindow : Window
         {
             Wire(current);
         }
+        _workspace.Persist();
         RefreshStatusBar();
+        ApplyWorkspaceVisibility();
         UpdateInspector();
     }
 
@@ -222,6 +232,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateInspector()
     {
+        if (_zen) { InspectorHost.Visibility = Visibility.Collapsed; return; }
         InspectorHost.Child = null;
         var plugin = InspectorPlugin();
         var tab = _workspace.Active;
@@ -271,6 +282,7 @@ public sealed partial class MainWindow : Window
 
     private void Wire(Tab tab)
     {
+        tab.Surface.WorkspaceShortcut = HandleWorkspaceShortcut;
         tab.Surface.QueryLink = link => QueryLinkAsync(tab, link);
         tab.Surface.TryOpenLink = link => TryOpenLink(tab, link);
         tab.Surface.LinkCommands = link => LinkCommands(tab, link);
@@ -429,7 +441,8 @@ public sealed partial class MainWindow : Window
         ReconnectButton.Visibility = model?.CanReconnect == true ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetName(HostButton, "Host, " + HostName.Text);
         AutomationProperties.SetHelpText(HostButton, HostName.Text);
-        ToolTipService.SetToolTip(HostButton, model?.LastError ?? HostName.Text);
+        var historyProblem = _workspace.HistoryProblem ?? model?.History?.Error;
+        ToolTipService.SetToolTip(HostButton, model?.LastError ?? historyProblem ?? HostName.Text);
     }
 
     private void Connect_Click(object sender, RoutedEventArgs e) => ShowHostPicker();
@@ -484,6 +497,7 @@ public sealed partial class MainWindow : Window
             foreach (var host in SshConfig.Filter(all, query.Text))
                 list.Items.Add(new HostRow(host));
             var any = list.Items.Count > 0;
+            list.SelectedIndex = any ? 0 : -1;
             problem.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
             list.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -491,6 +505,15 @@ public sealed partial class MainWindow : Window
         query.TextChanged += (_, _) => Reload();
         query.KeyDown += async (_, e) =>
         {
+            var control = InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; _hostPicker?.Close(); return; }
+            if (control && e.Key >= Windows.System.VirtualKey.Number1 && e.Key <= Windows.System.VirtualKey.Number9)
+            {
+                var index = (int)e.Key - (int)Windows.System.VirtualKey.Number1;
+                if (index < list.Items.Count && RowHost(list.Items[index]) is { } numbered) { e.Handled = true; await ChooseHostAsync(numbered); }
+                return;
+            }
             if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up)
             {
                 if (list.Items.Count > 0)
@@ -550,7 +573,7 @@ public sealed partial class MainWindow : Window
     private sealed class HostRow(HostEntry host)
     {
         public HostEntry Host { get; } = host;
-        public override string ToString() => host.Label;
+        public override string ToString() => Host.Label;
     }
 
     private async Task ChooseHostAsync(HostEntry host)
@@ -648,7 +671,7 @@ public sealed partial class MainWindow : Window
         var path = SshConfig.ExpandHome(key);
         if (!File.Exists(path))
             throw new IOException($"Could not read the key at {key}.");
-        return [new Secret.PrivateKey(File.ReadAllText(path)), new Secret.Interactive(prompter)];
+        return [new Secret.PrivateKey(File.ReadAllText(path), Unlock: prompter), new Secret.Interactive(prompter)];
     }
 
     private void CancelConnect_Click(object sender, RoutedEventArgs e) =>
@@ -673,21 +696,10 @@ public sealed partial class MainWindow : Window
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        var control = InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+        bool Down(Windows.System.VirtualKey key) => InputKeyboardSource.GetKeyStateForCurrentThread(key)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-
-        if (control && e.Key == Windows.System.VirtualKey.N)
-        {
-            _ = _workspace.AddAsync();
-            e.Handled = true;
-            return;
-        }
-        if (control && e.Key == Windows.System.VirtualKey.W)
-        {
-            _ = CloseSelectedAsync();
-            e.Handled = true;
-        }
+        e.Handled = HandleWorkspaceShortcut(new Shortcut(e.Key, Down(Windows.System.VirtualKey.Shift),
+            Down(Windows.System.VirtualKey.Control), Down(Windows.System.VirtualKey.Menu)));
     }
 
     private async Task CloseSelectedAsync()
@@ -699,22 +711,24 @@ public sealed partial class MainWindow : Window
     {
         var index = _workspace.Tabs.ToList().IndexOf(tab);
         if (index < 0) return;
-        var note = tab.Attachments.Select(attachment => attachment.CloseNote).FirstOrDefault(note => note is not null);
-        if (note is not null)
+        if (!_closingTabs.Add(tab)) return;
+        try
         {
-            var dialog = new ContentDialog
+            var note = tab.Attachments.Select(attachment => attachment.CloseNote).FirstOrDefault(note => note is not null)
+                ?? await ShellActivity.CloseNoteAsync(tab.Model);
+            if (note is not null)
             {
-                XamlRoot = WorkspaceRoot.XamlRoot,
-                RequestedTheme = WorkspaceRoot.ActualTheme,
-                Title = "Close this tab?",
-                Content = note,
-                PrimaryButtonText = "Close",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Close,
-            };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-        }
+                _connecting = true;
+                try
+                {
+                    if (await Alerts.ContentAsync("Close this tab?", note, "Close", null, WorkspaceRoot.ActualTheme,
+                        _ => { }) != ContentDialogResult.Primary) return;
+                }
+                finally { _connecting = false; }
+            }
         await _workspace.CloseAsync(index);
-        if (_workspace.Tabs.Count == 0) Close();
+        if (_workspace.Tabs.Count == 0) await _workspace.AddAsync();
+        }
+        finally { _closingTabs.Remove(tab); }
     }
 }

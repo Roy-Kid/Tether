@@ -19,11 +19,15 @@ struct MacKeyCapture: NSViewRepresentable {
   var active = true
   var onFocus: () -> Void = {}
   var onScroll: (Int32) -> Void = { _ in }
+  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
   var lineHeight: CGFloat = 17
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
-  var frame: ScreenFrame?
+  var cursorRect: CGRect = .zero
   var onHover: (TerminalLink?) -> Void = { _ in }
+  var onSelection: (SelectionUpdate) -> Void = { _ in }
+  var selection: GridSelection?
+  var mouse: MouseTracking = .off
 
   func makeNSView(context: Context) -> KeyCaptureView {
     let view = KeyCaptureView()
@@ -41,12 +45,16 @@ struct MacKeyCapture: NSViewRepresentable {
     view.onInput = onInput
     view.onFocus = onFocus
     view.onScroll = onScroll
+    view.claimsWheel = claimsWheel
     view.lineHeight = lineHeight
     view.wantsFocus = active
     view.links = links
     view.geometry = geometry
-    view.screenFrame = frame
+    view.cursorRect = cursorRect
     view.onHover = onHover
+    view.onSelection = onSelection
+    view.selection = selection
+    view.mouse = mouse
   }
 }
 
@@ -57,90 +65,49 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var onInput: ((TerminalInput) -> Void)?
   /// Positive goes back into history, matching a wheel pushed away.
   var onScroll: ((Int32) -> Void)?
+  /// `true` takes a wheel that would otherwise be reported to the program.
+  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
   /// How tall a row is, so a trackpad's point deltas become lines.
   var lineHeight: CGFloat = 17
   /// Fractional lines left over from the last wheel event.
   private var carried: CGFloat = 0
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
+  /// The terminal caret in top-left-origin surface coordinates.
+  var cursorRect: CGRect = .zero {
+    didSet {
+      if cursorRect != oldValue { inputContext?.invalidateCharacterCoordinates() }
+    }
+  }
   var onHover: ((TerminalLink?) -> Void)?
+  var onSelection: (SelectionUpdate) -> Void = { _ in }
+  /// The selection on screen. Shift-click extends its anchor; ⌘C copies it.
+  var selection: GridSelection?
+  /// What the far side asked to hear. `off` keeps selection and local history.
+  var mouse: MouseTracking = .off {
+    didSet {
+      if mouse != oldValue { window?.invalidateCursorRects(for: self) }
+    }
+  }
+  /// The button held for a report. Nil while a drag is selecting text instead.
+  private var held: PointerButton?
+  /// The last move already sent, so a pointer that stays in one cell is quiet.
+  private var reportedCell: (row: UInt16, column: UInt16)?
   /// The link under the pointer while ⌘ is held.
   private var hovered: TerminalLink?
+  /// Where a drag began, and how it chooses text. A click that never moves
+  /// stays unarmed, so it clears a selection instead of copying one cell.
+  private var dragKind = SelectionKind.character
+  private var dragAnchor: GridPoint?
+  private var dragHead: GridPoint?
+  private var dragArmed = false
+  private var dragStart = NSPoint.zero
+  /// A few points, under half a cell: a shaky click is not a selection.
+  private let dragSlop: CGFloat = 4
   /// A force click opens once per press, not once per pressure change.
   private var forced = false
 
-  var screenFrame: ScreenFrame? {
-    didSet {
-      if oldValue?.columns != screenFrame?.columns || oldValue?.lines != screenFrame?.lines {
-        selectionAnchor = nil
-        selectionFocus = nil
-      }
-      needsDisplay = true
-    }
-  }
-  private var selectionAnchor: Int?
-  private var selectionFocus: Int?
-  private var pastePending = false
-  override var isFlipped: Bool { true }
   override var acceptsFirstResponder: Bool { true }
-
-  private var selectionRange: ClosedRange<Int>? {
-    guard let a = selectionAnchor, let b = selectionFocus, a != b else { return nil }
-    return min(a, b)...max(a, b)
-  }
-
-  private func cellIndex(_ event: NSEvent) -> Int? {
-    guard geometry.columns > 0, geometry.rows > 0 else { return nil }
-    let point = convert(event.locationInWindow, from: nil)
-    let column = min(Int(geometry.columns) - 1, max(0, Int((point.x - geometry.inset) / geometry.cellWidth)))
-    let row = min(Int(geometry.rows) - 1, max(0, Int((point.y - geometry.inset) / geometry.lineHeight)))
-    return row * Int(geometry.columns) + column
-  }
-
-  override func mouseDragged(with event: NSEvent) {
-    guard selectionAnchor != nil else { return }
-    selectionFocus = cellIndex(event)
-    needsDisplay = true
-  }
-
-  override func draw(_ dirtyRect: NSRect) {
-    guard let range = selectionRange, geometry.columns > 0 else { return }
-    let columns = Int(geometry.columns)
-    NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3).setFill()
-    for row in (range.lowerBound / columns)...(range.upperBound / columns) {
-      let start = max(0, range.lowerBound - row * columns)
-      let end = min(columns - 1, range.upperBound - row * columns)
-      NSRect(x: geometry.inset + CGFloat(start) * geometry.cellWidth,
-        y: geometry.inset + CGFloat(row) * geometry.lineHeight,
-        width: CGFloat(end - start + 1) * geometry.cellWidth, height: geometry.lineHeight).fill()
-    }
-  }
-
-  @objc func copy(_ sender: Any?) {
-    guard let range = selectionRange, let frame = screenFrame, geometry.columns > 0 else { return }
-    let text = TerminalSelection.text(frame: frame, range: range)
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
-  }
-
-  private func shortcut(_ event: NSEvent) -> Bool {
-    guard wantsFocus, !hasMarkedText(), window?.firstResponder === self else { return false }
-    let bindings = TerminalShortcuts.current
-    for action in TerminalAction.allCases {
-      guard let chord = TerminalShortcut(bindings[action.rawValue] ?? action.defaultChord), chord.matches(event) else { continue }
-      switch action {
-      case .copy: copy(nil)
-      case .paste: paste(nil)
-      case .zoomIn, .zoomOut, .zoomReset:
-        let defaults = UserDefaults.standard
-        let size = (defaults.object(forKey: "terminalFontSize") as? Double) ?? 13
-        let next = action == .zoomReset ? 13 : size + (action == .zoomIn ? 1 : -1)
-        defaults.set(min(32, max(10, next)), forKey: "terminalFontSize")
-      }
-      return true
-    }
-    return false
-  }
 
   // MARK: - Pointing at links
   //
@@ -160,6 +127,8 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
 
   override func mouseMoved(with event: NSEvent) {
     hover(event.modifierFlags.contains(.command) ? link(at: event.locationInWindow) : nil)
+    guard mouse == .any, held == nil, !event.modifierFlags.contains(.shift) else { return }
+    report(.move, button: .none, at: event.locationInWindow, event: event)
   }
 
   override func flagsChanged(with event: NSEvent) {
@@ -171,7 +140,11 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func mouseExited(with event: NSEvent) {
-    hover(nil)
+    if hovered != nil {
+      hovered = nil
+      onHover?(nil)
+    }
+    NSCursor.arrow.set()
   }
 
   override func pressureChange(with event: NSEvent) {
@@ -184,19 +157,14 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
+    guard let link = link(at: event.locationInWindow), let menu = links.menu(link),
+      !menu.items.isEmpty
+    else { return nil }
     let built = NSMenu()
-    let copyItem = ClosureMenuItem(title: "Copy", action: { [weak self] in self?.copy(nil) })
-    copyItem.isEnabled = selectionRange != nil
-    built.autoenablesItems = false
-    built.addItem(copyItem)
-    built.addItem(ClosureMenuItem(title: "Paste", action: { [weak self] in self?.paste(nil) }))
-    if let link = link(at: event.locationInWindow), let menu = links.menu(link) {
-      built.addItem(.separator())
-      for item in menu.items {
-        let entry = ClosureMenuItem(title: item.title, action: item.action)
-        entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
-        built.addItem(entry)
-      }
+    for item in menu.items {
+      let entry = ClosureMenuItem(title: item.title, action: item.action)
+      entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
+      built.addItem(entry)
     }
     return built
   }
@@ -205,15 +173,44 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     guard link != hovered else { return }
     hovered = link
     onHover?(link)
-    (link == nil ? NSCursor.arrow : NSCursor.pointingHand).set()
+    (link == nil ? NSCursor.iBeam : NSCursor.pointingHand).set()
+    window?.invalidateCursorRects(for: self)
+  }
+
+  override func resetCursorRects() {
+    discardCursorRects()
+    let pointer: NSCursor = if mouse != .off {
+      .arrow
+    } else if hovered == nil {
+      .iBeam
+    } else {
+      .pointingHand
+    }
+    addCursorRect(bounds, cursor: pointer)
   }
 
   /// The link under a point in window coordinates.
   private func link(at location: NSPoint) -> TerminalLink? {
-    let point = convert(location, from: nil)
-    let flipped = CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y)
-    guard let cell = geometry.cell(at: flipped) else { return nil }
+    guard let cell = cell(at: location) else { return nil }
     return links.find(cell.row, cell.column)
+  }
+
+  /// Top-left origin, matching the grid. AppKit's own origin is the bottom.
+  private func surfacePoint(_ location: NSPoint) -> CGPoint {
+    let point = convert(location, from: nil)
+    return CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y)
+  }
+
+  private func cell(at location: NSPoint) -> (row: UInt16, column: UInt16)? {
+    geometry.cell(at: surfacePoint(location))
+  }
+
+  private func clampedCell(at location: NSPoint) -> (row: UInt16, column: UInt16)? {
+    geometry.clampedCell(at: surfacePoint(location))
+  }
+
+  private func gridPoint(_ cell: (row: UInt16, column: UInt16)) -> GridPoint {
+    GridPoint(row: Int(cell.row), column: Int(cell.column))
   }
 
   override func viewDidMoveToWindow() {
@@ -226,18 +223,21 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// Without this, Tab moves focus to the next control and an arrow scrolls
   /// a parent — a terminal that cannot send Tab is not a terminal.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
-    if shortcut(event) { return true }
+    // ⌘C copies the selection onto this machine's pasteboard. The menu's
+    // Copy item does not reliably reach an `NSView` inside SwiftUI, and
+    // returning false here lets that miss leave the selection uncopied.
+    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      .subtracting(.capsLock)
+    if window?.firstResponder === self, flags == .command,
+      event.charactersIgnoringModifiers?.lowercased() == "c", selection != nil
+    {
+      copy(nil)
+      return true
+    }
     // Command chords are the application's: ⌘Q, ⌘V and the rest must keep
     // working, and a terminal has nothing to send for them anyway.
     guard !hasMarkedText(), window?.firstResponder === self, !event.modifierFlags.contains(.command)
     else { return false }
-    // Control-Shift-P is the command menu. It must not become terminal bytes.
-    if event.modifierFlags.contains(.control),
-      event.modifierFlags.contains(.shift),
-      event.charactersIgnoringModifiers?.lowercased() == "p"
-    {
-      return false
-    }
     if !event.modifierFlags.intersection([.control, .option]).isEmpty {
     } else if Self.namedKey(for: event) == nil {
       return false
@@ -249,6 +249,15 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     guard let onInput, let input = Self.input(for: event) else { return false }
     onInput(input)
     return true
+  }
+
+  override var mouseDownCanMoveWindow: Bool { false }
+
+  /// A parent that scrolls would otherwise keep the wheel. The history is
+  /// this view's, and a swipe that moves some outer container instead is a
+  /// terminal that cannot be read.
+  override func wantsForwardedScrollEvents(for axis: NSEvent.GestureAxis) -> Bool {
+    axis == .vertical || axis == .horizontal
   }
 
   /// A wheel or a two-finger swipe reads the history.
@@ -268,27 +277,208 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     let lines = carried.rounded(.towardZero)
     guard lines != 0 else { return }
     carried -= lines
+    // Shift keeps the wheel for this terminal's own history, which is how
+    // text is still readable inside a program that took the mouse.
+    // Something standing on the shell can take the lines first: reporting
+    // every notch makes a program that scrolls five rows per notch jump,
+    // and a notch on its status row changes window.
+    if mouse != .off, !event.modifierFlags.contains(.shift) {
+      let button: PointerButton = lines > 0 ? .wheelUp : .wheelDown
+      if let cell = clampedCell(at: event.locationInWindow),
+        claimsWheel(Int32(lines), cell.column, cell.row)
+      {
+        return
+      }
+      for _ in 0..<Int(abs(lines)) {
+        report(.press, button: button, at: event.locationInWindow, event: event, clamp: true)
+      }
+      return
+    }
     onScroll(Int32(lines))
   }
 
   override func mouseDown(with event: NSEvent) {
     window?.makeFirstResponder(self)
     onFocus?()
-    if event.modifierFlags.contains(.command), let link = link(at: event.locationInWindow) {
-      links.open(link)
-      selectionAnchor = nil
-    } else {
-      selectionAnchor = cellIndex(event)
+    dragAnchor = nil
+    dragHead = nil
+    dragArmed = false
+    dragKind = .character
+    dragStart = event.locationInWindow
+
+    // ⌘ belongs to links. A program in the terminal cannot ask for it, which
+    // is why a plain drag is free to select the text instead.
+    if event.modifierFlags.contains(.command) {
+      if let link = link(at: event.locationInWindow) { links.open(link) }
+      return
     }
-    selectionFocus = selectionAnchor
-    needsDisplay = true
+    if reportPress(.left, event: event) { return }
+    guard let cell = cell(at: event.locationInWindow) else { return }
+    let point = gridPoint(cell)
+    if event.clickCount >= 3 {
+      begin(.line, at: point)
+    } else if event.clickCount == 2 {
+      begin(.word, at: point)
+    } else if event.modifierFlags.contains(.shift), let selection {
+      dragKind = .character
+      dragAnchor = selection.anchor
+      dragHead = point
+      dragArmed = true
+      onSelection(.highlight(.character, selection.anchor, point))
+    } else {
+      dragAnchor = point
+      dragHead = point
+    }
+  }
+
+  private func begin(_ kind: SelectionKind, at point: GridPoint) {
+    dragKind = kind
+    dragAnchor = point
+    dragHead = point
+    dragArmed = true
+    onSelection(.highlight(kind, point, point))
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    if let held {
+      if mouse == .drag || mouse == .any {
+        report(.move, button: held, at: event.locationInWindow, event: event, clamp: true)
+      }
+      return
+    }
+    guard let anchor = dragAnchor else { return }
+    let moved = hypot(event.locationInWindow.x - dragStart.x, event.locationInWindow.y - dragStart.y)
+    if !dragArmed, moved < dragSlop { return }
+    guard let cell = clampedCell(at: event.locationInWindow) else { return }
+    dragArmed = true
+    let head = gridPoint(cell)
+    dragHead = head
+    onSelection(.highlight(dragKind, anchor, head))
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    if let button = held {
+      held = nil
+      report(.release, button: button, at: event.locationInWindow, event: event, clamp: true)
+      reportedCell = nil
+      return
+    }
+    let armed = dragArmed
+    let kind = dragKind
+    let anchor = dragAnchor
+    let head = dragHead
+    dragAnchor = nil
+    dragHead = nil
+    dragArmed = false
+    guard armed, let anchor else {
+      onSelection(.clear)
+      return
+    }
+    onSelection(.copy(kind, anchor, head ?? anchor))
+  }
+
+  override func rightMouseDown(with event: NSEvent) {
+    window?.makeFirstResponder(self)
+    // A link's menu stays a menu. Everywhere else, a program that asked for
+    // the mouse hears the right button.
+    if link(at: event.locationInWindow) == nil, reportPress(.right, event: event) { return }
+    super.rightMouseDown(with: event)
+  }
+
+  override func rightMouseDragged(with event: NSEvent) {
+    guard held == .right else {
+      super.rightMouseDragged(with: event)
+      return
+    }
+    if mouse == .drag || mouse == .any {
+      report(.move, button: .right, at: event.locationInWindow, event: event, clamp: true)
+    }
+  }
+
+  override func rightMouseUp(with event: NSEvent) {
+    guard held == .right else {
+      super.rightMouseUp(with: event)
+      return
+    }
+    held = nil
+    report(.release, button: .right, at: event.locationInWindow, event: event, clamp: true)
+    reportedCell = nil
+  }
+
+  override func otherMouseDown(with event: NSEvent) {
+    window?.makeFirstResponder(self)
+    if reportPress(.middle, event: event) { return }
+    super.otherMouseDown(with: event)
+  }
+
+  override func otherMouseDragged(with event: NSEvent) {
+    guard held == .middle else {
+      super.otherMouseDragged(with: event)
+      return
+    }
+    if mouse == .drag || mouse == .any {
+      report(.move, button: .middle, at: event.locationInWindow, event: event, clamp: true)
+    }
+  }
+
+  override func otherMouseUp(with event: NSEvent) {
+    guard held == .middle else {
+      super.otherMouseUp(with: event)
+      return
+    }
+    held = nil
+    report(.release, button: .middle, at: event.locationInWindow, event: event, clamp: true)
+    reportedCell = nil
+  }
+
+  /// Starts a report for `button` when the far side wants the pointer and
+  /// Shift is not holding it back for a local selection. Returns whether it did.
+  private func reportPress(_ button: PointerButton, event: NSEvent) -> Bool {
+    guard mouse != .off, !event.modifierFlags.contains(.shift),
+      cell(at: event.locationInWindow) != nil
+    else { return false }
+    held = button
+    reportedCell = nil
+    dragAnchor = nil
+    report(.press, button: button, at: event.locationInWindow, event: event)
+    return true
+  }
+
+  private func report(
+    _ phase: PointerPhase, button: PointerButton, at location: NSPoint, event: NSEvent,
+    clamp: Bool = false
+  ) {
+    let point = surfacePoint(location)
+    guard let cell = clamp ? geometry.clampedCell(at: point) : geometry.cell(at: point) else { return }
+    if phase == .move, reportedCell?.row == cell.row, reportedCell?.column == cell.column { return }
+    if phase == .move { reportedCell = cell }
+    let flags = event.modifierFlags
+    onInput?(
+      .pointer(
+        button: button, phase: phase, column: cell.column, row: cell.row,
+        modifiers: KeyModifiers(
+          shift: flags.contains(.shift), alt: flags.contains(.option),
+          control: flags.contains(.control))))
+  }
+
+  /// ⌘C. The menu's Copy item finds this because the view is first responder.
+  @objc func copy(_ sender: Any?) {
+    guard let selection else { return }
+    onSelection(.copyExisting(selection))
+  }
+
+  @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    switch menuItem.action {
+    case #selector(copy(_:)):
+      return selection != nil
+    case #selector(paste(_:)):
+      return NSPasteboard.general.string(forType: .string)?.isEmpty == false
+    default:
+      return true
+    }
   }
 
   override func keyDown(with event: NSEvent) {
-    if shortcut(event) { return }
-    selectionAnchor = nil
-    selectionFocus = nil
-    needsDisplay = true
     if event.modifierFlags.contains(.command) {
       super.keyDown(with: event)
       return
@@ -306,23 +496,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     }
   }
   @objc func paste(_ sender: Any?) {
-    guard !pastePending, wantsFocus, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-    pastePending = true
-    defer { pastePending = false }
-    let threshold = UserDefaults.standard.object(forKey: "terminalPasteThreshold") as? Int ?? 4096
-    if TerminalPastePolicy.requiresConfirmation(text, threshold: threshold) {
-      let alert = NSAlert()
-      alert.messageText = "Paste into terminal?"
-      alert.informativeText = "\(text.utf16.count) characters; line breaks may execute commands."
-      alert.addButton(withTitle: "Cancel")
-      alert.addButton(withTitle: "Paste")
-      guard alert.runModal() == .alertSecondButtonReturn else { return }
-    }
-    guard wantsFocus, window != nil else { return }
-    selectionAnchor = nil
-    selectionFocus = nil
-    needsDisplay = true
-    onInput?(.paste(text))
+    if let text = NSPasteboard.general.string(forType: .string) { onInput?(.paste(text)) }
   }
   func insertText(_ string: Any, replacementRange: NSRange) {
     let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
@@ -347,8 +521,12 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   { nil }
   func characterIndex(for point: NSPoint) -> Int { 0 }
   func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-    window?.convertToScreen(
-      convert(NSRect(x: 8, y: 8, width: 1, height: 20), to: nil)) ?? .zero
+    actualRange?.pointee = markedRange()
+    guard let window else { return .zero }
+    var rect = cursorRect
+    // AppKit views normally count up from the bottom; terminal rows count down.
+    if !isFlipped { rect.origin.y = bounds.height - rect.maxY }
+    return window.convertToScreen(convert(rect, to: nil))
   }
   override func doCommand(by selector: Selector) {}
 

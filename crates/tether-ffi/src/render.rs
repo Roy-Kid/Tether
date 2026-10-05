@@ -79,7 +79,9 @@ impl RenderSurface {
 
     pub fn set_fonts(&self, primary: String, wide: String) {
         if let Ok(mut guard) = self.inner.lock() {
-            if let Some(renderer) = guard.as_mut() { renderer.set_fonts(primary, wide); }
+            if let Some(renderer) = guard.as_mut() {
+                renderer.set_fonts(primary, wide);
+            }
         }
     }
 

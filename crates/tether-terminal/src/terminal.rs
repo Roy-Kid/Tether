@@ -14,7 +14,7 @@ use crate::directory::DirectoryScanner;
 use crate::input::Input;
 use crate::link::{self, Glyph, Link, LinkTarget};
 use crate::palette::Palette;
-use crate::screen::{Cell, Cursor, CursorShape, Modes, Screen};
+use crate::screen::{Cell, Cursor, CursorShape, Modes, MouseEncoding, MouseMotion, Screen};
 use crate::scroll::{Scroll, Viewport};
 use crate::size::{Position, ScreenSize};
 use crate::style::{Color, NamedColor, Style, Underline};
@@ -28,6 +28,10 @@ struct Collected {
     /// attributes, colour queries. A consumer that dropped these would hang
     /// any program that waits for an answer.
     replies: Vec<u8>,
+    /// Text a program asked to put on the local clipboard, via `OSC 52`.
+    /// The last such request wins. A request to *read* the clipboard is not
+    /// recorded: that would hand this machine's clipboard to the far side.
+    clipboard: Option<String>,
     /// What the consumer draws with, when it has said. Only colour queries
     /// use it, and only to answer them.
     palette: Option<Palette>,
@@ -38,7 +42,7 @@ struct Collected {
 /// `Arc<Mutex<_>>` because the engine hands events to `&self` while we hold
 /// `&mut Term`, and because a `Terminal` should be movable between threads.
 #[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Collected>>);
+pub(crate) struct Sink(Arc<Mutex<Collected>>);
 
 impl EventListener for Sink {
     fn send_event(&self, event: Event) {
@@ -60,11 +64,20 @@ impl EventListener for Sink {
                     collected.replies.extend_from_slice(reply.as_bytes());
                 }
             }
-            // Clipboard and size queries also answer by writing back; the
-            // ones that need state we do not have are answered by the
-            // consumer, not invented here.
+            // A copy is for the machine the person is sitting at. Kept until
+            // they take it — the engine has no clipboard of its own, and
+            // inventing one here would be the wrong machine.
+            //
+            // A *read* is refused. `OSC 52` can ask for the clipboard as
+            // well as set it, and answering would send whatever the person
+            // copied last back to a program that has not been trusted with
+            // it (spec §18).
+            Event::ClipboardStore(_, text) => {
+                if !text.is_empty() && text.len() <= MAX_CLIPBOARD_BYTES {
+                    collected.clipboard = Some(text);
+                }
+            }
             Event::ClipboardLoad(_, _)
-            | Event::ClipboardStore(_, _)
             | Event::TextAreaSizeRequest(_)
             | Event::CursorBlinkingChange
             | Event::MouseCursorDirty
@@ -94,6 +107,12 @@ impl Dimensions for Dims {
         self.size.columns as usize
     }
 }
+
+/// How much text one `OSC 52` copy may place on the local clipboard.
+///
+/// A remote program is untrusted input. A megabyte is more than a person
+/// copies and less than a way to pin memory by announcing a clipboard.
+const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 
 /// The narrowest grid the engine can reflow into.
 ///
@@ -130,6 +149,23 @@ impl Default for Options {
     }
 }
 
+/// What a frontend needs in order to draw the next frame, and nothing else.
+///
+/// `full` replaces the screen. Otherwise `rows` is only the lines the damage
+/// named — empty when the grid did not change and only the cursor or the
+/// title did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameDelta {
+    /// The whole screen, when the damage was not a list of rows.
+    pub full: Option<Screen>,
+    pub rows: Vec<(u16, Vec<Cell>)>,
+    pub cursor: Cursor,
+    pub title: String,
+    pub viewport: Viewport,
+    pub modes: Modes,
+    pub size: ScreenSize,
+}
+
 /// A headless terminal.
 ///
 /// Feed it the bytes a remote shell produced; ask it what the screen looks
@@ -161,6 +197,13 @@ pub struct Terminal {
     /// occurred, so that is what we check, rather than trying to tell a
     /// spurious cursor span from a real one.
     dirty: bool,
+    /// How much history this terminal may keep. Lowered for the rest of the
+    /// session when memory is short, so a warning cannot grow back.
+    scrollback_limit: usize,
+    /// Set when the cap changed while the alternate screen — which does not
+    /// hold the history — was showing.
+    scrollback_needs_apply: bool,
+    pub(crate) history: Option<crate::history::Capture>,
 }
 
 impl Terminal {
@@ -188,6 +231,54 @@ impl Terminal {
             directory: DirectoryScanner::default(),
             // A terminal nobody has drawn yet needs a first full paint.
             dirty: true,
+            scrollback_limit: options.scrollback_lines,
+            scrollback_needs_apply: false,
+            history: None,
+        }
+    }
+
+    /// Warm a fresh terminal with a bounded tail. This only draws content;
+    /// it cannot send input or terminal replies to the new shell.
+    pub fn restore_history(&mut self, rows: &[crate::HistoryRow]) -> Vec<crate::HistoryRow> {
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let capacity =
+            rows.iter().map(|r| r.columns as usize / self.size.columns as usize + 2).sum::<usize>()
+                + self.size.rows as usize
+                + 4;
+        self.inner.grid_mut().update_history(capacity);
+        self.feed(&crate::history::display_bytes(rows));
+        // Leave recent content visible and the cursor below the separator,
+        // where the new shell can start. Only rows that actually scrolled off
+        // belong in the archive's history; the rest remain its screen snapshot.
+        self.take_replies();
+        let depth = self.inner.grid().history_size();
+        let restored =
+            (-(depth as i32)..0).map(|line| crate::history::row(&self.inner, line)).collect();
+        self.inner.grid_mut().update_history(self.scrollback_limit);
+        restored
+    }
+
+    /// Capture completed main-screen rows independently of frame publication.
+    pub fn record_history(&mut self) {
+        self.history = Some(crate::history::Capture::default());
+    }
+
+    pub fn pending_history_events(&self) -> usize {
+        self.history.as_ref().map_or(0, |h| h.events.len())
+    }
+
+    pub fn take_history_events(&mut self) -> Vec<crate::HistoryEvent> {
+        self.history.as_mut().map(|h| std::mem::take(&mut h.events)).unwrap_or_default()
+    }
+
+    /// The main screen, even while a full-screen application is showing.
+    pub fn history_screen(&self) -> Vec<crate::HistoryRow> {
+        if self.inner.mode().contains(TermMode::ALT_SCREEN) {
+            self.history.as_ref().map(|h| h.main_screen.clone()).unwrap_or_default()
+        } else {
+            crate::history::screen(&self.inner)
         }
     }
 
@@ -210,9 +301,19 @@ impl Terminal {
             return;
         }
         self.dirty = true;
-        self.parser.advance(&mut self.inner, bytes);
+        if let Some(history) = &mut self.history {
+            let mut handler = crate::history::Recording {
+                term: &mut self.inner,
+                capture: history,
+                limit: self.scrollback_limit,
+            };
+            self.parser.advance(&mut handler, bytes);
+        } else {
+            self.parser.advance(&mut self.inner, bytes);
+        }
         self.directory.feed(bytes);
         self.adopt_title();
+        self.apply_scrollback_limit();
     }
 
     /// The directory the far side's shell last reported, by `OSC 7` or
@@ -333,8 +434,42 @@ impl Terminal {
     /// Always reported as full damage: reflow can move every line.
     pub fn resize(&mut self, size: ScreenSize) {
         let size = usable(size);
+        let recording = self.history.is_some();
+        let alternate = self.inner.mode().contains(TermMode::ALT_SCREEN);
+        let before = self.inner.grid().history_size();
+        if recording {
+            let (depth, columns, rows) = if alternate {
+                let history = self.history.as_ref().unwrap();
+                (
+                    history.main_history,
+                    history.main_screen.first().map_or(self.size.columns, |r| r.columns),
+                    history.main_screen.len(),
+                )
+            } else {
+                (before, self.size.columns, self.size.rows as usize)
+            };
+            let capacity = (depth + rows) * columns as usize / size.columns as usize
+                + self.size.rows as usize
+                + size.rows as usize
+                + 1;
+            self.inner.set_options(Config { scrolling_history: capacity, ..Config::default() });
+        }
         self.size = size;
         self.inner.resize(Dims { size });
+        if let Some(history) = &mut self.history {
+            if alternate {
+                history.reflowed = true;
+            } else {
+                history.events.push(crate::HistoryEvent::Truncate(before));
+                let depth = self.inner.grid().history_size();
+                for line in -(depth as i32)..0 {
+                    history
+                        .events
+                        .push(crate::HistoryEvent::Row(crate::history::row(&self.inner, line)));
+                }
+                self.inner.grid_mut().update_history(self.scrollback_limit);
+            }
+        }
         self.pending_full_damage = true;
         self.dirty = true;
     }
@@ -355,6 +490,18 @@ impl Terminal {
     /// A program that asked "where is the cursor?" is waiting.
     pub fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.sink.0.lock().expect("sink poisoned").replies)
+    }
+
+    /// Text a program asked to copy onto the local clipboard since the last
+    /// call, if it asked.
+    ///
+    /// `OSC 52`. The consumer writes it to the clipboard of the machine the
+    /// person is using. Empty when nothing arrived, and empty again once
+    /// taken — a copy is delivered once. A request larger than
+    /// [`MAX_CLIPBOARD_BYTES`] is ignored, and a request to read the
+    /// clipboard is never answered.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.sink.0.lock().expect("sink poisoned").clipboard.take()
     }
 
     /// What changed since this was last called, and clears it.
@@ -484,55 +631,122 @@ impl Terminal {
 
     /// A snapshot of the visible screen.
     pub fn screen(&self) -> Screen {
+        let rows = (0..self.size.rows).map(|row| self.cells_for_row(row)).collect();
+        Screen::new(self.size, self.read_cursor(), self.read_modes(), self.viewport(), rows)
+    }
+
+    /// One visible row, in the same cells [`screen`] reports.
+    ///
+    /// `Line(0)` is the top of the *live* screen and history is negative, so
+    /// the viewport is applied here. A damage span names this row, not the
+    /// line behind the viewport.
+    pub fn cells_for_row(&self, row: u16) -> Vec<Cell> {
         let grid = self.inner.grid();
-        let mut rows = Vec::with_capacity(self.size.rows as usize);
+        let line = row as i32 - grid.display_offset() as i32;
+        let mut cells = Vec::with_capacity(self.size.columns as usize);
+        for column in 0..self.size.columns as usize {
+            let cell = &grid[Line(line)][Column(column)];
 
-        // `Line(0)` is the top of the *live* screen and history is negative,
-        // so the viewport is applied here rather than assumed away. Reading
-        // `0..rows` regardless is how scrolling can move the engine's
-        // viewport and change nothing a consumer can see.
-        let offset = grid.display_offset() as i32;
-
-        for row in 0..self.size.rows as i32 {
-            let line = row - offset;
-            let mut cells = Vec::with_capacity(self.size.columns as usize);
-            for column in 0..self.size.columns as usize {
-                let cell = &grid[Line(line)][Column(column)];
-
-                // The engine marks the right half of a wide character with a
-                // spacer. That is its bookkeeping, not a cell a consumer
-                // should have to skip.
+            // The engine marks the right half of a wide character with a
+            // spacer. That is its bookkeeping, not a cell a consumer
+            // should have to skip.
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                    && column > 0
+                    && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
                 {
                     continue;
                 }
-
-                let mut text = String::from(cell.c);
-                if let Some(zerowidth) = cell.zerowidth() {
-                    text.extend(zerowidth);
-                }
-
-                // A wide character reports two columns only when the engine
-                // really did reserve the column to its right for it.
-                //
-                // Asking whether a column *index* remains is not the same
-                // question, and getting them confused overflows the row:
-                // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
-                // spacer is gone, with an ordinary cell beside it — measured
-                // by the fuzzer, a two-column row then claimed three. The
-                // spacer is the engine's own record of the reservation, so it
-                // is what gets asked.
-                let wide = cell.flags.contains(Flags::WIDE_CHAR)
-                    && (column + 1 < self.size.columns as usize)
-                    && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
-
-                cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
+                // A wrap placeholder or an orphaned spacer still occupies
+                // a column. Dropping it shifts every later cell away from
+                // the column indices used by cursor and damage reports.
+                cells.push(Cell { text: " ".into(), width: 1, style: style_of(cell) });
+                continue;
             }
-            rows.push(cells);
-        }
 
-        Screen::new(self.size, self.read_cursor(), self.read_modes(), self.viewport(), rows)
+            let mut text = String::from(cell.c);
+            if let Some(zerowidth) = cell.zerowidth() {
+                text.extend(zerowidth);
+            }
+
+            // A wide character reports two columns only when the engine
+            // really did reserve the column to its right for it.
+            //
+            // Asking whether a column *index* remains is not the same
+            // question, and getting them confused overflows the row:
+            // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
+            // spacer is gone, with an ordinary cell beside it — measured
+            // by the fuzzer, a two-column row then claimed three. The
+            // spacer is the engine's own record of the reservation, so it
+            // is what gets asked.
+            let wide = cell.flags.contains(Flags::WIDE_CHAR)
+                && (column + 1 < self.size.columns as usize)
+                && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
+
+            cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
+        }
+        cells
+    }
+
+    /// Damage since the last call, and the rows that damage names.
+    ///
+    /// One lock, one answer. A consumer that took the damage and then read
+    /// the screen would copy every row to find the few that changed.
+    pub fn take_frame_delta(&mut self) -> FrameDelta {
+        self.apply_scrollback_limit();
+        let changes = self.take_changes();
+        let full = matches!(changes.screen, ScreenDamage::Full);
+        if full {
+            return FrameDelta {
+                full: Some(self.screen()),
+                rows: Vec::new(),
+                cursor: self.read_cursor(),
+                title: self.title.clone(),
+                viewport: self.viewport(),
+                modes: self.read_modes(),
+                size: self.size,
+            };
+        }
+        let indexes: Vec<u16> = match changes.screen {
+            ScreenDamage::Rows(spans) => {
+                let mut rows: Vec<u16> = spans.into_iter().map(|span| span.row).collect();
+                rows.sort_unstable();
+                rows.dedup();
+                rows
+            }
+            ScreenDamage::None | ScreenDamage::Full => Vec::new(),
+        };
+        let rows = indexes.into_iter().map(|row| (row, self.cells_for_row(row))).collect();
+        FrameDelta {
+            full: None,
+            rows,
+            cursor: self.read_cursor(),
+            title: self.title.clone(),
+            viewport: self.viewport(),
+            modes: self.read_modes(),
+            size: self.size,
+        }
+    }
+
+    /// Drops history above `keep` lines and stops it growing back.
+    ///
+    /// The live screen stays. A viewport parked in the lines that went away
+    /// is clamped by the engine. The alternate screen's grid has no history
+    /// of its own; the primary grid is capped the next time it is showing.
+    pub fn release_history(&mut self, keep: usize) {
+        self.scrollback_limit = keep;
+        self.scrollback_needs_apply = true;
+        self.apply_scrollback_limit();
+        self.pending_full_damage = true;
+        self.dirty = true;
+    }
+
+    fn apply_scrollback_limit(&mut self) {
+        if !self.scrollback_needs_apply || self.inner.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        self.inner.grid_mut().update_history(self.scrollback_limit);
+        self.scrollback_needs_apply = false;
     }
 
     fn read_cursor(&self) -> Cursor {
@@ -564,11 +778,27 @@ impl Terminal {
 
     fn read_modes(&self) -> Modes {
         let mode = self.inner.mode();
+        let mouse_motion = if mode.contains(TermMode::MOUSE_MOTION) {
+            MouseMotion::Any
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            MouseMotion::Drag
+        } else {
+            MouseMotion::None
+        };
+        let mouse_encoding = if mode.contains(TermMode::SGR_MOUSE) {
+            MouseEncoding::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            MouseEncoding::Utf8
+        } else {
+            MouseEncoding::Normal
+        };
         Modes {
             alternate_screen: mode.contains(TermMode::ALT_SCREEN),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
             mouse_reporting: mode.intersects(TermMode::MOUSE_MODE),
+            mouse_motion,
+            mouse_encoding,
             line_wrap: mode.contains(TermMode::LINE_WRAP),
         }
     }
@@ -692,7 +922,7 @@ fn shape_of(shape: alacritty_terminal::vte::ansi::CursorShape) -> CursorShape {
     }
 }
 
-fn style_of(cell: &alacritty_terminal::term::cell::Cell) -> Style {
+pub(crate) fn style_of(cell: &alacritty_terminal::term::cell::Cell) -> Style {
     let flags = cell.flags;
     Style {
         foreground: color_of(cell.fg),

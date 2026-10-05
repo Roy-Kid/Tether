@@ -158,6 +158,68 @@ fn a_device_status_report_produces_a_reply_to_send_back() {
     assert!(term.take_replies().is_empty(), "replies are taken, not repeated");
 }
 
+/// A program that copies — tmux copy-mode, an editor's yank — asks the
+/// terminal to put that text on the clipboard with `OSC 52`. The text has
+/// to leave the engine for the machine the person is sitting at. It is not
+/// drawn, and it is not sent back.
+#[test]
+fn a_remote_copy_is_handed_to_the_local_clipboard_once() {
+    let mut term = terminal(20, 5);
+    // `c` is the clipboard. `s` is the X11 selection; this platform has one
+    // pasteboard, so both are a copy. "hi" is aGk=, "中" is 5Lit.
+    term.feed(b"\x1b]52;c;aGk=\x1b\\");
+    assert_eq!(term.take_clipboard().as_deref(), Some("hi"));
+    assert_eq!(term.take_clipboard(), None, "a copy is taken, not repeated");
+    assert_eq!(term.screen().row_text(0), "");
+    assert!(term.take_replies().is_empty());
+
+    term.feed(b"\x1b]52;s;5Lit\x07");
+    assert_eq!(term.take_clipboard().as_deref(), Some("中"));
+}
+
+/// The sequence can be cut by a packet boundary, like any other escape.
+#[test]
+fn a_remote_copy_split_across_feeds_is_reassembled() {
+    let mut term = terminal(20, 5);
+    term.feed(b"\x1b]52;c;aG");
+    assert_eq!(term.take_clipboard(), None);
+    term.feed(b"k=\x1b\\");
+    assert_eq!(term.take_clipboard().as_deref(), Some("hi"));
+}
+
+/// Two copies in one chunk: the pasteboard holds the last one.
+#[test]
+fn the_later_remote_copy_replaces_the_earlier() {
+    let mut term = terminal(20, 5);
+    // "hi", then "b" (Yg==).
+    term.feed(b"\x1b]52;c;aGk=\x1b\\\x1b]52;c;Yg==\x1b\\");
+    assert_eq!(term.take_clipboard().as_deref(), Some("b"));
+}
+
+/// `OSC 52` can also ask to read the clipboard. Answering would send the
+/// person's last copy to the far side, so the request produces nothing.
+#[test]
+fn a_remote_clipboard_read_is_refused() {
+    let mut term = terminal(20, 5);
+    term.feed(b"\x1b]52;c;?\x1b\\");
+    assert_eq!(term.take_clipboard(), None);
+    assert!(term.take_replies().is_empty(), "the clipboard is not written back");
+}
+
+/// A remote program is untrusted. A copy larger than the cap is dropped
+/// rather than pinned in memory until something reads it.
+#[test]
+fn a_remote_copy_past_the_cap_is_ignored() {
+    let mut term = terminal(20, 5);
+    // "AAA" encodes to QUFB. Repeated, that is well past a megabyte.
+    let payload = "QUFB".repeat(400_000);
+    let mut sequence = Vec::from(&b"\x1b]52;c;"[..]);
+    sequence.extend(payload.into_bytes());
+    sequence.extend(b"\x1b\\");
+    term.feed(&sequence);
+    assert_eq!(term.take_clipboard(), None);
+}
+
 #[test]
 fn the_bell_is_reported_once() {
     let mut term = terminal(20, 5);

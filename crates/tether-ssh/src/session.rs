@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::auth::{Challenge, Method, Prompt, Prompter};
 use crate::error::SshError;
 use crate::host::{Endpoint, HostVerifier, Verdict};
+use crate::key::{KeyError, KeyUnlocker, PrivateKey, Unlocking};
 use crate::shell::{Shell, WindowSize};
 
 /// Bridges russh's callbacks onto our own policy interfaces.
@@ -165,20 +166,60 @@ impl Connection {
         Ok(self.step_from(result))
     }
 
-    /// Authenticates with a private key given as PEM text.
+    /// Authenticates with a private key.
     ///
-    /// Text rather than a parsed key type: a caller has a file or a keychain
-    /// item, and handing them an `ssh-key` type to construct would put our
-    /// protocol library in their dependency graph (spec §8).
+    /// The key is a [`PrivateKey`] the caller already read, not text: reading
+    /// is where a key turns out to be unusable, and finding that out here
+    /// would cost the connection this call consumes — and every credential
+    /// that was going to be tried on it after this one.
+    ///
+    /// A locked key is unlocked through `unlocker`, and only when it has to
+    /// be. OpenSSH's format keeps the public half readable, so the server is
+    /// asked about it first and the person is asked only once the server has
+    /// said yes. The other formats have nothing to ask the server with; a
+    /// caller that wants a no to cost only that key opens them first with
+    /// [`PrivateKey::opened`], and one that does not has them unlocked here.
+    ///
+    /// A person declining is [`SshError::Declined`]; every passphrase wrong
+    /// is [`SshError::Key`]. Either way the connection is gone: once the
+    /// server has been told a signature is coming, nothing else can be said
+    /// on it.
     pub async fn private_key(
         mut self,
         user: &str,
-        pem: &str,
-        passphrase: Option<&str>,
+        key: &PrivateKey,
+        unlocker: Option<&dyn KeyUnlocker>,
     ) -> Result<Step, SshError> {
-        let key = russh::keys::decode_secret_key(pem, passphrase)
-            .map_err(|error| SshError::Protocol { cause: format!("unusable key: {error}") })?;
+        if let Some(ready) = key.ready_key() {
+            return self.sign_in(user, ready.clone()).await;
+        }
+        let Some(unlocker) = unlocker else {
+            return Err(SshError::Key(KeyError::Locked));
+        };
 
+        let Some(public) = key.sealed_public_key() else {
+            let ready = key.unlock(unlocker).await.map_err(unlocking_error)?;
+            return self.sign_in(user, ready).await;
+        };
+
+        let hash = if matches!(public.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+            self.handle.best_supported_rsa_hash().await?.flatten()
+        } else {
+            None
+        };
+        let mut signer = Unlock { key, unlocker };
+        match self.handle.authenticate_publickey_with(user, public.clone(), hash, &mut signer).await
+        {
+            Ok(result) => Ok(self.step_from(result)),
+            Err(UnlockFailure::Unlocking(unlocking)) => Err(unlocking_error(unlocking)),
+            Err(UnlockFailure::Signing(cause)) => Err(SshError::protocol(cause)),
+            Err(UnlockFailure::Send) => {
+                Err(SshError::Disconnected { cause: "the connection closed mid-login".to_owned() })
+            }
+        }
+    }
+
+    async fn sign_in(mut self, user: &str, key: russh::keys::PrivateKey) -> Result<Step, SshError> {
         let best_hash = self.handle.best_supported_rsa_hash().await?.flatten();
 
         let result = self
@@ -266,6 +307,59 @@ impl Connection {
                 }
             }
         }
+    }
+}
+
+/// Signs for a key that is unlocked only when the server asks for the
+/// signature — which russh does only after the server accepted the key's
+/// public half.
+struct Unlock<'a> {
+    key: &'a PrivateKey,
+    unlocker: &'a dyn KeyUnlocker,
+}
+
+#[derive(Debug)]
+enum UnlockFailure {
+    Unlocking(Unlocking),
+    Signing(String),
+    Send,
+}
+
+impl From<russh::SendError> for UnlockFailure {
+    fn from(_: russh::SendError) -> Self {
+        Self::Send
+    }
+}
+
+impl russh::Signer for Unlock<'_> {
+    type Error = UnlockFailure;
+
+    #[allow(clippy::manual_async_fn)] // the trait asks for a `Send` future by name
+    fn auth_sign(
+        &mut self,
+        _: &russh::keys::agent::AgentIdentity,
+        hash: Option<russh::keys::HashAlg>,
+        to_sign: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        async move {
+            let key = self.key.unlock(self.unlocker).await.map_err(UnlockFailure::Unlocking)?;
+            let signature =
+                crate::key::sign(&key, hash, &to_sign).map_err(UnlockFailure::Signing)?;
+            // The signature follows the signed bytes as an SSH string, which
+            // is what russh writes for a key it holds itself.
+            let mut signed = to_sign;
+            russh::keys::ssh_encoding::Encode::encode(signature.as_slice(), &mut signed)
+                .map_err(|error| UnlockFailure::Signing(error.to_string()))?;
+            Ok(signed)
+        }
+    }
+}
+
+fn unlocking_error(unlocking: Unlocking) -> SshError {
+    match unlocking {
+        // The same decision as walking away from an interactive prompt.
+        Unlocking::Declined => SshError::Declined,
+        Unlocking::Failed(error) => SshError::Key(error),
     }
 }
 

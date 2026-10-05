@@ -7,13 +7,17 @@ license.workspace = true
 description = "A shell on this machine, on a pseudo-terminal. The local counterpart to tether-ssh."
 
 [dependencies]
-portable-pty = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # `F_SETNOSIGPIPE`, so a child that stops reading is an error rather than
 # the end of the embedding application (tests/sigpipe.rs).
+# iOS cannot start a process, so the pseudo-terminal crate is not linked
+# into that slice at all. A runtime check would still compile the types in.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+portable-pty = { workspace = true }
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 libc = "0.2"
 

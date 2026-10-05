@@ -19,6 +19,7 @@ public sealed partial class SettingsWindow : Window
         InitializeComponent();
         BuildExtensions();
         BuildTerminal();
+        BuildWorkspaceSettings();
         foreach (var profile in AppSettings.KnownShells)
             ShellPicker.Items.Add(new ComboBoxItem { Content = profile.Name, Tag = profile.Program });
         BuildSshPicker();
@@ -62,11 +63,14 @@ public sealed partial class SettingsWindow : Window
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
         var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
-        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", _ => "Startup" };
+        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "History", "files" => "Files", _ => "Startup" };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;
         ExtensionsPane.Visibility = tag == "extensions" ? Visibility.Visible : Visibility.Collapsed;
+        KeysPane.Visibility = tag == "keys" ? Visibility.Visible : Visibility.Collapsed;
+        HistoryPane.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
+        FilesPane.Visibility = tag == "files" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void BuildTerminal()
@@ -118,7 +122,7 @@ public sealed partial class SettingsWindow : Window
                 Copy = fields[0].Text, Paste = fields[1].Text, ZoomIn = fields[2].Text,
                 ZoomOut = fields[3].Text, ZoomReset = fields[4].Text,
             };
-            problem.Text = updated.Validate() ?? "";
+            problem.Text = updated.Validate() ?? WorkspaceCommands.Validate(AppSettings.Current.KeyBindings, updated) ?? "";
             if (problem.Text.Length == 0) ShowSaveResult((AppSettings.Current with { Terminal = updated }).Save());
         };
         var reset = new Button { Content = "Restore terminal defaults" };

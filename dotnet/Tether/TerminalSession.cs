@@ -61,7 +61,14 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         Gen.TetherException.TimedOut e => new TetherException.TimedOut(e.millis),
         Gen.TetherException.Unreachable e => new TetherException.Unreachable(e.endpoint, e.cause),
         Gen.TetherException.HostRejected e => new TetherException.HostRejected(e.endpoint),
-        Gen.TetherException.AuthenticationFailed e => new TetherException.AuthenticationFailed(e.remaining),
+        Gen.TetherException.AuthenticationFailed e => new TetherException.AuthenticationFailed(e.remaining, e.skipped.Select(k => new SkippedKey(k.Position, k.Fingerprint, k.Problem switch
+        {
+            Gen.KeyProblem.Unreadable p => "Unreadable key: " + p.Cause,
+            Gen.KeyProblem.Unsupported p => "Unsupported key: " + p.What,
+            Gen.KeyProblem.Locked => "Key needs a passphrase",
+            Gen.KeyProblem.WrongPassphrase => "Incorrect key passphrase",
+            _ => "Key could not be used",
+        })).ToArray()),
         Gen.TetherException.MoreFactorsNeeded e => new TetherException.MoreFactorsNeeded(e.remaining),
         Gen.TetherException.NothingToOffer => new TetherException.NothingToOffer(),
         Gen.TetherException.ShellRefused e => new TetherException.ShellRefused(e.cause),
@@ -84,10 +91,11 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         ushort columns = 80,
         ushort rows = 24,
         uint scrollbackLines = 10_000,
-        string? shell = null)
+        string? shell = null,
+        SessionHistory? history = null)
     {
         var inner = await Gen.TetherFfiMethods.OpenLocal(new Gen.LocalShell(
-            directory, term, columns, rows, scrollbackLines, shell)).ConfigureAwait(false);
+            directory, term, columns, rows, scrollbackLines, shell, history?.Inner)).ConfigureAwait(false);
         return new TerminalSession(inner);
     }
 
@@ -115,10 +123,11 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         ushort columns = 80,
         ushort rows = 24,
         uint scrollbackLines = 10_000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SessionHistory? history = null)
     {
         using var cancellation = new CancellationTokenAdapter(cancellationToken);
-        var shell = new Gen.LocalShell(null, "xterm-256color", columns, rows, scrollbackLines, null);
+        var shell = new Gen.LocalShell(null, "xterm-256color", columns, rows, scrollbackLines, null, history?.Inner);
         try
         {
             var inner = await Gen.TetherFfiMethods.ConnectOverSshClientCancellable(
@@ -205,7 +214,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     // `internal` so a consumer cannot name them (Decisions/0004).
 
     private static Gen.Destination Lower(Destination d) =>
-        new(d.Host, d.Port, d.User, d.Term, d.Columns, d.Rows, d.ScrollbackLines);
+        new(d.Host, d.Port, d.User, d.Term, d.Columns, d.Rows, d.ScrollbackLines, d.History?.Inner);
 
     private static Gen.Jump Lower(Jump jump) =>
         new(jump.Host, jump.Port, jump.User, jump.Secrets.Select(Lower).ToArray());
@@ -213,7 +222,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     private static Gen.Secret Lower(Secret s) => s switch
     {
         Secret.Password p => new Gen.Secret.Password(p.Value),
-        Secret.PrivateKey k => new Gen.Secret.PrivateKey(k.Pem, k.Passphrase),
+        Secret.PrivateKey k => new Gen.Secret.PrivateKey(k.Pem, k.Passphrase, k.Unlock is null ? null : new PassphraseAdapter(k.Unlock)),
         Secret.Interactive i => new Gen.Secret.Interactive(new PrompterAdapter(i.Prompter)),
         _ => throw new ArgumentOutOfRangeException(nameof(s)),
     };
@@ -227,6 +236,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     {
         TerminalInput.Key k => new Gen.TerminalInput.Key(Lower(k.Press), Lower(k.Modifiers)),
         TerminalInput.Paste p => new Gen.TerminalInput.Paste(p.Text),
+        TerminalInput.Pointer p => new Gen.TerminalInput.Pointer((Gen.PointerButton)p.Button, (Gen.PointerPhase)p.Phase, p.Column, p.Row, Lower(p.Modifiers)),
         _ => throw new ArgumentOutOfRangeException(nameof(input)),
     };
 
@@ -269,7 +279,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         f.Columns, f.Rows, f.CursorRow, f.CursorColumn,
         Lift(f.CursorShape), f.CursorVisible, f.AlternateScreen,
         f.ViewportOffset, f.HistoryLines, f.Title,
-        f.Lines.Select(Lift).ToArray());
+        f.Lines.Select(Lift).ToArray()) { Mouse = (MouseTracking)f.Mouse };
 
     private static ScreenRow Lift(Gen.ScreenRow r) =>
         new(r.Runs.Select(Lift).ToArray());
@@ -364,6 +374,57 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     {
         public Task<bool> Trusts(Gen.HostIdentity host) =>
             inner.TrustsAsync(new Tether.HostIdentity(host.Host, host.Port, host.Algorithm, host.Fingerprint, host.Encoded));
+    }
+
+    private sealed class PassphraseAdapter(IPassphrasePrompter inner) : Gen.PassphrasePrompter
+    {
+        public Task<string?> Passphrase(Gen.LockedKey key, uint attempt) =>
+            inner.PassphraseAsync(new LockedKey(key.Fingerprint, key.Comment), attempt);
+    }
+
+    public string? CurrentDirectory => _inner.CurrentDirectory();
+    public string? TerminalName => _inner.TerminalName();
+    public uint? LocalProcessId => _inner.LocalProcessId();
+    public void CheckpointHistory() => _inner.CheckpointHistory();
+    public string? HistoryError => _inner.HistoryError();
+    public string? TakeClipboard() => _inner.TakeClipboard();
+    public async Task<string> ExecuteAsync(string command, CancellationToken token = default)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        using var cancellation = new CancellationTokenAdapter(token);
+        var result = await connection.Execute(command, cancellation.Ffi).ConfigureAwait(false);
+        if (result.Status != 0) throw new IOException(System.Text.Encoding.UTF8.GetString(result.Stderr));
+        return System.Text.Encoding.UTF8.GetString(result.Stdout);
+    }
+
+    public async Task<IReadOnlyList<TmuxSessionInfo>> TmuxSessionsAsync(CancellationToken token = default)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        using var cancellation = new CancellationTokenAdapter(token);
+        return (await connection.TmuxSessions(cancellation.Ffi).ConfigureAwait(false)).Select(s =>
+            new TmuxSessionInfo(s.Id, s.Name, s.Attached, s.Windows.Select(w => new TmuxWindow(w.Id, w.Index, w.Name, w.Active, w.Panes)).ToArray())).ToArray();
+    }
+    public async Task<TmuxSessionInfo> CreateTmuxAsync(string name, string? directory, CancellationToken token = default)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        using var cancellation = new CancellationTokenAdapter(token);
+        var s = await connection.CreateTmux(name, directory, cancellation.Ffi).ConfigureAwait(false);
+        return new(s.Id, s.Name, s.Attached, []);
+    }
+    public async Task RenameTmuxAsync(string id, string name)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        await connection.RenameTmux(id, name).ConfigureAwait(false);
+    }
+    public async Task EndTmuxAsync(string id)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        await connection.EndTmux(id).ConfigureAwait(false);
+    }
+    public async Task<string?> TmuxSessionForClientAsync(string tty)
+    {
+        using var connection = _inner.Connection() ?? throw new IOException("No live connection.");
+        return await connection.TmuxSessionForClient(tty).ConfigureAwait(false);
     }
 
     private sealed class PrompterAdapter(IAuthPrompter inner) : Gen.InteractivePrompter

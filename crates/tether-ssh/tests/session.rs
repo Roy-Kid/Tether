@@ -7,7 +7,11 @@ mod support;
 use std::sync::Arc;
 
 use support::{BANNER, CLIENT_KEY, CLIENT_PUBLIC_KEY, ONE_TIME_CODE, PASSWORD, Policy, USER};
-use tether_ssh::{Connection, Endpoint, Output, SshError, Step, WindowSize};
+use tether_ssh::{Connection, Endpoint, Output, PrivateKey, SshError, Step, WindowSize};
+
+fn client_key() -> PrivateKey {
+    PrivateKey::parse(CLIENT_KEY, None).expect("the test key reads")
+}
 
 fn endpoint() -> Endpoint {
     Endpoint::new("fake.cluster", 22)
@@ -219,7 +223,7 @@ async fn a_private_key_authenticates() {
     let (connection, observed) =
         connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
 
-    match connection.private_key(USER, CLIENT_KEY, None).await.expect("attempt") {
+    match connection.private_key(USER, &client_key(), None).await.expect("attempt") {
         Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
         other => panic!("the key should have been accepted, got {other:?}"),
     }
@@ -232,7 +236,7 @@ async fn a_private_key_authenticates() {
 async fn an_unknown_key_is_refused_and_the_server_says_what_it_wants() {
     let (connection, _) = connect(Policy::default()).await;
 
-    match connection.private_key(USER, CLIENT_KEY, None).await.expect("attempt") {
+    match connection.private_key(USER, &client_key(), None).await.expect("attempt") {
         Step::Rejected { remaining, .. } => assert!(
             remaining.iter().any(|m| m.to_string() == "keyboard-interactive"),
             "expected keyboard-interactive among {remaining:?}"
@@ -264,7 +268,8 @@ async fn a_key_accepted_as_a_first_factor_leads_to_a_second() {
     })
     .await;
 
-    let connection = match connection.private_key(USER, CLIENT_KEY, None).await.expect("attempt") {
+    let connection = match connection.private_key(USER, &client_key(), None).await.expect("attempt")
+    {
         Step::AnotherFactor { remaining, next } => {
             assert!(
                 remaining.iter().any(|m| m.to_string() == "keyboard-interactive"),
@@ -341,6 +346,117 @@ async fn a_second_shell_opens_on_the_authenticated_session() {
     second.write(b"two\n".to_vec()).await.unwrap();
     assert_eq!(read_text(&mut first).await, "one\n");
     assert_eq!(read_text(&mut second).await, "two\n");
+}
+
+fn locked_key() -> PrivateKey {
+    PrivateKey::parse(support::LOCKED_KEY, None).expect("the locked test key reads")
+}
+
+/// A locked key is unlocked the way OpenSSH unlocks one: the server hears
+/// the public half first, and the person is asked once the server said yes.
+#[tokio::test]
+async fn a_locked_key_is_unlocked_once_the_server_would_take_it() {
+    let (connection, _) =
+        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
+            .await;
+    let unlocker = support::ScriptedUnlocker::new([Some(support::LOCKED_PASSPHRASE)]);
+
+    match connection.private_key(USER, &locked_key(), Some(&unlocker)).await.expect("attempt") {
+        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
+        other => panic!("the unlocked key should have been accepted, got {other:?}"),
+    }
+
+    let asked = unlocker.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "asked once");
+    assert_eq!(asked[0].1, 1, "attempts count from one");
+    assert_eq!(
+        asked[0].0.fingerprint.as_deref(),
+        Some("SHA256:geKjwKwJQtGRfWN+mIqt0nKBY/0SsaLfiVYpvHUCKKc"),
+        "the person is shown which key"
+    );
+}
+
+/// The prompt people learn to dismiss is the one for a key the server was
+/// never going to take. A refused public half asks nobody anything, and the
+/// connection is still there for the next credential.
+#[tokio::test]
+async fn a_locked_key_the_server_refuses_asks_nobody() {
+    let (connection, observed) =
+        connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
+    let unlocker = support::ScriptedUnlocker::new([Some(support::LOCKED_PASSPHRASE)]);
+
+    let retry = match connection.private_key(USER, &locked_key(), Some(&unlocker)).await {
+        Ok(Step::Rejected { retry, .. }) => retry,
+        other => panic!("the key should have been refused, got {other:?}"),
+    };
+    assert!(unlocker.asked.lock().unwrap().is_empty(), "nobody was asked for a passphrase");
+    assert_eq!(observed.lock().unwrap().public_key_offers, 1, "the server was asked");
+    assert_eq!(observed.lock().unwrap().public_key_attempts, 0, "and nothing was signed");
+
+    match retry.private_key(USER, &client_key(), None).await.expect("next credential") {
+        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
+        other => panic!("the connection should have survived, got {other:?}"),
+    }
+}
+
+/// Closing the passphrase dialog is the person's no — not a wrong passphrase.
+#[tokio::test]
+async fn declining_to_unlock_is_a_decline() {
+    let (connection, _) =
+        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
+            .await;
+    let unlocker = support::ScriptedUnlocker::new([None]);
+
+    match connection.private_key(USER, &locked_key(), Some(&unlocker)).await {
+        Err(SshError::Declined) => {}
+        other => panic!("expected Declined, got {other:?}"),
+    }
+}
+
+/// Three wrong passphrases end the attempt, and say so in their own words.
+#[tokio::test]
+async fn three_wrong_passphrases_are_named_for_what_they_were() {
+    let (connection, _) =
+        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
+            .await;
+    let unlocker = support::ScriptedUnlocker::new([Some("one"), Some("two"), Some("three")]);
+
+    match connection.private_key(USER, &locked_key(), Some(&unlocker)).await {
+        Err(SshError::Key(tether_ssh::KeyError::WrongPassphrase)) => {}
+        other => panic!("expected a wrong passphrase, got {other:?}"),
+    }
+    let attempts: Vec<u32> = unlocker.asked.lock().unwrap().iter().map(|(_, n)| *n).collect();
+    assert_eq!(attempts, vec![1, 2, 3]);
+}
+
+/// A key with no passphrase never asks for one.
+#[tokio::test]
+async fn an_unlocked_key_asks_nobody() {
+    let (connection, _) =
+        connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
+    let unlocker = support::ScriptedUnlocker::new([Some("unused")]);
+
+    match connection.private_key(USER, &client_key(), Some(&unlocker)).await.expect("attempt") {
+        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
+        other => panic!("the key should have been accepted, got {other:?}"),
+    }
+    assert!(unlocker.asked.lock().unwrap().is_empty());
+}
+
+/// A locked key with nothing to ask is refused by name before the server
+/// hears about it.
+#[tokio::test]
+async fn a_locked_key_with_nobody_to_ask_is_named_as_locked() {
+    let (connection, observed) =
+        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
+            .await;
+
+    match connection.private_key(USER, &locked_key(), None).await {
+        Err(SshError::Key(tether_ssh::KeyError::Locked)) => {}
+        other => panic!("expected Locked, got {other:?}"),
+    }
+    assert_eq!(observed.lock().unwrap().public_key_offers, 0);
+    assert_eq!(observed.lock().unwrap().public_key_attempts, 0);
 }
 
 async fn login(connection: Connection) -> tether_ssh::Session {

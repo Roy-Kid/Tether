@@ -1,0 +1,32 @@
+name: Windows
+on:
+  push:
+    branches: [master, windows-app]
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Install C# binding generator
+        run: cargo install --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
+      - run: ./scripts/build-windows.ps1 -DebugBuild
+      - run: dotnet build app-windows/TetherApp.Windows.csproj -c Debug
+      - name: Windows regressions
+        shell: pwsh
+        run: |
+          foreach ($project in @('terminal-experience','connection-errors','windows-files')) {
+            dotnet run --project "tests/$project"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - run: dotnet test tests/ssh-config
+      - run: dotnet test tests/plugins

@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
-use tether_ssh::{Connection, Endpoint, HostVerifier, Prompter, SshError, Step, WindowSize};
+use tether_ssh::{
+    Connection, Endpoint, HostVerifier, KeyError, KeyUnlocker, PrivateKey, Prompter, SshError,
+    Step, WindowSize,
+};
 use tether_terminal::{Options, ScreenSize};
 
 use crate::session::TerminalSession;
@@ -26,9 +29,14 @@ pub enum Credential {
     Password(String),
     /// PEM text, not a path and not a parsed key: a caller's key may live in
     /// a keychain item that never touches the filesystem.
+    ///
+    /// A key protected by a passphrase is unlocked with `passphrase` when one
+    /// is given, and otherwise through `unlock` — asked only once the server
+    /// has said it would take the key. With neither, it is left out.
     PrivateKey {
         pem: String,
         passphrase: Option<String>,
+        unlock: Option<Arc<dyn KeyUnlocker>>,
     },
     /// Answers whatever the server asks, for as many rounds as it asks.
     Interactive(Arc<dyn Prompter>),
@@ -47,15 +55,36 @@ impl std::fmt::Debug for Credential {
     }
 }
 
+/// A private key left out of a login, and why.
+///
+/// Named by where it sat in the credentials the caller gave, counting from
+/// zero: the caller built that list, so it knows which file or keychain item
+/// that was — a name this crate never learns (spec §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedKey {
+    pub position: usize,
+    /// `SHA256:…`, when the key could be read far enough to have one.
+    pub fingerprint: Option<String>,
+    pub problem: KeyError,
+}
+
 /// What went wrong between a hostname and a shell.
 #[derive(Debug, thiserror::Error)]
 pub enum DialError {
     /// Every credential was offered and the server took none of them.
     ///
     /// Carries what the server said it would still accept, so a consumer can
-    /// tell a person "this host wants a key" rather than "login failed".
+    /// tell a person "this host wants a key" rather than "login failed" —
+    /// and the keys that were never offered, because "your key was not used,
+    /// and here is why" is often the whole story.
     #[error("authentication failed; the server still wants: {}", .remaining.join(", "))]
-    Refused { remaining: Vec<String> },
+    Refused { remaining: Vec<String>, skipped: Vec<SkippedKey> },
+
+    /// No credential could be used: every one given was a key that could not
+    /// be read, or a key's passphrase was wrong every time it was asked for.
+    /// The server was not refused anything; this side had nothing to offer.
+    #[error("no credential could be used")]
+    Unusable { skipped: Vec<SkippedKey> },
 
     /// Credentials ran out while the server was still asking for factors.
     /// Different from [`Self::Refused`]: what was offered was *accepted*.
@@ -75,12 +104,6 @@ pub enum DialError {
 /// A builder because the required parts (where, who) and the tuning (what
 /// `$TERM` claims, how much scrollback) have very different lifetimes in a
 /// consumer's code.
-/// One authenticated hop in front of the destination.
-///
-/// A `ProxyJump` chain is these, first to last: each is logged into before
-/// the next channel is opened. Credentials stay here, with the hop they
-/// belong to, so a password typed for the destination is never offered to a
-/// bastion.
 pub struct Jump {
     pub endpoint: Endpoint,
     pub user: String,
@@ -106,6 +129,7 @@ pub struct Dial {
     size: ScreenSize,
     options: Options,
     jumps: Vec<Jump>,
+    history: Option<crate::history::HistoryArchive>,
 }
 
 impl Dial {
@@ -126,14 +150,11 @@ impl Dial {
             term: "xterm-256color".to_owned(),
             size: ScreenSize::new(80, 24),
             options: Options::default(),
+            history: None,
             jumps: Vec::new(),
         }
     }
 
-    /// Reach the destination through these hops, first to last.
-    ///
-    /// An empty list dials directly. Each hop is a separate login: its own
-    /// host key, its own credentials, then a forwarded channel to the next.
     pub fn through(mut self, jumps: Vec<Jump>) -> Self {
         self.jumps = jumps;
         self
@@ -160,6 +181,11 @@ impl Dial {
         self
     }
 
+    pub fn history(mut self, history: Option<crate::history::HistoryArchive>) -> Self {
+        self.history = history;
+        self
+    }
+
     pub fn options(mut self, options: Options) -> Self {
         self.options = options;
         self
@@ -174,14 +200,27 @@ impl Dial {
     pub async fn connect(self, credentials: Vec<Credential>) -> Result<TerminalSession, DialError> {
         let size = self.size;
         let options = self.options;
+        let history = self.history.clone();
         let term = self.term.clone();
         let connection = self.authenticate(credentials).await?;
         let shell =
             connection.shell(&term, WindowSize::new(size.columns as u32, size.rows as u32)).await?;
-        Ok(TerminalSession::start_with(shell, size, options, crate::Connection::Remote(connection)))
+        Ok(TerminalSession::start_with(
+            shell,
+            size,
+            options,
+            crate::Connection::Remote(connection),
+            None,
+            None,
+            history,
+        ))
     }
 
     /// Authenticate once, then open independent channels on this connection.
+    ///
+    /// Keys are read before anything is dialled. One that cannot be used is
+    /// left out — logged, never printed — and reported with the outcome if
+    /// the login fails; it does not take the credentials after it down too.
     pub async fn authenticate(
         self,
         credentials: Vec<Credential>,
@@ -189,15 +228,18 @@ impl Dial {
         if credentials.is_empty() {
             return Err(DialError::NothingToOffer);
         }
-
-        let mut via: Option<tether_ssh::Session> = None;
+        let (offers, skipped) = prepare(credentials);
+        if offers.is_empty() {
+            return Err(DialError::Unusable { skipped });
+        }
+        let mut via = None;
         for jump in self.jumps {
-            let endpoint = jump.endpoint.clone();
+            let endpoint = jump.endpoint;
             let connection = match via.take() {
                 Some(previous) => {
                     Connection::connect_through(
                         previous,
-                        endpoint.clone(),
+                        endpoint,
                         Arc::clone(&self.verifier),
                         Arc::clone(&self.config),
                     )
@@ -205,79 +247,98 @@ impl Dial {
                 }
                 None => {
                     Connection::connect(
-                        endpoint.clone(),
+                        endpoint,
                         Arc::clone(&self.verifier),
                         Arc::clone(&self.config),
                     )
                     .await?
                 }
             };
-            via = Some(
-                login(connection, &jump.user, jump.credentials)
-                    .await
-                    .map_err(|error| attribute(&endpoint, error))?,
-            );
+            via = Some(login(connection, &jump.user, jump.credentials).await?);
         }
-
-        let connection = match via.take() {
+        let connection = match via {
             Some(previous) => {
-                Connection::connect_through(
-                    previous,
-                    self.endpoint.clone(),
-                    Arc::clone(&self.verifier),
-                    Arc::clone(&self.config),
-                )
-                .await?
+                Connection::connect_through(previous, self.endpoint, self.verifier, self.config)
+                    .await?
             }
-            None => {
-                Connection::connect(
-                    self.endpoint.clone(),
-                    Arc::clone(&self.verifier),
-                    Arc::clone(&self.config),
-                )
-                .await?
-            }
+            None => Connection::connect(self.endpoint, self.verifier, self.config).await?,
         };
-
-        // The destination's own failure is not attributed to a hop. A person
-        // who typed the wrong password is already looking at that machine.
-        let session = login(connection, &self.user, credentials).await?;
-        Ok(Arc::new(session))
+        Ok(Arc::new(login_prepared(connection, &self.user, offers, skipped).await?))
     }
 }
 
-impl std::fmt::Debug for Dial {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Dial")
-            .field("endpoint", &self.endpoint)
-            .field("user", &self.user)
-            .field("jumps", &self.jumps)
-            .field("term", &self.term)
-            .field("size", &self.size)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The credential loop, apart from how the connection was reached.
 async fn login(
-    mut connection: Connection,
+    connection: Connection,
     user: &str,
     credentials: Vec<Credential>,
 ) -> Result<tether_ssh::Session, DialError> {
     if credentials.is_empty() {
         return Err(DialError::NothingToOffer);
     }
+    let (offers, skipped) = prepare(credentials);
+    if offers.is_empty() {
+        return Err(DialError::Unusable { skipped });
+    }
+    login_prepared(connection, user, offers, skipped).await
+}
 
+async fn login_prepared(
+    mut connection: Connection,
+    user: &str,
+    offers: Vec<Offer>,
+    mut skipped: Vec<SkippedKey>,
+) -> Result<tether_ssh::Session, DialError> {
     let mut refused = Vec::new();
-    let mut offered = credentials.into_iter().peekable();
+    let mut offered = offers.into_iter().peekable();
 
-    loop {
-        let Some(credential) = offered.next() else {
-            return Err(DialError::Refused { remaining: refused });
+    let session = loop {
+        let Some(offer) = offered.next() else {
+            // Out of credentials. Which error depends on how the last
+            // attempt went, and that distinction is the difference
+            // between "your password is wrong" and "now your code".
+            return Err(DialError::Refused { remaining: refused, skipped });
         };
 
-        match attempt(connection, user, credential).await? {
-            Step::Authenticated(session) => return Ok(session),
+        // A key with no readable public half is unlocked before its turn,
+        // while nothing about it has reached the server: a no, or three
+        // wrong passphrases, leave it out and keep the connection for the
+        // credentials after it — as ssh moves on to its next key.
+        let offer = match offer {
+            Offer::Key { position, key, unlock: Some(unlock) } if key.unlocks_first() => {
+                match key.opened(unlock.as_ref()).await {
+                    Ok(open) => Offer::Key { position, key: Box::new(open), unlock: None },
+                    Err(problem) => {
+                        tracing::warn!(position, %problem, "a private key was left out");
+                        let fingerprint = key.description().fingerprint.clone();
+                        skipped.push(SkippedKey { position, fingerprint, problem });
+                        continue;
+                    }
+                }
+            }
+            other => other,
+        };
+
+        let step = match attempt(connection, user, &offer).await {
+            Ok(step) => step,
+            // A key the server accepted and that then could not be
+            // unlocked ends the login — the server is waiting for its
+            // signature, so the connection went with it — and is named
+            // like any other.
+            Err(SshError::Key(problem)) => {
+                if let Offer::Key { position, key, .. } = &offer {
+                    skipped.push(SkippedKey {
+                        position: *position,
+                        fingerprint: key.description().fingerprint.clone(),
+                        problem,
+                    });
+                }
+                return Err(DialError::Unusable { skipped });
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        match step {
+            Step::Authenticated(session) => break session,
             Step::AnotherFactor { remaining, next } => {
                 let remaining = names(&remaining);
                 if offered.peek().is_none() {
@@ -291,32 +352,86 @@ async fn login(
                 connection = retry;
             }
         }
+    };
+
+    Ok(session)
+}
+
+/// A credential that survived being read.
+enum Offer {
+    Password(String),
+    Key { position: usize, key: Box<PrivateKey>, unlock: Option<Arc<dyn KeyUnlocker>> },
+    Interactive(Arc<dyn Prompter>),
+}
+
+/// Reads every key before a connection exists, and sets aside the ones that
+/// cannot be used — including a locked one with nothing to ask for its
+/// passphrase, which would otherwise fail only after the server accepted it.
+fn prepare(credentials: Vec<Credential>) -> (Vec<Offer>, Vec<SkippedKey>) {
+    let mut offers = Vec::new();
+    let mut skipped = Vec::new();
+    for (position, credential) in credentials.into_iter().enumerate() {
+        match credential {
+            Credential::Password(password) => offers.push(Offer::Password(password)),
+            Credential::Interactive(prompter) => offers.push(Offer::Interactive(prompter)),
+            Credential::PrivateKey { pem, passphrase, unlock } => {
+                let read = PrivateKey::parse(&pem, passphrase.as_deref()).and_then(|key| {
+                    if key.needs_passphrase() && unlock.is_none() {
+                        Err(KeyError::Locked)
+                    } else {
+                        Ok(key)
+                    }
+                });
+                match read {
+                    Ok(key) => offers.push(Offer::Key { position, key: Box::new(key), unlock }),
+                    Err(problem) => {
+                        tracing::warn!(position, %problem, "a private key was left out");
+                        let fingerprint = PrivateKey::parse(&pem, None)
+                            .ok()
+                            .and_then(|key| key.description().fingerprint.clone());
+                        skipped.push(SkippedKey { position, fingerprint, problem });
+                    }
+                }
+            }
+        }
+    }
+    (offers, skipped)
+}
+
+impl std::fmt::Debug for Dial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dial")
+            .field("endpoint", &self.endpoint)
+            .field("user", &self.user)
+            .field("term", &self.term)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
     }
 }
 
-/// A hop's failure has to name the hop. "Authentication failed" on its own
-/// sends a person to the machine they meant to reach, which accepted nothing
-/// because it was never contacted.
-fn attribute(endpoint: &Endpoint, error: DialError) -> DialError {
-    match error {
-        DialError::Ssh(inner) => DialError::Ssh(inner),
-        other => {
-            DialError::Ssh(tether_ssh::SshError::Protocol { cause: format!("{endpoint}: {other}") })
+async fn attempt(connection: Connection, user: &str, offer: &Offer) -> Result<Step, SshError> {
+    match offer {
+        Offer::Password(password) => connection.password(user, password).await,
+        Offer::Key { key, unlock, .. } => {
+            connection.private_key(user, key, unlock.as_deref()).await
         }
-    }
-}
-
-async fn attempt(
-    connection: Connection,
-    user: &str,
-    credential: Credential,
-) -> Result<Step, SshError> {
-    match credential {
-        Credential::Password(password) => connection.password(user, &password).await,
-        Credential::PrivateKey { pem, passphrase } => {
-            connection.private_key(user, &pem, passphrase.as_deref()).await
+        Offer::Interactive(prompter) => {
+            // A wrong code ends this round and leaves keyboard-interactive
+            // available. Ask again on the same connection instead of
+            // reporting the login as failed.
+            let mut connection = connection;
+            for _ in 0..4 {
+                match connection.interactive(user, prompter.as_ref()).await? {
+                    Step::Rejected { remaining, retry }
+                        if remaining.iter().any(|method| method.0 == "keyboard-interactive") =>
+                    {
+                        connection = retry;
+                    }
+                    other => return Ok(other),
+                }
+            }
+            connection.interactive(user, prompter.as_ref()).await
         }
-        Credential::Interactive(prompter) => connection.interactive(user, prompter.as_ref()).await,
     }
 }
 

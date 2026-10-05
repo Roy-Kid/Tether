@@ -20,7 +20,10 @@ import TetherFFIBindings
 // line of consumer code.
 
 public typealias ScreenFrame = TetherFFIBindings.ScreenFrame
+public typealias MouseTracking = TetherFFIBindings.MouseTracking
 public typealias ScreenRow = TetherFFIBindings.ScreenRow
+public typealias FrameUpdate = TetherFFIBindings.FrameUpdate
+public typealias UpdatedRow = TetherFFIBindings.UpdatedRow
 public typealias StyledRun = TetherFFIBindings.StyledRun
 public typealias CellStyle = TetherFFIBindings.CellStyle
 public typealias CellColor = TetherFFIBindings.CellColor
@@ -62,6 +65,16 @@ public struct KeyModifiers: Sendable, Equatable {
   public static let none = KeyModifiers()
 }
 
+/// A mouse button. `none` is a move with nothing held down.
+public enum PointerButton: Sendable, Equatable {
+  case left, middle, right, none, wheelUp, wheelDown
+}
+
+/// Press, release, or a move.
+public enum PointerPhase: Sendable, Equatable {
+  case press, release, move
+}
+
 /// Something the person did.
 public enum TerminalInput: Sendable, Equatable {
   case key(Key, KeyModifiers = .none)
@@ -69,6 +82,13 @@ public enum TerminalInput: Sendable, Equatable {
   /// paste from ending its own bracket — happens in the engine, where the
   /// mode that decides it lives.
   case paste(String)
+  /// A pointer event in cells of the visible grid, from the top left.
+  ///
+  /// The engine writes it in the protocol the far side asked for, and writes
+  /// nothing when that program has not asked. Column and row are zero-based.
+  case pointer(
+    button: PointerButton, phase: PointerPhase, column: UInt16, row: UInt16,
+    modifiers: KeyModifiers = .none)
 }
 
 // MARK: - Colours
@@ -136,10 +156,6 @@ public struct HostIdentity: Sendable, Equatable {
   /// The `SHA256:…` form a person compares against what their
   /// administrator published.
   public let fingerprint: String
-  /// The `authorized_keys` one-line form, which is what a `known_hosts` file
-  /// holds after the host pattern. A verifier that stores keys rather than
-  /// fingerprints needs this.
-  public let encoded: [UInt8]
 
   /// Public because a consumer has to be able to make one.
   ///
@@ -148,14 +164,11 @@ public struct HostIdentity: Sendable, Equatable {
   /// for — "a key that changed must be refused" is not something to find out
   /// in production. A memberwise initialiser is internal by default, which
   /// would leave every consumer unable to exercise its own trust policy.
-  public init(
-    host: String, port: UInt16, algorithm: String, fingerprint: String, encoded: [UInt8] = []
-  ) {
+  public init(host: String, port: UInt16, algorithm: String, fingerprint: String) {
     self.host = host
     self.port = port
     self.algorithm = algorithm
     self.fingerprint = fingerprint
-    self.encoded = encoded
   }
 }
 
@@ -168,32 +181,70 @@ public protocol HostTrust: Sendable {
   func trusts(_ host: HostIdentity) async -> Bool
 }
 
+/// A private key that needs its passphrase, as a person is shown it.
+public struct LockedKey: Sendable, Equatable {
+  /// The `SHA256:…` form `ssh-keygen -l` prints. `nil` for the formats that
+  /// keep even the public half behind the passphrase.
+  public let fingerprint: String?
+  /// The key's own comment, often `user@host`. Empty when the format
+  /// encrypts it along with the key.
+  public let comment: String
+
+  public init(fingerprint: String?, comment: String) {
+    self.fingerprint = fingerprint
+    self.comment = comment
+  }
+}
+
+/// Supplies a private key's passphrase, when and only when a login needs it.
+///
+/// Asked from the middle of a handshake. Where the key's format allows, the
+/// server has already said it would take this key — a person is never asked
+/// to unlock a key that was not going to be used.
+public protocol KeyUnlocker: Sendable {
+  /// `attempt` counts from 1; a second call means the first passphrase was
+  /// wrong. `nil` is the person's no, which ends the login as a decline.
+  func passphrase(for key: LockedKey, attempt: Int) async -> String?
+}
+
 /// Something to authenticate with. Offered in the order given, which is how
 /// "a key, then a one-time code" is expressed: two credentials, one login.
 public enum Credential: Sendable {
   case password(String)
   /// PEM text, so a key in a keychain item never has to reach the disk.
-  case privateKey(pem: String, passphrase: String? = nil)
+  ///
+  /// A key protected by a passphrase is unlocked with `passphrase` if one is
+  /// given, and otherwise by asking `unlock`. With neither it is left out,
+  /// and named in the error if the login then fails — as is a key that
+  /// cannot be read at all, which no longer costs the credentials after it.
+  case privateKey(pem: String, passphrase: String? = nil, unlock: (any KeyUnlocker)? = nil)
   case interactive(any AuthPrompter)
 }
 
-/// One hop in front of a destination. Its credentials are not the
-/// destination's: a password typed for the far machine is not offered here.
+/// Lines of history a new session keeps when the caller does not say.
+///
+/// Ten thousand lines is cheap on a Mac. On a phone, a handful of tabs at
+/// that size is enough to be jetsam-killed. Two thousand is the cap a tmux
+/// pane already uses.
+public let defaultScrollbackLines: UInt32 = {
+  #if os(iOS)
+    2_000
+  #else
+    10_000
+  #endif
+}()
+
+/// Where to connect and as whom.
 public struct Jump: Sendable {
   public var host: String
   public var port: UInt16
   public var user: String
   public var credentials: [Credential]
-
   public init(host: String, port: UInt16 = 22, user: String, credentials: [Credential]) {
-    self.host = host
-    self.port = port
-    self.user = user
-    self.credentials = credentials
+    self.host = host; self.port = port; self.user = user; self.credentials = credentials
   }
 }
 
-/// Where to connect and as whom.
 public struct Destination: Sendable {
   public var host: String
   public var port: UInt16
@@ -205,6 +256,7 @@ public struct Destination: Sendable {
   public var columns: UInt16
   public var rows: UInt16
   public var scrollbackLines: UInt32
+  public var history: SessionHistory?
 
   public init(
     host: String,
@@ -213,7 +265,8 @@ public struct Destination: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) {
     self.host = host
     self.port = port
@@ -222,6 +275,7 @@ public struct Destination: Sendable {
     self.columns = columns
     self.rows = rows
     self.scrollbackLines = scrollbackLines
+    self.history = history
   }
 }
 
@@ -243,19 +297,25 @@ public struct LocalShell: Sendable {
   public var columns: UInt16
   public var rows: UInt16
   public var scrollbackLines: UInt32
+  public var history: SessionHistory?
+  public var shell: String?
 
   public init(
     directory: String? = nil,
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil,
+    shell: String? = nil
   ) {
+    self.shell = shell
     self.directory = directory
     self.term = term
     self.columns = columns
     self.rows = rows
     self.scrollbackLines = scrollbackLines
+    self.history = history
   }
 }
 
@@ -283,6 +343,9 @@ public final class TerminalSession: Sendable {
     self.inner = inner
   }
 
+  /// Local PTY name, used to identify tmux clients opened in this shell.
+  public var terminalName: String? { inner.terminalName() }
+
   /// Connects, authenticates and opens a shell.
   public static func connect(
     to destination: Destination,
@@ -302,10 +365,10 @@ public final class TerminalSession: Sendable {
             term: destination.term,
             columns: destination.columns,
             rows: destination.rows,
-            scrollbackLines: destination.scrollbackLines),
+            scrollbackLines: destination.scrollbackLines, history: destination.history?.inner),
           trust: HostTrustBridge(trust),
           secrets: credentials.map(secret),
-          jumps: jumps.map(ffiJump),
+          jumps: jumps.map { TetherFFIBindings.Jump(host: $0.host, port: $0.port, user: $0.user, secrets: $0.credentials.map(secret)) },
           cancellation: token)
       }
       if Task.isCancelled {
@@ -332,7 +395,7 @@ public final class TerminalSession: Sendable {
           term: shell.term,
           columns: shell.columns,
           rows: shell.rows,
-          scrollbackLines: shell.scrollbackLines))
+          scrollbackLines: shell.scrollbackLines, shell: shell.shell, history: shell.history?.inner))
     }
     return TerminalSession(session)
   }
@@ -366,7 +429,8 @@ public final class TerminalSession: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) async throws -> TerminalSession {
     let token = TetherFFIBindings.CancellationToken()
     return try await withTaskCancellationHandler {
@@ -379,7 +443,7 @@ public final class TerminalSession: Sendable {
             term: term,
             columns: columns,
             rows: rows,
-            scrollbackLines: scrollbackLines),
+            scrollbackLines: scrollbackLines, shell: nil, history: history?.inner),
           cancellation: token)
       }
       if Task.isCancelled {
@@ -431,14 +495,49 @@ public final class TerminalSession: Sendable {
     inner.linkAt(row: row, column: column)
   }
 
-  /// The directory the shell last reported (`OSC 7`), if it reports one.
+  /// The shell's current directory, preferring its OSC 7 report and falling
+  /// back to the local shell process when no report is available.
   public var workingDirectory: String? {
-    inner.workingDirectory()
+    inner.workingDirectory() ?? inner.currentDirectory()
   }
 
   /// Everything needed to draw the screen once.
   public func frame() -> ScreenFrame {
     inner.frame()
+  }
+
+  /// What changed since the last call. Unchanged rows are absent.
+  public func update() -> FrameUpdate {
+    inner.update()
+  }
+
+  /// Commit the screen before the owning tab closes or the app backgrounds.
+  public func checkpointHistory() { inner.checkpointHistory() }
+  public var historyError: String? { inner.historyError() }
+
+  /// Text a remote program asked to place on the local clipboard since the
+  /// last call (`OSC 52`).
+  ///
+  /// `nil` when it asked for nothing. The caller writes it to this machine's
+  /// pasteboard. A request to read the clipboard is refused and does not
+  /// appear here.
+  public func takeClipboard() -> String? {
+    inner.takeClipboard()
+  }
+
+  /// Drops scrollback above `keep` lines and does not grow it back.
+  public func releaseHistory(keep: UInt32) {
+    inner.releaseHistory(keep: keep)
+  }
+
+  /// Stops reading the far side until `resume`. Closing still ends the session.
+  public func pause() {
+    inner.pause()
+  }
+
+  /// Reads the far side again. Output that arrived while paused is delivered then.
+  public func resume() {
+    inner.resume()
   }
 
   /// Waits until the screen changed, returning `false` once the session has
@@ -501,22 +600,28 @@ public final class TerminalSession: Sendable {
 
 // MARK: - The seam
 
-private func ffiJump(_ jump: Jump) -> TetherFFIBindings.Jump {
-  TetherFFIBindings.Jump(
-    host: jump.host,
-    port: jump.port,
-    user: jump.user,
-    secrets: jump.credentials.map(secret))
-}
-
 private func secret(_ credential: Credential) -> TetherFFIBindings.Secret {
   switch credential {
   case .password(let password):
     .password(password: password)
-  case .privateKey(let pem, let passphrase):
-    .privateKey(pem: pem, passphrase: passphrase)
+  case .privateKey(let pem, let passphrase, let unlock):
+    .privateKey(pem: pem, passphrase: passphrase, unlock: unlock.map(UnlockBridge.init))
   case .interactive(let prompter):
     .interactive(prompter: PrompterBridge(prompter))
+  }
+}
+
+/// Bridges a consumer's `KeyUnlocker` onto the generated callback
+/// interface, so a generated type never appears in a signature a consumer
+/// writes.
+final class UnlockBridge: TetherFFIBindings.PassphrasePrompter {
+  private let inner: any KeyUnlocker
+
+  init(_ inner: any KeyUnlocker) { self.inner = inner }
+
+  func passphrase(key: TetherFFIBindings.LockedKey, attempt: UInt32) async -> String? {
+    await inner.passphrase(
+      for: LockedKey(fingerprint: key.fingerprint, comment: key.comment), attempt: Int(attempt))
   }
 }
 
@@ -559,6 +664,26 @@ func bridged(_ input: TerminalInput) -> TetherFFIBindings.TerminalInput {
       key: press,
       modifiers: TetherFFIBindings.KeyModifiers(
         shift: modifiers.shift, alt: modifiers.alt, control: modifiers.control))
+  case .pointer(let button, let phase, let column, let row, let modifiers):
+    let named: TetherFFIBindings.PointerButton =
+      switch button {
+      case .left: .left
+      case .middle: .middle
+      case .right: .right
+      case .none: .none
+      case .wheelUp: .wheelUp
+      case .wheelDown: .wheelDown
+      }
+    let where_: TetherFFIBindings.PointerPhase =
+      switch phase {
+      case .press: .press
+      case .release: .release
+      case .move: .move
+      }
+    return .pointer(
+      button: named, phase: where_, column: column, row: row,
+      modifiers: TetherFFIBindings.KeyModifiers(
+        shift: modifiers.shift, alt: modifiers.alt, control: modifiers.control))
   }
 }
 
@@ -574,7 +699,6 @@ private final class HostTrustBridge: TetherFFIBindings.HostTrust {
         host: host.host,
         port: host.port,
         algorithm: host.algorithm,
-        fingerprint: host.fingerprint,
-        encoded: host.encoded))
+        fingerprint: host.fingerprint))
   }
 }

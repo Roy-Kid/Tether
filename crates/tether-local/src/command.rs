@@ -149,7 +149,7 @@ fn resolve_program(program: String) -> String {
         if on_path(&with_exe) {
             return with_exe;
         }
-        return login_shell_path();
+        login_shell_path()
     }
     #[cfg(not(windows))]
     {
@@ -172,7 +172,7 @@ fn resolve_program(program: String) -> String {
 /// Windows: `pwsh` first (PowerShell 7, what a person who installed it
 /// wants), then Windows PowerShell, then `cmd` via `COMSPEC`. Every other
 /// terminal on this machine picks the same way.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 fn login_shell_path() -> String {
     if let Ok(shell) = std::env::var("SHELL")
         && !shell.is_empty()
@@ -246,4 +246,9 @@ mod tests {
         assert_eq!(Command::login_shell().parts().3, "xterm-256color");
         assert_eq!(Command::new("sh").term("dumb").parts().3, "dumb");
     }
+}
+
+#[cfg(target_os = "ios")]
+fn login_shell_path() -> String {
+    "/bin/sh".into()
 }

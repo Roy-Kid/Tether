@@ -82,7 +82,10 @@ public sealed record ScreenFrame(
     uint ViewportOffset,
     uint HistoryLines,
     string Title,
-    ScreenRow[] Lines);
+    ScreenRow[] Lines)
+{
+    public MouseTracking Mouse { get; init; }
+}
 
 /// <summary>Modifier keys. No "command": Apple's Option maps to Alt.</summary>
 public sealed record KeyModifiers(bool Shift = false, bool Alt = false, bool Control = false);
@@ -119,7 +122,12 @@ public abstract record TerminalInput
     /// <param name="Press">The key. Named <c>Press</c>, not <c>Key</c>, because the nested type is already <c>Key</c>.</param>
     public sealed record Key(KeyPress Press, KeyModifiers Modifiers) : TerminalInput;
     public sealed record Paste(string Text) : TerminalInput;
+    public sealed record Pointer(PointerButton Button, PointerPhase Phase, ushort Column, ushort Row, KeyModifiers Modifiers) : TerminalInput;
 }
+
+public enum MouseTracking { Off, Clicks, Drag, Any }
+public enum PointerButton { Left, Middle, Right, None, WheelUp, WheelDown }
+public enum PointerPhase { Press, Release, Move }
 
 public enum ScrollToKind { Lines, PageUp, PageDown, Oldest, Live }
 
@@ -153,7 +161,8 @@ public sealed record Destination(
     string Term = "xterm-256color",
     ushort Columns = 80,
     ushort Rows = 24,
-    uint ScrollbackLines = 10_000);
+    uint ScrollbackLines = 10_000,
+    SessionHistory? History = null);
 
 /// <summary>What the server presented as its identity.</summary>
 /// <param name="Fingerprint">The <c>SHA256:…</c> form a person compares against what their administrator published.</param>
@@ -201,7 +210,7 @@ public interface IAuthPrompter
 public abstract record Secret
 {
     public sealed record Password(string Value) : Secret;
-    public sealed record PrivateKey(string Pem, string? Passphrase = null) : Secret;
+    public sealed record PrivateKey(string Pem, string? Passphrase = null, IPassphrasePrompter? Unlock = null) : Secret;
     public sealed record Interactive(IAuthPrompter Prompter) : Secret;
 }
 
@@ -311,10 +320,12 @@ public abstract class TetherException : Exception
 
     public sealed class AuthenticationFailed : TetherException
     {
-        public AuthenticationFailed(IReadOnlyList<string> remaining)
-            : base("authentication failed; still accepted: " + string.Join(", ", remaining))
-            => Remaining = remaining;
+        public AuthenticationFailed(IReadOnlyList<string> remaining, IReadOnlyList<SkippedKey>? skipped = null)
+            : base("authentication failed; still accepted: " + string.Join(", ", remaining) +
+                (skipped is { Count: > 0 } ? "; " + string.Join("; ", skipped.Select(k => k.Reason)) : ""))
+        { Remaining = remaining; Skipped = skipped ?? []; }
         public IReadOnlyList<string> Remaining { get; }
+        public IReadOnlyList<SkippedKey> Skipped { get; }
     }
 
     public sealed class MoreFactorsNeeded : TetherException
@@ -359,3 +370,8 @@ public abstract class TetherException : Exception
         public string Cause { get; }
     }
 }
+
+public sealed record TmuxWindow(uint Id, uint Index, string Name, bool Active, uint Panes);
+public sealed record TmuxSessionInfo(string Id, string Name, bool Attached, IReadOnlyList<TmuxWindow> Windows);
+
+public sealed record SkippedKey(uint Position, string? Fingerprint, string Reason);

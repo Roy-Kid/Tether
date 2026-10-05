@@ -22,6 +22,7 @@
     </DataTemplate></ListView.ItemTemplate>
     <ListView.ContextFlyout><MenuFlyout>
      <MenuFlyoutItem Text="Open" Click="Open_Click"/>
+     <MenuFlyoutItem Text="Preview" Click="Preview_Click"/>
      <MenuFlyoutItem Text="Save As…" Click="Download_Click"/>
      <MenuFlyoutItem Text="Copy Path" Click="CopyPath_Click"/>
      <MenuFlyoutItem Text="Insert Path" Click="InsertPath_Click"/>

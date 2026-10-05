@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use tether_render::{prepare, Caret, FontMetrics, Frame, Name, Paint, Palette, Row, Run, RunStyle};
+use tether_render::{Caret, FontMetrics, Frame, Name, Paint, Palette, Row, Run, RunStyle, prepare};
 
 /// Half a cell is the point at which the cursor visibly straddles two
 /// characters; the drawing ceiling is orders of magnitude coarser than that.
@@ -21,7 +21,7 @@ fn metrics() -> FontMetrics {
 fn style(index: u8) -> RunStyle {
     RunStyle {
         foreground: Paint::Indexed(index),
-        background: if index % 5 == 0 {
+        background: if index.is_multiple_of(5) {
             Paint::Named(Name::Background)
         } else {
             Paint::Indexed(16 + (index % 36))
@@ -32,7 +32,8 @@ fn style(index: u8) -> RunStyle {
 
 /// One run per row.
 fn prose(columns: u32, rows: u32) -> Frame {
-    let text: String = "lorem ipsum dolor sit amet ".repeat(20).chars().take(columns as usize).collect();
+    let text: String =
+        "lorem ipsum dolor sit amet ".repeat(20).chars().take(columns as usize).collect();
     Frame {
         columns,
         rows,
@@ -46,11 +47,7 @@ fn prose(columns: u32, rows: u32) -> Frame {
         title: String::new(),
         lines: (0..rows)
             .map(|_| Row {
-                runs: vec![Run {
-                    text: text.clone(),
-                    columns,
-                    style: RunStyle::default(),
-                }],
+                runs: vec![Run { text: text.clone(), columns, style: RunStyle::default() }],
             })
             .collect(),
     }

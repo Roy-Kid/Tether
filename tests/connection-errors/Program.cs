@@ -17,7 +17,13 @@ var lift = typeof(TerminalSession).GetMethod("LiftError", BindingFlags.NonPublic
 foreach (var variant in new[] { "AuthenticationFailed", "MoreFactorsNeeded" })
 {
     var type = assembly.GetType("uniffi.tether_ffi.TetherException+" + variant)!;
-    var generated = Activator.CreateInstance(type, new object[] { new[] { "publickey", "keyboard-interactive" } })!;
+    var arguments = new List<object> { new[] { "publickey", "keyboard-interactive" } };
+    if (variant == "AuthenticationFailed")
+    {
+        var skipped = assembly.GetType("uniffi.tether_ffi.SkippedKey")!;
+        arguments.Add(Array.CreateInstance(skipped, 0));
+    }
+    var generated = Activator.CreateInstance(type, arguments.ToArray())!;
     var error = (TetherException)lift.Invoke(null, new[] { generated })!;
     if (error.GetType().Name != variant || !error.Message.Contains("publickey, keyboard-interactive")
         || error.Message.Contains("System.String[]"))

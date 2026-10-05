@@ -13,6 +13,7 @@
     <ColumnDefinition Width="*" />
     <ColumnDefinition x:Name="CaptionRightInset" Width="0" />
    </Grid.ColumnDefinitions>
+  <Border x:Name="HiddenTitleBarDragArea" Grid.Column="1" Background="Transparent" Visibility="Collapsed" />
   <!-- Only the empty footer is draggable; tabs remain native interactive controls. -->
   <TabView x:Name="TabStrip" Grid.Column="1" VerticalAlignment="Bottom" TabWidthMode="SizeToContent"
    IsAddTabButtonVisible="True" AddTabButtonClick="Tab_AddRequested" CanDragTabs="False" CanReorderTabs="False"
@@ -29,15 +30,19 @@
   </TabView>
   </Grid>
   <Grid Grid.Row="1">
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <Grid x:Name="TerminalHostPlaceholder" Background="{StaticResource TerminalCanvasBrush}"
+   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <StackPanel x:Name="VerticalTabs" Grid.Column="0" Width="180" Visibility="Collapsed" Background="{ThemeResource ChromeSidebarBrush}">
+    <ListView x:Name="VerticalTabList" SelectionChanged="VerticalTabs_SelectionChanged" AutomationProperties.Name="Terminal tabs" />
+    <Button Content="&#xE710;" FontFamily="Segoe Fluent Icons" Click="VerticalAdd_Click" ToolTipService.ToolTip="New Terminal" AutomationProperties.Name="New Terminal" />
+   </StackPanel>
+   <Grid x:Name="TerminalHostPlaceholder" Grid.Column="1" Background="{StaticResource TerminalCanvasBrush}"
     Padding="{StaticResource TerminalInset}" />
-   <Border x:Name="InspectorHost" Grid.Column="1" Width="{StaticResource FilesPaneWidth}" Visibility="Collapsed"
+   <Border x:Name="InspectorHost" Grid.Column="2" Width="{StaticResource FilesPaneWidth}" Visibility="Collapsed"
     BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="1,0,0,0"/>
-   <Thumb Grid.Column="1" Width="4" HorizontalAlignment="Left" Background="Transparent"
+   <Thumb Grid.Column="2" Width="4" HorizontalAlignment="Left" Background="Transparent"
     Visibility="{Binding Visibility, ElementName=InspectorHost}" DragDelta="InspectorResize_DragDelta" AutomationProperties.Name="Resize inspector"/>
   </Grid>
-  <Border Grid.Row="2" Background="{ThemeResource ChromeSidebarBrush}"
+  <Border x:Name="StatusBar" Grid.Row="2" Background="{ThemeResource ChromeSidebarBrush}"
    BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="0,1,0,0">
    <Grid Padding="{StaticResource ChromeHorizontalInset}">
     <Grid.ColumnDefinitions>

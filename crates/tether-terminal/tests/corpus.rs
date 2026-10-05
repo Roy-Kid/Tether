@@ -51,7 +51,7 @@ fn terminal() -> Terminal {
 fn recording(name: &str) -> Vec<u8> {
     let path = corpus().join(format!("{name}.vt"));
     fs::read(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}. Re-record with `python3 scripts/record-corpus.py`", path.display())
+        panic!("{}: {error}. Re-record with `./scripts/tether.sh --record-corpus`", path.display())
     })
 }
 
@@ -179,6 +179,32 @@ fn damage_alone_is_enough_to_redraw_a_recorded_workload() {
 
             if let Some(disagreement) = mirror.disagreement(&screen) {
                 panic!("{name}: damage was not enough at chunk {index}\n{disagreement}");
+            }
+        }
+    }
+}
+
+#[test]
+fn damage_regressions_preserve_column_alignment() {
+    let directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/regressions/terminal_damage");
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let data = fs::read(&path).unwrap();
+        let (&chunk, stream) = data.split_first().unwrap();
+        let mut term =
+            Terminal::with_options(ScreenSize::new(80, 24), Options { scrollback_lines: 64 });
+        let mut mirror = Mirror::new(&term.screen());
+        for (index, piece) in stream.chunks(usize::from(chunk).max(1)).enumerate() {
+            term.feed(piece);
+            let changes = term.take_changes();
+            let screen = term.screen();
+            for row in screen.rows() {
+                assert_eq!(row.iter().map(|cell| usize::from(cell.width)).sum::<usize>(), 80);
+            }
+            mirror.apply(&changes, &screen);
+            if let Some(disagreement) = mirror.disagreement(&screen) {
+                panic!("{}: chunk {index}\n{disagreement}", path.display());
             }
         }
     }

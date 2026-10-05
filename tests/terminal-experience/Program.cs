@@ -42,6 +42,36 @@ Check(new Selection(new Cell(1, 1), new Cell(3, 0)).Text(frame) == selectedText,
 var fonts = TerminalSurface.FontFamilies();
 Check(fonts.Length > 0 && fonts.Distinct().Count() == fonts.Length, "native installed-font enumeration");
 Check((preferences with { FontFamily = "" }).Validate() is not null, "reject empty font selection");
+Check(WorkspaceCommands.Validate(new Dictionary<string, string>(), preferences) is null, "workspace defaults do not collide with terminal shortcuts");
+Check(WorkspaceCommands.Validate(new Dictionary<string, string> { ["closeTab"] = "Ctrl+Shift+C" }, preferences) is not null, "reject terminal/workspace conflict");
+Check(WorkspaceCommands.Validate(new Dictionary<string, string> { ["closeTab"] = "" }, preferences) is null, "allow unassigned shortcut");
+Check(Shortcut.TryParse("Ctrl+PageUp", out var previous) && previous.Key == VirtualKey.PageUp, "named shortcut keys");
+var ttyTable = "banner\nTETHER-TTY 20\n1 0 ?\n10 1 ?\n11 10 pts/3\n20 10 ?\n21 20 pts/9\nTETHER-TTY-END\n";
+Check(ProcessTable.TtyCandidates(ttyTable).SequenceEqual(new[] { "/dev/pts/3" }), "tty lookup excludes its own command descendants");
+Check(ProcessTable.TtyCandidates("banner only").Count == 0, "no tty guess from unframed output");
+Check(!ProcessTable.IsDevice("/dev/pts/3;touch /tmp/bad"), "untrusted tty cannot become shell text");
+Check(ProcessTable.CloseNote("TETHER-PROCESSES\n10 1 pts/3 S bash\nTETHER-PROCESSES-END", "/dev/pts/3") is null, "idle root shell closes quietly");
+Check(ProcessTable.CloseNote("TETHER-PROCESSES\n10 1 pts/3 S bash\n11 10 ? S sleep\nTETHER-PROCESSES-END", "/dev/pts/3") == "Running: sleep", "background descendants require confirmation");
+Check(ProcessTable.CloseNote("TETHER-PROCESSES\nbroken\nTETHER-PROCESSES-END", "/dev/pts/3") is not null, "incomplete process table cannot prove idle");
+var temporary = Path.Combine(Path.GetTempPath(), "tether-history-test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var store = new SessionHistoryStore(temporary);
+    Check(store.Load().Count == 0, "new manifest starts empty");
+    var open = new ClosedTerminal(Guid.NewGuid(), "Shell", "cmd", null, null, null, 0, null);
+    var closed = Enumerable.Range(0, 25).Select(i => open with { Id = Guid.NewGuid(), Title = "Tab " + i }).ToArray();
+    store.Save([open], closed);
+    var saved = File.ReadAllText(Path.Combine(temporary, "tabs.json"));
+    Check(!saved.Contains("Password") && !saved.Contains("PrivateKey"), "manifest contains no credential fields");
+    var recovered = new SessionHistoryStore(temporary).Load();
+    Check(recovered.Count == 20 && recovered[^1].Id == open.Id, "relaunch recovers open tabs and retains latest twenty");
+    File.WriteAllText(Path.Combine(temporary, "tabs.json"), "broken");
+    var damaged = new SessionHistoryStore(temporary);
+    Check(damaged.Load().Count == 0 && damaged.Problem is not null, "corruption is reported");
+    damaged.Save([], []);
+    Check(File.ReadAllText(Path.Combine(temporary, "tabs.json")) == "broken", "corrupt history is preserved");
+}
+finally { if (Directory.Exists(temporary)) Directory.Delete(temporary, true); }
 Console.WriteLine("PASS: shortcuts, paste policy, settings compatibility, Unicode selection and exit states.");
 
 static void Check(bool condition, string message)

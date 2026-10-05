@@ -20,12 +20,14 @@ mod metrics;
 mod palette;
 mod renderer;
 
-pub use draw::{BgRect, Cell, CellSpan, CursorQuad, DrawList, LinkUnderline, Overlay, Rgba, TextRun};
+pub use draw::{
+    BgRect, Cell, CellSpan, CursorQuad, DrawList, LinkUnderline, Overlay, Rgba, TextRun,
+};
 pub use frame::{Caret, Frame, Name, Paint, Row, Run, RunStyle, Underline};
 pub use layout::{prepare, prepare_with_overlay};
 pub use metrics::FontMetrics;
 pub use palette::Palette;
-pub use renderer::{font_families, measure_monospace, RenderError, SurfaceSize, TerminalRenderer};
+pub use renderer::{RenderError, SurfaceSize, TerminalRenderer, font_families, measure_monospace};
 
 /// The byte-stream boundary in executable form, restated for the
 /// presentation layer.

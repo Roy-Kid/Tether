@@ -11,7 +11,9 @@
 //! model, it is the model (spec §14: no UI toolkit types here, and none of
 //! `alacritty_terminal`'s types either).
 
-use tether_core::terminal::{Color, CursorShape, NamedColor, Screen, Style, Underline};
+use tether_core::terminal::{
+    Color, CursorShape, Modes, MouseMotion, NamedColor, Screen, Style, Underline,
+};
 
 /// One of the palette entries a terminal names rather than resolves.
 ///
@@ -103,6 +105,75 @@ pub struct ScreenRow {
     pub runs: Vec<StyledRun>,
 }
 
+/// One row of a partial update, named by its place on the visible screen.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UpdatedRow {
+    pub row: u32,
+    pub line: ScreenRow,
+}
+
+/// What changed since the frontend last drew.
+///
+/// `Full` replaces the screen. `Rows` replaces those lines and the cursor.
+/// `Idle` is a cursor or title change with no new cells.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FrameUpdate {
+    Full {
+        frame: ScreenFrame,
+    },
+    Rows {
+        rows: Vec<UpdatedRow>,
+        cursor_row: u32,
+        cursor_column: u32,
+        cursor_shape: CaretShape,
+        cursor_visible: bool,
+        title: String,
+        viewport_offset: u32,
+        history_lines: u32,
+        mouse: MouseTracking,
+    },
+    Idle {
+        cursor_row: u32,
+        cursor_column: u32,
+        cursor_shape: CaretShape,
+        cursor_visible: bool,
+        title: String,
+        viewport_offset: u32,
+        history_lines: u32,
+        mouse: MouseTracking,
+    },
+}
+
+/// How much of the pointer the far side wants sent back.
+///
+/// `Off` leaves clicks and the wheel to this app: selection and its own
+/// history. Anything else is a program — an editor, a pager, tmux — that
+/// asked to handle the pointer itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, uniffi::Enum)]
+pub enum MouseTracking {
+    #[default]
+    Off,
+    /// Presses, releases and the wheel. No motion.
+    Clicks,
+    /// Motion while a button is held, as well as clicks.
+    Drag,
+    /// Every move, whether or not a button is held.
+    Any,
+}
+
+impl MouseTracking {
+    fn of(modes: Modes) -> Self {
+        if !modes.mouse_reporting {
+            return Self::Off;
+        }
+        match modes.mouse_motion {
+            MouseMotion::None => Self::Clicks,
+            MouseMotion::Drag => Self::Drag,
+            MouseMotion::Any => Self::Any,
+        }
+    }
+}
+
 /// One frame: everything a frontend needs to draw the screen once.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ScreenFrame {
@@ -114,6 +185,9 @@ pub struct ScreenFrame {
     pub cursor_visible: bool,
     /// A full-screen program is running, so scrollback must not be shown.
     pub alternate_screen: bool,
+    /// What to do with the pointer. Read on every event: a program turns
+    /// tracking on without otherwise changing the grid.
+    pub mouse: MouseTracking,
     /// Lines between the bottom of this frame and the live screen. Zero means
     /// new output appears on what is being shown.
     pub viewport_offset: u32,
@@ -139,10 +213,54 @@ impl ScreenFrame {
             cursor_shape: caret(screen.cursor.shape),
             cursor_visible: screen.cursor.visible,
             alternate_screen: screen.modes.alternate_screen,
+            mouse: MouseTracking::of(screen.modes),
             viewport_offset: screen.viewport.offset.min(u32::MAX as usize) as u32,
             history_lines: screen.viewport.history.min(u32::MAX as usize) as u32,
             title,
             lines: screen.rows().map(row_of).collect(),
+        }
+    }
+}
+
+impl FrameUpdate {
+    /// The next frame, copying only the rows the damage named.
+    pub fn from_delta(delta: &tether_core::terminal::FrameDelta) -> Self {
+        let cursor_row = delta.cursor.position.row as u32;
+        let cursor_column = delta.cursor.position.column as u32;
+        let cursor_shape = caret(delta.cursor.shape);
+        let cursor_visible = delta.cursor.visible;
+        let viewport_offset = delta.viewport.offset.min(u32::MAX as usize) as u32;
+        let history_lines = delta.viewport.history.min(u32::MAX as usize) as u32;
+        let mouse = MouseTracking::of(delta.modes);
+        if let Some(screen) = &delta.full {
+            return FrameUpdate::Full { frame: ScreenFrame::of(screen, delta.title.clone()) };
+        }
+        if delta.rows.is_empty() {
+            return FrameUpdate::Idle {
+                cursor_row,
+                cursor_column,
+                cursor_shape,
+                cursor_visible,
+                title: delta.title.clone(),
+                viewport_offset,
+                history_lines,
+                mouse,
+            };
+        }
+        FrameUpdate::Rows {
+            rows: delta
+                .rows
+                .iter()
+                .map(|(row, cells)| UpdatedRow { row: *row as u32, line: row_of(cells) })
+                .collect(),
+            cursor_row,
+            cursor_column,
+            cursor_shape,
+            cursor_visible,
+            title: delta.title.clone(),
+            viewport_offset,
+            history_lines,
+            mouse,
         }
     }
 }

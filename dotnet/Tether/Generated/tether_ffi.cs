@@ -699,6 +699,10 @@ static class _UniFFILib {
         ulong @uniffiHandle,ulong @bytes,IntPtr @uniffiOutReturn,ref UniffiRustCallStatus _uniffi_out_err
     );
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void UniffiCallbackInterfacePassphrasePrompterMethod0(
+        ulong @uniffiHandle,RustBuffer @key,uint @attempt,IntPtr @uniffiFutureCallback,ulong @uniffiCallbackData,IntPtr /*_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*/ @uniffiOutDroppedCallback
+    );
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void UniffiCallbackInterfaceHostTrustMethod0(
         ulong @uniffiHandle,RustBuffer @host,IntPtr @uniffiFutureCallback,ulong @uniffiCallbackData,IntPtr /*_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*/ @uniffiOutDroppedCallback
     );
@@ -717,219 +721,264 @@ static class _UniFFILib {
         public IntPtr @advanced;
     }
     [StructLayout(LayoutKind.Sequential)]
+    public struct UniffiVTableCallbackInterfacePassphrasePrompter
+    {
+        public IntPtr @uniffiFree;
+        public IntPtr @uniffiClone;
+        public IntPtr @passphrase;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     public struct UniffiVTableCallbackInterfaceHostTrust
     {
         public IntPtr @uniffiFree;
         public IntPtr @uniffiClone;
         public IntPtr @trusts;
     }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
         _UniFFILib.uniffiCheckApiChecksums();
-        
+
         UniffiCallbackInterfaceHostTrust.Register();
         UniffiCallbackInterfaceInteractivePrompter.Register();
+        UniffiCallbackInterfacePassphrasePrompter.Register();
         UniffiCallbackInterfaceTransferProgress.Register();
         }
 
@@ -1249,6 +1298,94 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ulong uniffi_tether_ffi_fn_clone_sessionhistory(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_free_sessionhistory(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_constructor_sessionhistory_open(RustBuffer @directory,RustBuffer @lineLimit,sbyte @restoring,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_method_sessionhistory_error(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_clone_passphraseprompter(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_free_passphraseprompter(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_init_callback_vtable_passphraseprompter(IntPtr /*_UniFFILib.UniffiVTableCallbackInterfacePassphrasePrompter*/ @vtable
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_passphraseprompter_passphrase(ulong @ptr,RustBuffer @key,uint @attempt
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ulong uniffi_tether_ffi_fn_clone_rendersurface(ulong @handle,ref UniffiRustCallStatus _uniffi_out_err
     );
 
@@ -1403,6 +1540,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     void uniffi_tether_ffi_fn_method_session_checkpoint_history(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      void uniffi_tether_ffi_fn_method_session_close(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
@@ -1415,6 +1563,17 @@ static class _UniFFILib {
     public static extern
 #endif
      RustBuffer uniffi_tether_ffi_fn_method_session_connection(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_current_directory(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -1447,6 +1606,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_history_error(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      RustBuffer uniffi_tether_ffi_fn_method_session_link_at(ulong @ptr,ushort @row,ushort @column,ref UniffiRustCallStatus _uniffi_out_err
     );
 
@@ -1458,7 +1628,51 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_local_process_id(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_session_pause(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_session_release_history(ulong @ptr,uint @keep,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      void uniffi_tether_ffi_fn_method_session_resize(ulong @ptr,ushort @columns,ushort @rows,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_session_resume(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -1492,6 +1706,39 @@ static class _UniFFILib {
     public static extern
 #endif
      void uniffi_tether_ffi_fn_method_session_set_palette(ulong @ptr,RustBuffer @palette,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_take_clipboard(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_terminal_name(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     RustBuffer uniffi_tether_ffi_fn_method_session_update(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -1568,7 +1815,7 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
-     ulong uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(ulong @ptr,RustBuffer @name,ulong @cancellation
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(ulong @ptr,RustBuffer @name,RustBuffer @directory,ulong @cancellation
     );
 
     #if NET8_0_OR_GREATER
@@ -1601,7 +1848,18 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
-     ulong uniffi_tether_ffi_fn_method_remoteconnection_open_shell(ulong @ptr,RustBuffer @term,ushort @columns,ushort @rows,uint @scrollbackLines,ulong @cancellation
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_execute(ulong @ptr,RustBuffer @command,ulong @cancellation
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_open_shell(ulong @ptr,RustBuffer @term,ushort @columns,ushort @rows,uint @scrollbackLines,RustBuffer @history,ulong @cancellation
     );
 
     #if NET8_0_OR_GREATER
@@ -1624,6 +1882,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ulong uniffi_tether_ffi_fn_method_remoteconnection_tmux_pane_directory(ulong @ptr,uint @paneId
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_tmux_session_for_client(ulong @ptr,RustBuffer @tty
     );
 
     #if NET8_0_OR_GREATER
@@ -1701,6 +1970,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ulong uniffi_tether_ffi_fn_method_tmuxworkspace_perform(ulong @ptr,RustBuffer @action
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_tmuxworkspace_scroll(ulong @ptr,uint @pane,int @lines
     );
 
     #if NET8_0_OR_GREATER
@@ -2745,6 +3025,28 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_sessionhistory_error(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_passphraseprompter_passphrase(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_rendersurface_draw(
     );
 
@@ -2811,6 +3113,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_session_checkpoint_history(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_session_close(
     );
 
@@ -2823,6 +3136,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_method_session_connection(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_current_directory(
     );
 
     #if NET8_0_OR_GREATER
@@ -2855,6 +3179,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_session_history_error(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_session_link_at(
     );
 
@@ -2866,7 +3201,51 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_session_local_process_id(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_pause(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_release_history(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_session_resize(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_resume(
     );
 
     #if NET8_0_OR_GREATER
@@ -2900,6 +3279,39 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_method_session_set_palette(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_take_clipboard(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_terminal_name(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_session_update(
     );
 
     #if NET8_0_OR_GREATER
@@ -2987,6 +3399,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_remoteconnection_execute(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_remoteconnection_open_shell(
     );
 
@@ -3010,6 +3433,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_remoteconnection_tmux_session_for_client(
     );
 
     #if NET8_0_OR_GREATER
@@ -3075,6 +3509,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_tmuxworkspace_scroll(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_tmuxworkspace_send(
     );
 
@@ -3119,6 +3564,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_constructor_sessionhistory_open(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_constructor_rendersurface_from_hwnd(
     );
 
@@ -3133,7 +3589,7 @@ static class _UniFFILib {
      uint ffi_tether_ffi_uniffi_contract_version(
     );
 
-    
+
 
     static void uniffiCheckContractApiVersion() {
         var scaffolding_contract_version = _UniFFILib.ffi_tether_ffi_uniffi_contract_version();
@@ -3204,8 +3660,8 @@ static class _UniFFILib {
         }
         {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_ssh_master_running();
-            if (checksum != 59773) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_ssh_master_running` checksum `59773`, library returned `{checksum}`");
+            if (checksum != 5424) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_ssh_master_running` checksum `5424`, library returned `{checksum}`");
             }
         }
         {
@@ -3311,6 +3767,18 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_sessionhistory_error();
+            if (checksum != 20268) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_sessionhistory_error` checksum `20268`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_passphraseprompter_passphrase();
+            if (checksum != 18568) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_passphraseprompter_passphrase` checksum `18568`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_draw();
             if (checksum != 61329) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_draw` checksum `61329`, library returned `{checksum}`");
@@ -3347,6 +3815,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_checkpoint_history();
+            if (checksum != 22193) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_checkpoint_history` checksum `22193`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_close();
             if (checksum != 5216) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_close` checksum `5216`, library returned `{checksum}`");
@@ -3356,6 +3830,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_connection();
             if (checksum != 52855) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_connection` checksum `52855`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_current_directory();
+            if (checksum != 23350) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_current_directory` checksum `23350`, library returned `{checksum}`");
             }
         }
         {
@@ -3371,15 +3851,45 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_history_error();
+            if (checksum != 46797) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_history_error` checksum `46797`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_link_at();
             if (checksum != 51569) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_link_at` checksum `51569`, library returned `{checksum}`");
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_local_process_id();
+            if (checksum != 59920) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_local_process_id` checksum `59920`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_pause();
+            if (checksum != 21274) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_pause` checksum `21274`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_release_history();
+            if (checksum != 20183) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_release_history` checksum `20183`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_resize();
             if (checksum != 30687) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_resize` checksum `30687`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_resume();
+            if (checksum != 43488) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_resume` checksum `43488`, library returned `{checksum}`");
             }
         }
         {
@@ -3398,6 +3908,24 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_set_palette();
             if (checksum != 52819) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_set_palette` checksum `52819`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_take_clipboard();
+            if (checksum != 25066) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_take_clipboard` checksum `25066`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_terminal_name();
+            if (checksum != 52524) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_terminal_name` checksum `52524`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_session_update();
+            if (checksum != 23205) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_session_update` checksum `23205`, library returned `{checksum}`");
             }
         }
         {
@@ -3426,8 +3954,8 @@ static class _UniFFILib {
         }
         {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux();
-            if (checksum != 10787) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux` checksum `10787`, library returned `{checksum}`");
+            if (checksum != 22605) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_create_tmux` checksum `22605`, library returned `{checksum}`");
             }
         }
         {
@@ -3443,9 +3971,15 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_execute();
+            if (checksum != 50320) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_execute` checksum `50320`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_open_shell();
-            if (checksum != 23719) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_open_shell` checksum `23719`, library returned `{checksum}`");
+            if (checksum != 49043) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_open_shell` checksum `49043`, library returned `{checksum}`");
             }
         }
         {
@@ -3458,6 +3992,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory();
             if (checksum != 23722) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory` checksum `23722`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_tmux_session_for_client();
+            if (checksum != 30684) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_tmux_session_for_client` checksum `30684`, library returned `{checksum}`");
             }
         }
         {
@@ -3491,6 +4031,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_tmuxworkspace_scroll();
+            if (checksum != 31077) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_tmuxworkspace_scroll` checksum `31077`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_tmuxworkspace_send();
             if (checksum != 14490) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_tmuxworkspace_send` checksum `14490`, library returned `{checksum}`");
@@ -3512,6 +4058,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_constructor_cancellationtoken_new();
             if (checksum != 18041) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_constructor_cancellationtoken_new` checksum `18041`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_constructor_sessionhistory_open();
+            if (checksum != 55326) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_constructor_sessionhistory_open` checksum `55326`, library returned `{checksum}`");
             }
         }
         {
@@ -3855,7 +4407,7 @@ internal class CancellationToken : ICancellationToken, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -3869,7 +4421,7 @@ internal class CancellationToken : ICancellationToken, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -3889,7 +4441,7 @@ internal class CancellationToken : ICancellationToken, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -3899,26 +4451,26 @@ internal class CancellationToken : ICancellationToken, IDisposable {
         }
     }
 
-    
+
     public void Cancel() {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_cancellationtoken_cancel(thisPtr,  ref _status)
 ));
     }
-    
-    
-    
+
+
+
     public bool IsCancelled() {
         return CallWithPointer(thisPtr => FfiConverterBoolean.INSTANCE.Lift(
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_cancellationtoken_is_cancelled(thisPtr,  ref _status)
 )));
     }
-    
-    
 
-    
+
+
+
 }
 class FfiConverterTypeCancellationToken: FfiConverter<CancellationToken, ulong> {
     public static FfiConverterTypeCancellationToken INSTANCE = new FfiConverterTypeCancellationToken();
@@ -4010,7 +4562,7 @@ internal class HostTrustImpl : HostTrust, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -4024,7 +4576,7 @@ internal class HostTrustImpl : HostTrust, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -4044,7 +4596,7 @@ internal class HostTrustImpl : HostTrust, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -4054,7 +4606,7 @@ internal class HostTrustImpl : HostTrust, IDisposable {
         }
     }
 
-    
+
     public async Task<bool> Trusts(HostIdentity @host) {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -4073,12 +4625,12 @@ internal class HostTrustImpl : HostTrust, IDisposable {
         (result) => FfiConverterBoolean.INSTANCE.Lift(result),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
     }
-    
 
-    
+
+
 }
 class UniffiCallbackInterfaceHostTrust {
     static void Trusts(ulong @uniffiHandle,RustBuffer @host,IntPtr @uniffiFutureCallback,ulong @uniffiCallbackData,IntPtr /*_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*/ @uniffiOutDroppedCallback) {
@@ -4135,7 +4687,7 @@ class UniffiCallbackInterfaceHostTrust {
                 }
             }
 
-            
+
             var cb = Marshal.GetDelegateForFunctionPointer<_UniFFILib.UniffiForeignFutureCompleteI8>(@uniffiFutureCallback);
             futureHandle.InvokeCallbackOnce(() => {
                 cb(@uniffiCallbackData, ret);
@@ -4229,7 +4781,7 @@ static class UniffiCallbackResponseStatus {
 
 class FfiConverterTypeHostTrust: FfiConverter<HostTrust, ulong> {
     public ConcurrentHandleMap<HostTrust> handleMap = new ConcurrentHandleMap<HostTrust>();
-    
+
     public static FfiConverterTypeHostTrust INSTANCE = new FfiConverterTypeHostTrust();
 
     static FfiConverterTypeHostTrust() {
@@ -4340,7 +4892,7 @@ internal class InteractivePrompterImpl : InteractivePrompter, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -4354,7 +4906,7 @@ internal class InteractivePrompterImpl : InteractivePrompter, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -4374,7 +4926,7 @@ internal class InteractivePrompterImpl : InteractivePrompter, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -4384,7 +4936,7 @@ internal class InteractivePrompterImpl : InteractivePrompter, IDisposable {
         }
     }
 
-    
+
     /// <summary>
     /// Returns one answer per prompt, in order. An empty vector means the
     /// person declined; the caller treats that as cancellation.
@@ -4407,12 +4959,12 @@ internal class InteractivePrompterImpl : InteractivePrompter, IDisposable {
         (result) => FfiConverterSequenceString.INSTANCE.Lift(result),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
     }
-    
 
-    
+
+
 }
 class UniffiCallbackInterfaceInteractivePrompter {
     static void Answer(ulong @uniffiHandle,RustBuffer @instruction,RustBuffer @prompts,IntPtr @uniffiFutureCallback,ulong @uniffiCallbackData,IntPtr /*_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*/ @uniffiOutDroppedCallback) {
@@ -4447,7 +4999,7 @@ class UniffiCallbackInterfaceInteractivePrompter {
             var result =
 
             await uniffiObject.Answer(
-                FfiConverterString.INSTANCE.Lift(@instruction), 
+                FfiConverterString.INSTANCE.Lift(@instruction),
                 FfiConverterSequenceTypeAuthPrompt.INSTANCE.Lift(@prompts))
             #if NET6_0_OR_GREATER
                 .WaitAsync(futureHandle.Cts.Token)
@@ -4470,7 +5022,7 @@ class UniffiCallbackInterfaceInteractivePrompter {
                 }
             }
 
-            
+
             var cb = Marshal.GetDelegateForFunctionPointer<_UniFFILib.UniffiForeignFutureCompleteRustBuffer>(@uniffiFutureCallback);
             futureHandle.InvokeCallbackOnce(() => {
                 cb(@uniffiCallbackData, ret);
@@ -4521,7 +5073,7 @@ class UniffiCallbackInterfaceInteractivePrompter {
 
 class FfiConverterTypeInteractivePrompter: FfiConverter<InteractivePrompter, ulong> {
     public ConcurrentHandleMap<InteractivePrompter> handleMap = new ConcurrentHandleMap<InteractivePrompter>();
-    
+
     public static FfiConverterTypeInteractivePrompter INSTANCE = new FfiConverterTypeInteractivePrompter();
 
     static FfiConverterTypeInteractivePrompter() {
@@ -4567,6 +5119,298 @@ class FfiConverterTypeInteractivePrompter: FfiConverter<InteractivePrompter, ulo
 
 
 
+/// <summary>
+/// Asks the application for a key's passphrase.
+///
+/// Upward, like the prompter: only the application can put a question in
+/// front of a person. Asked only once the server has said it would take the
+/// key, where the format lets the server be asked first.
+/// </summary>
+internal interface PassphrasePrompter {
+    /// <summary>
+    /// `attempt` counts from one; a second call means the first was wrong.
+    /// `None` is the person declining, which ends the login as a decline.
+    /// </summary>
+    Task<string?> Passphrase(LockedKey @key, uint @attempt);
+}
+/// <summary>
+/// Asks the application for a key's passphrase.
+///
+/// Upward, like the prompter: only the application can put a question in
+/// front of a person. Asked only once the server has said it would take the
+/// key, where the format lets the server be asked first.
+/// </summary>
+internal class PassphrasePrompterImpl : PassphrasePrompter, IDisposable {
+    protected ulong pointer;
+    private int _wasDestroyed = 0;
+    private long _callCounter = 1;
+
+    public PassphrasePrompterImpl(ulong pointer) {
+        this.pointer = pointer;
+    }
+
+    ~PassphrasePrompterImpl() {
+        Destroy();
+    }
+
+    protected void FreeRustArcPtr() {
+        _UniffiHelpers.RustCall((ref UniffiRustCallStatus status) => {
+            _UniFFILib.uniffi_tether_ffi_fn_free_passphraseprompter(this.pointer, ref status);
+        });
+    }
+
+    protected ulong CloneRustArcPtr() {
+        return _UniffiHelpers.RustCall((ref UniffiRustCallStatus status) => {
+            return _UniFFILib.uniffi_tether_ffi_fn_clone_passphraseprompter(this.pointer, ref status);
+        });
+    }
+
+    public void Destroy()
+    {
+        // Only allow a single call to this method.
+        if (Interlocked.CompareExchange(ref _wasDestroyed, 1, 0) == 0)
+        {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (Interlocked.Decrement(ref _callCounter) == 0)
+            {
+                FreeRustArcPtr();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        Destroy();
+        GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
+    }
+
+    private void IncrementCallCounter()
+    {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        long count;
+        do
+        {
+            count = Interlocked.Read(ref _callCounter);
+            if (count == 0L) throw new System.ObjectDisposedException(String.Format("'{0}' object has already been destroyed", this.GetType().Name));
+            if (count == long.MaxValue) throw new System.OverflowException(String.Format("'{0}' call counter would overflow", this.GetType().Name));
+
+        } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
+    }
+
+    private void DecrementCallCounter()
+    {
+        // This decrement always matches the increment we performed above.
+        if (Interlocked.Decrement(ref _callCounter) == 0) {
+            FreeRustArcPtr();
+        }
+    }
+
+    internal void CallWithPointer(Action<ulong> action)
+    {
+        IncrementCallCounter();
+        try {
+            action(CloneRustArcPtr());
+        }
+        finally {
+            DecrementCallCounter();
+        }
+    }
+
+    internal T CallWithPointer<T>(Func<ulong, T> func)
+    {
+        IncrementCallCounter();
+        try {
+            return func(CloneRustArcPtr());
+        }
+        finally {
+            DecrementCallCounter();
+        }
+    }
+
+
+    /// <summary>
+    /// `attempt` counts from one; a second call means the first was wrong.
+    /// `None` is the person declining, which ends the login as a decline.
+    /// </summary>
+    public async Task<string?> Passphrase(LockedKey @key, uint @attempt) {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_passphraseprompter_passphrase(thisPtr, FfiConverterTypeLockedKey.INSTANCE.Lower(@key), FfiConverterUInt32.INSTANCE.Lower(@attempt));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_rust_buffer(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_rust_buffer(future),
+        // Lift
+        (result) => FfiConverterOptionalString.INSTANCE.Lift(result),
+        // Error
+        NullCallStatusErrorHandler.INSTANCE
+
+    );
+    }
+
+
+
+}
+class UniffiCallbackInterfacePassphrasePrompter {
+    static void Passphrase(ulong @uniffiHandle,RustBuffer @key,uint @attempt,IntPtr @uniffiFutureCallback,ulong @uniffiCallbackData,IntPtr /*_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*/ @uniffiOutDroppedCallback) {
+        var handle = @uniffiHandle;
+        var futureHandle = new UniffiForeignFutureHandle();
+        var foreignHandle = _UniFFIAsync._foreign_futures_map.Insert(futureHandle);
+        unsafe {
+            (*(_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*)@uniffiOutDroppedCallback).handle = foreignHandle;
+            (*(_UniFFILib.UniffiForeignFutureDroppedCallbackStruct*)@uniffiOutDroppedCallback).free = Marshal.GetFunctionPointerForDelegate(_UniFFIAsync.UniffiForeignFutureDroppedCallbackImpl.callback);
+        }
+        if (!FfiConverterTypePassphrasePrompter.INSTANCE.handleMap.TryGet(handle, out var uniffiObject)) {
+            var ret = new _UniFFILib.UniffiForeignFutureResultRustBuffer();
+            ret.@callStatus = new UniffiRustCallStatus();
+            ret.@callStatus.code = UniffiCallbackResponseStatus.UNEXPECTED_ERROR;
+            try {
+                ret.@callStatus.error_buf = FfiConverterString.INSTANCE.Lower($"No callback in handlemap '{handle}'");
+            } catch { }
+            var earlyCb = Marshal.GetDelegateForFunctionPointer<_UniFFILib.UniffiForeignFutureCompleteRustBuffer>(@uniffiFutureCallback);
+            futureHandle.InvokeCallbackOnce(() => { earlyCb(@uniffiCallbackData, ret); });
+            futureHandle.Dispose();
+            return;
+        }
+
+        // Optimization: skip queuing if already cancelled before Task.Run schedules.
+        // TryInvokeCallback is the definitive cancellation guard inside the task body.
+        Task.Run(async () => {
+            var ret = new _UniFFILib.UniffiForeignFutureResultRustBuffer();
+            ret.@callStatus = new UniffiRustCallStatus();
+
+            try {
+            try {
+            var result =
+
+            await uniffiObject.Passphrase(
+                FfiConverterTypeLockedKey.INSTANCE.Lift(@key),
+                FfiConverterUInt32.INSTANCE.Lift(@attempt))
+            #if NET6_0_OR_GREATER
+                .WaitAsync(futureHandle.Cts.Token)
+            #endif
+                ;
+            ret.@returnValue = FfiConverterOptionalString.INSTANCE.Lower(result);
+
+            ret.@callStatus.code = UniffiCallbackResponseStatus.SUCCESS;
+            } catch (OperationCanceledException) when (futureHandle.Cts.IsCancellationRequested) {
+                ret.@callStatus.code = UniffiCallbackResponseStatus.UNEXPECTED_ERROR;
+                try {
+                    ret.@callStatus.error_buf = FfiConverterString.INSTANCE.Lower("Future cancelled");
+                } catch { }
+            } catch (System.Exception e) {
+                ret.@callStatus.code = UniffiCallbackResponseStatus.UNEXPECTED_ERROR;
+                try {
+                    ret.@callStatus.error_buf = FfiConverterString.INSTANCE.Lower(e.Message);
+                }
+                catch {
+                }
+            }
+
+
+            var cb = Marshal.GetDelegateForFunctionPointer<_UniFFILib.UniffiForeignFutureCompleteRustBuffer>(@uniffiFutureCallback);
+            futureHandle.InvokeCallbackOnce(() => {
+                cb(@uniffiCallbackData, ret);
+            });
+            } finally {
+                futureHandle.Dispose();
+            }
+        }, futureHandle.Cts.Token);
+    }
+
+    static void UniffiFree(ulong @handle) {
+        FfiConverterTypePassphrasePrompter.INSTANCE.handleMap.Remove(@handle);
+    }
+
+    static ulong UniffiClone(ulong @handle) {
+        try {
+            if (!FfiConverterTypePassphrasePrompter.INSTANCE.handleMap.TryGet(@handle, out var obj)) {
+                throw new InternalException($"No callback in handlemap '{@handle}'");
+            }
+            return FfiConverterTypePassphrasePrompter.INSTANCE.handleMap.Insert(obj);
+        } catch (System.Exception) {
+            return 0; // 0 is never a valid handle; ConcurrentHandleMap starts at 1
+        }
+    }
+    static _UniFFILib.UniffiCallbackInterfacePassphrasePrompterMethod0 _m0 = new _UniFFILib.UniffiCallbackInterfacePassphrasePrompterMethod0(Passphrase);
+    static _UniFFILib.UniffiCallbackInterfaceFree _callback_interface_free = new _UniFFILib.UniffiCallbackInterfaceFree(UniffiFree);
+    static _UniFFILib.UniffiCallbackInterfaceClone _callback_interface_clone = new _UniFFILib.UniffiCallbackInterfaceClone(UniffiClone);
+
+    private static GCHandle? _vtablePin;
+
+    public static void Register() {
+        if (_vtablePin.HasValue) return;
+        _UniFFILib.UniffiVTableCallbackInterfacePassphrasePrompter _vtable = new _UniFFILib.UniffiVTableCallbackInterfacePassphrasePrompter {
+            @passphrase = Marshal.GetFunctionPointerForDelegate(_m0),
+            @uniffiFree = Marshal.GetFunctionPointerForDelegate(_callback_interface_free),
+            @uniffiClone = Marshal.GetFunctionPointerForDelegate(_callback_interface_clone),
+        };
+
+        // Pin the vtable so the GC never moves it. The GCHandle is intentionally never freed —
+        // this pin must remain valid for the process lifetime.
+        _vtablePin = GCHandle.Alloc(_vtable, GCHandleType.Pinned);
+        _UniFFILib.uniffi_tether_ffi_fn_init_callback_vtable_passphraseprompter(_vtablePin.Value.AddrOfPinnedObject());
+    }
+}
+
+
+
+
+class FfiConverterTypePassphrasePrompter: FfiConverter<PassphrasePrompter, ulong> {
+    public ConcurrentHandleMap<PassphrasePrompter> handleMap = new ConcurrentHandleMap<PassphrasePrompter>();
+
+    public static FfiConverterTypePassphrasePrompter INSTANCE = new FfiConverterTypePassphrasePrompter();
+
+    static FfiConverterTypePassphrasePrompter() {
+        UniffiCallbackInterfacePassphrasePrompter.Register();
+    }
+
+    public override ulong Lower(PassphrasePrompter value) {
+        if (value is PassphrasePrompterImpl rustObj) {
+            // Rust-implemented object. Clone the handle and return it.
+            return rustObj.CallWithPointer(thisPtr => thisPtr);
+        } else {
+            // C# object, generate a new handle map entry and return it.
+            return handleMap.Insert(value);
+        }
+    }
+
+    public override PassphrasePrompter Lift(ulong value) {
+        if ((value & 1UL) == 0UL) {
+            // Rust-generated handle, construct a new wrapper.
+            return new PassphrasePrompterImpl(value);
+        } else {
+            // C#-generated handle, retrieve and remove from the handle map.
+            if (handleMap.Remove(value, out var obj)) {
+                return obj;
+            } else {
+                throw new InternalException($"No callback in handlemap '{value}'");
+            }
+        }
+    }
+
+    public override PassphrasePrompter Read(BigEndianStream stream) {
+        return Lift(stream.ReadULong());
+    }
+
+    public override int AllocationSize(PassphrasePrompter value) {
+        return 8;
+    }
+
+    public override void Write(PassphrasePrompter value, BigEndianStream stream) {
+        stream.WriteULong(Lower(value));
+    }
+}
+
+
+
 internal interface IRemoteConnection {
     /// <summary>
     /// Starts a file session where this lease's shell is running.
@@ -4579,7 +5423,7 @@ internal interface IRemoteConnection {
     /// <exception cref="TetherException"></exception>
     Task<TmuxWorkspace> AttachTmux(string @sessionId, CancellationToken @cancellation);
     /// <exception cref="TetherException"></exception>
-    Task<TmuxSessionInfo> CreateTmux(string @name, CancellationToken @cancellation);
+    Task<TmuxSessionInfo> CreateTmux(string @name, string? @directory, CancellationToken @cancellation);
     /// <exception cref="TetherException"></exception>
     Task EndTmux(string @sessionId);
     /// <summary>
@@ -4589,11 +5433,17 @@ internal interface IRemoteConnection {
     /// <exception cref="TetherException"></exception>
     Task EndTmuxWindow(uint @windowId);
     /// <summary>
+    /// Executes without creating a terminal or performing another authentication.
+    /// Both output size and duration are bounded at this public boundary.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    Task<CommandOutput> Execute(string @command, CancellationToken @cancellation);
+    /// <summary>
     /// Opens an interactive shell on this lease. No handshake: the connection
     /// is already authenticated, and a second terminal is another channel.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-    Task<Session> OpenShell(string @term, ushort @columns, ushort @rows, uint @scrollbackLines, CancellationToken @cancellation);
+    Task<Session> OpenShell(string @term, ushort @columns, ushort @rows, uint @scrollbackLines, SessionHistory? @history, CancellationToken @cancellation);
     /// <exception cref="TetherException"></exception>
     Task RenameTmux(string @sessionId, string @name);
     /// <summary>
@@ -4603,6 +5453,11 @@ internal interface IRemoteConnection {
     /// </summary>
     /// <exception cref="TetherException"></exception>
     Task<string> TmuxPaneDirectory(uint @paneId);
+    /// <summary>
+    /// Finds the tmux session attached to a particular terminal, if any.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    Task<string?> TmuxSessionForClient(string @tty);
     /// <exception cref="TetherException"></exception>
     Task<TmuxSessionInfo[]> TmuxSessions(CancellationToken @cancellation);
 }
@@ -4650,7 +5505,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -4664,7 +5519,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -4684,7 +5539,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -4694,7 +5549,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         }
     }
 
-    
+
     /// <summary>
     /// Starts a file session where this lease's shell is running.
     ///
@@ -4722,7 +5577,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <exception cref="TetherException"></exception>
     public async Task<TmuxWorkspace> AttachTmux(string @sessionId, CancellationToken @cancellation) {
     return await _UniFFIAsync.UniffiRustCallAsync(
@@ -4744,13 +5599,13 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <exception cref="TetherException"></exception>
-    public async Task<TmuxSessionInfo> CreateTmux(string @name, CancellationToken @cancellation) {
+    public async Task<TmuxSessionInfo> CreateTmux(string @name, string? @directory, CancellationToken @cancellation) {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
         CallWithPointer(thisPtr => {
-            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(thisPtr, FfiConverterString.INSTANCE.Lower(@name), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_create_tmux(thisPtr, FfiConverterString.INSTANCE.Lower(@name), FfiConverterOptionalString.INSTANCE.Lower(@directory), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
         }),
         // Poll
         (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
@@ -4766,7 +5621,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <exception cref="TetherException"></exception>
     public async Task EndTmux(string @sessionId) {await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -4784,7 +5639,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Ends one window without attaching to its session. A window id is
     /// unique across the server, so it names the window on its own.
@@ -4806,17 +5661,43 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
+    /// <summary>
+    /// Executes without creating a terminal or performing another authentication.
+    /// Both output size and duration are bounded at this public boundary.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    public async Task<CommandOutput> Execute(string @command, CancellationToken @cancellation) {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_execute(thisPtr, FfiConverterString.INSTANCE.Lower(@command), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_rust_buffer(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_rust_buffer(future),
+        // Lift
+        (result) => FfiConverterTypeCommandOutput.INSTANCE.Lift(result),
+        // Error
+        FfiConverterTypeTetherError.INSTANCE
+    );
+    }
+
     /// <summary>
     /// Opens an interactive shell on this lease. No handshake: the connection
     /// is already authenticated, and a second terminal is another channel.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-    public async Task<Session> OpenShell(string @term, ushort @columns, ushort @rows, uint @scrollbackLines, CancellationToken @cancellation) {
+    public async Task<Session> OpenShell(string @term, ushort @columns, ushort @rows, uint @scrollbackLines, SessionHistory? @history, CancellationToken @cancellation) {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
         CallWithPointer(thisPtr => {
-            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_open_shell(thisPtr, FfiConverterString.INSTANCE.Lower(@term), FfiConverterUInt16.INSTANCE.Lower(@columns), FfiConverterUInt16.INSTANCE.Lower(@rows), FfiConverterUInt32.INSTANCE.Lower(@scrollbackLines), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_open_shell(thisPtr, FfiConverterString.INSTANCE.Lower(@term), FfiConverterUInt16.INSTANCE.Lower(@columns), FfiConverterUInt16.INSTANCE.Lower(@rows), FfiConverterUInt32.INSTANCE.Lower(@scrollbackLines), FfiConverterOptionalTypeSessionHistory.INSTANCE.Lower(@history), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
         }),
         // Poll
         (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_u64(future, continuation, data),
@@ -4832,7 +5713,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <exception cref="TetherException"></exception>
     public async Task RenameTmux(string @sessionId, string @name) {await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -4850,7 +5731,7 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Where tmux says a pane's program is — `#{pane_current_path}`, which
     /// tmux reads from the process itself, so it is known even when the
@@ -4877,7 +5758,32 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
+    /// <summary>
+    /// Finds the tmux session attached to a particular terminal, if any.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    public async Task<string?> TmuxSessionForClient(string @tty) {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_tmux_session_for_client(thisPtr, FfiConverterString.INSTANCE.Lower(@tty));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_rust_buffer(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_rust_buffer(future),
+        // Lift
+        (result) => FfiConverterOptionalString.INSTANCE.Lift(result),
+        // Error
+        FfiConverterTypeTetherError.INSTANCE
+    );
+    }
+
     /// <exception cref="TetherException"></exception>
     public async Task<TmuxSessionInfo[]> TmuxSessions(CancellationToken @cancellation) {
     return await _UniFFIAsync.UniffiRustCallAsync(
@@ -4899,9 +5805,9 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
 
-    
+
+
 }
 class FfiConverterTypeRemoteConnection: FfiConverter<RemoteConnection, ulong> {
     public static FfiConverterTypeRemoteConnection INSTANCE = new FfiConverterTypeRemoteConnection();
@@ -5055,7 +5961,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -5069,7 +5975,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -5089,7 +5995,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -5099,7 +6005,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         }
     }
 
-    
+
     /// <summary>
     /// Ends the file session. The shell is untouched.
     /// </summary>
@@ -5117,10 +6023,10 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_void(future),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
     }
-    
+
     /// <summary>
     /// Copies `path` to `destination` on this machine, returning the bytes
     /// copied. `destination` is replaced if it exists, and appears only once
@@ -5147,7 +6053,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// The account's home directory, as an absolute path.
     /// </summary>
@@ -5172,7 +6078,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Whether these files are on this machine, so a path is also a local
     /// path: a preview can show the file itself instead of a copy.
@@ -5183,8 +6089,8 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_remotefiles_is_local(thisPtr,  ref _status)
 )));
     }
-    
-    
+
+
     /// <summary>
     /// What is in `directory`, sorted by name, links listed as links.
     /// </summary>
@@ -5209,7 +6115,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// What `path` is, reporting a link as a link.
     /// </summary>
@@ -5234,7 +6140,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <exception cref="FileException"></exception>
     public async Task MakeDirectory(string @path) {await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -5252,7 +6158,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Removes a file, a link, or an empty directory.
     /// </summary>
@@ -5273,7 +6179,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Removes `path` and everything under it without following links,
     /// returning how many things were removed. Cancelling stops the walk;
@@ -5300,7 +6206,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Moves `from` to `to`, replacing a file at `to` only when asked.
     /// </summary>
@@ -5321,7 +6227,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// `path` with `.`, `..` and links resolved, as the server sees it.
     /// </summary>
@@ -5346,7 +6252,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// What `path` is, looking through a link.
     /// </summary>
@@ -5371,7 +6277,7 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
+
     /// <summary>
     /// Copies `source` on this machine to `path`, returning the bytes
     /// copied. Refuses to replace an existing file unless `replace` is set,
@@ -5398,9 +6304,9 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         FfiConverterTypeFileError.INSTANCE
     );
     }
-    
 
-    
+
+
 }
 class FfiConverterTypeRemoteFiles: FfiConverter<RemoteFiles, ulong> {
     public static FfiConverterTypeRemoteFiles INSTANCE = new FfiConverterTypeRemoteFiles();
@@ -5501,7 +6407,7 @@ internal class RenderSurface : IRenderSurface, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -5515,7 +6421,7 @@ internal class RenderSurface : IRenderSurface, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -5535,7 +6441,7 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -5545,7 +6451,7 @@ internal class RenderSurface : IRenderSurface, IDisposable {
         }
     }
 
-    
+
     /// <summary>
     /// Draws one frame with the consumer's palette and whatever the pointer
     /// is doing (selection, link underlines — spec §14, Decisions/0015).
@@ -5557,9 +6463,9 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_draw(thisPtr, FfiConverterTypeScreenFrame.INSTANCE.Lower(@frame), FfiConverterTypePaletteDto.INSTANCE.Lower(@palette), FfiConverterOptionalTypeOverlayDto.INSTANCE.Lower(@overlay), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     /// <summary>
     /// Measures the monospaced face this surface will draw with.
     /// </summary>
@@ -5569,28 +6475,28 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_measure(thisPtr, FfiConverterFloat.INSTANCE.Lower(@size), ref _status)
 )));
     }
-    
-    
+
+
     public void Resize(uint @width, uint @height) {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_resize(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@width), FfiConverterUInt32.INSTANCE.Lower(@height), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     public void SetFonts(string @primary, string @wide) {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_set_fonts(thisPtr, FfiConverterString.INSTANCE.Lower(@primary), FfiConverterString.INSTANCE.Lower(@wide), ref _status)
 ));
     }
-    
-    
-    
 
-    
+
+
+
+
     /// <summary>
     /// Creates a surface for a Win32 `HWND`.
     ///
@@ -5618,8 +6524,8 @@ internal class RenderSurface : IRenderSurface, IDisposable {
         FfiConverterTypeRenderFailure.INSTANCE
     );
     }
-    
-    
+
+
 }
 class FfiConverterTypeRenderSurface: FfiConverter<RenderSurface, ulong> {
     public static FfiConverterTypeRenderSurface INSTANCE = new FfiConverterTypeRenderSurface();
@@ -5661,12 +6567,14 @@ internal interface ISession {
     /// byte. Polling on a timer would either lag or burn a core.
     /// </summary>
     Task<bool> AwaitChange();
+    void CheckpointHistory();
     /// <summary>
     /// Ends the session. Idempotent, because a frontend closing a window
     /// cannot easily know whether the far side got there first.
     /// </summary>
     void Close();
     RemoteConnection? Connection();
+    string? CurrentDirectory();
     /// <summary>
     /// `null` while the session is still running.
     /// </summary>
@@ -5675,16 +6583,33 @@ internal interface ISession {
     /// Everything needed to draw the screen once.
     /// </summary>
     ScreenFrame Frame();
+    string? HistoryError();
     /// <summary>
     /// What the text at a cell names, if anything, and where it is drawn.
     /// Asked when a person points, not every frame.
     /// </summary>
     TerminalLink? LinkAt(ushort @row, ushort @column);
     /// <summary>
+    /// The local shell's live working directory, if available.
+    /// </summary>
+    uint? LocalProcessId();
+    /// <summary>
+    /// Stops reading the far side until [`resume`](Self::resume).
+    /// </summary>
+    void Pause();
+    /// <summary>
+    /// Drops scrollback above `keep` lines for the rest of this session.
+    /// </summary>
+    void ReleaseHistory(uint @keep);
+    /// <summary>
     /// Tells both the engine and the far side that the window changed size.
     /// </summary>
     /// <exception cref="TetherException"></exception>
     void Resize(ushort @columns, ushort @rows);
+    /// <summary>
+    /// Reads the far side again.
+    /// </summary>
+    void Resume();
     /// <summary>
     /// Moves the viewport over the scrollback.
     ///
@@ -5711,6 +6636,22 @@ internal interface ISession {
     /// </summary>
     /// <exception cref="TetherException"></exception>
     void SetPalette(TerminalPalette? @palette);
+    /// <summary>
+    /// Text a remote program asked to place on the local clipboard (`OSC 52`).
+    ///
+    /// `None` when it asked for nothing since the last call. A program that
+    /// asked to *read* the clipboard is refused: the clipboard belongs to
+    /// the machine the person is using, and remote data is untrusted.
+    /// </summary>
+    string? TakeClipboard();
+    /// <summary>
+    /// The local shell's tty path, for matching tmux clients to this tab.
+    /// </summary>
+    string? TerminalName();
+    /// <summary>
+    /// What changed since the last call. Rows that did not change are absent.
+    /// </summary>
+    FrameUpdate Update();
     /// <summary>
     /// Routes wheel notches to the remote mouse protocol or local scrollback.
     /// Positive lines scroll down; local forces scrollback even in mouse mode.
@@ -5769,7 +6710,7 @@ internal class Session : ISession, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -5783,7 +6724,7 @@ internal class Session : ISession, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -5803,7 +6744,7 @@ internal class Session : ISession, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -5813,7 +6754,7 @@ internal class Session : ISession, IDisposable {
         }
     }
 
-    
+
     /// <summary>
     /// Waits until the screen changed, returning `false` once the session has
     /// ended and never will again.
@@ -5840,10 +6781,19 @@ internal class Session : ISession, IDisposable {
         (result) => FfiConverterBoolean.INSTANCE.Lift(result),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
     }
-    
+
+    public void CheckpointHistory() {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_checkpoint_history(thisPtr,  ref _status)
+));
+    }
+
+
+
     /// <summary>
     /// Ends the session. Idempotent, because a frontend closing a window
     /// cannot easily know whether the far side got there first.
@@ -5854,17 +6804,25 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_close(thisPtr,  ref _status)
 ));
     }
-    
-    
-    
+
+
+
     public RemoteConnection? Connection() {
         return CallWithPointer(thisPtr => FfiConverterOptionalTypeRemoteConnection.INSTANCE.Lift(
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_session_connection(thisPtr,  ref _status)
 )));
     }
-    
-    
+
+
+    public string? CurrentDirectory() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_current_directory(thisPtr,  ref _status)
+)));
+    }
+
+
     /// <summary>
     /// `null` while the session is still running.
     /// </summary>
@@ -5874,8 +6832,8 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_ending(thisPtr,  ref _status)
 )));
     }
-    
-    
+
+
     /// <summary>
     /// Everything needed to draw the screen once.
     /// </summary>
@@ -5885,8 +6843,16 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_frame(thisPtr,  ref _status)
 )));
     }
-    
-    
+
+
+    public string? HistoryError() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_history_error(thisPtr,  ref _status)
+)));
+    }
+
+
     /// <summary>
     /// What the text at a cell names, if anything, and where it is drawn.
     /// Asked when a person points, not every frame.
@@ -5897,8 +6863,43 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_link_at(thisPtr, FfiConverterUInt16.INSTANCE.Lower(@row), FfiConverterUInt16.INSTANCE.Lower(@column), ref _status)
 )));
     }
-    
-    
+
+
+    /// <summary>
+    /// The local shell's live working directory, if available.
+    /// </summary>
+    public uint? LocalProcessId() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalUInt32.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_local_process_id(thisPtr,  ref _status)
+)));
+    }
+
+
+    /// <summary>
+    /// Stops reading the far side until [`resume`](Self::resume).
+    /// </summary>
+    public void Pause() {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_pause(thisPtr,  ref _status)
+));
+    }
+
+
+
+    /// <summary>
+    /// Drops scrollback above `keep` lines for the rest of this session.
+    /// </summary>
+    public void ReleaseHistory(uint @keep) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_release_history(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@keep), ref _status)
+));
+    }
+
+
+
     /// <summary>
     /// Tells both the engine and the far side that the window changed size.
     /// </summary>
@@ -5909,9 +6910,21 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_resize(thisPtr, FfiConverterUInt16.INSTANCE.Lower(@columns), FfiConverterUInt16.INSTANCE.Lower(@rows), ref _status)
 ));
     }
-    
-    
-    
+
+
+
+    /// <summary>
+    /// Reads the far side again.
+    /// </summary>
+    public void Resume() {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_resume(thisPtr,  ref _status)
+));
+    }
+
+
+
     /// <summary>
     /// Moves the viewport over the scrollback.
     ///
@@ -5925,9 +6938,9 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_scroll(thisPtr, FfiConverterTypeScrollTo.INSTANCE.Lower(@to), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     /// <summary>
     /// Sends something the person did.
     ///
@@ -5942,9 +6955,9 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_send(thisPtr, FfiConverterTypeTerminalInput.INSTANCE.Lower(@input), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     /// <summary>
     /// Tells the engine what this consumer draws with, so that a program
     /// asking for a colour is answered.
@@ -5959,9 +6972,46 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_set_palette(thisPtr, FfiConverterOptionalTypeTerminalPalette.INSTANCE.Lower(@palette), ref _status)
 ));
     }
-    
-    
-    
+
+
+
+    /// <summary>
+    /// Text a remote program asked to place on the local clipboard (`OSC 52`).
+    ///
+    /// `None` when it asked for nothing since the last call. A program that
+    /// asked to *read* the clipboard is refused: the clipboard belongs to
+    /// the machine the person is using, and remote data is untrusted.
+    /// </summary>
+    public string? TakeClipboard() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_take_clipboard(thisPtr,  ref _status)
+)));
+    }
+
+
+    /// <summary>
+    /// The local shell's tty path, for matching tmux clients to this tab.
+    /// </summary>
+    public string? TerminalName() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_terminal_name(thisPtr,  ref _status)
+)));
+    }
+
+
+    /// <summary>
+    /// What changed since the last call. Rows that did not change are absent.
+    /// </summary>
+    public FrameUpdate Update() {
+        return CallWithPointer(thisPtr => FfiConverterTypeFrameUpdate.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_session_update(thisPtr,  ref _status)
+)));
+    }
+
+
     /// <summary>
     /// Routes wheel notches to the remote mouse protocol or local scrollback.
     /// Positive lines scroll down; local forces scrollback even in mouse mode.
@@ -5973,9 +7023,9 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_wheel(thisPtr, FfiConverterInt32.INSTANCE.Lower(@lines), FfiConverterUInt16.INSTANCE.Lower(@row), FfiConverterUInt16.INSTANCE.Lower(@column), FfiConverterBoolean.INSTANCE.Lower(@local), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     /// <summary>
     /// The directory the shell last reported, if it reports one.
     /// </summary>
@@ -5985,10 +7035,10 @@ internal class Session : ISession, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_session_working_directory(thisPtr,  ref _status)
 )));
     }
-    
-    
 
-    
+
+
+
 }
 class FfiConverterTypeSession: FfiConverter<Session, ulong> {
     public static FfiConverterTypeSession INSTANCE = new FfiConverterTypeSession();
@@ -6017,6 +7067,145 @@ class FfiConverterTypeSession: FfiConverter<Session, ulong> {
 
 
 
+internal interface ISessionHistory {
+    string? Error();
+}
+internal class SessionHistory : ISessionHistory, IDisposable {
+    protected ulong pointer;
+    private int _wasDestroyed = 0;
+    private long _callCounter = 1;
+
+    public SessionHistory(ulong pointer) {
+        this.pointer = pointer;
+    }
+
+    ~SessionHistory() {
+        Destroy();
+    }
+
+    protected void FreeRustArcPtr() {
+        _UniffiHelpers.RustCall((ref UniffiRustCallStatus status) => {
+            _UniFFILib.uniffi_tether_ffi_fn_free_sessionhistory(this.pointer, ref status);
+        });
+    }
+
+    protected ulong CloneRustArcPtr() {
+        return _UniffiHelpers.RustCall((ref UniffiRustCallStatus status) => {
+            return _UniFFILib.uniffi_tether_ffi_fn_clone_sessionhistory(this.pointer, ref status);
+        });
+    }
+
+    public void Destroy()
+    {
+        // Only allow a single call to this method.
+        if (Interlocked.CompareExchange(ref _wasDestroyed, 1, 0) == 0)
+        {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (Interlocked.Decrement(ref _callCounter) == 0)
+            {
+                FreeRustArcPtr();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        Destroy();
+        GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
+    }
+
+    private void IncrementCallCounter()
+    {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        long count;
+        do
+        {
+            count = Interlocked.Read(ref _callCounter);
+            if (count == 0L) throw new System.ObjectDisposedException(String.Format("'{0}' object has already been destroyed", this.GetType().Name));
+            if (count == long.MaxValue) throw new System.OverflowException(String.Format("'{0}' call counter would overflow", this.GetType().Name));
+
+        } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
+    }
+
+    private void DecrementCallCounter()
+    {
+        // This decrement always matches the increment we performed above.
+        if (Interlocked.Decrement(ref _callCounter) == 0) {
+            FreeRustArcPtr();
+        }
+    }
+
+    internal void CallWithPointer(Action<ulong> action)
+    {
+        IncrementCallCounter();
+        try {
+            action(CloneRustArcPtr());
+        }
+        finally {
+            DecrementCallCounter();
+        }
+    }
+
+    internal T CallWithPointer<T>(Func<ulong, T> func)
+    {
+        IncrementCallCounter();
+        try {
+            return func(CloneRustArcPtr());
+        }
+        finally {
+            DecrementCallCounter();
+        }
+    }
+
+
+    public string? Error() {
+        return CallWithPointer(thisPtr => FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_sessionhistory_error(thisPtr,  ref _status)
+)));
+    }
+
+
+
+
+    /// <exception cref="TetherException"></exception>
+    public static SessionHistory Open(string @directory, ulong? @lineLimit, bool @restoring) {
+        return new SessionHistory(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeTetherError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_constructor_sessionhistory_open(FfiConverterString.INSTANCE.Lower(@directory), FfiConverterOptionalUInt64.INSTANCE.Lower(@lineLimit), FfiConverterBoolean.INSTANCE.Lower(@restoring), ref _status)
+));
+    }
+
+
+}
+class FfiConverterTypeSessionHistory: FfiConverter<SessionHistory, ulong> {
+    public static FfiConverterTypeSessionHistory INSTANCE = new FfiConverterTypeSessionHistory();
+
+
+    public override ulong Lower(SessionHistory value) {
+        return value.CallWithPointer(thisPtr => thisPtr);
+    }
+
+    public override SessionHistory Lift(ulong value) {
+        return new SessionHistory(value);
+    }
+
+    public override SessionHistory Read(BigEndianStream stream) {
+        return Lift(stream.ReadULong());
+    }
+
+    public override int AllocationSize(SessionHistory value) {
+        return 8;
+    }
+
+    public override void Write(SessionHistory value, BigEndianStream stream) {
+        stream.WriteULong(Lower(value));
+    }
+}
+
+
+
 internal interface ITmuxWorkspace {
     Task<bool> AwaitChange();
     void Detach();
@@ -6026,6 +7215,8 @@ internal interface ITmuxWorkspace {
     TerminalLink? LinkAt(uint @pane, ushort @row, ushort @column);
     /// <exception cref="TetherException"></exception>
     Task Perform(TmuxAction @action);
+    /// <exception cref="TetherException"></exception>
+    Task Scroll(uint @pane, int @lines);
     /// <exception cref="TetherException"></exception>
     void Send(uint @pane, TerminalInput @input);
     TmuxSnapshot Snapshot();
@@ -6078,7 +7269,7 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -6092,7 +7283,7 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -6112,7 +7303,7 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -6122,7 +7313,7 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
         }
     }
 
-    
+
     public async Task<bool> AwaitChange() {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -6141,19 +7332,19 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
         (result) => FfiConverterBoolean.INSTANCE.Lift(result),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
     }
-    
+
     public void Detach() {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_detach(thisPtr,  ref _status)
 ));
     }
-    
-    
-    
+
+
+
     /// <summary>
     /// What the text at a cell of a pane names, as `Session::link_at`.
     /// </summary>
@@ -6163,8 +7354,8 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_link_at(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@pane), FfiConverterUInt16.INSTANCE.Lower(@row), FfiConverterUInt16.INSTANCE.Lower(@column), ref _status)
 )));
     }
-    
-    
+
+
     /// <exception cref="TetherException"></exception>
     public async Task Perform(TmuxAction @action) {await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -6182,7 +7373,25 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
-    
+
+    /// <exception cref="TetherException"></exception>
+    public async Task Scroll(uint @pane, int @lines) {await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_scroll(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@pane), FfiConverterInt32.INSTANCE.Lower(@lines));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_void(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {_UniFFILib.ffi_tether_ffi_rust_future_complete_void(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_void(future),
+        // Error
+        FfiConverterTypeTetherError.INSTANCE
+    );
+    }
+
     /// <exception cref="TetherException"></exception>
     public void Send(uint @pane, TerminalInput @input) {
         CallWithPointer(thisPtr =>
@@ -6190,17 +7399,17 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_send(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@pane), FfiConverterTypeTerminalInput.INSTANCE.Lower(@input), ref _status)
 ));
     }
-    
-    
-    
+
+
+
     public TmuxSnapshot Snapshot() {
         return CallWithPointer(thisPtr => FfiConverterTypeTmuxSnapshot.INSTANCE.Lift(
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_snapshot(thisPtr,  ref _status)
 )));
     }
-    
-    
+
+
     /// <summary>
     /// The directory a pane's shell last reported, if it reports one.
     /// </summary>
@@ -6210,10 +7419,10 @@ internal class TmuxWorkspace : ITmuxWorkspace, IDisposable {
     _UniFFILib.uniffi_tether_ffi_fn_method_tmuxworkspace_working_directory(thisPtr, FfiConverterUInt32.INSTANCE.Lower(@pane), ref _status)
 )));
     }
-    
-    
 
-    
+
+
+
 }
 class FfiConverterTypeTmuxWorkspace: FfiConverter<TmuxWorkspace, ulong> {
     public static FfiConverterTypeTmuxWorkspace INSTANCE = new FfiConverterTypeTmuxWorkspace();
@@ -6297,7 +7506,7 @@ internal class TransferProgressImpl : TransferProgress, IDisposable {
         GC.SuppressFinalize(this); // Suppress finalization to avoid unnecessary GC overhead.
     }
 
-    private void IncrementCallCounter() 
+    private void IncrementCallCounter()
     {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
@@ -6311,7 +7520,7 @@ internal class TransferProgressImpl : TransferProgress, IDisposable {
         } while (Interlocked.CompareExchange(ref _callCounter, count + 1, count) != count);
     }
 
-    private void DecrementCallCounter() 
+    private void DecrementCallCounter()
     {
         // This decrement always matches the increment we performed above.
         if (Interlocked.Decrement(ref _callCounter) == 0) {
@@ -6331,7 +7540,7 @@ internal class TransferProgressImpl : TransferProgress, IDisposable {
     }
 
     internal T CallWithPointer<T>(Func<ulong, T> func)
-    {   
+    {
         IncrementCallCounter();
         try {
             return func(CloneRustArcPtr());
@@ -6341,18 +7550,18 @@ internal class TransferProgressImpl : TransferProgress, IDisposable {
         }
     }
 
-    
+
     public void Advanced(ulong @bytes) {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_transferprogress_advanced(thisPtr, FfiConverterUInt64.INSTANCE.Lower(@bytes), ref _status)
 ));
     }
-    
-    
-    
 
-    
+
+
+
+
 }
 class UniffiCallbackInterfaceTransferProgress {
     static void Advanced(ulong @uniffiHandle,ulong @bytes,IntPtr @uniffiOutReturn,ref UniffiRustCallStatus _uniffi_out_err) {
@@ -6416,7 +7625,7 @@ class UniffiCallbackInterfaceTransferProgress {
 
 class FfiConverterTypeTransferProgress: FfiConverter<TransferProgress, ulong> {
     public ConcurrentHandleMap<TransferProgress> handleMap = new ConcurrentHandleMap<TransferProgress>();
-    
+
     public static FfiConverterTypeTransferProgress INSTANCE = new FfiConverterTypeTransferProgress();
 
     static FfiConverterTypeTransferProgress() {
@@ -6470,7 +7679,7 @@ class FfiConverterTypeTransferProgress: FfiConverter<TransferProgress, ulong> {
 /// server did not (spec §10).
 /// </summary>
 internal record AuthPrompt (
-    string Text, 
+    string Text,
     bool Echo
 ) {
 }
@@ -6503,15 +7712,15 @@ class FfiConverterTypeAuthPrompt: FfiConverterRustBuffer<AuthPrompt> {
 /// Everything about a run's appearance except its text.
 /// </summary>
 internal record CellStyle (
-    CellColor Foreground, 
-    CellColor Background, 
-    UnderlineStyle Underline, 
-    CellColor? UnderlineColor, 
-    bool Bold, 
-    bool Dim, 
-    bool Italic, 
-    bool Strikethrough, 
-    bool Inverse, 
+    CellColor Foreground,
+    CellColor Background,
+    UnderlineStyle Underline,
+    CellColor? UnderlineColor,
+    bool Bold,
+    bool Dim,
+    bool Italic,
+    bool Strikethrough,
+    bool Inverse,
     bool Hidden
 ) {
 }
@@ -6568,8 +7777,8 @@ class FfiConverterTypeCellStyle: FfiConverterRustBuffer<CellStyle> {
 /// One colour, as the far side will be told it.
 /// </summary>
 internal record ColorValue (
-    byte Red, 
-    byte Green, 
+    byte Red,
+    byte Green,
     byte Blue
 ) {
 }
@@ -6602,6 +7811,43 @@ class FfiConverterTypeColorValue: FfiConverterRustBuffer<ColorValue> {
 
 
 /// <summary>
+/// Bounded output from a command on an authenticated connection.
+/// </summary>
+internal record CommandOutput (
+    int? Status,
+    byte[] Stdout,
+    byte[] Stderr
+) {
+}
+
+class FfiConverterTypeCommandOutput: FfiConverterRustBuffer<CommandOutput> {
+    public static FfiConverterTypeCommandOutput INSTANCE = new FfiConverterTypeCommandOutput();
+
+    public override CommandOutput Read(BigEndianStream stream) {
+        return new CommandOutput(
+            Status: FfiConverterOptionalInt32.INSTANCE.Read(stream),
+            Stdout: FfiConverterByteArray.INSTANCE.Read(stream),
+            Stderr: FfiConverterByteArray.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(CommandOutput value) {
+        return 0
+            + FfiConverterOptionalInt32.INSTANCE.AllocationSize(value.Status)
+            + FfiConverterByteArray.INSTANCE.AllocationSize(value.Stdout)
+            + FfiConverterByteArray.INSTANCE.AllocationSize(value.Stderr);
+    }
+
+    public override void Write(CommandOutput value, BigEndianStream stream) {
+            FfiConverterOptionalInt32.INSTANCE.Write(value.Status, stream);
+            FfiConverterByteArray.INSTANCE.Write(value.Stdout, stream);
+            FfiConverterByteArray.INSTANCE.Write(value.Stderr, stream);
+    }
+}
+
+
+
+/// <summary>
 /// Where to connect and as whom.
 /// </summary>
 /// <param name="Term">
@@ -6610,19 +7856,31 @@ class FfiConverterTypeColorValue: FfiConverterRustBuffer<ColorValue> {
 /// actually draw.
 /// </param>
 internal record Destination (
-    string Host, 
-    ushort Port, 
-    string User, 
+    string Host,
+    ushort Port,
+    string User,
     /// <summary>
     /// What the far side will see in `$TERM`. It decides which sequences
     /// remote programs emit, so it must describe what this frontend can
     /// actually draw.
     /// </summary>
-    string Term, 
-    ushort Columns, 
-    ushort Rows, 
-    uint ScrollbackLines
-) {
+    string Term,
+    ushort Columns,
+    ushort Rows,
+    uint ScrollbackLines,
+    SessionHistory? History
+) : IDisposable {
+    public void Dispose() {
+    FFIObjectUtil.DisposeAll(
+            this.Host,
+            this.Port,
+            this.User,
+            this.Term,
+            this.Columns,
+            this.Rows,
+            this.ScrollbackLines,
+            this.History);
+    }
 }
 
 class FfiConverterTypeDestination: FfiConverterRustBuffer<Destination> {
@@ -6636,7 +7894,8 @@ class FfiConverterTypeDestination: FfiConverterRustBuffer<Destination> {
             Term: FfiConverterString.INSTANCE.Read(stream),
             Columns: FfiConverterUInt16.INSTANCE.Read(stream),
             Rows: FfiConverterUInt16.INSTANCE.Read(stream),
-            ScrollbackLines: FfiConverterUInt32.INSTANCE.Read(stream)
+            ScrollbackLines: FfiConverterUInt32.INSTANCE.Read(stream),
+            History: FfiConverterOptionalTypeSessionHistory.INSTANCE.Read(stream)
         );
     }
 
@@ -6648,7 +7907,8 @@ class FfiConverterTypeDestination: FfiConverterRustBuffer<Destination> {
             + FfiConverterString.INSTANCE.AllocationSize(value.Term)
             + FfiConverterUInt16.INSTANCE.AllocationSize(value.Columns)
             + FfiConverterUInt16.INSTANCE.AllocationSize(value.Rows)
-            + FfiConverterUInt32.INSTANCE.AllocationSize(value.ScrollbackLines);
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.ScrollbackLines)
+            + FfiConverterOptionalTypeSessionHistory.INSTANCE.AllocationSize(value.History);
     }
 
     public override void Write(Destination value, BigEndianStream stream) {
@@ -6659,6 +7919,7 @@ class FfiConverterTypeDestination: FfiConverterRustBuffer<Destination> {
             FfiConverterUInt16.INSTANCE.Write(value.Columns, stream);
             FfiConverterUInt16.INSTANCE.Write(value.Rows, stream);
             FfiConverterUInt32.INSTANCE.Write(value.ScrollbackLines, stream);
+            FfiConverterOptionalTypeSessionHistory.INSTANCE.Write(value.History, stream);
     }
 }
 
@@ -6677,14 +7938,14 @@ class FfiConverterTypeDestination: FfiConverterRustBuffer<Destination> {
 /// Permission bits, without the type.
 /// </param>
 internal record FileEntry (
-    string Name, 
-    string Path, 
-    FileKind Kind, 
-    ulong Size, 
+    string Name,
+    string Path,
+    FileKind Kind,
+    ulong Size,
     /// <summary>
     /// Seconds since the Unix epoch, when the server said.
     /// </summary>
-    ulong? Modified, 
+    ulong? Modified,
     /// <summary>
     /// Permission bits, without the type.
     /// </summary>
@@ -6732,10 +7993,10 @@ class FfiConverterTypeFileEntry: FfiConverterRustBuffer<FileEntry> {
 /// The monospaced geometry a frontend lays out against.
 /// </summary>
 internal record FontMetricsDto (
-    float Size, 
-    float CellWidth, 
-    float LineHeight, 
-    float NarrowAdvance, 
+    float Size,
+    float CellWidth,
+    float LineHeight,
+    float NarrowAdvance,
     float WideAdvance
 ) {
 }
@@ -6787,14 +8048,14 @@ class FfiConverterTypeFontMetricsDto: FfiConverterRustBuffer<FontMetricsDto> {
 /// (`tether-ssh::HostKey::encoded`).
 /// </param>
 internal record HostIdentity (
-    string Host, 
-    ushort Port, 
-    string Algorithm, 
+    string Host,
+    ushort Port,
+    string Algorithm,
     /// <summary>
     /// The `SHA256:…` form a person compares against what their
     /// administrator published.
     /// </summary>
-    string Fingerprint, 
+    string Fingerprint,
     /// <summary>
     /// The `authorized_keys` one-line form (`ssh-ed25519 AAAA…`), which is
     /// also what a `known_hosts` file holds after the host pattern. A
@@ -6846,9 +8107,9 @@ class FfiConverterTypeHostIdentity: FfiConverterRustBuffer<HostIdentity> {
 /// not the destination's.
 /// </summary>
 internal record Jump (
-    string Host, 
-    ushort Port, 
-    string User, 
+    string Host,
+    ushort Port,
+    string User,
     Secret[] Secrets
 ) : IDisposable {
     public void Dispose() {
@@ -6899,8 +8160,8 @@ class FfiConverterTypeJump: FfiConverterRustBuffer<Jump> {
 /// stays platform-free (spec §14).
 /// </summary>
 internal record KeyModifiers (
-    bool Shift, 
-    bool Alt, 
+    bool Shift,
+    bool Alt,
     bool Control
 ) {
 }
@@ -6942,11 +8203,11 @@ class FfiConverterTypeKeyModifiers: FfiConverterRustBuffer<KeyModifiers> {
 /// One past the last column.
 /// </param>
 internal record LinkSpan (
-    ushort Row, 
+    ushort Row,
     /// <summary>
     /// First column, inclusive.
     /// </summary>
-    ushort Start, 
+    ushort Start,
     /// <summary>
     /// One past the last column.
     /// </summary>
@@ -6995,15 +8256,15 @@ class FfiConverterTypeLinkSpan: FfiConverterRustBuffer<LinkSpan> {
 /// Solid once the host says the thing exists; dotted while it asks.
 /// </param>
 internal record LinkUnderlineDto (
-    uint Row, 
+    uint Row,
     /// <summary>
     /// First column, inclusive.
     /// </summary>
-    uint Start, 
+    uint Start,
     /// <summary>
     /// One past the last column.
     /// </summary>
-    uint End, 
+    uint End,
     /// <summary>
     /// Solid once the host says the thing exists; dotted while it asks.
     /// </summary>
@@ -7062,7 +8323,7 @@ class FfiConverterTypeLinkUnderlineDto: FfiConverterRustBuffer<LinkUnderlineDto>
 /// <param name="Shell">
 /// The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
 /// else on this machine's `PATH`.
-/// 
+///
 /// `None` is the platform default: the person's login shell on Unix,
 /// `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
 /// fills this in; the SDK does not know which one a consumer offers.
@@ -7072,16 +8333,16 @@ internal record LocalShell (
     /// Where the shell starts. The person's home directory when absent,
     /// which is what a shell would have chosen anyway.
     /// </summary>
-    string? Directory, 
+    string? Directory,
     /// <summary>
     /// What the shell will see in `$TERM`. It decides which sequences
     /// programs emit, so it must describe what this frontend can actually
     /// draw.
     /// </summary>
-    string Term, 
-    ushort Columns, 
-    ushort Rows, 
-    uint ScrollbackLines, 
+    string Term,
+    ushort Columns,
+    ushort Rows,
+    uint ScrollbackLines,
     /// <summary>
     /// The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
     /// else on this machine's `PATH`.
@@ -7090,8 +8351,19 @@ internal record LocalShell (
     /// `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
     /// fills this in; the SDK does not know which one a consumer offers.
     /// </summary>
-    string? Shell
-) {
+    string? Shell,
+    SessionHistory? History
+) : IDisposable {
+    public void Dispose() {
+    FFIObjectUtil.DisposeAll(
+            this.Directory,
+            this.Term,
+            this.Columns,
+            this.Rows,
+            this.ScrollbackLines,
+            this.Shell,
+            this.History);
+    }
 }
 
 class FfiConverterTypeLocalShell: FfiConverterRustBuffer<LocalShell> {
@@ -7104,7 +8376,8 @@ class FfiConverterTypeLocalShell: FfiConverterRustBuffer<LocalShell> {
             Columns: FfiConverterUInt16.INSTANCE.Read(stream),
             Rows: FfiConverterUInt16.INSTANCE.Read(stream),
             ScrollbackLines: FfiConverterUInt32.INSTANCE.Read(stream),
-            Shell: FfiConverterOptionalString.INSTANCE.Read(stream)
+            Shell: FfiConverterOptionalString.INSTANCE.Read(stream),
+            History: FfiConverterOptionalTypeSessionHistory.INSTANCE.Read(stream)
         );
     }
 
@@ -7115,7 +8388,8 @@ class FfiConverterTypeLocalShell: FfiConverterRustBuffer<LocalShell> {
             + FfiConverterUInt16.INSTANCE.AllocationSize(value.Columns)
             + FfiConverterUInt16.INSTANCE.AllocationSize(value.Rows)
             + FfiConverterUInt32.INSTANCE.AllocationSize(value.ScrollbackLines)
-            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.Shell);
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.Shell)
+            + FfiConverterOptionalTypeSessionHistory.INSTANCE.AllocationSize(value.History);
     }
 
     public override void Write(LocalShell value, BigEndianStream stream) {
@@ -7125,6 +8399,54 @@ class FfiConverterTypeLocalShell: FfiConverterRustBuffer<LocalShell> {
             FfiConverterUInt16.INSTANCE.Write(value.Rows, stream);
             FfiConverterUInt32.INSTANCE.Write(value.ScrollbackLines, stream);
             FfiConverterOptionalString.INSTANCE.Write(value.Shell, stream);
+            FfiConverterOptionalTypeSessionHistory.INSTANCE.Write(value.History, stream);
+    }
+}
+
+
+
+/// <summary>
+/// A key that needs its passphrase, as a person is shown it.
+/// </summary>
+/// <param name="Fingerprint">
+/// `SHA256:…`. Absent for the formats that keep even the public half
+/// behind the passphrase.
+/// </param>
+/// <param name="Comment">
+/// The key's own comment, often `user@host`; empty when encrypted.
+/// </param>
+internal record LockedKey (
+    /// <summary>
+    /// `SHA256:…`. Absent for the formats that keep even the public half
+    /// behind the passphrase.
+    /// </summary>
+    string? Fingerprint,
+    /// <summary>
+    /// The key's own comment, often `user@host`; empty when encrypted.
+    /// </summary>
+    string Comment
+) {
+}
+
+class FfiConverterTypeLockedKey: FfiConverterRustBuffer<LockedKey> {
+    public static FfiConverterTypeLockedKey INSTANCE = new FfiConverterTypeLockedKey();
+
+    public override LockedKey Read(BigEndianStream stream) {
+        return new LockedKey(
+            Fingerprint: FfiConverterOptionalString.INSTANCE.Read(stream),
+            Comment: FfiConverterString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(LockedKey value) {
+        return 0
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.Fingerprint)
+            + FfiConverterString.INSTANCE.AllocationSize(value.Comment);
+    }
+
+    public override void Write(LockedKey value, BigEndianStream stream) {
+            FfiConverterOptionalString.INSTANCE.Write(value.Fingerprint, stream);
+            FfiConverterString.INSTANCE.Write(value.Comment, stream);
     }
 }
 
@@ -7147,12 +8469,12 @@ internal record OverlayDto (
     /// <summary>
     /// Anchor and focus of a drag, as `(column, row)` pairs.
     /// </summary>
-    SelectionDto? Selection, 
-    LinkUnderlineDto[] LinkUnderlines, 
+    SelectionDto? Selection,
+    LinkUnderlineDto[] LinkUnderlines,
     /// <summary>
     /// What to tint a selected cell with. `TetherUI` uses accent at 0.12.
     /// </summary>
-    RgbaDto SelectionColor, 
+    RgbaDto SelectionColor,
     /// <summary>
     /// What to underline a link with.
     /// </summary>
@@ -7198,9 +8520,9 @@ class FfiConverterTypeOverlayDto: FfiConverterRustBuffer<OverlayDto> {
 /// `Palette.chosen` discipline) cannot disagree with itself.
 /// </summary>
 internal record PaletteDto (
-    RgbaDto Background, 
-    RgbaDto Foreground, 
-    RgbaDto Cursor, 
+    RgbaDto Background,
+    RgbaDto Foreground,
+    RgbaDto Cursor,
     RgbaDto[] Ansi
 ) {
 }
@@ -7236,9 +8558,9 @@ class FfiConverterTypePaletteDto: FfiConverterRustBuffer<PaletteDto> {
 
 
 internal record RgbaDto (
-    float Red, 
-    float Green, 
-    float Blue, 
+    float Red,
+    float Green,
+    float Blue,
     float Alpha
 ) {
 }
@@ -7279,6 +8601,10 @@ class FfiConverterTypeRgbaDto: FfiConverterRustBuffer<RgbaDto> {
 /// <param name="AlternateScreen">
 /// A full-screen program is running, so scrollback must not be shown.
 /// </param>
+/// <param name="Mouse">
+/// What to do with the pointer. Read on every event: a program turns
+/// tracking on without otherwise changing the grid.
+/// </param>
 /// <param name="ViewportOffset">
 /// Lines between the bottom of this frame and the live screen. Zero means
 /// new output appears on what is being shown.
@@ -7288,27 +8614,32 @@ class FfiConverterTypeRgbaDto: FfiConverterRustBuffer<RgbaDto> {
 /// alternate screen, which keeps none.
 /// </param>
 internal record ScreenFrame (
-    uint Columns, 
-    uint Rows, 
-    uint CursorRow, 
-    uint CursorColumn, 
-    CaretShape CursorShape, 
-    bool CursorVisible, 
+    uint Columns,
+    uint Rows,
+    uint CursorRow,
+    uint CursorColumn,
+    CaretShape CursorShape,
+    bool CursorVisible,
     /// <summary>
     /// A full-screen program is running, so scrollback must not be shown.
     /// </summary>
-    bool AlternateScreen, 
+    bool AlternateScreen,
+    /// <summary>
+    /// What to do with the pointer. Read on every event: a program turns
+    /// tracking on without otherwise changing the grid.
+    /// </summary>
+    MouseTracking Mouse,
     /// <summary>
     /// Lines between the bottom of this frame and the live screen. Zero means
     /// new output appears on what is being shown.
     /// </summary>
-    uint ViewportOffset, 
+    uint ViewportOffset,
     /// <summary>
     /// How many lines of history exist behind the live screen. Zero on the
     /// alternate screen, which keeps none.
     /// </summary>
-    uint HistoryLines, 
-    string Title, 
+    uint HistoryLines,
+    string Title,
     ScreenRow[] Lines
 ) {
 }
@@ -7325,6 +8656,7 @@ class FfiConverterTypeScreenFrame: FfiConverterRustBuffer<ScreenFrame> {
             CursorShape: FfiConverterTypeCaretShape.INSTANCE.Read(stream),
             CursorVisible: FfiConverterBoolean.INSTANCE.Read(stream),
             AlternateScreen: FfiConverterBoolean.INSTANCE.Read(stream),
+            Mouse: FfiConverterTypeMouseTracking.INSTANCE.Read(stream),
             ViewportOffset: FfiConverterUInt32.INSTANCE.Read(stream),
             HistoryLines: FfiConverterUInt32.INSTANCE.Read(stream),
             Title: FfiConverterString.INSTANCE.Read(stream),
@@ -7341,6 +8673,7 @@ class FfiConverterTypeScreenFrame: FfiConverterRustBuffer<ScreenFrame> {
             + FfiConverterTypeCaretShape.INSTANCE.AllocationSize(value.CursorShape)
             + FfiConverterBoolean.INSTANCE.AllocationSize(value.CursorVisible)
             + FfiConverterBoolean.INSTANCE.AllocationSize(value.AlternateScreen)
+            + FfiConverterTypeMouseTracking.INSTANCE.AllocationSize(value.Mouse)
             + FfiConverterUInt32.INSTANCE.AllocationSize(value.ViewportOffset)
             + FfiConverterUInt32.INSTANCE.AllocationSize(value.HistoryLines)
             + FfiConverterString.INSTANCE.AllocationSize(value.Title)
@@ -7355,6 +8688,7 @@ class FfiConverterTypeScreenFrame: FfiConverterRustBuffer<ScreenFrame> {
             FfiConverterTypeCaretShape.INSTANCE.Write(value.CursorShape, stream);
             FfiConverterBoolean.INSTANCE.Write(value.CursorVisible, stream);
             FfiConverterBoolean.INSTANCE.Write(value.AlternateScreen, stream);
+            FfiConverterTypeMouseTracking.INSTANCE.Write(value.Mouse, stream);
             FfiConverterUInt32.INSTANCE.Write(value.ViewportOffset, stream);
             FfiConverterUInt32.INSTANCE.Write(value.HistoryLines, stream);
             FfiConverterString.INSTANCE.Write(value.Title, stream);
@@ -7391,9 +8725,9 @@ class FfiConverterTypeScreenRow: FfiConverterRustBuffer<ScreenRow> {
 
 
 internal record SelectionDto (
-    uint AnchorColumn, 
-    uint AnchorRow, 
-    uint FocusColumn, 
+    uint AnchorColumn,
+    uint AnchorRow,
+    uint FocusColumn,
     uint FocusRow
 ) {
 }
@@ -7429,6 +8763,47 @@ class FfiConverterTypeSelectionDto: FfiConverterRustBuffer<SelectionDto> {
 
 
 /// <summary>
+/// A key left out of a login.
+///
+/// Named by its place among the secrets the application passed, counting
+/// from zero — the application built that list, so it can say which file or
+/// keychain item it was. The core never learns a file name (spec §4).
+/// </summary>
+internal record SkippedKey (
+    uint Position,
+    string? Fingerprint,
+    KeyProblem Problem
+) {
+}
+
+class FfiConverterTypeSkippedKey: FfiConverterRustBuffer<SkippedKey> {
+    public static FfiConverterTypeSkippedKey INSTANCE = new FfiConverterTypeSkippedKey();
+
+    public override SkippedKey Read(BigEndianStream stream) {
+        return new SkippedKey(
+            Position: FfiConverterUInt32.INSTANCE.Read(stream),
+            Fingerprint: FfiConverterOptionalString.INSTANCE.Read(stream),
+            Problem: FfiConverterTypeKeyProblem.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(SkippedKey value) {
+        return 0
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.Position)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.Fingerprint)
+            + FfiConverterTypeKeyProblem.INSTANCE.AllocationSize(value.Problem);
+    }
+
+    public override void Write(SkippedKey value, BigEndianStream stream) {
+            FfiConverterUInt32.INSTANCE.Write(value.Position, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.Fingerprint, stream);
+            FfiConverterTypeKeyProblem.INSTANCE.Write(value.Problem, stream);
+    }
+}
+
+
+
+/// <summary>
 /// A stretch of text on one row that looks the same all the way along, every
 /// character of it covering the same number of columns.
 ///
@@ -7444,13 +8819,13 @@ class FfiConverterTypeSelectionDto: FfiConverterRustBuffer<SelectionDto> {
 /// monospaced grid needs the column count to place the next run.
 /// </param>
 internal record StyledRun (
-    string Text, 
+    string Text,
     /// <summary>
     /// How many columns the run covers. Not `text.count` — a wide character
     /// is one grapheme over two columns, and a frontend laying out a
     /// monospaced grid needs the column count to place the next run.
     /// </summary>
-    uint Columns, 
+    uint Columns,
     CellStyle Style
 ) {
 }
@@ -7486,8 +8861,8 @@ class FfiConverterTypeStyledRun: FfiConverterRustBuffer<StyledRun> {
 /// Something on screen that names a place, and where it is drawn.
 /// </summary>
 internal record TerminalLink (
-    string Text, 
-    LinkKind Kind, 
+    string Text,
+    LinkKind Kind,
     LinkSpan[] Spans
 ) {
 }
@@ -7535,9 +8910,9 @@ class FfiConverterTypeTerminalLink: FfiConverterRustBuffer<TerminalLink> {
 /// colours is a mistake on the consumer's side, not a default.
 /// </param>
 internal record TerminalPalette (
-    ColorValue Foreground, 
-    ColorValue Background, 
-    ColorValue Cursor, 
+    ColorValue Foreground,
+    ColorValue Background,
+    ColorValue Cursor,
     /// <summary>
     /// The sixteen ANSI colours: eight normal, then eight bright. Any other
     /// length is refused rather than padded — a palette that is not sixteen
@@ -7582,10 +8957,10 @@ class FfiConverterTypeTerminalPalette: FfiConverterRustBuffer<TerminalPalette> {
 /// it must not open a control client.
 /// </summary>
 internal record TmuxListedWindow (
-    uint Id, 
-    uint Index, 
-    string Name, 
-    bool Active, 
+    uint Id,
+    uint Index,
+    string Name,
+    bool Active,
     uint Panes
 ) {
 }
@@ -7624,14 +8999,14 @@ class FfiConverterTypeTmuxListedWindow: FfiConverterRustBuffer<TmuxListedWindow>
 
 
 internal record TmuxPaneFrame (
-    uint Id, 
-    uint Window, 
-    ushort X, 
-    ushort Y, 
-    ushort Width, 
-    ushort Height, 
-    bool Active, 
-    bool Visible, 
+    uint Id,
+    uint Window,
+    ushort X,
+    ushort Y,
+    ushort Width,
+    ushort Height,
+    bool Active,
+    bool Visible,
     ScreenFrame Frame
 ) {
 }
@@ -7682,9 +9057,9 @@ class FfiConverterTypeTmuxPaneFrame: FfiConverterRustBuffer<TmuxPaneFrame> {
 
 
 internal record TmuxSessionInfo (
-    string Id, 
-    string Name, 
-    bool Attached, 
+    string Id,
+    string Name,
+    bool Attached,
     TmuxListedWindow[] Windows
 ) {
 }
@@ -7720,8 +9095,8 @@ class FfiConverterTypeTmuxSessionInfo: FfiConverterRustBuffer<TmuxSessionInfo> {
 
 
 internal record TmuxSnapshot (
-    TmuxWindowInfo[] Windows, 
-    TmuxPaneFrame[] Panes, 
+    TmuxWindowInfo[] Windows,
+    TmuxPaneFrame[] Panes,
     string? Ended
 ) {
 }
@@ -7754,10 +9129,10 @@ class FfiConverterTypeTmuxSnapshot: FfiConverterRustBuffer<TmuxSnapshot> {
 
 
 internal record TmuxWindowInfo (
-    uint Id, 
-    string Name, 
-    bool Active, 
-    ushort Width, 
+    uint Id,
+    string Name,
+    bool Active,
+    ushort Width,
     ushort Height
 ) {
 }
@@ -7790,6 +9165,39 @@ class FfiConverterTypeTmuxWindowInfo: FfiConverterRustBuffer<TmuxWindowInfo> {
             FfiConverterBoolean.INSTANCE.Write(value.Active, stream);
             FfiConverterUInt16.INSTANCE.Write(value.Width, stream);
             FfiConverterUInt16.INSTANCE.Write(value.Height, stream);
+    }
+}
+
+
+
+/// <summary>
+/// One row of a partial update, named by its place on the visible screen.
+/// </summary>
+internal record UpdatedRow (
+    uint Row,
+    ScreenRow Line
+) {
+}
+
+class FfiConverterTypeUpdatedRow: FfiConverterRustBuffer<UpdatedRow> {
+    public static FfiConverterTypeUpdatedRow INSTANCE = new FfiConverterTypeUpdatedRow();
+
+    public override UpdatedRow Read(BigEndianStream stream) {
+        return new UpdatedRow(
+            Row: FfiConverterUInt32.INSTANCE.Read(stream),
+            Line: FfiConverterTypeScreenRow.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(UpdatedRow value) {
+        return 0
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.Row)
+            + FfiConverterTypeScreenRow.INSTANCE.AllocationSize(value.Line);
+    }
+
+    public override void Write(UpdatedRow value, BigEndianStream stream) {
+            FfiConverterUInt32.INSTANCE.Write(value.Row, stream);
+            FfiConverterTypeScreenRow.INSTANCE.Write(value.Line, stream);
     }
 }
 
@@ -7840,23 +9248,23 @@ class FfiConverterTypeCaretShape: FfiConverterRustBuffer<CaretShape> {
 
 
 internal record CellColor {
-    
+
     public record Named (
         ColorName Name
     ) : CellColor {}
-    
+
     public record Indexed (
         byte Index
     ) : CellColor {}
-    
+
     public record Rgb (
         byte Red,
         byte Green,
         byte Blue
     ) : CellColor {}
-    
 
-    
+
+
 }
 
 class FfiConverterTypeCellColor : FfiConverterRustBuffer<CellColor>{
@@ -8034,8 +9442,8 @@ internal class FileException: UniffiException {
     FileException(String @Message) : base(@Message) {}
 
     // Each variant is a nested class
-    
-    
+
+
     public class NotFound : FileException {
         // Members
         public string @path;
@@ -8048,8 +9456,8 @@ internal class FileException: UniffiException {
             this.@path = @path;
         }
     }
-    
-    
+
+
     public class Exists : FileException {
         // Members
         public string @path;
@@ -8062,8 +9470,8 @@ internal class FileException: UniffiException {
             this.@path = @path;
         }
     }
-    
-    
+
+
     public class PermissionDenied : FileException {
         // Members
         public string @path;
@@ -8076,8 +9484,8 @@ internal class FileException: UniffiException {
             this.@path = @path;
         }
     }
-    
-    
+
+
     public class NotEmpty : FileException {
         // Members
         public string @path;
@@ -8090,13 +9498,13 @@ internal class FileException: UniffiException {
             this.@path = @path;
         }
     }
-    
+
     public class Cancelled : FileException {
         public Cancelled() : base() {}
     }
-    
-    
-    
+
+
+
     public class Disconnected : FileException {
         // Members
         public string @cause;
@@ -8109,8 +9517,8 @@ internal class FileException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
-    
+
+
     public class Failed : FileException {
         // Members
         public string @cause;
@@ -8123,9 +9531,9 @@ internal class FileException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
 
-    
+
+
 }
 
 class FfiConverterTypeFileError : FfiConverterRustBuffer<FileException>, CallStatusErrorHandler<FileException> {
@@ -8279,6 +9687,155 @@ class FfiConverterTypeFileKind: FfiConverterRustBuffer<FileKind> {
 
 
 /// <summary>
+/// What changed since the frontend last drew.
+///
+/// `Full` replaces the screen. `Rows` replaces those lines and the cursor.
+/// `Idle` is a cursor or title change with no new cells.
+/// </summary>
+internal record FrameUpdate {
+
+    public record Full (
+        ScreenFrame Frame
+    ) : FrameUpdate {}
+
+    public record Rows (
+        UpdatedRow[] RowsValue,
+        uint CursorRow,
+        uint CursorColumn,
+        CaretShape CursorShape,
+        bool CursorVisible,
+        string Title,
+        uint ViewportOffset,
+        uint HistoryLines,
+        MouseTracking Mouse
+    ) : FrameUpdate {}
+
+    public record Idle (
+        uint CursorRow,
+        uint CursorColumn,
+        CaretShape CursorShape,
+        bool CursorVisible,
+        string Title,
+        uint ViewportOffset,
+        uint HistoryLines,
+        MouseTracking Mouse
+    ) : FrameUpdate {}
+
+
+
+}
+
+class FfiConverterTypeFrameUpdate : FfiConverterRustBuffer<FrameUpdate>{
+    public static FfiConverterRustBuffer<FrameUpdate> INSTANCE = new FfiConverterTypeFrameUpdate();
+
+    public override FrameUpdate Read(BigEndianStream stream) {
+        var value = stream.ReadInt();
+        switch (value) {
+            case 1:
+                return new FrameUpdate.Full(
+                    FfiConverterTypeScreenFrame.INSTANCE.Read(stream)
+                );
+            case 2:
+                return new FrameUpdate.Rows(
+                    FfiConverterSequenceTypeUpdatedRow.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterTypeCaretShape.INSTANCE.Read(stream),
+                    FfiConverterBoolean.INSTANCE.Read(stream),
+                    FfiConverterString.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterTypeMouseTracking.INSTANCE.Read(stream)
+                );
+            case 3:
+                return new FrameUpdate.Idle(
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterTypeCaretShape.INSTANCE.Read(stream),
+                    FfiConverterBoolean.INSTANCE.Read(stream),
+                    FfiConverterString.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterUInt32.INSTANCE.Read(stream),
+                    FfiConverterTypeMouseTracking.INSTANCE.Read(stream)
+                );
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeFrameUpdate.Read()", value));
+        }
+    }
+
+    public override int AllocationSize(FrameUpdate value) {
+        switch (value) {
+            case FrameUpdate.Full variant_value:
+                return 4
+                    + FfiConverterTypeScreenFrame.INSTANCE.AllocationSize(variant_value.Frame);
+            case FrameUpdate.Rows variant_value:
+                return 4
+                    + FfiConverterSequenceTypeUpdatedRow.INSTANCE.AllocationSize(variant_value.RowsValue)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.CursorRow)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.CursorColumn)
+                    + FfiConverterTypeCaretShape.INSTANCE.AllocationSize(variant_value.CursorShape)
+                    + FfiConverterBoolean.INSTANCE.AllocationSize(variant_value.CursorVisible)
+                    + FfiConverterString.INSTANCE.AllocationSize(variant_value.Title)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.ViewportOffset)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.HistoryLines)
+                    + FfiConverterTypeMouseTracking.INSTANCE.AllocationSize(variant_value.Mouse);
+            case FrameUpdate.Idle variant_value:
+                return 4
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.CursorRow)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.CursorColumn)
+                    + FfiConverterTypeCaretShape.INSTANCE.AllocationSize(variant_value.CursorShape)
+                    + FfiConverterBoolean.INSTANCE.AllocationSize(variant_value.CursorVisible)
+                    + FfiConverterString.INSTANCE.AllocationSize(variant_value.Title)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.ViewportOffset)
+                    + FfiConverterUInt32.INSTANCE.AllocationSize(variant_value.HistoryLines)
+                    + FfiConverterTypeMouseTracking.INSTANCE.AllocationSize(variant_value.Mouse);
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeFrameUpdate.AllocationSize()", value));
+        }
+    }
+
+    public override void Write(FrameUpdate value, BigEndianStream stream) {
+        switch (value) {
+            case FrameUpdate.Full variant_value:
+                stream.WriteInt(1);
+                FfiConverterTypeScreenFrame.INSTANCE.Write(variant_value.Frame, stream);
+                break;
+            case FrameUpdate.Rows variant_value:
+                stream.WriteInt(2);
+                FfiConverterSequenceTypeUpdatedRow.INSTANCE.Write(variant_value.RowsValue, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.CursorRow, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.CursorColumn, stream);
+                FfiConverterTypeCaretShape.INSTANCE.Write(variant_value.CursorShape, stream);
+                FfiConverterBoolean.INSTANCE.Write(variant_value.CursorVisible, stream);
+                FfiConverterString.INSTANCE.Write(variant_value.Title, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.ViewportOffset, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.HistoryLines, stream);
+                FfiConverterTypeMouseTracking.INSTANCE.Write(variant_value.Mouse, stream);
+                break;
+            case FrameUpdate.Idle variant_value:
+                stream.WriteInt(3);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.CursorRow, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.CursorColumn, stream);
+                FfiConverterTypeCaretShape.INSTANCE.Write(variant_value.CursorShape, stream);
+                FfiConverterBoolean.INSTANCE.Write(variant_value.CursorVisible, stream);
+                FfiConverterString.INSTANCE.Write(variant_value.Title, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.ViewportOffset, stream);
+                FfiConverterUInt32.INSTANCE.Write(variant_value.HistoryLines, stream);
+                FfiConverterTypeMouseTracking.INSTANCE.Write(variant_value.Mouse, stream);
+                break;
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeFrameUpdate.Write()", value));
+        }
+    }
+}
+
+
+
+
+
+
+
+/// <summary>
 /// A key, named by what it is rather than by a scancode.
 ///
 /// `Char` carries a `String`, not a character: what a person typed may be a
@@ -8287,59 +9844,59 @@ class FfiConverterTypeFileKind: FfiConverterRustBuffer<FileKind> {
 /// boundary would break exactly the input methods people rely on.
 /// </summary>
 internal record KeyPress {
-    
+
     public record Char (
         string Text
     ) : KeyPress {}
-    
+
     public record Enter: KeyPress {}
-    
-    
+
+
     public record Tab: KeyPress {}
-    
-    
+
+
     public record Backspace: KeyPress {}
-    
-    
+
+
     public record Escape: KeyPress {}
-    
-    
+
+
     public record Delete: KeyPress {}
-    
-    
+
+
     public record Insert: KeyPress {}
-    
-    
+
+
     public record Up: KeyPress {}
-    
-    
+
+
     public record Down: KeyPress {}
-    
-    
+
+
     public record Left: KeyPress {}
-    
-    
+
+
     public record Right: KeyPress {}
-    
-    
+
+
     public record Home: KeyPress {}
-    
-    
+
+
     public record End: KeyPress {}
-    
-    
+
+
     public record PageUp: KeyPress {}
-    
-    
+
+
     public record PageDown: KeyPress {}
-    
-    
+
+
     public record Function (
         byte Number
     ) : KeyPress {}
-    
 
-    
+
+
 }
 
 class FfiConverterTypeKeyPress : FfiConverterRustBuffer<KeyPress>{
@@ -8509,22 +10066,128 @@ class FfiConverterTypeKeyPress : FfiConverterRustBuffer<KeyPress>{
 
 
 /// <summary>
+/// Why a key could not be used. Our words, not the parser's (spec §18).
+/// </summary>
+internal record KeyProblem {
+
+    /// <summary>
+    /// Not a private key in a format this build reads. `cause` is diagnostic.
+    /// </summary>
+    public record Unreadable (
+        string Cause
+    ) : KeyProblem {}
+
+    /// <summary>
+    /// A kind this build cannot sign with, such as a hardware security key.
+    /// </summary>
+    public record Unsupported (
+        string What
+    ) : KeyProblem {}
+
+    /// <summary>
+    /// Protected by a passphrase that was not given: nothing could ask for
+    /// one, or the person asked said no.
+    /// </summary>
+    public record Locked: KeyProblem {}
+
+
+    /// <summary>
+    /// Every passphrase offered was wrong.
+    /// </summary>
+    public record WrongPassphrase: KeyProblem {}
+
+
+
+
+}
+
+class FfiConverterTypeKeyProblem : FfiConverterRustBuffer<KeyProblem>{
+    public static FfiConverterRustBuffer<KeyProblem> INSTANCE = new FfiConverterTypeKeyProblem();
+
+    public override KeyProblem Read(BigEndianStream stream) {
+        var value = stream.ReadInt();
+        switch (value) {
+            case 1:
+                return new KeyProblem.Unreadable(
+                    FfiConverterString.INSTANCE.Read(stream)
+                );
+            case 2:
+                return new KeyProblem.Unsupported(
+                    FfiConverterString.INSTANCE.Read(stream)
+                );
+            case 3:
+                return new KeyProblem.Locked(
+                );
+            case 4:
+                return new KeyProblem.WrongPassphrase(
+                );
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeKeyProblem.Read()", value));
+        }
+    }
+
+    public override int AllocationSize(KeyProblem value) {
+        switch (value) {
+            case KeyProblem.Unreadable variant_value:
+                return 4
+                    + FfiConverterString.INSTANCE.AllocationSize(variant_value.Cause);
+            case KeyProblem.Unsupported variant_value:
+                return 4
+                    + FfiConverterString.INSTANCE.AllocationSize(variant_value.What);
+            case KeyProblem.Locked variant_value:
+                return 4;
+            case KeyProblem.WrongPassphrase variant_value:
+                return 4;
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeKeyProblem.AllocationSize()", value));
+        }
+    }
+
+    public override void Write(KeyProblem value, BigEndianStream stream) {
+        switch (value) {
+            case KeyProblem.Unreadable variant_value:
+                stream.WriteInt(1);
+                FfiConverterString.INSTANCE.Write(variant_value.Cause, stream);
+                break;
+            case KeyProblem.Unsupported variant_value:
+                stream.WriteInt(2);
+                FfiConverterString.INSTANCE.Write(variant_value.What, stream);
+                break;
+            case KeyProblem.Locked variant_value:
+                stream.WriteInt(3);
+                break;
+            case KeyProblem.WrongPassphrase variant_value:
+                stream.WriteInt(4);
+                break;
+            default:
+                throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeKeyProblem.Write()", value));
+        }
+    }
+}
+
+
+
+
+
+
+
+/// <summary>
 /// What a link points at. A path is shape, not truth: nothing has asked the
 /// far side whether it exists.
 /// </summary>
 internal record LinkKind {
-    
+
     /// <summary>
     /// The URI a program attached with `OSC 8`, exactly as sent.
     /// </summary>
     public record Hyperlink (
         string Uri
     ) : LinkKind {}
-    
+
     public record Url (
         string UrlValue
     ) : LinkKind {}
-    
+
     /// <summary>
     /// Relative or absolute, as printed; `line` and `column` when it carried
     /// `:12:5`.
@@ -8534,9 +10197,9 @@ internal record LinkKind {
         uint? Line,
         uint? Column
     ) : LinkKind {}
-    
 
-    
+
+
 }
 
 class FfiConverterTypeLinkKind : FfiConverterRustBuffer<LinkKind>{
@@ -8611,6 +10274,157 @@ class FfiConverterTypeLinkKind : FfiConverterRustBuffer<LinkKind>{
 
 
 /// <summary>
+/// How much of the pointer the far side wants sent back.
+///
+/// `Off` leaves clicks and the wheel to this app: selection and its own
+/// history. Anything else is a program — an editor, a pager, tmux — that
+/// asked to handle the pointer itself.
+/// </summary>
+internal enum MouseTracking: int {
+    Off,
+    /// <summary>
+    /// Presses, releases and the wheel. No motion.
+    /// </summary>
+    Clicks,
+    /// <summary>
+    /// Motion while a button is held, as well as clicks.
+    /// </summary>
+    Drag,
+    /// <summary>
+    /// Every move, whether or not a button is held.
+    /// </summary>
+    Any
+}
+
+class FfiConverterTypeMouseTracking: FfiConverterRustBuffer<MouseTracking> {
+    public static FfiConverterTypeMouseTracking INSTANCE = new FfiConverterTypeMouseTracking();
+
+    public override MouseTracking Read(BigEndianStream stream) {
+        var value = stream.ReadInt();
+        switch (value) {
+            case 1: return MouseTracking.Off;
+            case 2: return MouseTracking.Clicks;
+            case 3: return MouseTracking.Drag;
+            case 4: return MouseTracking.Any;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeMouseTracking.Read()", value));
+        }
+    }
+
+    public override int AllocationSize(MouseTracking value) {
+        return 4;
+    }
+
+    public override void Write(MouseTracking value, BigEndianStream stream) {
+        switch (value) {
+            case MouseTracking.Off: stream.WriteInt(1); break;
+            case MouseTracking.Clicks: stream.WriteInt(2); break;
+            case MouseTracking.Drag: stream.WriteInt(3); break;
+            case MouseTracking.Any: stream.WriteInt(4); break;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeMouseTracking.Write()", value));
+        }
+    }
+}
+
+
+
+
+
+
+
+/// <summary>
+/// A mouse button. `None` is motion with nothing held.
+/// </summary>
+internal enum PointerButton: int {
+    Left,
+    Middle,
+    Right,
+    None,
+    WheelUp,
+    WheelDown
+}
+
+class FfiConverterTypePointerButton: FfiConverterRustBuffer<PointerButton> {
+    public static FfiConverterTypePointerButton INSTANCE = new FfiConverterTypePointerButton();
+
+    public override PointerButton Read(BigEndianStream stream) {
+        var value = stream.ReadInt();
+        switch (value) {
+            case 1: return PointerButton.Left;
+            case 2: return PointerButton.Middle;
+            case 3: return PointerButton.Right;
+            case 4: return PointerButton.None;
+            case 5: return PointerButton.WheelUp;
+            case 6: return PointerButton.WheelDown;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypePointerButton.Read()", value));
+        }
+    }
+
+    public override int AllocationSize(PointerButton value) {
+        return 4;
+    }
+
+    public override void Write(PointerButton value, BigEndianStream stream) {
+        switch (value) {
+            case PointerButton.Left: stream.WriteInt(1); break;
+            case PointerButton.Middle: stream.WriteInt(2); break;
+            case PointerButton.Right: stream.WriteInt(3); break;
+            case PointerButton.None: stream.WriteInt(4); break;
+            case PointerButton.WheelUp: stream.WriteInt(5); break;
+            case PointerButton.WheelDown: stream.WriteInt(6); break;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypePointerButton.Write()", value));
+        }
+    }
+}
+
+
+
+
+
+
+
+/// <summary>
+/// Press, release, or a move.
+/// </summary>
+internal enum PointerPhase: int {
+    Press,
+    Release,
+    Move
+}
+
+class FfiConverterTypePointerPhase: FfiConverterRustBuffer<PointerPhase> {
+    public static FfiConverterTypePointerPhase INSTANCE = new FfiConverterTypePointerPhase();
+
+    public override PointerPhase Read(BigEndianStream stream) {
+        var value = stream.ReadInt();
+        switch (value) {
+            case 1: return PointerPhase.Press;
+            case 2: return PointerPhase.Release;
+            case 3: return PointerPhase.Move;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypePointerPhase.Read()", value));
+        }
+    }
+
+    public override int AllocationSize(PointerPhase value) {
+        return 4;
+    }
+
+    public override void Write(PointerPhase value, BigEndianStream stream) {
+        switch (value) {
+            case PointerPhase.Press: stream.WriteInt(1); break;
+            case PointerPhase.Release: stream.WriteInt(2); break;
+            case PointerPhase.Move: stream.WriteInt(3); break;
+            default: throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypePointerPhase.Write()", value));
+        }
+    }
+}
+
+
+
+
+
+
+
+/// <summary>
 /// Errors are ours: a backend error number is diagnostic context, never the
 /// public API (spec §18).
 /// </summary>
@@ -8619,13 +10433,13 @@ internal class RenderFailure: UniffiException {
     RenderFailure(String @Message) : base(@Message) {}
 
     // Each variant is a nested class
-    
+
     public class NoAdapter : RenderFailure {
         public NoAdapter() : base() {}
     }
-    
-    
-    
+
+
+
     public class NoDevice : RenderFailure {
         // Members
         public string @cause;
@@ -8638,8 +10452,8 @@ internal class RenderFailure: UniffiException {
             this.@cause = @cause;
         }
     }
-    
-    
+
+
     public class Surface : RenderFailure {
         // Members
         public string @cause;
@@ -8652,9 +10466,9 @@ internal class RenderFailure: UniffiException {
             this.@cause = @cause;
         }
     }
-    
 
-    
+
+
 }
 
 class FfiConverterTypeRenderFailure : FfiConverterRustBuffer<RenderFailure>, CallStatusErrorHandler<RenderFailure> {
@@ -8725,28 +10539,28 @@ class FfiConverterTypeRenderFailure : FfiConverterRustBuffer<RenderFailure>, Cal
 /// could get a different answer than the engine uses.
 /// </summary>
 internal record ScrollTo {
-    
+
     /// <summary>
     /// Positive goes back into history, negative comes forward.
     /// </summary>
     public record Lines (
         int Count
     ) : ScrollTo {}
-    
-    public record PageUp: ScrollTo {}
-    
-    
-    public record PageDown: ScrollTo {}
-    
-    
-    public record Oldest: ScrollTo {}
-    
-    
-    public record Live: ScrollTo {}
-    
-    
 
-    
+    public record PageUp: ScrollTo {}
+
+
+    public record PageDown: ScrollTo {}
+
+
+    public record Oldest: ScrollTo {}
+
+
+    public record Live: ScrollTo {}
+
+
+
+
 }
 
 class FfiConverterTypeScrollTo : FfiConverterRustBuffer<ScrollTo>{
@@ -8828,29 +10642,35 @@ class FfiConverterTypeScrollTo : FfiConverterRustBuffer<ScrollTo>{
 /// A credential to offer, in the order they are given.
 /// </summary>
 internal record Secret: IDisposable  {
-    
+
     public record Password (
         string PasswordValue
     ) : Secret {}
-    
+
     /// <summary>
     /// PEM text, so a key held in a keychain item never has to be written to
     /// a file to be used.
+    ///
+    /// A key protected by a passphrase is unlocked with `passphrase` when one
+    /// is given, and otherwise by asking `unlock` — only once the server has
+    /// said it would take the key. With neither, it is left out and named in
+    /// the error if the login fails.
     /// </summary>
     public record PrivateKey (
         string Pem,
-        string? Passphrase
+        string? Passphrase,
+        PassphrasePrompter? Unlock
     ) : Secret {}
-    
+
     /// <summary>
     /// Answers whatever the server asks, for as many rounds as it asks.
     /// </summary>
     public record Interactive (
         InteractivePrompter Prompter
     ) : Secret {}
-    
 
-    
+
+
     public void Dispose() {
         switch (this) {
             case Secret.Password variant_value:
@@ -8860,7 +10680,8 @@ internal record Secret: IDisposable  {
             case Secret.PrivateKey variant_value:
                 FFIObjectUtil.DisposeAll(
                     variant_value.Pem,
-                    variant_value.Passphrase);
+                    variant_value.Passphrase,
+                    variant_value.Unlock);
                 break;
             case Secret.Interactive variant_value:
                 FFIObjectUtil.DisposeAll(
@@ -8870,7 +10691,7 @@ internal record Secret: IDisposable  {
                 throw new InternalException(String.Format("invalid enum value '{0}' in Secret.Dispose()", this));
         }
     }
-    
+
 }
 
 class FfiConverterTypeSecret : FfiConverterRustBuffer<Secret>{
@@ -8886,7 +10707,8 @@ class FfiConverterTypeSecret : FfiConverterRustBuffer<Secret>{
             case 2:
                 return new Secret.PrivateKey(
                     FfiConverterString.INSTANCE.Read(stream),
-                    FfiConverterOptionalString.INSTANCE.Read(stream)
+                    FfiConverterOptionalString.INSTANCE.Read(stream),
+                    FfiConverterOptionalTypePassphrasePrompter.INSTANCE.Read(stream)
                 );
             case 3:
                 return new Secret.Interactive(
@@ -8905,7 +10727,8 @@ class FfiConverterTypeSecret : FfiConverterRustBuffer<Secret>{
             case Secret.PrivateKey variant_value:
                 return 4
                     + FfiConverterString.INSTANCE.AllocationSize(variant_value.Pem)
-                    + FfiConverterOptionalString.INSTANCE.AllocationSize(variant_value.Passphrase);
+                    + FfiConverterOptionalString.INSTANCE.AllocationSize(variant_value.Passphrase)
+                    + FfiConverterOptionalTypePassphrasePrompter.INSTANCE.AllocationSize(variant_value.Unlock);
             case Secret.Interactive variant_value:
                 return 4
                     + FfiConverterTypeInteractivePrompter.INSTANCE.AllocationSize(variant_value.Prompter);
@@ -8924,6 +10747,7 @@ class FfiConverterTypeSecret : FfiConverterRustBuffer<Secret>{
                 stream.WriteInt(2);
                 FfiConverterString.INSTANCE.Write(variant_value.Pem, stream);
                 FfiConverterOptionalString.INSTANCE.Write(variant_value.Passphrase, stream);
+                FfiConverterOptionalTypePassphrasePrompter.INSTANCE.Write(variant_value.Unlock, stream);
                 break;
             case Secret.Interactive variant_value:
                 stream.WriteInt(3);
@@ -8945,20 +10769,20 @@ class FfiConverterTypeSecret : FfiConverterRustBuffer<Secret>{
 /// Why a session stopped.
 /// </summary>
 internal record SessionEnding {
-    
+
     public record Exited (
         uint Status
     ) : SessionEnding {}
-    
+
     public record Closed: SessionEnding {}
-    
-    
+
+
     public record Lost (
         string Cause
     ) : SessionEnding {}
-    
 
-    
+
+
 }
 
 class FfiConverterTypeSessionEnding : FfiConverterRustBuffer<SessionEnding>{
@@ -9027,12 +10851,12 @@ class FfiConverterTypeSessionEnding : FfiConverterRustBuffer<SessionEnding>{
 /// Something the person did.
 /// </summary>
 internal record TerminalInput {
-    
+
     public record Key (
         KeyPress KeyValue,
         KeyModifiers Modifiers
     ) : TerminalInput {}
-    
+
     /// <summary>
     /// Text arriving all at once rather than typed. Bracketing — and the
     /// stripping that stops a paste from ending its own bracket — happens in
@@ -9041,9 +10865,23 @@ internal record TerminalInput {
     public record Paste (
         string Text
     ) : TerminalInput {}
-    
 
-    
+    /// <summary>
+    /// A pointer event in cells of the visible grid, counted from the top left.
+    ///
+    /// The engine encodes it in whichever mouse protocol the far side turned
+    /// on, and encodes it as nothing when tracking is off.
+    /// </summary>
+    public record Pointer (
+        PointerButton Button,
+        PointerPhase Phase,
+        ushort Column,
+        ushort Row,
+        KeyModifiers Modifiers
+    ) : TerminalInput {}
+
+
+
 }
 
 class FfiConverterTypeTerminalInput : FfiConverterRustBuffer<TerminalInput>{
@@ -9061,6 +10899,14 @@ class FfiConverterTypeTerminalInput : FfiConverterRustBuffer<TerminalInput>{
                 return new TerminalInput.Paste(
                     FfiConverterString.INSTANCE.Read(stream)
                 );
+            case 3:
+                return new TerminalInput.Pointer(
+                    FfiConverterTypePointerButton.INSTANCE.Read(stream),
+                    FfiConverterTypePointerPhase.INSTANCE.Read(stream),
+                    FfiConverterUInt16.INSTANCE.Read(stream),
+                    FfiConverterUInt16.INSTANCE.Read(stream),
+                    FfiConverterTypeKeyModifiers.INSTANCE.Read(stream)
+                );
             default:
                 throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeTerminalInput.Read()", value));
         }
@@ -9075,6 +10921,13 @@ class FfiConverterTypeTerminalInput : FfiConverterRustBuffer<TerminalInput>{
             case TerminalInput.Paste variant_value:
                 return 4
                     + FfiConverterString.INSTANCE.AllocationSize(variant_value.Text);
+            case TerminalInput.Pointer variant_value:
+                return 4
+                    + FfiConverterTypePointerButton.INSTANCE.AllocationSize(variant_value.Button)
+                    + FfiConverterTypePointerPhase.INSTANCE.AllocationSize(variant_value.Phase)
+                    + FfiConverterUInt16.INSTANCE.AllocationSize(variant_value.Column)
+                    + FfiConverterUInt16.INSTANCE.AllocationSize(variant_value.Row)
+                    + FfiConverterTypeKeyModifiers.INSTANCE.AllocationSize(variant_value.Modifiers);
             default:
                 throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeTerminalInput.AllocationSize()", value));
         }
@@ -9090,6 +10943,14 @@ class FfiConverterTypeTerminalInput : FfiConverterRustBuffer<TerminalInput>{
             case TerminalInput.Paste variant_value:
                 stream.WriteInt(2);
                 FfiConverterString.INSTANCE.Write(variant_value.Text, stream);
+                break;
+            case TerminalInput.Pointer variant_value:
+                stream.WriteInt(3);
+                FfiConverterTypePointerButton.INSTANCE.Write(variant_value.Button, stream);
+                FfiConverterTypePointerPhase.INSTANCE.Write(variant_value.Phase, stream);
+                FfiConverterUInt16.INSTANCE.Write(variant_value.Column, stream);
+                FfiConverterUInt16.INSTANCE.Write(variant_value.Row, stream);
+                FfiConverterTypeKeyModifiers.INSTANCE.Write(variant_value.Modifiers, stream);
                 break;
             default:
                 throw new InternalException(String.Format("invalid enum value '{0}' in FfiConverterTypeTerminalInput.Write()", value));
@@ -9115,13 +10976,13 @@ internal class TetherException: UniffiException {
     TetherException(String @Message) : base(@Message) {}
 
     // Each variant is a nested class
-    
+
     public class Cancelled : TetherException {
         public Cancelled() : base() {}
     }
-    
-    
-    
+
+
+
     public class TimedOut : TetherException {
         // Members
         public ulong @millis;
@@ -9134,8 +10995,8 @@ internal class TetherException: UniffiException {
             this.@millis = @millis;
         }
     }
-    
-    
+
+
     public class Unreachable : TetherException {
         // Members
         public string @endpoint;
@@ -9143,7 +11004,7 @@ internal class TetherException: UniffiException {
 
         // Constructor
         public Unreachable(
-                string @endpoint, 
+                string @endpoint,
                 string @cause) : base(
                 "@endpoint" + "=" + @endpoint+ ", " +
                 "@cause" + "=" + @cause) {
@@ -9153,12 +11014,12 @@ internal class TetherException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
+
     /// <summary>
     /// The application's own trust decision, reported back to it. Not a
     /// failure of the connection: nothing was sent.
     /// </summary>
-    
+
     public class HostRejected : TetherException {
         // Members
         public string @endpoint;
@@ -9171,27 +11032,38 @@ internal class TetherException: UniffiException {
             this.@endpoint = @endpoint;
         }
     }
-    
-    
+
+    /// <summary>
+    /// What the server would still accept, and the keys that were never
+    /// offered to it — "your key was not used, and here is why" is often the
+    /// whole story of a refused login. `remaining` is empty when nothing was
+    /// refused by the server at all: every key given was unusable.
+    /// </summary>
+
     public class AuthenticationFailed : TetherException {
         // Members
         public string[] @remaining;
+        public SkippedKey[] @skipped;
 
         // Constructor
         public AuthenticationFailed(
-                string[] @remaining) : base(
-                "@remaining" + "=" + @remaining) {
+                string[] @remaining,
+                SkippedKey[] @skipped) : base(
+                "@remaining" + "=" + @remaining+ ", " +
+                "@skipped" + "=" + @skipped) {
 
             this.@remaining = @remaining;
+
+            this.@skipped = @skipped;
         }
     }
-    
+
     /// <summary>
     /// The credential was *accepted* and the server wants another factor, but
     /// none was left to offer. Distinct from a rejection, because telling
     /// someone their password was wrong when it was right is its own failure.
     /// </summary>
-    
+
     public class MoreFactorsNeeded : TetherException {
         // Members
         public string[] @remaining;
@@ -9204,18 +11076,18 @@ internal class TetherException: UniffiException {
             this.@remaining = @remaining;
         }
     }
-    
+
     public class NothingToOffer : TetherException {
         public NothingToOffer() : base() {}
     }
-    
-    
+
+
     /// <summary>
     /// Neither side would give us a shell. Worded for both, because by this
     /// point a consumer holds a session and does not care whether the shell
     /// it asked for was going to run here or somewhere else.
     /// </summary>
-    
+
     public class ShellRefused : TetherException {
         // Members
         public string @cause;
@@ -9228,7 +11100,7 @@ internal class TetherException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
+
     /// <summary>
     /// The system does not let an application do this at all.
     ///
@@ -9236,7 +11108,7 @@ internal class TetherException: UniffiException {
     /// `fork`/`exec` outside the sandbox. Distinct from a refusal, because a
     /// refusal is something a person might fix and this is not.
     /// </summary>
-    
+
     public class Unsupported : TetherException {
         // Members
         public string @what;
@@ -9249,8 +11121,8 @@ internal class TetherException: UniffiException {
             this.@what = @what;
         }
     }
-    
-    
+
+
     public class Disconnected : TetherException {
         // Members
         public string @cause;
@@ -9263,13 +11135,13 @@ internal class TetherException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
+
     public class SessionEnded : TetherException {
         public SessionEnded() : base() {}
     }
-    
-    
-    
+
+
+
     public class Protocol : TetherException {
         // Members
         public string @cause;
@@ -9282,9 +11154,9 @@ internal class TetherException: UniffiException {
             this.@cause = @cause;
         }
     }
-    
 
-    
+
+
 }
 
 class FfiConverterTypeTetherError : FfiConverterRustBuffer<TetherException>, CallStatusErrorHandler<TetherException> {
@@ -9307,7 +11179,8 @@ class FfiConverterTypeTetherError : FfiConverterRustBuffer<TetherException>, Cal
                     FfiConverterString.INSTANCE.Read(stream));
             case 5:
                 return new TetherException.AuthenticationFailed(
-                    FfiConverterSequenceString.INSTANCE.Read(stream));
+                    FfiConverterSequenceString.INSTANCE.Read(stream),
+                    FfiConverterSequenceTypeSkippedKey.INSTANCE.Read(stream));
             case 6:
                 return new TetherException.MoreFactorsNeeded(
                     FfiConverterSequenceString.INSTANCE.Read(stream));
@@ -9353,7 +11226,8 @@ class FfiConverterTypeTetherError : FfiConverterRustBuffer<TetherException>, Cal
 
             case TetherException.AuthenticationFailed variant_value:
                 return 4
-                    + FfiConverterSequenceString.INSTANCE.AllocationSize(variant_value.@remaining);
+                    + FfiConverterSequenceString.INSTANCE.AllocationSize(variant_value.@remaining)
+                    + FfiConverterSequenceTypeSkippedKey.INSTANCE.AllocationSize(variant_value.@skipped);
 
             case TetherException.MoreFactorsNeeded variant_value:
                 return 4
@@ -9406,6 +11280,7 @@ class FfiConverterTypeTetherError : FfiConverterRustBuffer<TetherException>, Cal
             case TetherException.AuthenticationFailed variant_value:
                 stream.WriteInt(5);
                 FfiConverterSequenceString.INSTANCE.Write(variant_value.@remaining, stream);
+                FfiConverterSequenceTypeSkippedKey.INSTANCE.Write(variant_value.@skipped, stream);
                 break;
             case TetherException.MoreFactorsNeeded variant_value:
                 stream.WriteInt(6);
@@ -9444,60 +11319,60 @@ class FfiConverterTypeTetherError : FfiConverterRustBuffer<TetherException>, Cal
 
 
 internal record TmuxAction {
-    
+
     public record NewWindow: TmuxAction {}
-    
-    
+
+
     public record SelectWindow (
         uint Id
     ) : TmuxAction {}
-    
+
     public record RenameWindow (
         uint Id,
         string Name
     ) : TmuxAction {}
-    
+
     public record CloseWindow (
         uint Id
     ) : TmuxAction {}
-    
+
     public record SelectPane (
         uint Id
     ) : TmuxAction {}
-    
+
     public record Split (
         uint Id,
         bool Horizontal
     ) : TmuxAction {}
-    
+
     public record ResizePane (
         uint Id,
         ushort Columns,
         ushort Rows
     ) : TmuxAction {}
-    
+
     public record ZoomPane (
         uint Id
     ) : TmuxAction {}
-    
+
     public record ClosePane (
         uint Id
     ) : TmuxAction {}
-    
+
     public record Resize (
         ushort Columns,
         ushort Rows
     ) : TmuxAction {}
-    
+
     public record RenameSession (
         string Name
     ) : TmuxAction {}
-    
-    public record EndSession: TmuxAction {}
-    
-    
 
-    
+    public record EndSession: TmuxAction {}
+
+
+
+
 }
 
 class FfiConverterTypeTmuxAction : FfiConverterRustBuffer<TmuxAction>{
@@ -9751,6 +11626,37 @@ class FfiConverterOptionalUInt32: FfiConverterRustBuffer<uint?> {
 
 
 
+class FfiConverterOptionalInt32: FfiConverterRustBuffer<int?> {
+    public static FfiConverterOptionalInt32 INSTANCE = new FfiConverterOptionalInt32();
+
+    public override int? Read(BigEndianStream stream) {
+        if (stream.ReadByte() == 0) {
+            return null;
+        }
+        return FfiConverterInt32.INSTANCE.Read(stream);
+    }
+
+    public override int AllocationSize(int? value) {
+        if (value == null) {
+            return 1;
+        } else {
+            return 1 + FfiConverterInt32.INSTANCE.AllocationSize((int)value);
+        }
+    }
+
+    public override void Write(int? value, BigEndianStream stream) {
+        if (value == null) {
+            stream.WriteByte(0);
+        } else {
+            stream.WriteByte(1);
+            FfiConverterInt32.INSTANCE.Write((int)value, stream);
+        }
+    }
+}
+
+
+
+
 class FfiConverterOptionalUInt64: FfiConverterRustBuffer<ulong?> {
     public static FfiConverterOptionalUInt64 INSTANCE = new FfiConverterOptionalUInt64();
 
@@ -9844,6 +11750,37 @@ class FfiConverterOptionalTypeCancellationToken: FfiConverterRustBuffer<Cancella
 
 
 
+class FfiConverterOptionalTypePassphrasePrompter: FfiConverterRustBuffer<PassphrasePrompter?> {
+    public static FfiConverterOptionalTypePassphrasePrompter INSTANCE = new FfiConverterOptionalTypePassphrasePrompter();
+
+    public override PassphrasePrompter? Read(BigEndianStream stream) {
+        if (stream.ReadByte() == 0) {
+            return null;
+        }
+        return FfiConverterTypePassphrasePrompter.INSTANCE.Read(stream);
+    }
+
+    public override int AllocationSize(PassphrasePrompter? value) {
+        if (value == null) {
+            return 1;
+        } else {
+            return 1 + FfiConverterTypePassphrasePrompter.INSTANCE.AllocationSize((PassphrasePrompter)value);
+        }
+    }
+
+    public override void Write(PassphrasePrompter? value, BigEndianStream stream) {
+        if (value == null) {
+            stream.WriteByte(0);
+        } else {
+            stream.WriteByte(1);
+            FfiConverterTypePassphrasePrompter.INSTANCE.Write((PassphrasePrompter)value, stream);
+        }
+    }
+}
+
+
+
+
 class FfiConverterOptionalTypeRemoteConnection: FfiConverterRustBuffer<RemoteConnection?> {
     public static FfiConverterOptionalTypeRemoteConnection INSTANCE = new FfiConverterOptionalTypeRemoteConnection();
 
@@ -9868,6 +11805,37 @@ class FfiConverterOptionalTypeRemoteConnection: FfiConverterRustBuffer<RemoteCon
         } else {
             stream.WriteByte(1);
             FfiConverterTypeRemoteConnection.INSTANCE.Write((RemoteConnection)value, stream);
+        }
+    }
+}
+
+
+
+
+class FfiConverterOptionalTypeSessionHistory: FfiConverterRustBuffer<SessionHistory?> {
+    public static FfiConverterOptionalTypeSessionHistory INSTANCE = new FfiConverterOptionalTypeSessionHistory();
+
+    public override SessionHistory? Read(BigEndianStream stream) {
+        if (stream.ReadByte() == 0) {
+            return null;
+        }
+        return FfiConverterTypeSessionHistory.INSTANCE.Read(stream);
+    }
+
+    public override int AllocationSize(SessionHistory? value) {
+        if (value == null) {
+            return 1;
+        } else {
+            return 1 + FfiConverterTypeSessionHistory.INSTANCE.AllocationSize((SessionHistory)value);
+        }
+    }
+
+    public override void Write(SessionHistory? value, BigEndianStream stream) {
+        if (value == null) {
+            stream.WriteByte(0);
+        } else {
+            stream.WriteByte(1);
+            FfiConverterTypeSessionHistory.INSTANCE.Write((SessionHistory)value, stream);
         }
     }
 }
@@ -10506,6 +12474,52 @@ class FfiConverterSequenceTypeScreenRow: FfiConverterRustBuffer<ScreenRow[]> {
 
 
 
+class FfiConverterSequenceTypeSkippedKey: FfiConverterRustBuffer<SkippedKey[]> {
+    public static FfiConverterSequenceTypeSkippedKey INSTANCE = new FfiConverterSequenceTypeSkippedKey();
+
+    public override SkippedKey[]  Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        if (length == 0) {
+            return [];
+        }
+
+        var result = new SkippedKey[length];
+        var readFn = FfiConverterTypeSkippedKey.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result[i] = readFn(stream);
+        }
+        return result;
+    }
+
+    public override int AllocationSize(SkippedKey[]  value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeSkippedKey.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(SkippedKey[] value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Length);
+        var writerFn = FfiConverterTypeSkippedKey.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
 class FfiConverterSequenceTypeStyledRun: FfiConverterRustBuffer<StyledRun[]> {
     public static FfiConverterSequenceTypeStyledRun INSTANCE = new FfiConverterSequenceTypeStyledRun();
 
@@ -10736,6 +12750,52 @@ class FfiConverterSequenceTypeTmuxWindowInfo: FfiConverterRustBuffer<TmuxWindowI
 
 
 
+class FfiConverterSequenceTypeUpdatedRow: FfiConverterRustBuffer<UpdatedRow[]> {
+    public static FfiConverterSequenceTypeUpdatedRow INSTANCE = new FfiConverterSequenceTypeUpdatedRow();
+
+    public override UpdatedRow[]  Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        if (length == 0) {
+            return [];
+        }
+
+        var result = new UpdatedRow[length];
+        var readFn = FfiConverterTypeUpdatedRow.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result[i] = readFn(stream);
+        }
+        return result;
+    }
+
+    public override int AllocationSize(UpdatedRow[]  value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeUpdatedRow.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(UpdatedRow[] value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Length);
+        var writerFn = FfiConverterTypeUpdatedRow.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
 class FfiConverterSequenceTypeSecret: FfiConverterRustBuffer<Secret[]> {
     public static FfiConverterSequenceTypeSecret INSTANCE = new FfiConverterSequenceTypeSecret();
 
@@ -10934,7 +12994,7 @@ internal static class TetherFfiMethods {
     /// future, and that a timeout raised in Rust surfaces as a typed Swift error.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<string> ProbeDelay(ulong @millis, ulong @budgetMillis, CancellationToken? @token) 
+   public static async Task<string> ProbeDelay(ulong @millis, ulong @budgetMillis, CancellationToken? @token)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -10960,7 +13020,7 @@ internal static class TetherFfiMethods {
     /// the multi-round case, and treats an empty answer as the person declining.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<string[]> RunInteractiveExchange(InteractivePrompter @prompter) 
+   public static async Task<string[]> RunInteractiveExchange(InteractivePrompter @prompter)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11003,7 +13063,7 @@ internal static class TetherFfiMethods {
     /// forgetting it is a crash with no useful error.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> Connect(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps) 
+   public static async Task<Session> Connect(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11026,7 +13086,7 @@ internal static class TetherFfiMethods {
     /// Cancellation-aware entry point; the original connect remains source compatible.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> ConnectCancellable(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps, CancellationToken @cancellation) 
+   public static async Task<Session> ConnectCancellable(Destination @destination, HostTrust @trust, Secret[] @secrets, Jump[] @jumps, CancellationToken @cancellation)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11049,7 +13109,7 @@ internal static class TetherFfiMethods {
     /// Opens a shell by asking the OpenSSH client, typically a ControlMaster.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> ConnectOverSshClient(string @target, LocalShell @shell) 
+   public static async Task<Session> ConnectOverSshClient(string @target, LocalShell @shell)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11072,7 +13132,7 @@ internal static class TetherFfiMethods {
     /// Cancellation-aware attach; the original remains source compatible.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> ConnectOverSshClientCancellable(string @target, LocalShell @shell, CancellationToken @cancellation) 
+   public static async Task<Session> ConnectOverSshClientCancellable(string @target, LocalShell @shell, CancellationToken @cancellation)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11117,7 +13177,7 @@ internal static class TetherFfiMethods {
     /// an opaque `rustPanic`.
     /// </summary>
     /// <exception cref="TetherException"></exception>
-   public static async Task<Session> OpenLocal(LocalShell @shell) 
+   public static async Task<Session> OpenLocal(LocalShell @shell)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11142,9 +13202,9 @@ internal static class TetherFfiMethods {
     ///
     /// A live master is a handshake that has already been spent. The
     /// application attaches through OpenSSH instead of offering credentials
-    /// again (Decisions/0010).
+    /// again.
     /// </summary>
-   public static async Task<bool> SshMasterRunning(string @target) 
+   public static async Task<bool> SshMasterRunning(string @target)
    {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
@@ -11161,7 +13221,7 @@ internal static class TetherFfiMethods {
         (result) => FfiConverterBoolean.INSTANCE.Lift(result),
         // Error
         NullCallStatusErrorHandler.INSTANCE
-        
+
     );
    }
 }

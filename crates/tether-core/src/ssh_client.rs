@@ -4,7 +4,7 @@
 //! multiplexing on a Unix socket, and the client that created the socket is
 //! the one that knows how to ask it for another session. russh has never
 //! heard of it; speaking the mux protocol ourselves would be rewriting the
-//! client that already owns it (Decisions/0010).
+//! client that already owns it.
 //!
 //! So this is `ssh`, as a producer. The interactive shell is a
 //! pseudo-terminal running `ssh -tt`. A second command is `ssh -T` on pipes.
@@ -91,12 +91,30 @@ impl SshClient {
         size: ScreenSize,
         options: Options,
     ) -> Result<TerminalSession, ConnectionError> {
+        self.connect_recorded(term, size, options, None).await
+    }
+
+    pub async fn connect_recorded(
+        self,
+        term: impl Into<String>,
+        size: ScreenSize,
+        options: Options,
+        history: Option<crate::history::HistoryArchive>,
+    ) -> Result<TerminalSession, ConnectionError> {
         let this = self.with_resolved_path().await;
         let term = term.into();
         let command = this.ssh_command(true).term(term);
         let shell = Shell::open(command, WindowSize::new(size.columns, size.rows))
             .map_err(ConnectionError::new)?;
-        Ok(TerminalSession::start_with(shell, size, options, Connection::OpenSsh(this)))
+        Ok(TerminalSession::start_with(
+            shell,
+            size,
+            options,
+            Connection::OpenSsh(this),
+            None,
+            None,
+            history,
+        ))
     }
 
     pub(crate) fn exec(&self, command: &str) -> Command {

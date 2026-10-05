@@ -12,8 +12,9 @@ swift/Artifacts/
 # scripts/build-app-ios.sh. Hundreds of megabytes, reproducible from source.
 /build/
 
-# Fuzzing. The corpus the fuzzer grows and its build are outputs; a crashing
-# input is not — it belongs under fuzz/artifacts/ as a committed regression.
+# Fuzzing. The corpus ./scripts/fuzz-targets.sh grows and its build are
+# outputs; a crashing input is not — it belongs under fuzz/artifacts/ as a
+# committed regression.
 /fuzz/corpus/
 /fuzz/target/
 # Crashes land here; a fixed one is moved to fuzz/regressions/ and committed.
@@ -36,3 +37,7 @@ swift/Artifacts/
 
 # Isolated font-fix application build used while the main executable is open.
 /artifacts/font-preview/
+# Python bytecode caches from the corpus helpers; never source.
+__pycache__/
+
+/artifacts/merged-swift-bindings/

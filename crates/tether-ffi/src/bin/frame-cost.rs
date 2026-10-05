@@ -7,9 +7,7 @@
 //!
 //! This measures the half that is ours: reading the engine's grid into a
 //! [`Screen`] and collapsing it into the [`ScreenFrame`] a frontend draws. It
-//! does not measure uniffi's lowering into Swift, nor the drawing itself;
-//! those are measured from Swift (`RenderCostTests`), and the two halves are
-//! added up in `Decisions/0006`.
+//! does not measure uniffi's lowering into Swift, nor the drawing itself.
 //!
 //! Run it against a release build, which is what ships:
 //!

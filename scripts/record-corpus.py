@@ -19,7 +19,7 @@ Two things this script works hard at:
     replaced with a padded placeholder of exactly the same byte length, so
     the column arithmetic of the stream survives the substitution.
 
-Usage:  python3 scripts/record-corpus.py [name ...]
+Usage:  ./scripts/record-corpus.py [name ...]
 """
 
 from __future__ import annotations
@@ -41,6 +41,20 @@ from pathlib import Path
 
 COLUMNS, ROWS = 80, 24
 CORPUS = Path(__file__).resolve().parent.parent / "crates/tether-terminal/tests/corpus"
+
+USAGE = """Usage: ./scripts/record-corpus.py [name ...]
+
+Record real terminal workloads as raw byte streams into
+crates/tether-terminal/tests/corpus/ (spec §12). With no names, every
+workload is re-recorded; name some to re-record only those.
+
+Options:
+  -h, --help   show this help
+"""
+
+
+def usage() -> str:
+    return USAGE
 
 # A recording that never ends is a hung script, not a test fixture.
 IDLE_TIMEOUT = 2.0
@@ -338,6 +352,10 @@ def workloads(home: Path, repo: Path) -> dict[str, tuple[list[str], list[tuple[f
 
 
 def main() -> int:
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        print(usage(), end="")
+        return 0
+
     CORPUS.mkdir(parents=True, exist_ok=True)
     home = sandbox()
     repo = git_fixture(home)

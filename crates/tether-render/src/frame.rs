@@ -44,7 +44,11 @@ pub enum Paint {
     Named(Name),
     /// An index into the 256-colour palette.
     Indexed(u8),
-    Rgb { red: u8, green: u8, blue: u8 },
+    Rgb {
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

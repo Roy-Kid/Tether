@@ -54,7 +54,11 @@ public readonly record struct Shortcut(VirtualKey Key, bool Shift, bool Control,
         if (name.Length == 1 && char.IsAsciiLetterOrDigit(name[0])) key = (VirtualKey)name[0];
         else if (name == "EQUALS") key = (VirtualKey)187;
         else if (name == "MINUS") key = (VirtualKey)189;
-        else return false;
+        else if (!Enum.TryParse<VirtualKey>(parts[^1], true, out key) ||
+            key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down
+                or VirtualKey.Tab or VirtualKey.Enter or VirtualKey.Escape or VirtualKey.Delete
+                or VirtualKey.Back or VirtualKey.Home or VirtualKey.End or VirtualKey.PageUp or VirtualKey.PageDown)
+            && (key < VirtualKey.F1 || key > VirtualKey.F24)) return false;
         result = new(key, modifiers.Contains("shift"), ctrl, alt);
         return true;
     }

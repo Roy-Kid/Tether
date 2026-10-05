@@ -57,5 +57,19 @@ import Testing
       #expect(KeyCaptureView.namedKey(for: .keyboardSpacebar) == nil)
       #expect(KeyCaptureView.namedKey(for: .keyboard1) == nil)
     }
+
+    /// The software keyboard must not rewrite a command, or grow a predictive
+    /// bar that changes the terminal's height.
+    @Test("the software keyboard does not rewrite what is typed")
+    @MainActor
+    func keyboardDoesNotRewrite() {
+      let view = KeyCaptureView(frame: .zero)
+      #expect(view.autocorrectionType == .no)
+      #expect(view.spellCheckingType == .no)
+      #expect(view.autocapitalizationType == .none)
+      #expect(view.smartQuotesType == .no)
+      #expect(view.smartDashesType == .no)
+      #expect(view.smartInsertDeleteType == .no)
+    }
   }
 #endif

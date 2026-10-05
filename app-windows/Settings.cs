@@ -12,6 +12,13 @@ public sealed record AppSettings(string Shell = "pwsh", string Appearance = "sys
 {
     /// <summary>Plugin ids a person has switched off. Missing in an old file means none.</summary>
     public string[] DisabledPlugins { get; init; } = [];
+    public Dictionary<string, string> KeyBindings { get; init; } = new();
+    public string TabLayout { get; init; } = "horizontal";
+    public bool ShowsTabBar { get; init; } = true;
+    public ulong HistoryLines { get; init; } = 10_000;
+    public bool UnlimitedHistory { get; init; }
+    public ulong FilesPromptMegabytes { get; init; } = 50;
+    public string DownloadDirectory { get; init; } = "";
     public TerminalPreferences Terminal { get; init; } = new();
 
     /// <summary>

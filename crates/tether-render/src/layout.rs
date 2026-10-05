@@ -31,10 +31,7 @@ pub fn prepare_with_overlay(
     palette: &Palette,
     overlay: &Overlay,
 ) -> DrawList {
-    let mut list = DrawList {
-        background: palette.background,
-        ..DrawList::default()
-    };
+    let mut list = DrawList { background: palette.background, ..DrawList::default() };
 
     // Visible columns is a clip, not a shrink: a run that starts inside is
     // drawn whole and clipped by the surface, which is what `TerminalView`
@@ -84,10 +81,7 @@ pub fn prepare_with_overlay(
                     bold: run.style.bold,
                     italic: run.style.italic,
                     underline: !matches!(run.style.underline, crate::frame::Underline::None),
-                    underline_color: run
-                        .style
-                        .underline_color
-                        .map(|paint| palette.resolve(paint)),
+                    underline_color: run.style.underline_color.map(|paint| palette.resolve(paint)),
                     strikethrough: run.style.strikethrough,
                 });
             }
@@ -122,8 +116,8 @@ pub fn prepare_with_overlay(
         // And as a glyph, so a backend whose quad path is not drawing still
         // shows the caret. The text pass is the one every backend has.
         list.texts.push(TextRun {
-                    font_size: metrics.size,
-                    cell_width: metrics.cell_width,
+            font_size: metrics.size,
+            cell_width: metrics.cell_width,
             x,
             y,
             width,
@@ -152,12 +146,7 @@ pub fn prepare_with_overlay(
 }
 
 /// Selection and link underlines, as rects under the glyphs.
-fn push_overlay(
-    list: &mut DrawList,
-    metrics: &FontMetrics,
-    overlay: &Overlay,
-    columns: u32,
-) {
+fn push_overlay(list: &mut DrawList, metrics: &FontMetrics, overlay: &Overlay, columns: u32) {
     if let Some((anchor, focus)) = overlay.selection {
         for row in selection_rows(anchor, focus) {
             let (start, end) = selection_columns(anchor, focus, row, columns);
@@ -190,22 +179,11 @@ fn selection_rows(anchor: Cell, focus: Cell) -> impl Iterator<Item = u32> {
 /// not past it.
 fn selection_columns(anchor: Cell, focus: Cell, row: u32, columns: u32) -> (u32, u32) {
     let (left, right) = if anchor.row == focus.row {
-        (
-            anchor.column.min(focus.column),
-            anchor.column.max(focus.column) + 1,
-        )
+        (anchor.column.min(focus.column), anchor.column.max(focus.column) + 1)
     } else if row == anchor.row {
-        if focus.row > anchor.row {
-            (anchor.column, columns)
-        } else {
-            (0, anchor.column + 1)
-        }
+        if focus.row > anchor.row { (anchor.column, columns) } else { (0, anchor.column + 1) }
     } else if row == focus.row {
-        if focus.row > anchor.row {
-            (0, focus.column + 1)
-        } else {
-            (focus.column, columns)
-        }
+        if focus.row > anchor.row { (0, focus.column + 1) } else { (focus.column, columns) }
     } else {
         (0, columns)
     };
@@ -225,13 +203,7 @@ fn push_link_underline(
     let width = metrics.cells_width(underline.span.end.saturating_sub(underline.span.start));
 
     if underline.confirmed {
-        list.rects.push(BgRect {
-            x,
-            y,
-            width,
-            height: 1.0,
-            color,
-        });
+        list.rects.push(BgRect { x, y, width, height: 1.0, color });
         return;
     }
 
@@ -240,13 +212,7 @@ fn push_link_underline(
     let end = x + width;
     while cursor < end {
         let dash = (end - cursor).min(2.0);
-        list.rects.push(BgRect {
-            x: cursor,
-            y,
-            width: dash,
-            height: 1.0,
-            color,
-        });
+        list.rects.push(BgRect { x: cursor, y, width: dash, height: 1.0, color });
         cursor += 4.0;
     }
 }
@@ -258,11 +224,7 @@ fn push_link_underline(
 fn resolved(style: &RunStyle, palette: &Palette) -> (Rgba, Rgba) {
     let foreground = palette.resolve(style.foreground);
     let background = palette.resolve(style.background);
-    if style.inverse {
-        (background, foreground)
-    } else {
-        (foreground, background)
-    }
+    if style.inverse { (background, foreground) } else { (foreground, background) }
 }
 
 #[cfg(test)]
@@ -291,19 +253,12 @@ mod tests {
     }
 
     fn styled(text: &str, columns: u32) -> Run {
-        Run {
-            text: text.to_string(),
-            columns,
-            style: RunStyle::default(),
-        }
+        Run { text: text.to_string(), columns, style: RunStyle::default() }
     }
 
     #[test]
     fn runs_land_on_the_grid() {
-        let frame = one_row(vec![
-            styled("hello", 5),
-            styled("world", 5),
-        ]);
+        let frame = one_row(vec![styled("hello", 5), styled("world", 5)]);
         let list = prepare(&frame, &metrics(), &Palette::dark());
         assert_eq!(list.texts.len(), 2);
         assert_eq!(list.texts[0].x, 0.0);
@@ -464,11 +419,8 @@ mod tests {
             ..Overlay::default()
         };
         let list = prepare_with_overlay(&frame, &metrics(), &Palette::dark(), &overlay);
-        let rects: Vec<_> = list
-            .rects
-            .iter()
-            .filter(|r| (r.color.alpha - 0.12).abs() < 1e-6)
-            .collect();
+        let rects: Vec<_> =
+            list.rects.iter().filter(|r| (r.color.alpha - 0.12).abs() < 1e-6).collect();
         assert_eq!(rects.len(), 3, "one rect per row");
         assert_eq!(rects[0].width, 2.0 * 8.0, "columns 8..end on the first row");
         assert_eq!(rects[1].width, 10.0 * 8.0, "the middle row is whole");
@@ -478,10 +430,8 @@ mod tests {
     #[test]
     fn a_link_underline_is_solid_when_confirmed_and_dashed_when_not() {
         let frame = one_row(vec![styled("src/main.rs", 11)]);
-        let mut confirmed = Overlay {
-            link_color: Rgba::new(0.3, 0.6, 1.0, 1.0),
-            ..Overlay::default()
-        };
+        let mut confirmed =
+            Overlay { link_color: Rgba::new(0.3, 0.6, 1.0, 1.0), ..Overlay::default() };
         confirmed.link_underlines.push(LinkUnderline {
             span: crate::draw::CellSpan { row: 0, start: 0, end: 11 },
             confirmed: true,

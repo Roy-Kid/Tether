@@ -3,13 +3,12 @@ import Testing
 
 @testable import TetherApp
 
-/// Reading and editing `~/.ssh/config`.
+/// Reading `~/.ssh/config`.
 ///
-/// The file is the person's, not the app's. Most of what these assert is
-/// therefore about what *stays*: a setting this app has never heard of, a
-/// comment, an indentation style, the order the stanzas were written in.
-/// Losing any of those is worse than not offering the feature, because the
-/// file is the only copy and `ssh` reads it too.
+/// The file is the person's, not the app's, and `ssh` reads it too. What
+/// these assert is that the app reads it the way `ssh` does — the same host,
+/// the same user, the same key — because an answer that differs from ssh's
+/// is worse than no answer.
 @Suite("SSH config")
 struct SSHConfigTests {
   static let sample = """
@@ -109,14 +108,10 @@ struct SSHConfigTests {
 
   /// A name with a space in it is two patterns to ssh unless it is quoted,
   /// and "Lab machine" is a perfectly ordinary thing to call a computer.
-  @Test("a name with a space in it survives being written and read")
+  @Test("a quoted name with a space in it is one host")
   func quotedNames() {
-    var config = SSHConfig("")
-    config.write(
-      SSHConfig.Entry(
-        alias: "Lab machine", hostName: "10.0.0.4", user: "ada", port: 22, identityFile: nil))
-
-    #expect(SSHConfig(config.text).entries.map(\.alias) == ["Lab machine"])
+    let config = SSHConfig("Host \"Lab machine\"\n  HostName 10.0.0.4\n")
+    #expect(config.entries.map(\.alias) == ["Lab machine"])
   }
 
   /// `Host *` is settings for other hosts, not a machine anyone can reach.
@@ -127,119 +122,11 @@ struct SSHConfigTests {
 
   /// A key path comes back exactly as it was written. `~/.ssh/id_lab`
   /// survives the account being moved and the file being copied to another
-  /// machine — which people do with this file — and reading it, expanding it
-  /// and writing it back would replace it with one that does neither.
-  @Test("a key path is read and written exactly as it is written down")
+  /// machine — which people do with this file.
+  @Test("a key path is read exactly as it is written down")
   func keyPathsAreNotRewritten() {
-    var config = SSHConfig(Self.sample)
-    let key = config.entries[0].identityFile
-    #expect(key == "~/.ssh/id_lab")
-
-    config.write(config.entries[0])
-    #expect(config.text == Self.sample + "\n")
-  }
-
-  /// The other direction: a path chosen in a file picker is absolute, and
-  /// written down the way a person would have written it.
-  @Test("a path inside the home directory is written with a tilde")
-  func contractsTheHomeDirectory() {
-    #expect(contractingHome(NSHomeDirectory() + "/.ssh/id_x") == "~/.ssh/id_x")
-    #expect(contractingHome("/etc/ssh/id_x") == "/etc/ssh/id_x")
+    #expect(SSHConfig(Self.sample).entries[0].identityFile == "~/.ssh/id_lab")
     #expect(expandingTilde("~/.ssh/id_x") == NSHomeDirectory() + "/.ssh/id_x")
-  }
-
-  /// The one that matters. Everything this app does not understand has to
-  /// come back out of the file exactly as it went in.
-  @Test("editing a host leaves the rest of the file alone")
-  func editingPreservesEverything() {
-    var config = SSHConfig(Self.sample)
-    config.write(
-      SSHConfig.Entry(
-        alias: "lab", hostName: "10.0.0.9", user: "ada", port: 22, identityFile: nil))
-
-    let text = config.text
-    #expect(text.contains("# Everything, everywhere"))
-    #expect(text.contains("ForwardAgent no"))
-    #expect(text.contains("ControlMaster auto"))
-    #expect(text.contains("Host cluster gateway"))
-    #expect(text.contains("HostName 10.0.0.9"))
-    // The port went back to the default and the key was cleared, so the lines
-    // that said otherwise are gone rather than left to contradict the app.
-    #expect(!text.contains("Port 2222"))
-    #expect(!text.contains("IdentityFile"))
-  }
-
-  @Test("a setting is changed where it already sits")
-  func editingKeepsTheLayout() {
-    var config = SSHConfig(Self.sample)
-    config.write(
-      SSHConfig.Entry(
-        alias: "lab", hostName: "10.0.0.9", user: "ada", port: 2222,
-        identityFile: "/keys/id_lab"))
-
-    let lines = config.text.components(separatedBy: "\n")
-    let hostName = try? #require(lines.first { $0.contains("HostName 10.0.0.9") })
-    #expect(hostName?.hasPrefix("  ") == true, "indentation follows the stanza it is in")
-    #expect(lines.filter { $0.contains("HostName") }.count == 2, "changed, not added beside")
-  }
-
-  @Test("a new host is appended as a stanza of its own")
-  func appending() {
-    var config = SSHConfig(Self.sample)
-    config.write(
-      SSHConfig.Entry(
-        alias: "newbox", hostName: "192.168.1.2", user: "root", port: 2022,
-        identityFile: nil))
-
-    let entries = config.entries
-    #expect(entries.map(\.alias) == ["lab", "cluster", "newbox"])
-    #expect(entries.last?.port == 2022)
-    #expect(config.text.contains("Host newbox"))
-  }
-
-  /// A default port is not written. `Port 22` in a file that never had one is
-  /// this app leaving fingerprints on something it does not own.
-  @Test("the default port is not written down")
-  func defaultPortIsSilent() {
-    var config = SSHConfig("")
-    config.write(
-      SSHConfig.Entry(alias: "plain", hostName: "example.org", user: "ada", port: 22,
-        identityFile: nil))
-
-    #expect(!config.text.contains("Port"))
-    #expect(config.entries.first?.port == nil)
-  }
-
-  @Test("renaming a host renames only its own name")
-  func renaming() {
-    var config = SSHConfig(Self.sample)
-    config.write(
-      SSHConfig.Entry(
-        alias: "cluster-a", hostName: "hpc.example.org", user: "grace", port: 22,
-        identityFile: nil),
-      replacing: "cluster")
-
-    #expect(config.text.contains("Host cluster-a gateway"), "the other name was not ours to take")
-    #expect(config.entries.map(\.alias) == ["lab", "cluster-a"])
-  }
-
-  @Test("deleting a host takes its stanza and nothing after it")
-  func deleting() {
-    var config = SSHConfig(Self.sample)
-    config.remove(alias: "lab")
-
-    #expect(config.entries.map(\.alias) == ["cluster"])
-    #expect(!config.text.contains("ControlMaster auto"))
-    #expect(config.text.contains("Host cluster gateway"))
-    #expect(config.text.contains("ForwardAgent no"))
-  }
-
-  @Test("a file is not grown by being read and written")
-  func roundTripIsStable() {
-    let once = SSHConfig(Self.sample).text
-    let twice = SSHConfig(once).text
-
-    #expect(once == twice)
   }
 
   /// ssh reads `Key=value` and `Key value` the same way, so both have to be
@@ -270,119 +157,132 @@ struct SSHConfigTests {
     #expect(entries.first?.user == nil, "the Match block's user is not the lab's")
   }
 
-  /// A name in the file has to mean the route `ssh` would take, not a direct
-  /// dial to the address written under it.
-  @Test("ProxyJump is the hops in front of a host, nested ones first")
-  func proxyJumpExpandsNestedHopsFirst() {
+  /// Settings above the first `Host` line apply to every host, the same as
+  /// under `Host *`. Skipping them would offer a user ssh would not use.
+  @Test("settings before the first Host apply to every host")
+  func preambleApplies() {
+    let entries = SSHConfig("User everyone\n\nHost lab\n  HostName 10.0.0.4\n").entries
+    #expect(entries.first?.user == "everyone")
+  }
+
+  /// OrbStack, Colima and most dotfile managers write `Include` at the top
+  /// of the file. Its hosts are hosts, and its settings reach the hosts
+  /// below it, because that is what ssh does with it.
+  @Test("an Include is read where it stands")
+  func includesAreRead() {
+    let files = ["orb/*": ["Host orb\n  HostName 127.0.0.1\n  Port 32222\n"], "common": ["User shared\n"]]
+    let config = SSHConfig(
+      """
+      Include orb/*
+      Include common
+
+      Host lab
+        HostName 10.0.0.4
+      """
+    ) { argument in (files[argument] ?? []).map { SSHConfig.Source(path: argument, text: $0) } }
+
+    #expect(config.entries.map(\.alias) == ["orb", "lab"])
+    #expect(config.entries[0].port == 32222)
+    #expect(config.entries[1].user == "shared", "a top-level Include is a top-level setting")
+  }
+
+  /// Inside a stanza, an included file is read only for hosts that stanza
+  /// matches, and the lines after the `Include` still belong to it.
+  @Test("an Include inside a stanza stays inside it")
+  func includeInsideAStanza() {
+    let config = SSHConfig(
+      """
+      Host work-*
+        Include work
+        User worker
+
+      Host home
+        HostName 192.168.1.2
+      """
+    ) { $0 == "work" ? [SSHConfig.Source(path: "work", text: "Port 2200\nHost work-db\n  HostName db.internal\n")] : [] }
+
+    let work = config.entries.first { $0.alias == "work-db" }
+    #expect(work?.hostName == "db.internal")
+    #expect(work?.port == 2200)
+    #expect(work?.user == "worker", "the stanza resumes after the Include")
+    #expect(config.entries.first { $0.alias == "home" }?.port == nil, "not a work host")
+  }
+
+  /// A file that includes itself is read as deep as ssh would, then stops.
+  @Test("a file that includes itself ends")
+  func includeCycleEnds() {
+    let config = SSHConfig("Include self\nHost lab\n  HostName x\n") { _ in [SSHConfig.Source(path: "self", text: "Include self\n")] }
+    #expect(config.entries.map(\.alias) == ["lab"])
+  }
+
+  /// Relative paths are relative to the config's directory, globs expand in
+  /// sorted order, and Tether's own export is not read back as strangers.
+  @Test("files are read from beside the config, without Tether's own")
+  func readsFilesFromDisk() throws {
+    let config = temporaryFile("config")
+    defer { removeDirectory(of: config) }
+    let directory = config.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory.appending(path: "config.d"), withIntermediateDirectories: true)
+    try "Host b\n  HostName b.example\n".write(to: directory.appending(path: "config.d/2-b"), atomically: true, encoding: .utf8)
+    try "Host a\n  HostName a.example\n".write(to: directory.appending(path: "config.d/1-a"), atomically: true, encoding: .utf8)
+    let exported = directory.appending(path: "tether_config")
+    try "Host managed\n  HostName m.example\n".write(to: exported, atomically: true, encoding: .utf8)
+    try "Include \"\(exported.path)\"\nInclude config.d/*\nInclude missing/*\n".write(to: config, atomically: true, encoding: .utf8)
+
+    let entries = try SSHConfig.read(config, skipping: [exported]).entries
+    #expect(entries.map(\.alias) == ["a", "b"])
+    #expect(entries.map { $0.file.map { URL(fileURLWithPath: $0).lastPathComponent } } == ["1-a", "2-b"], "each knows its file")
+  }
+
+  /// The regression that made import impossible: exporting writes an
+  /// `Include` into the config, and any `Include` used to refuse every host.
+  @Test("an Include does not stop a host being imported")
+  func includeDoesNotBlockImport() {
+    let config = SSHConfig("Include \"/Users/ada/.ssh/tether_config\"\n\nHost lab\n  HostName 10.0.0.4\n")
+    #expect(config.importLimitations(alias: "lab").isEmpty)
+  }
+
+  /// A typical Mac config. None of it decides where ssh connects or who logs
+  /// in, so none of it is a reason to refuse.
+  @Test("settings that only tune ssh do not stop an import")
+  func tuningDoesNotBlockImport() {
     let config = SSHConfig(
       """
       Host lab
-        HostName lab.internal
-        ProxyJump bastion
-
-      Host bastion
-        HostName bastion.example
-        User jump
-        ProxyJump edge
-
-      Host edge
-        HostName edge.example
-        Port 2222
-        IdentityFile ~/.ssh/id_edge
-      """
-    )
-
-    let hops = try! config.jumps(for: "lab").get()
-    #expect(hops.map(\.hostName) == ["edge.example", "bastion.example"])
-    #expect(hops[0].port == 2222)
-    #expect(hops[0].identityFile == "~/.ssh/id_edge")
-    #expect(hops[1].user == "jump")
-    #expect(hops[1].port == 22)
-  }
-
-  @Test("a comma-separated ProxyJump is visited in order")
-  func proxyJumpList() {
-    let hops = try! SSHConfig(
-      """
-      Host lab
-        ProxyJump me@10.0.0.1:2222, edge
-
-      Host edge
-        HostName edge.example
-      """
-    ).jumps(for: "lab").get()
-
-    #expect(hops.count == 2)
-    #expect(hops[0].hostName == "10.0.0.1")
-    #expect(hops[0].port == 2222)
-    #expect(hops[0].user == "me")
-    #expect(hops[1].hostName == "edge.example")
-  }
-
-  @Test("ProxyJump none means there is no jump, even under Host *")
-  func proxyJumpNone() {
-    let hops = try! SSHConfig(
-      """
-      Host lab
-        HostName lab.internal
-        ProxyJump none
+        HostName 10.0.0.4
+        IdentityFile ~/.ssh/id_lab
+        LocalForward 8888 localhost:8888
 
       Host *
+        AddKeysToAgent yes
+        UseKeychain yes
+        ServerAliveInterval 30
+        IdentityFile ~/.ssh/id_ed25519
+        IdentityAgent "~/Library/Group Containers/agent.sock"
+      """)
+    #expect(config.importLimitations(alias: "lab").isEmpty)
+    #expect(config.entries.first?.identityFile == "~/.ssh/id_lab", "the one ssh tries first")
+  }
+
+  /// A jump host, a proxy or a remote command changes which machine answers
+  /// or what runs there; a profile without it would be a different host.
+  @Test("a route or a command stops only the hosts it applies to")
+  func routesBlockTheirOwnHosts() {
+    let config = SSHConfig(
+      """
+      Host inside
+        HostName 10.0.0.9
         ProxyJump bastion
-      """
-    ).jumps(for: "lab").get()
 
-    #expect(hops.isEmpty)
-  }
-
-  @Test("Host * can supply the jump a host does not name")
-  func proxyJumpIsInherited() {
-    // `none` on the bastion is what stops the wildcard jump applying to the
-    // bastion itself. Without it the bastion would jump through itself.
-    let hops = try! SSHConfig(
-      """
       Host lab
-        HostName lab.internal
+        HostName 10.0.0.4
 
-      Host bastion
-        HostName bastion.example
-        ProxyJump none
-
-      Host *
-        ProxyJump bastion
-        User ada
-      """
-    ).jumps(for: "lab").get()
-
-    #expect(hops.map(\.hostName) == ["bastion.example"])
-    #expect(hops[0].user == "ada")
-  }
-
-  @Test("a ProxyJump cycle is an error")
-  func proxyJumpCycle() {
-    let result = SSHConfig(
-      """
-      Host a
-        ProxyJump b
-      Host b
-        ProxyJump a
-      """
-    ).jumps(for: "a")
-
-    #expect(result == .failure(.cycle("a")))
-  }
-
-  @Test("an IPv6 jump keeps the address inside the brackets")
-  func proxyJumpIPv6() {
-    let hops = try! SSHConfig(
-      """
-      Host lab
-        ProxyJump me@[2001:db8::1]:2222
-      """
-    ).jumps(for: "lab").get()
-
-    #expect(hops[0].hostName == "2001:db8::1")
-    #expect(hops[0].port == 2222)
-    #expect(hops[0].user == "me")
+      Match host inside exec "true"
+        User nobody
+      """)
+    #expect(config.importLimitations(alias: "inside") == ["match", "proxyjump"])
+    #expect(config.importLimitations(alias: "lab") == ["match"], "a Match that could set the user cannot be ruled out")
+    #expect(SSHConfig("Host lab\n  HostName x\nMatch all\n  ServerAliveInterval 5\n").importLimitations(alias: "lab").isEmpty,
+      "a Match that only tunes ssh changes nothing")
   }
 }

@@ -55,3 +55,9 @@ tokio-util = "0.7"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles", "metal"] }
 glyphon = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
+
+# The xcframework is a release build. Thin LTO and stripped symbols are what
+# ship; debug builds stay unoptimised so tests stay quick.
+[profile.release]
+lto = "thin"
+strip = "symbols"

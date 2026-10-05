@@ -88,23 +88,16 @@ impl Palette {
     /// while the far side was told "dark" is worse than either mistake alone.
     pub fn chosen(setting: &str, system_is_dark: bool) -> Self {
         let dark = setting == "dark" || (setting == "system" && system_is_dark);
-        if dark {
-            Self::dark()
-        } else {
-            Self::light()
-        }
+        if dark { Self::dark() } else { Self::light() }
     }
 
     pub fn resolve(&self, paint: Paint) -> Rgba {
         match paint {
             Paint::Named(name) => self.named(name),
             Paint::Indexed(index) => self.indexed(index),
-            Paint::Rgb { red, green, blue } => Rgba::new(
-                red as f32 / 255.0,
-                green as f32 / 255.0,
-                blue as f32 / 255.0,
-                1.0,
-            ),
+            Paint::Rgb { red, green, blue } => {
+                Rgba::new(red as f32 / 255.0, green as f32 / 255.0, blue as f32 / 255.0, 1.0)
+            }
         }
     }
 
@@ -143,18 +136,9 @@ impl Palette {
             16..=231 => {
                 let value = index as i32 - 16;
                 let level = |step: i32| {
-                    if step == 0 {
-                        0.0
-                    } else {
-                        (55 + step * 40) as f32 / 255.0
-                    }
+                    if step == 0 { 0.0 } else { (55 + step * 40) as f32 / 255.0 }
                 };
-                Rgba::new(
-                    level(value / 36),
-                    level((value / 6) % 6),
-                    level(value % 6),
-                    1.0,
-                )
+                Rgba::new(level(value / 36), level((value / 6) % 6), level(value % 6), 1.0)
             }
             _ => {
                 let grey = (8 + (index as i32 - 232) * 10) as f32 / 255.0;
@@ -180,15 +164,9 @@ mod tests {
     fn indexed_resolves_the_cube_and_greys() {
         let palette = Palette::dark();
         // 16 is the first cube entry: (0, 0, 0).
-        assert_eq!(
-            palette.resolve(Paint::Indexed(16)),
-            Rgba::new(0.0, 0.0, 0.0, 1.0)
-        );
+        assert_eq!(palette.resolve(Paint::Indexed(16)), Rgba::new(0.0, 0.0, 0.0, 1.0));
         // 231 is the last cube entry: (255, 255, 255).
-        assert_eq!(
-            palette.resolve(Paint::Indexed(231)),
-            Rgba::new(1.0, 1.0, 1.0, 1.0)
-        );
+        assert_eq!(palette.resolve(Paint::Indexed(231)), Rgba::new(1.0, 1.0, 1.0, 1.0));
         // 232 is the first grey: 8/255.
         let first_grey = 8.0 / 255.0;
         assert_eq!(

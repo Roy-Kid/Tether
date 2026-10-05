@@ -11,7 +11,7 @@ use crate::style::Style;
 /// cell holding several joined by zero-width joiners. A consumer that treated
 /// this as a `char` would split exactly the sequences people notice
 /// (spec §12).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cell {
     pub text: String,
     /// How many columns this cell occupies: 1 for most text, 2 for wide
@@ -57,6 +57,33 @@ pub enum CursorShape {
     Hidden,
 }
 
+/// How much pointer motion a program asked to hear.
+///
+/// Clicks and the wheel are reported whenever mouse tracking is on. Motion
+/// is the part that differs: none at all, only while a button is held, or
+/// every move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseMotion {
+    #[default]
+    None,
+    /// DEC private mode 1002.
+    Drag,
+    /// DEC private mode 1003.
+    Any,
+}
+
+/// Which encoding the program asked for mouse reports in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseEncoding {
+    /// `CSI M Cb Cx Cy`, each value one byte plus 32.
+    #[default]
+    Normal,
+    /// DEC private mode 1006.
+    Sgr,
+    /// DEC private mode 1005.
+    Utf8,
+}
+
 /// Terminal modes a consumer has to know about to behave correctly.
 ///
 /// Not the full DEC mode set: these are the ones that change what a *frontend*
@@ -75,6 +102,10 @@ pub struct Modes {
     pub application_cursor_keys: bool,
     /// The far side wants mouse events reported.
     pub mouse_reporting: bool,
+    /// Which motions to report, when [`Self::mouse_reporting`] is set.
+    pub mouse_motion: MouseMotion,
+    /// How a reported event is written. Meaningless until reporting is on.
+    pub mouse_encoding: MouseEncoding,
     /// Text wraps at the right margin rather than overwriting the last column.
     pub line_wrap: bool,
 }

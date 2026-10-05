@@ -12,6 +12,7 @@ import TetherPluginKit
 private final class HostProbe {
   var typed: [String] = []
   var shown = 0
+  var focused = 0
   var workingDirectory: String?
 
   func context() -> TabContext {
@@ -20,7 +21,7 @@ private final class HostProbe {
       plugin: PluginContext(
         connection: nil, hostLabel: "lab", hostID: UUID(),
         openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
-      focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
+      focus: { [weak self] in self?.focused += 1 }, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
       insertText: { [weak self] in self?.typed.append($0) },
       workingDirectory: { [weak self] in self?.workingDirectory },
       showAccessory: { [weak self] in self?.shown += 1 })
@@ -33,9 +34,25 @@ private func scratchCache() -> FileCache {
     base: FileManager.default.temporaryDirectory.appendingPathComponent("files-tests-\(UUID())"))
 }
 
+/// A defaults suite with nothing set, so a threshold changed on this Mac
+/// does not change what the tests ask.
+func cleanDefaults() -> UserDefaults {
+  let name = "FilesPluginTests.\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: name)!
+  defaults.removePersistentDomain(forName: name)
+  return defaults
+}
+
 @MainActor
-private func browser(_ source: StubSource, host: HostProbe = HostProbe()) -> FilesTab {
-  FilesTab(tab: host.context(), cache: scratchCache(), open: { _ in source }, present: { _ in })
+private func browser(
+  _ source: StubSource, host: HostProbe = HostProbe(), defaults: UserDefaults = cleanDefaults()
+) -> FilesTab {
+  let model = FilesTab(
+    tab: host.context(), cache: scratchCache(), open: { _ in source }, present: { _ in },
+    defaults: defaults)
+  model.revealSaved = { _ in }
+  model.openLocal = { _ in }
+  return model
 }
 
 private func pointed(_ printed: String, in directory: String? = nil) -> PointedLink {
@@ -61,6 +78,20 @@ struct FilesTabTests {
     "/home/ada/.env": .file, "/home/ada/runs/plot.png": .file,
   ]
 
+  @Test("a reopened tab restores the browser's directory on a fresh attachment")
+  func restoreDirectory() async throws {
+    let original = browser(StubSource(tree))
+    await original.go(to: "/home/ada/runs")
+    let state = try #require(original.restorationState)
+    original.close()
+    let restored = browser(StubSource(tree))
+    defer { restored.close() }
+    restored.restore(from: state)
+    try await settle(restored) { restored.directory == "/home/ada/runs" }
+    #expect(restored.entries.map(\.name) == ["plot.png"])
+    #expect(restored.transfers.running == 0)
+  }
+
   @Test("the browser starts at home, folders first, dot-files hidden until asked")
   func startsAtHome() async throws {
     let model = browser(StubSource(tree))
@@ -85,6 +116,45 @@ struct FilesTabTests {
     fallback.appear()
     try await settle(fallback) { fallback.directory == "/home/ada" }
     #expect(fallback.problem == nil)
+  }
+
+  @Test("a replaced lease lists the open directory again")
+  func relistsAfterReconnect() async throws {
+    let source = StubSource(tree)
+    let host = HostProbe()
+    var opens = 0
+    let model = FilesTab(
+      tab: host.context(), cache: scratchCache(),
+      open: { _ in
+        opens += 1
+        return source
+      }, present: { _ in }, defaults: cleanDefaults())
+    await model.go(to: "/home/ada")
+    #expect(opens == 1)
+    model.reopen()
+    try await settle(model) { opens >= 2 && model.directory == "/home/ada" }
+    #expect(model.problem == nil)
+    #expect(model.visible.map(\.name).contains("A.png"))
+  }
+
+  @Test("a lease that arrives after a failed open still lists")
+  func listsWhenTheLeaseArrivesLate() async throws {
+    let source = StubSource(tree)
+    let host = HostProbe()
+    var live = false
+    let model = FilesTab(
+      tab: host.context(), cache: scratchCache(),
+      open: { _ in
+        if !live { throw FileError.disconnected(cause: "No connection.") }
+        return source
+      }, present: { _ in }, defaults: cleanDefaults())
+    model.appear()
+    try await settle(model) { model.problem != nil }
+    #expect(model.directory == nil)
+    live = true
+    model.reopen()
+    try await settle(model) { model.directory == "/home/ada" }
+    #expect(model.problem == nil)
   }
 
   @Test("into a folder, up, and back retrace the way")
@@ -196,6 +266,34 @@ struct FilesTabTests {
     #expect(source.has("/home/ada/untitled folder 2"))
   }
 
+  @Test("dragging a file or a folder carries the absolute path Copy Path would copy")
+  func dragCarriesAbsolutePath() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    await model.go(to: "/home/ada")
+    let image = try #require(model.entries.first { $0.name == "A.png" })
+    let folder = try #require(model.entries.first { $0.name == "runs" })
+    let text = try #require(model.entries.first { $0.name == "b.txt" })
+    #expect(model.draggedPathText(image) == "/home/ada/A.png")
+    #expect(model.draggedPathText(folder) == "/home/ada/runs")
+    #expect(folder.kind == .directory)
+    model.selection = [image.path, text.path]
+    #expect(model.draggedPathText(image) == "/home/ada/A.png\n/home/ada/b.txt")
+    #expect(model.draggedPathText(folder) == "/home/ada/runs", "a row outside the selection is only itself")
+
+    let dragged = DraggedFile(
+      text: model.draggedPathText(image), file: RemoteFile(model: model, entry: image))
+    let provider = NSItemProvider()
+    provider.register(dragged)
+    #expect(provider.registeredTypeIdentifiers.contains(DroppedPath.contentType.identifier))
+    let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<DroppedPath?, Never>) in
+      _ = provider.loadTransferable(type: DroppedPath.self) { result in
+        continuation.resume(returning: try? result.get())
+      }
+    }
+    #expect(loaded?.text == "/home/ada/A.png\n/home/ada/b.txt")
+  }
+
   @Test("files dropped on the terminal arrive where the browser is, then are typed")
   func dropUploadsThenTypes() async throws {
     let source = StubSource(tree)
@@ -225,6 +323,41 @@ struct FilesTabTests {
     #expect(try String(contentsOf: first, encoding: .utf8) == "/home/ada/A.png")
     #expect(model.cache.cached(image) == first)
     #expect(model.transfers.items.isEmpty, "a finished copy leaves the list")
+
+    await model.preview([image])
+    #expect(source.downloads.count == 1, "the same modification time is not fetched again")
+    #expect(model.previewed.first == first)
+
+    source.modifiedAt["/home/ada/A.png"] = 1_700_000_001
+    await model.preview([image])
+    let second = try #require(model.previewed.first)
+    #expect(source.downloads.count == 2, "a newer modification time is fetched")
+    #expect(second != first)
+    #expect(try String(contentsOf: second, encoding: .utf8) == "/home/ada/A.png")
+  }
+
+  @Test("Quick Look opens before an uncached remote file finishes downloading")
+  func previewOpensWhileDownloading() async throws {
+    let source = StubSource(tree)
+    source.downloadDelay = .seconds(1)
+    var shown: [[URL]] = []
+    let host = HostProbe()
+    let model = FilesTab(
+      tab: host.context(), cache: scratchCache(), open: { _ in source },
+      present: { shown.append($0) }, defaults: cleanDefaults())
+    await model.go(to: "/home/ada")
+    let file = try #require(model.entries.first { $0.name == "A.png" })
+
+    let fetching = Task { await model.preview([file]) }
+    try await settle(model) { !shown.isEmpty }
+    #expect(shown.count == 1)
+    let placeholderFolder = shown[0].first?.deletingLastPathComponent()
+      .deletingLastPathComponent().lastPathComponent
+    #expect(placeholderFolder == "Tether Preview Loading")
+
+    await fetching.value
+    #expect(shown.count == 2)
+    #expect(shown[1].first?.lastPathComponent == "A.png")
   }
 
   @Test("a large file asks before it is fetched")
@@ -232,10 +365,127 @@ struct FilesTabTests {
     let model = browser(StubSource(tree))
     let huge = FileEntry(
       name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
-      size: FilesTab.previewLimit, modified: nil, permissions: 0o644)
+      size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
     await model.preview([huge])
     #expect(model.pendingLarge == huge)
+    #expect(model.pendingFetch == .preview([huge]))
     #expect(model.previewed.isEmpty)
+  }
+
+  @Test("a large file already in the cache does not ask again")
+  func cachedLargeFileDoesNotAsk() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    let huge = FileEntry(
+      name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
+      size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
+    try Data("mov".utf8).write(to: model.cache.location(for: huge))
+    await model.preview([huge])
+    #expect(model.pendingLarge == nil)
+    #expect(source.downloads.isEmpty)
+    await model.openFetched([huge])
+    #expect(model.pendingLarge == nil)
+    #expect(source.downloads.isEmpty)
+  }
+
+  @Test("a file at the limit is fetched without asking")
+  func fileAtTheLimitDoesNotAsk() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    let exact = FileEntry(
+      name: "clip.mov", path: "/home/ada/clip.mov", kind: .file,
+      size: FilesTab.previewLimit, modified: nil, permissions: 0o644)
+    await model.preview([exact])
+    #expect(model.pendingLarge == nil)
+    #expect(source.downloads.count == 1)
+  }
+
+  @Test("the size gate is the one set in preferences")
+  func promptLimitFollowsTheSetting() async {
+    let defaults = cleanDefaults()
+    defaults.set(1, forKey: FilesPreferences.promptKey)
+    let model = browser(StubSource(tree), defaults: defaults)
+    let small = FileEntry(
+      name: "a.txt", path: "/a.txt", kind: .file, size: 1_000_000, modified: nil, permissions: 0o644)
+    let large = FileEntry(
+      name: "b.txt", path: "/b.txt", kind: .file, size: 1_000_001, modified: nil, permissions: 0o644)
+    await model.preview([small])
+    #expect(model.pendingLarge == nil)
+    await model.preview([large])
+    #expect(model.pendingLarge == large)
+  }
+
+  @Test("a large file on this machine is shown without asking")
+  func localLargeFileDoesNotAsk() async {
+    let source = StubSource(tree)
+    source.isLocal = true
+    let model = browser(source)
+    let huge = FileEntry(
+      name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
+      size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
+    await model.preview([huge])
+    #expect(model.pendingLarge == nil)
+    #expect(model.previewed == [URL(fileURLWithPath: huge.path)])
+    #expect(source.downloads.isEmpty)
+  }
+
+  @Test("opening a large file asks before it is fetched")
+  func openAsksForALargeFile() async {
+    let source = StubSource(tree)
+    let model = browser(source)
+    let huge = FileEntry(
+      name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
+      size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
+    await model.openFetched([huge])
+    #expect(model.pendingLarge == huge)
+    #expect(model.pendingFetch == .open([huge]))
+    #expect(source.downloads.isEmpty)
+  }
+
+  @Test("a download asks where to save, unless a folder is set")
+  func downloadAsksUnlessAFolderIsSet() async throws {
+    let source = StubSource(tree)
+    let asking = browser(source)
+    await asking.go(to: "/home/ada")
+    let image = try #require(asking.entries.first { $0.name == "A.png" })
+    asking.download([image])
+    #expect(asking.pendingSave == [image])
+    #expect(source.downloads.isEmpty)
+
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-save-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let defaults = cleanDefaults()
+    defaults.set(folder.path, forKey: FilesPreferences.directoryKey)
+    let saving = browser(source, defaults: defaults)
+    await saving.go(to: "/home/ada")
+    let again = try #require(saving.entries.first { $0.name == "A.png" })
+    saving.download([again])
+    try await settle(saving) { source.downloads.count == 1 }
+    #expect(saving.pendingSave.isEmpty)
+    let saved = folder.appendingPathComponent("A.png")
+    #expect(FileManager.default.fileExists(atPath: saved.path))
+  }
+
+  @Test("a download moves the preview copy instead of fetching again")
+  func downloadMovesThePreview() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    await model.go(to: "/home/ada")
+    let image = try #require(model.entries.first { $0.name == "A.png" })
+    await model.preview([image])
+    let cached = try #require(model.cache.cached(image))
+    let bytes = try Data(contentsOf: cached)
+    #expect(source.downloads.count == 1)
+
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-move-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    await model.save([image], to: folder)
+    #expect(source.downloads.count == 1, "the preview copy moved")
+    #expect(model.cache.cached(image) == nil)
+    #expect(!FileManager.default.fileExists(atPath: cached.path))
+    #expect(try Data(contentsOf: folder.appendingPathComponent("A.png")) == bytes)
   }
 
   @Test("closing the tab with a copy in flight says what stops, and stops it")
@@ -245,16 +495,19 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     #expect(model.closeNote == nil)
+    #expect(!model.requiresCloseConfirmation)
 
     let fetching = Task { await model.preview([model.entries.first { $0.name == "A.png" }!]) }
     try await settle(model) { model.transfers.running == 1 }
     #expect(model.closeNote == "1 transfer stops.")
+    #expect(model.requiresCloseConfirmation)
     // Progress arrives on a later hop to the main actor than the row does.
     try await settle(model) { model.transfers.items.first?.done == 1 }
 
     model.close()
     await fetching.value
     #expect(model.transfers.items.isEmpty, "a stopped copy is not a failure to show")
+    #expect(!model.requiresCloseConfirmation)
     #expect(model.previewed.isEmpty)
   }
 
@@ -289,7 +542,7 @@ struct FilesTabTests {
     #expect(await model.resolve(.at("nowhere.txt")) == nil)
   }
 
-  @Test("pointing at a file shows it; at a directory, shows the browser there")
+  @Test("pointing at a file focuses Files; at a directory, shows the browser there")
   func lookingAtALink() async {
     let source = StubSource(tree)
     let host = HostProbe()
@@ -299,7 +552,8 @@ struct FilesTabTests {
 
     await model.look(at: .at("runs/plot.png", in: "/home/ada"))
     #expect(model.previewed.map(\.lastPathComponent) == ["plot.png"])
-    #expect(host.shown == 0, "a file opens in Quick Look, not the browser")
+    #expect(host.shown == 1, "a file opens in Quick Look with Files focused")
+    #expect(host.focused == 1)
 
     await model.look(at: .at("runs", in: "/home/ada"))
     #if os(macOS)
@@ -310,7 +564,8 @@ struct FilesTabTests {
     #else
       #expect(model.directory == "/home/ada/runs")
     #endif
-    #expect(host.shown == 1)
+    #expect(host.shown == 2)
+    #expect(host.focused == 2)
 
     await model.reveal(.at("/home/ada/b.txt"))
     #expect(model.directory == "/home/ada")
@@ -325,6 +580,7 @@ struct FilesTabTests {
     await model.look(at: .at("not/there.png"))
     #expect(model.previewed.isEmpty)
     #expect(host.shown == 0)
+    #expect(host.focused == 0)
   }
 
   @Test("a web address is not a file; a file:// hyperlink is")
@@ -351,6 +607,44 @@ struct FilesTabTests {
     #expect(await absent.exists?() == false)
   }
 
+  @Test("a local preview follows the file's modification time")
+  func localPreviewFollowsModificationTime() async throws {
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-mtime-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("plot.png")
+    try Data("one".utf8).write(to: file)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: file.path)
+
+    let source = StubSource([folder.path: .directory, file.path: .file])
+    source.isLocal = true
+    let model = browser(source)
+    let entry = FileEntry(
+      name: "plot.png", path: file.path, kind: .file, size: 3, modified: 1, permissions: 0o644)
+
+    await model.preview([entry])
+    let first = try #require(model.previewed.first)
+    #expect(first.path != file.path)
+    #expect(try String(contentsOf: first, encoding: .utf8) == "one")
+
+    try Data("two".utf8).write(to: file)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: file.path)
+    await model.preview([entry])
+    #expect(model.previewed.first == first)
+
+    try Data("three".utf8).write(to: file)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1_700_000_005)], ofItemAtPath: file.path)
+    await model.preview([entry])
+    let second = try #require(model.previewed.first)
+    #expect(second != first)
+    #expect(try String(contentsOf: second, encoding: .utf8) == "three")
+    #expect(source.downloads.isEmpty)
+  }
+
   @Test("on this machine a file is shown where it is, never copied")
   func localFilesAreShownInPlace() async throws {
     let source = StubSource(tree)
@@ -366,6 +660,130 @@ struct FilesTabTests {
   func accessoryPlacement() {
     #expect(FilesPlugin().accessory.placement == .inspector)
   }
+
+  @Test("a pasted relative path is resolved from the shell, then the browser")
+  func pastedPathUsesTheShell() async throws {
+    let relative = "lab-new/projects/pcl-ptmc-pec-tg/figures/hotmelt-rho.png"
+    let underShell = "/home/ada/runs/" + relative
+    let underBrowser = "/home/ada/" + relative
+    var files = tree
+    for path in [underShell, underBrowser] {
+      var cursor = ""
+      for part in path.split(separator: "/") {
+        cursor += "/" + part
+        if cursor.hasSuffix(".png") {
+          files[cursor] = .file
+        } else if files[cursor] == nil {
+          files[cursor] = .directory
+        }
+      }
+    }
+    let source = StubSource(files)
+    let host = HostProbe()
+    host.workingDirectory = "/home/ada/runs"
+    let model = browser(source, host: host)
+    await model.go(to: "/home/ada")
+    let listed = source.stats.count
+
+    model.beginFind()
+    model.query = relative
+    model.noteQueryChange(from: "")
+    try await settle(model) { model.selection == [underShell] }
+    #if os(macOS)
+      #expect(model.directory == "/home/ada", "the file is under the root, so the root stays")
+    #else
+      #expect(model.directory == Paths.parent(underShell))
+    #endif
+    #expect(!model.finding)
+    #expect(source.stats.dropFirst(listed).first == underShell)
+    let stayed = model.directory
+
+    model.beginFind()
+    model.query = "lab-new/missing.png"
+    model.noteQueryChange(from: "")
+    try await settle(model) { source.stats.last == "/home/ada/lab-new/missing.png" }
+    #expect(model.finding, "nothing by that name, so the field stays")
+    #expect(model.directory == stayed)
+  }
+
+  @Test("typing a path does not look it up; a name filters rows already listed")
+  func typedPathWaitsAndNameDoesNotStat() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    await model.go(to: "/home/ada")
+    let listed = source.stats.count
+
+    model.beginFind()
+    var previous = ""
+    for next in ["l", "la", "lab", "lab/"] {
+      model.query = next
+      model.noteQueryChange(from: previous)
+      previous = next
+    }
+    #expect(model.finding)
+    #expect(source.stats.count == listed, "a typed slash is not a search of the far side")
+
+    model.query = "plot"
+    model.noteQueryChange(from: "lab/")
+    #expect(model.displayedRows.isEmpty, "plot.png is inside a folder that is not open")
+    #expect(source.stats.count == listed)
+
+    model.query = "a.png"
+    model.noteQueryChange(from: "plot")
+    #expect(model.displayedRows.map(\.entry.name) == ["A.png"])
+    #expect(model.selection == ["/home/ada/A.png"])
+    model.query = ".env"
+    model.noteQueryChange(from: "a.png")
+    #expect(model.displayedRows.map(\.entry.name) == [".env"])
+    model.query = "env"
+    model.noteQueryChange(from: ".env")
+    #expect(model.displayedRows.isEmpty, "a dot-file stays hidden until the query names the dot")
+    #expect(source.stats.count == listed)
+
+    model.query = "runs"
+    model.noteQueryChange(from: "env")
+    model.commitFind()
+    #if os(macOS)
+      try await settle(model) { model.expanded.contains("/home/ada/runs") }
+    #else
+      try await settle(model) { model.directory == "/home/ada/runs" }
+    #endif
+    #expect(source.stats.count == listed)
+  }
+
+  @Test("shell is a jump only when the browser is somewhere else")
+  func shellJump() async throws {
+    let host = HostProbe()
+    host.workingDirectory = "/home/ada/runs"
+    let model = browser(StubSource(tree), host: host)
+    await model.go(to: "/home/ada/runs")
+    #expect(model.shellDirectory == nil)
+    model.goToShell()
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(model.history.isEmpty)
+
+    await model.go(to: "/home/ada")
+    #expect(model.shellDirectory == "/home/ada/runs")
+    model.goToShell()
+    try await settle(model) { model.directory == "/home/ada/runs" }
+    #expect(model.history == ["/home/ada/runs", "/home/ada"])
+  }
+
+  @Test("find is a command, and a paste is not one typed character")
+  func findCommandAndPaste() {
+    let model = browser(StubSource(tree))
+    let find = model.commands.first { $0.id == "find" }
+    #expect(find?.symbol == "magnifyingglass")
+    find?.action()
+    #expect(model.finding)
+    #expect(model.findTicket == 1)
+
+    #expect(FindQuery.pasted(from: "", to: "a/b"))
+    #expect(!FindQuery.pasted(from: "lab-new", to: "lab-new/"))
+    #expect(FindQuery.classify("~/A.png")?.symbol == "house")
+    #expect(FindQuery.classify("runs/plot.png")?.symbol == "terminal")
+    #expect(FindQuery.classify("plot")?.symbol == "magnifyingglass")
+  }
 }
 
 @Suite("the preview cache")
@@ -374,6 +792,30 @@ struct FileCacheTests {
     FileEntry(
       name: String(path.split(separator: "/").last!), path: path, kind: .file, size: size,
       modified: modified, permissions: 0o644)
+  }
+
+  #if os(macOS)
+    @Test("previews are kept in /tmp")
+    func previewsLiveInTemporary() {
+      let cache = FileCache(host: UUID())
+      #expect(cache.root.path.hasPrefix("/tmp/"))
+    }
+  #endif
+
+  @Test("moving a copy takes it out of the cache")
+  func moveTakesTheCopy() throws {
+    let cache = scratchCache()
+    let file = entry("/a/plot.png")
+    let cached = cache.location(for: file)
+    try Data("png".utf8).write(to: cached)
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-cache-move-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let destination = folder.appendingPathComponent("plot.png")
+    #expect(cache.move(file, to: destination))
+    #expect(cache.cached(file) == nil)
+    #expect(try Data(contentsOf: destination) == Data("png".utf8))
+    #expect(!FileManager.default.fileExists(atPath: cached.path))
   }
 
   @Test("a changed file is a different copy")

@@ -9,15 +9,9 @@ fn a_login_shell_resolves_to_something_on_this_machine() {
     let program = command.program_name();
     assert!(!program.is_empty());
     // pwsh, powershell or cmd — what every other terminal here would pick.
-    let name = program
-        .rsplit(['/', char::from(92)])
-        .next()
-        .unwrap_or(program);
+    let name = program.rsplit(['/', char::from(92)]).next().unwrap_or(program);
     let name = name.strip_suffix(".exe").unwrap_or(name).to_ascii_lowercase();
-    assert!(
-        name == "pwsh" || name == "powershell" || name == "cmd",
-        "got {program}"
-    );
+    assert!(name == "pwsh" || name == "powershell" || name == "cmd", "got {program}");
 }
 
 #[test]

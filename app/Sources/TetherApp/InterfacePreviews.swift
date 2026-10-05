@@ -23,24 +23,29 @@ private enum InterfaceFixture {
 }
 
 #Preview("Host editor · light") {
-  HostEditor(host: InterfaceFixture.host) { _, _ in }
+  HostEditor(host: InterfaceFixture.host) { _, _ in true }
     .preferredColorScheme(.light)
 }
 
 #Preview("Host editor · dark") {
-  HostEditor(host: InterfaceFixture.host) { _, _ in }
+  HostEditor(host: InterfaceFixture.host) { _, _ in true }
     .preferredColorScheme(.dark)
-}
-
-#Preview("Connect · large text") {
-  ConnectSheet(host: InterfaceFixture.host, remembered: nil) { _, _ in }
-    .environment(\.dynamicTypeSize, .accessibility3)
 }
 
 #if os(macOS)
 #Preview("Mac · twenty tabs", traits: .fixedLayout(width: 860, height: 520)) {
   VStack(spacing: 0) {
     WorkspaceTabBar(tabs: InterfaceFixture.tabs(), onClose: { _ in })
+    EmptyWorkspace().frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+  .background(Theme.window)
+}
+
+#Preview("Mac · vertical tabs", traits: .fixedLayout(width: 860, height: 520)) {
+  HStack(spacing: 0) {
+    WorkspaceTabBar(tabs: InterfaceFixture.tabs(), layout: .vertical, onClose: { _ in })
+      .frame(width: Chrome.tabSidebarIdeal)
+    Divider()
     EmptyWorkspace().frame(maxWidth: .infinity, maxHeight: .infinity)
   }
   .background(Theme.window)

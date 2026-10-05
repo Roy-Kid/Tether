@@ -8,6 +8,12 @@ public typealias TmuxPaneFrame = TetherFFIBindings.TmuxPaneFrame
 public typealias TmuxSnapshot = TetherFFIBindings.TmuxSnapshot
 public typealias TmuxAction = TetherFFIBindings.TmuxAction
 
+public struct CommandOutput: Sendable {
+  public let status: Int32?
+  public let stdout: Data
+  public let stderr: Data
+}
+
 /// A lease on an authenticated connection, independent of any shell channel.
 public final class RemoteConnection: Sendable {
   let inner: TetherFFIBindings.RemoteConnection
@@ -22,7 +28,8 @@ public final class RemoteConnection: Sendable {
     term: String = "xterm-256color",
     columns: UInt16 = 80,
     rows: UInt16 = 24,
-    scrollbackLines: UInt32 = 10_000
+    scrollbackLines: UInt32 = defaultScrollbackLines,
+    history: SessionHistory? = nil
   ) async throws -> TerminalSession {
     let session = try await cancellable { token in
       try await self.inner.openShell(
@@ -30,16 +37,28 @@ public final class RemoteConnection: Sendable {
         columns: columns,
         rows: rows,
         scrollbackLines: scrollbackLines,
+        history: history?.inner,
         cancellation: token)
     }
     return TerminalSession(session)
   }
 
+  /// Runs a bounded command on this authenticated lease, independently of a terminal.
+  public func execute(_ command: String) async throws -> CommandOutput {
+    let result = try await cancellable { try await self.inner.execute(command: command, cancellation: $0) }
+    return CommandOutput(status: result.status, stdout: result.stdout, stderr: result.stderr)
+  }
+
   public func tmuxSessions() async throws -> [TmuxSessionInfo] {
     try await cancellable { try await self.inner.tmuxSessions(cancellation: $0) }
   }
-  public func createTmux(name: String) async throws -> TmuxSessionInfo {
-    try await cancellable { try await self.inner.createTmux(name: name, cancellation: $0) }
+  public func tmuxSession(forClientTTY tty: String) async throws -> String? {
+    try await Tether.mapped { try await self.inner.tmuxSessionForClient(tty: tty) }
+  }
+  public func createTmux(name: String, directory: String? = nil) async throws -> TmuxSessionInfo {
+    try await cancellable {
+      try await self.inner.createTmux(name: name, directory: directory, cancellation: $0)
+    }
   }
   public func attachTmux(sessionID: String) async throws -> TmuxWorkspace {
     let workspace = try await cancellable {
@@ -72,6 +91,9 @@ public final class TmuxWorkspace: Sendable {
   public func awaitChange() async -> Bool { await inner.awaitChange() }
   public func send(pane: UInt32, input: TerminalInput) throws {
     try Tether.mappedSync { try inner.send(pane: pane, input: bridged(input)) }
+  }
+  public func scroll(pane: UInt32, lines: Int32) async throws {
+    try await Tether.mapped { try await inner.scroll(pane: pane, lines: lines) }
   }
   public func perform(_ action: TmuxAction) async throws {
     try await Tether.mapped { try await self.inner.perform(action: action) }

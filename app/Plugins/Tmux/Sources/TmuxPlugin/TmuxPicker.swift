@@ -15,6 +15,8 @@ struct TmuxPicker: View {
   @Bindable var model: TmuxTab
   /// The session whose windows are showing, when the picker is a level in.
   @State private var opened: String?
+  @State private var keyboardSelection: String?
+  @FocusState private var keyboardFocused: Bool
   @Environment(\.dynamicTypeSize) private var typeSize
   #if os(macOS)
     @State private var levelHeight = UIStyle.listHeight
@@ -23,57 +25,75 @@ struct TmuxPicker: View {
   var body: some View {
     layout
       .onAppear { model.refresh() }
-      .confirmationDialog(
-        "End this session?",
-        isPresented: Binding(
-          get: { model.sessionToEnd != nil },
-          set: { if !$0 { model.sessionToEnd = nil } })
-      ) {
-        Button("End", role: .destructive) {
-          guard let session = model.sessionToEnd else { return }
+      #if os(macOS)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($keyboardFocused)
+        .task { await Task.yield(); keyboardFocused = true }
+        .onChange(of: keyboardItems.map(\.id), initial: true) { _, ids in
+          if !ids.contains(keyboardSelection ?? "") { keyboardSelection = ids.first }
+        }
+        .onPickerNavigation { movement in
+          let ids = keyboardItems.map(\.id)
+          guard !ids.isEmpty else { return }
+          if movement == .first { keyboardSelection = ids.first }
+          else if movement == .last { keyboardSelection = ids.last }
+          else {
+            let index = ids.firstIndex(of: keyboardSelection ?? "") ?? 0
+            let offset = movement.offset(pageSize: max(1, Int(UIStyle.listHeight / UIStyle.rowHeight)))
+            keyboardSelection = ids[min(ids.count - 1, max(0, index + offset))]
+          }
+        }
+        .onPickerSubmit { keyboardItems.first { $0.id == keyboardSelection }?.run() }
+        .onPickerQuickSelection(count: keyboardItems.count) { index in
+          let items = keyboardItems
+          guard items.indices.contains(index) else { return }
+          let item = items[index]
+          keyboardSelection = item.id
+          item.run()
+        }
+        .onPickerCancel {
+          if opened != nil { opened = nil } else { model.tab.dismissAccessory() }
+        }
+        .onKeyPress(keys: [.leftArrow, .rightArrow, "b", "f", "B", "F"]) { press in
+          let arrow = press.key == .leftArrow || press.key == .rightArrow
+          let flags = press.modifiers.intersection([.control, .option, .command, .shift])
+          guard arrow ? flags.isEmpty : flags == .control else { return .ignored }
+          if press.key == .leftArrow || press.key.character.lowercased() == "b" {
+            guard opened != nil else { return .ignored }
+            opened = nil
+          } else {
+            guard !model.busy, let session = model.sessions.first(where: { "session:\($0.id)" == keyboardSelection }),
+              model.windows(for: session).count > 1 else { return .ignored }
+            opened = session.id
+          }
+          return .handled
+        }
+      #endif
+      .dialog(for: model.sessionToEnd) { session in
+        Dialog.confirm(
+          "End this session?", verb: "End", role: .destructive, cancel: { model.sessionToEnd = nil }
+        ) {
           model.sessionToEnd = nil
           if opened == session.id { opened = nil }
           model.endSession(session)
         }
       }
-      .confirmationDialog(
-        "End this window?",
-        isPresented: Binding(
-          get: { model.windowToEnd != nil },
-          set: { if !$0 { model.windowToEnd = nil } })
-      ) {
-        Button("End", role: .destructive) {
-          guard let window = model.windowToEnd else { return }
+      .dialog(for: model.windowToEnd) { window in
+        Dialog.confirm(
+          "End this window?", verb: "End", role: .destructive, cancel: { model.windowToEnd = nil }
+        ) {
           model.windowToEnd = nil
           model.endWindow(window)
         }
       }
-      .alert(
-        "Rename",
-        isPresented: Binding(
-          get: { model.renameWindow != nil || model.renameSession != nil },
-          set: {
-            if !$0 {
-              model.renameWindow = nil
-              model.renameSession = nil
-            }
-          })
-      ) {
-        TextField("Name", text: $model.renameText)
-        Button("Cancel", role: .cancel) {
-          model.renameWindow = nil
-          model.renameSession = nil
-        }
-        Button("Save") {
-          let name = model.renameText
-          if let window = model.renameWindow {
-            model.perform(.renameWindow(id: window.id, name: name))
-          }
-          if let session = model.renameSession {
-            model.renameSession(session, to: name)
-          }
-          model.renameWindow = nil
-          model.renameSession = nil
+      .dialog(for: model.renaming) { renaming in
+        Dialog.input(
+          "Rename", field: Dialog.Field("Name", initial: renaming.name), verb: "Save",
+          cancel: { model.renaming = nil }
+        ) { name in
+          model.renaming = nil
+          model.rename(renaming, to: name)
         }
       }
   }
@@ -82,11 +102,16 @@ struct TmuxPicker: View {
   @ViewBuilder
   private var layout: some View {
     #if os(macOS)
-      ScrollView {
-        level.padding(UIStyle.Space.group)
-          .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-            levelHeight = $0
-          }
+      ScrollViewReader { proxy in
+        ScrollView {
+          level.padding(UIStyle.Space.group)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+              levelHeight = $0
+            }
+        }
+        .onChange(of: keyboardSelection) { _, id in
+          if let id { proxy.scrollTo(id) }
+        }
       }
       .scrollBounceBehavior(.basedOnSize)
       .frame(width: UIStyle.treeWidth, alignment: .leading)
@@ -96,13 +121,17 @@ struct TmuxPicker: View {
         ScrollView {
           level.padding(UIStyle.Space.inset)
         }
-        .navigationTitle("tmux sessions")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
-            Button("Close", systemImage: "xmark") { model.tab.dismissAccessory() }
-              .labelStyle(.iconOnly)
-              .keyboardShortcut(.cancelAction)
+            Button {
+              model.tab.dismissAccessory()
+            } label: {
+              Label("Close", systemImage: "xmark")
+            }
+            .buttonStyle(.iconOnly)
+            .help("Close")
+            .keyboardShortcut(.cancelAction)
           }
         }
       }
@@ -124,11 +153,29 @@ struct TmuxPicker: View {
     VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
       header(model.tab.plugin.hostLabel)
 
-      row(
-        title: "Original shell",
-        selected: !model.showing
-      ) {
-        model.showShell()
+      let shells = model.tab.shells()
+      if shells.count > 1 {
+        ForEach(shells) { shell in
+          row(id: "shell:\(shell.id)", title: shell.title, selected: shell.current && model.shellSessionID == nil) {
+            model.tab.openShell(shell.id)
+            model.tab.dismissAccessory()
+          }
+        }
+      }
+
+      if shells.count < 2 || model.shellSessionID != nil {
+        row(
+          id: "shell",
+          title: model.tab.plugin.shellLabel,
+          selected: model.shellSessionID == nil
+        ) {
+          model.showShell()
+        }
+      }
+
+      row(id: "new-shell", title: "New shell…", selected: false) {
+        model.tab.newShell()
+        model.tab.dismissAccessory()
       }
 
       Divider()
@@ -146,23 +193,12 @@ struct TmuxPicker: View {
       }
 
       ForEach(model.sessions, id: \.id) { session in
-        sessionRow(session)
+        sessionRow(session).disabled(model.busy)
       }
 
       // Last in the list, because it is what there is to do when none of
       // the sessions above is the one that was wanted.
-      row(title: "New session…", selected: false) {
-        let tab = model.tab
-        tab.present(
-          AnyView(
-            CreateTmuxSheet(
-              model: model,
-              onCancel: tab.dismissSheet,
-              onCreate: {
-                tab.dismissSheet()
-                tab.dismissAccessory()
-              })))
-      }
+      row(id: "new-session", title: "New session…", selected: false, action: createSession)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
@@ -182,57 +218,58 @@ struct TmuxPicker: View {
             .font(UIStyle.header)
             .foregroundStyle(Theme.subtle)
           Spacer(minLength: 0)
+          PickerShortcutHint(index: keyboardItems.firstIndex { $0.id == "back" })
         }
         .padding(.horizontal, UIStyle.Space.inline)
         .padding(.vertical, UIStyle.rowPadding)
         .frame(minHeight: UIStyle.rowHeight)
         .contentShape(Rectangle())
       }
-      .buttonStyle(ChromeButtonStyle())
+      .buttonStyle(ChromeButtonStyle(selected: keyboardSelection == "back"))
+      .id("back")
 
       Divider()
 
       ForEach(listed, id: \.id) { window in
         row(
+          id: "window:\(window.id)",
           title: tmuxWindowLine(window),
-          selected: window.active && model.session?.id == session.id && model.showing,
+          selected: window.active && model.shellSessionID == session.id,
           // The last window is the session; that one ends from the level above.
           end: listed.count > 1 ? RowEnd("End window") { model.windowToEnd = window } : nil
         ) {
           model.choose(session, windowID: window.id)
         }
+        .disabled(model.busy)
         .contextMenu {
-          Button("Rename…") {
-            model.renameWindow = TmuxWindowInfo(
-              id: window.id, name: window.name, active: window.active, width: 1, height: 1)
-            model.renameText = window.name
-          }
+          Button("Rename…") { model.renaming = .window(window) }
           if listed.count > 1 {
             Button("End window…", role: .destructive) { model.windowToEnd = window }
           }
         }
       }
 
-      if model.session?.id == session.id {
-        row(title: "New window", selected: false) {
-          model.perform(.newWindow)
+      if model.shellSessionID == session.id {
+        row(id: "new-window", title: "New window", selected: false) {
+          model.newWindow()
         }
-        .disabled(model.busy || model.ended)
+        .disabled(model.busy)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func sessionRow(_ session: TmuxSessionInfo) -> some View {
-    let owned = model.session?.id == session.id
+    let owned = model.shellSessionID == session.id
     let listed = model.windows(for: session)
     // A chevron is a promise that there is another level behind it. One
     // window is not another level: that row attaches, which is what the
     // click was for.
     let deeper = listed.count > 1
     return row(
+      id: "session:\(session.id)",
       title: tmuxSessionLine(session, windows: listed, owned: owned),
-      selected: owned && model.showing,
+      selected: owned,
       chevron: deeper,
       end: RowEnd("End session") { model.sessionToEnd = session }
     ) {
@@ -243,10 +280,7 @@ struct TmuxPicker: View {
       }
     }
     .contextMenu {
-      Button("Rename…") {
-        model.renameSession = session
-        model.renameText = session.name
-      }
+      Button("Rename…") { model.renaming = .session(session) }
       if owned {
         Button("Detach session") {
           model.detachSession()
@@ -286,11 +320,67 @@ struct TmuxPicker: View {
   }
 
   private func row(
-    title: String, selected: Bool, chevron: Bool = false, end: RowEnd? = nil,
+    id: String, title: String, selected: Bool, chevron: Bool = false, end: RowEnd? = nil,
     action: @escaping () -> Void
   ) -> some View {
-    TreeRow(title: title, selected: selected, chevron: chevron, end: end, action: action)
+    TreeRow(title: title, selected: selected, highlighted: keyboardSelection == id,
+      chevron: chevron, end: end, shortcutIndex: keyboardItems.firstIndex { $0.id == id }) {
+        keyboardSelection = id
+        action()
+      }
       .disabled(model.busy)
+      .id(id)
+  }
+
+  private struct KeyboardItem {
+    let id: String
+    let run: () -> Void
+  }
+
+  private var keyboardItems: [KeyboardItem] {
+    if let opened, let session = model.sessions.first(where: { $0.id == opened }) {
+      var items = [KeyboardItem(id: "back") { self.opened = nil }]
+      guard !model.busy else { return items }
+      items += model.windows(for: session).map { window in
+        KeyboardItem(id: "window:\(window.id)") { model.choose(session, windowID: window.id) }
+      }
+      if model.shellSessionID == session.id {
+        items.append(KeyboardItem(id: "new-window") { model.newWindow() })
+      }
+      return items
+    }
+    guard !model.busy else { return [] }
+    let shells = model.tab.shells()
+    var items: [KeyboardItem] = []
+    if shells.count > 1 {
+      items += shells.map { shell in
+        KeyboardItem(id: "shell:\(shell.id)") {
+          model.tab.openShell(shell.id)
+          model.tab.dismissAccessory()
+        }
+      }
+    }
+    if shells.count < 2 || model.shellSessionID != nil {
+      items.append(KeyboardItem(id: "shell", run: model.showShell))
+    }
+    items.append(KeyboardItem(id: "new-shell") { model.tab.newShell(); model.tab.dismissAccessory() })
+    items += model.sessions.map { session in
+      KeyboardItem(id: "session:\(session.id)") {
+        let windows = model.windows(for: session)
+        if windows.count > 1 { self.opened = session.id }
+        else { model.choose(session, windowID: windows.first?.id) }
+      }
+    }
+    items.append(KeyboardItem(id: "new-session", run: createSession))
+    return items
+  }
+
+  private func createSession() {
+    let tab = model.tab
+    tab.present(AnyView(CreateTmuxSheet(model: model, onCancel: tab.dismissSheet, onCreate: {
+      tab.dismissSheet()
+      tab.dismissAccessory()
+    })))
   }
 }
 
@@ -313,13 +403,15 @@ private struct RowEnd {
 private struct TreeRow: View {
   let title: String
   let selected: Bool
+  let highlighted: Bool
   let chevron: Bool
   let end: RowEnd?
+  let shortcutIndex: Int?
   let action: () -> Void
   @State private var hovering = false
 
   private static let mark: CGFloat = 10
-  private static let endSize: CGFloat = 16
+  private static let endSize = UIStyle.Mark.glyph
 
   private var showsEnd: Bool { hovering && end != nil }
 
@@ -335,10 +427,11 @@ private struct TreeRow: View {
           .foregroundStyle(Theme.text)
           .adaptiveRowText()
         Spacer(minLength: 0)
+        PickerShortcutHint(index: shortcutIndex)
         // Room for the ✕, only while it shows: a long title gives way to it
         // instead of running underneath.
         if showsEnd {
-          Color.clear.frame(width: Self.endSize, height: 1)
+          Color.clear.frame(width: Self.endSize, height: UIStyle.Mark.hairline)
         }
         if chevron {
           Image(systemName: "chevron.right")
@@ -354,7 +447,7 @@ private struct TreeRow: View {
     }
     .buttonStyle(
       ChromeButtonStyle(
-        selected: selected, hovered: hovering, hoverOpacity: UIStyle.focusOpacity)
+        selected: selected || highlighted, hovered: hovering, hoverOpacity: UIStyle.focusOpacity)
     )
     .overlay(alignment: .trailing) {
       if showsEnd, let end {
@@ -444,7 +537,7 @@ struct CreateTmuxSheet: View {
       }
     }
     #if os(macOS)
-      .frame(minWidth: 340, minHeight: 180)
+      .frame(minWidth: UIStyle.menuWidth, minHeight: UIStyle.menuHeight)
     #endif
     .interactiveDismissDisabled(model.busy)
     .task {
@@ -457,5 +550,27 @@ struct CreateTmuxSheet: View {
   private func create() {
     guard canCreate else { return }
     model.create(onSuccess: onCreate)
+  }
+}
+
+/// The same menu the tab carries, beside the terminal when the inspector is open.
+struct TmuxInspector: View {
+  @Bindable var model: TmuxTab
+  var body: some View {
+    Form {
+      Section {
+        LabeledContent("Host", value: model.tab.plugin.hostLabel)
+        LabeledContent("Session", value: model.subtitle.isEmpty ? model.tab.plugin.shellLabel : model.subtitle)
+      }
+      if !model.commands.isEmpty {
+        Section {
+          ForEach(model.commands) { command in
+            Button(command.title, systemImage: command.symbol, action: command.action)
+          }
+        }
+        .disabled(model.busy)
+      }
+    }
+    .formStyle(.grouped)
   }
 }

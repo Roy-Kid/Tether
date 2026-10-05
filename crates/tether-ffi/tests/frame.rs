@@ -6,13 +6,33 @@
 //! depends on are asserted here rather than left to be discovered on screen.
 
 use tether_core::terminal::{Options, ScreenSize, Terminal};
-use tether_ffi::{CellColor, ColorName, ScreenFrame};
+use tether_ffi::{CellColor, ColorName, FrameUpdate, ScreenFrame};
 
 fn frame(columns: u16, rows: u16, bytes: &[u8]) -> ScreenFrame {
     let mut terminal =
         Terminal::with_options(ScreenSize::new(columns, rows), Options { scrollback_lines: 64 });
     terminal.feed(bytes);
     ScreenFrame::of(&terminal.screen(), terminal.title().to_owned())
+}
+
+#[test]
+fn one_character_does_not_copy_the_other_rows() {
+    let mut terminal =
+        Terminal::with_options(ScreenSize::new(40, 8), Options { scrollback_lines: 16 });
+    let _ = terminal.take_frame_delta();
+    terminal.feed(b"x");
+    match FrameUpdate::from_delta(&terminal.take_frame_delta()) {
+        FrameUpdate::Rows { rows, .. } => {
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].row, 0);
+            assert!(rows[0].line.runs.iter().any(|run| run.text.contains('x')));
+        }
+        other => panic!("expected row damage, got {other:?}"),
+    }
+    assert!(matches!(
+        FrameUpdate::from_delta(&terminal.take_frame_delta()),
+        FrameUpdate::Idle { .. }
+    ));
 }
 
 /// A frontend places each run at a column by adding up the ones before it. If

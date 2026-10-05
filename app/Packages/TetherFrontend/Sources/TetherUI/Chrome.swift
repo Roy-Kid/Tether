@@ -56,14 +56,43 @@ public enum UIStyle {
     public static let group: CGFloat = 8
     public static let inset: CGFloat = 12
     public static let section: CGFloat = 16
+    public static let page: CGFloat = 24
+    public static let wide: CGFloat = 28
   }
   public static let rowRadius: CGFloat = 4
+  public static let badgeRadius: CGFloat = 5
   public static let panelRadius: CGFloat = 10
+  /// Sizes of chrome marks. The number lives here; a view asks for the role.
+  public enum Mark {
+    public static let hairline: CGFloat = 1
+    public static let rule: CGFloat = 2
+    public static let presence: CGFloat = 7
+    public static let disclosure: CGFloat = 10
+    public static let chevron: CGFloat = 12
+    public static let glyph: CGFloat = 16
+    public static let icon: CGFloat = 18
+    public static let iconLarge: CGFloat = 20
+    public static let status: CGFloat = 22
+    public static let badge: CGFloat = 23
+    public static let tileWidth: CGFloat = 30
+    public static let tileHeight: CGFloat = 34
+    public static let progress: CGFloat = 60
+    public static let hero: CGFloat = 64
+  }
+  public static let sheetWidth: CGFloat = 400
+  public static let sheetHeight: CGFloat = 420
+  public static let compactWidth: CGFloat = 240
+  public static let compactHeight: CGFloat = 200
+  public static let menuWidth: CGFloat = 340
+  public static let menuHeight: CGFloat = 180
   public static let panelWidth: CGFloat = 420
   public static let pickerWidth: CGFloat = 280
   public static let treeWidth: CGFloat = 260
   public static let listHeight: CGFloat = 280
   public static let selectionOpacity = 0.12
+  /// Drawn over glyphs, so it has to read as a selection and still leave
+  /// the text visible. A list row's highlight is too faint for that.
+  public static let textSelectionOpacity = 0.40
   public static let hoverOpacity = 0.06
   /// Hover in a list someone is choosing from, where the row under the
   /// pointer is the answer being considered and has to read as one.
@@ -139,7 +168,7 @@ public struct ChromeButtonStyle: ButtonStyle {
         .overlay {
           if selected && contrast == .increased {
             RoundedRectangle(cornerRadius: UIStyle.rowRadius)
-              .strokeBorder(Theme.text, lineWidth: 1)
+              .strokeBorder(Theme.text, lineWidth: UIStyle.Mark.hairline)
           }
         }
         .opacity(enabled ? 1 : UIStyle.disabledOpacity)
@@ -169,7 +198,7 @@ private struct FloatingPanel: ViewModifier {
       }
       .overlay {
         RoundedRectangle(cornerRadius: UIStyle.panelRadius)
-          .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: 1)
+          .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: UIStyle.Mark.hairline)
           .allowsHitTesting(false)
       }
       .shadow(color: .black.opacity(UIStyle.shadowOpacity),
@@ -205,10 +234,69 @@ extension Color {
   }
 }
 
-// There is deliberately no `toolbarIconOnly()` helper here.
-//
-// `labelStyle` inherits down the whole view tree, so applying it once at the
-// container was not a convenience — it stripped the text from every `Label`
-// below it, and the tab strip lost its titles: a row of identical terminal
-// icons with no way to tell one session from another. Each button says
-// `.labelStyle(.iconOnly)` for itself, where the effect is visible.
+/// An empty place in the window: one symbol, its name on hover.
+///
+/// A title and a description under a large icon is a second layout. The name
+/// stays available to the pointer and to accessibility. `detail` is data —
+/// a reason that arrived from elsewhere — and is the only line of text.
+public struct QuietMark: View {
+  public let title: String
+  public let systemImage: String
+  public var detail: String?
+
+  public init(_ title: String, systemImage: String, detail: String? = nil) {
+    self.title = title
+    self.systemImage = systemImage
+    self.detail = detail
+  }
+
+  private var spoken: String {
+    guard let detail, !detail.isEmpty else { return title }
+    return "\(title). \(detail)"
+  }
+
+  public var body: some View {
+    VStack(spacing: UIStyle.Space.group) {
+      Image(systemName: systemImage)
+        .font(.system(size: UIStyle.Mark.tileWidth, weight: .medium))
+        .foregroundStyle(Theme.subtle)
+        .accessibilityHidden(true)
+      if let detail, !detail.isEmpty {
+        Text(detail)
+          .font(UIStyle.detail)
+          .foregroundStyle(Theme.subtle)
+          .multilineTextAlignment(.center)
+          .textSelection(.enabled)
+          .padding(.horizontal, UIStyle.Space.inset)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(spoken)
+    .help(title)
+  }
+}
+
+/// Icon-only chrome. Apply it to the button itself.
+///
+/// `labelStyle` inherits, so a container-level style is not a convenience:
+/// it strips the title from every `Label` under it, and a tab strip becomes
+/// a row of identical terminal icons. A button style does not inherit.
+///
+/// On iOS 26 the navigation bar draws a toolbar item's title beside its
+/// symbol. `.labelStyle(.iconOnly)` on the button never reaches the title
+/// the bar already took. Replacing the label from inside a `ButtonStyle`
+/// does. A button that also needs `ChromeButtonStyle` cannot wear two
+/// styles; that one keeps `.labelStyle(.iconOnly)` on its own label, which
+/// is enough outside a toolbar.
+public struct IconOnlyButtonStyle: ButtonStyle {
+  public init() {}
+
+  public func makeBody(configuration: Configuration) -> some View {
+    configuration.label.labelStyle(.iconOnly)
+  }
+}
+
+extension ButtonStyle where Self == IconOnlyButtonStyle {
+  public static var iconOnly: Self { Self() }
+}

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tether_terminal::{Input, Link, Options, Position, Screen, ScreenSize, Terminal};
+use tether_terminal::{Input, Link, Options, Position, Screen, ScreenSize, Scroll, Terminal};
 use tmuxctl::{Event, Notification};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -204,9 +204,30 @@ impl Workspace {
         };
         self.write(pane, bytes)
     }
+    /// Moves `pane`'s viewport over the history kept here for it.
+    ///
+    /// Not tmux's copy mode. A control-mode client is sent the pane's
+    /// output, never what tmux draws for copy mode, so entering it changed
+    /// nothing on this screen — and with `-e` a scroll toward the present
+    /// left the mode on its first line, failing every repeat after with
+    /// "not in a mode". The history was captured on attach and grows with
+    /// the output; it is scrolled where it is, as a terminal of its own
+    /// would be. Positive goes back, negative comes forward, clamped.
+    pub fn scroll(&self, pane: u32, lines: i32) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let target = state.panes.get_mut(&pane).ok_or_else(|| Error("Pane closed".into()))?;
+        target.terminal.scroll(Scroll::Lines(lines));
+        Ok(())
+    }
+    /// Sends bytes to `pane` — and returns it to the present first, the way
+    /// every terminal does: a keystroke whose echo lands off screen reads as
+    /// one that was ignored.
     pub fn write(&self, pane: u32, bytes: Vec<u8>) -> Result<()> {
         if bytes.len() > 1024 * 1024 {
             return Err(Error("Paste exceeds 1 MiB".into()));
+        }
+        if let Some(target) = self.state.lock().unwrap().panes.get_mut(&pane) {
+            target.terminal.scroll(Scroll::Live);
         }
         self.requests
             .try_send(Request::Input(pane, bytes))
@@ -429,11 +450,14 @@ impl Driver {
                         } else {
                             b"\x1b[?1l"
                         });
-                        pane.terminal.feed(if values[4] == "1" {
-                            b"\x1b[?2004h"
-                        } else {
-                            b"\x1b[?2004l"
-                        });
+                        // tmux before 3.7 has no bracket_paste_flag and expands
+                        // the name to nothing. Treating that as off clears a
+                        // mode the server could not report.
+                        match values[4] {
+                            "1" => pane.terminal.feed(b"\x1b[?2004h"),
+                            "0" => pane.terminal.feed(b"\x1b[?2004l"),
+                            _ => {}
+                        }
                         pane.terminal.feed(if values[5] == "1" {
                             b"\x1b[?7h"
                         } else {

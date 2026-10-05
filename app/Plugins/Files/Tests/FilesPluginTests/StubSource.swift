@@ -13,18 +13,30 @@ final class StubSource: FileSource, @unchecked Sendable {
   private(set) var removed: [String] = []
   private(set) var renames: [(String, String, Bool)] = []
   private(set) var closed = false
+  /// Every `stat`, in order. A name filter must not add to it.
+  private var recordedStats: [String] = []
+  private var recordedLists: [String] = []
+  var lists: [String] { lock.withLock { recordedLists } }
+  var stats: [String] { lock.withLock { recordedStats } }
   var homePath = "/home/ada"
   var isLocal = false
+  /// Modification time `stat` and `list` report, when a test has changed it.
+  var modifiedAt: [String: UInt64] = [:]
   /// Held for the length of a listing, so a test can overtake it.
   var listDelay: [String: Duration] = [:]
   /// Held for the length of every download; cancelling the task ends it.
   var downloadDelay: Duration?
+  /// Destinations a download finished writing. A move out of the cache does
+  /// not add to this.
+  private var recordedDownloads: [String] = []
+  var downloads: [String] { lock.withLock { recordedDownloads } }
 
   init(_ files: [String: FileKind]) { self.files = files }
 
   func home() async throws -> String { homePath }
 
   func list(_ directory: String) async throws -> [FileEntry] {
+    lock.withLock { recordedLists.append(directory) }
     if let delay = lock.withLock({ listDelay[directory] }) { try await Task.sleep(for: delay) }
     return try lock.withLock {
       guard files[directory] == .directory else { throw FileError.notFound(path: directory) }
@@ -35,7 +47,13 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
   }
 
-  func stat(_ path: String) async throws -> FileEntry { try known(path) }
+  func stat(_ path: String) async throws -> FileEntry {
+    try lock.withLock {
+      recordedStats.append(path)
+      guard files[path] != nil else { throw FileError.notFound(path: path) }
+      return entry(path)
+    }
+  }
   func lstat(_ path: String) async throws -> FileEntry { try known(path) }
 
   private func known(_ path: String) throws -> FileEntry {
@@ -54,6 +72,7 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
     try Data(path.utf8).write(to: URL(fileURLWithPath: destination))
     progress?(UInt64(path.utf8.count))
+    lock.withLock { recordedDownloads.append(destination) }
     return UInt64(path.utf8.count)
   }
 
@@ -106,6 +125,7 @@ final class StubSource: FileSource, @unchecked Sendable {
   private func entry(_ path: String) -> FileEntry {
     FileEntry(
       name: String(path.split(separator: "/").last ?? "/"), path: path,
-      kind: files[path] ?? .other, size: 3, modified: 1_700_000_000, permissions: 0o644)
+      kind: files[path] ?? .other, size: 3, modified: modifiedAt[path] ?? 1_700_000_000,
+      permissions: 0o644)
   }
 }

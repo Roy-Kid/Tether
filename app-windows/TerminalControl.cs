@@ -374,6 +374,8 @@ public sealed class TerminalControl : Control
     /// Whether this key press was taken. One that was not produces text,
     /// which arrives through <see cref="SendText"/>.
     /// </summary>
+    public Func<Shortcut, bool>? WorkspaceShortcut { get; set; }
+
     private bool HandleKey(VirtualKey key)
     {
         if (_model is null) return false;
@@ -383,6 +385,7 @@ public sealed class TerminalControl : Control
         var control = IsDown(VirtualKey.Control);
 
         var pressed = new Shortcut(key, shift, control, alt);
+        if (WorkspaceShortcut?.Invoke(pressed) == true) return true;
         foreach (var (name, chordText) in AppSettings.Current.Terminal.Bindings)
         {
             if (!Shortcut.TryParse(chordText, out var shortcut) || shortcut != pressed) continue;
@@ -499,6 +502,20 @@ public sealed class TerminalControl : Control
     /// Pointer input from the render window, whose client pixels cover this
     /// control. XAML never sees those events: the window is in front of the island.
     /// </summary>
+    private PointerButton _remoteButton = PointerButton.None;
+    private Cell _remoteCell;
+    private bool ReportPointer(Windows.Foundation.Point position, PointerButton button, PointerPhase phase)
+    {
+        if (_model?.CurrentFrame is not { Mouse: not MouseTracking.Off } frame || IsDown(VirtualKey.Shift)) return false;
+        var cell = CellAt(position);
+        _remoteCell = cell;
+        if (phase == PointerPhase.Move && (frame.Mouse == MouseTracking.Clicks || frame.Mouse == MouseTracking.Drag && button == PointerButton.None)) return true;
+        _model.Send(new TerminalInput.Pointer(button, phase, (ushort)Math.Clamp(cell.Column, 0, (int)frame.Columns - 1),
+            (ushort)Math.Clamp(cell.Row, 0, (int)frame.Rows - 1),
+            new KeyModifiers(IsDown(VirtualKey.Shift), IsDown(VirtualKey.Menu), IsDown(VirtualKey.Control))));
+        return true;
+    }
+
     private void OnChildPointer(ChildPointer message)
     {
         var scale = DpiScale;
@@ -518,7 +535,17 @@ public sealed class TerminalControl : Control
             case ChildPointerKind.LeftUp:
                 ReleaseAt();
                 break;
+            case ChildPointerKind.RightDown:
+                if (ReportPointer(position, PointerButton.Right, PointerPhase.Press)) _remoteButton = PointerButton.Right;
+                break;
+            case ChildPointerKind.MiddleDown:
+                if (ReportPointer(position, PointerButton.Middle, PointerPhase.Press)) _remoteButton = PointerButton.Middle;
+                break;
+            case ChildPointerKind.MiddleUp:
+                ReportPointer(position, PointerButton.Middle, PointerPhase.Release); _remoteButton = PointerButton.None;
+                break;
             case ChildPointerKind.RightUp:
+                if (ReportPointer(position, PointerButton.Right, PointerPhase.Release)) { _remoteButton = PointerButton.None; break; }
                 ShowMenu(position);
                 break;
         }
@@ -564,6 +591,8 @@ public sealed class TerminalControl : Control
             return;
         }
 
+        if (ReportPointer(position, PointerButton.Left, PointerPhase.Press)) { _remoteButton = PointerButton.Left; return; }
+
         var now = DateTimeOffset.UtcNow;
         _clickCount = (now - _lastPress <= ClickInterval && cell == _lastPressCell)
             ? _clickCount + 1
@@ -605,6 +634,7 @@ public sealed class TerminalControl : Control
     private void MoveAt(Windows.Foundation.Point raw)
     {
         var cell = CellAt(raw);
+        if (!_selecting && ReportPointer(raw, _remoteButton, PointerPhase.Move)) return;
 
         if (_selecting && _selection is { } current)
         {
@@ -648,6 +678,12 @@ public sealed class TerminalControl : Control
 
     private void ReleaseAt()
     {
+        if (_remoteButton != PointerButton.None)
+        {
+            _model?.Send(new TerminalInput.Pointer(_remoteButton, PointerPhase.Release,
+                (ushort)Math.Max(0, _remoteCell.Column), (ushort)Math.Max(0, _remoteCell.Row), new KeyModifiers()));
+            _remoteButton = PointerButton.None;
+        }
         _selecting = false;
         _autoScroll.Stop();
         _autoScrollDelta = 0;

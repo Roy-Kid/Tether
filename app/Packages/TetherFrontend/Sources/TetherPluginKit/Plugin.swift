@@ -14,6 +14,33 @@ public struct PluginMetadata: Identifiable, Sendable {
   }
 }
 
+/// One weighted status band. Colours are sRGB 0xRRGGBB values so plugins can
+/// contribute without importing a UI framework.
+public struct PluginStatusSegment: Identifiable, Sendable, Hashable {
+  public let id: String
+  public let color: UInt32
+  public let weight: Double
+
+  public init(id: String, color: UInt32, weight: Double) {
+    self.id = id
+    self.color = color
+    self.weight = max(0, weight)
+  }
+}
+
+/// A plugin's data-only contribution to the host's bottom ribbon.
+public struct PluginStatusBarItem: Identifiable, Sendable, Hashable {
+  public let id: String
+  public let label: String
+  public let segments: [PluginStatusSegment]
+
+  public init(id: String, label: String, segments: [PluginStatusSegment]) {
+    self.id = id
+    self.label = label
+    self.segments = segments
+  }
+}
+
 @MainActor
 public struct PluginCommand: Identifiable {
   public let id: String
@@ -25,6 +52,16 @@ public struct PluginCommand: Identifiable {
     self.title = title
     self.symbol = symbol
     self.action = action
+  }
+}
+
+/// Stable command metadata, available before a connection or workspace exists.
+public struct PluginCommandDescriptor: Identifiable, Sendable {
+  public let id: String
+  public let title: String
+  public init(id: String, title: String) {
+    self.id = id
+    self.title = title
   }
 }
 
@@ -49,17 +86,21 @@ public struct PluginContext {
   /// and because a plugin that needs none should not be kept waiting for one.
   public let connection: RemoteConnection?
   public let hostLabel: String
+  /// The shell behind this tab, suitable for the tmux picker's shell row.
+  public let shellLabel: String
   public let hostID: UUID
   public let openWorkspace: (any PluginWorkspace) -> Void
   /// Reauthentication belongs to the host, never the plugin. No credentials cross this API.
   public let reconnect: () async throws -> RemoteConnection
   public init(
     connection: RemoteConnection?, hostLabel: String, hostID: UUID,
+    shellLabel: String = "Shell",
     openWorkspace: @escaping (any PluginWorkspace) -> Void,
     reconnect: @escaping () async throws -> RemoteConnection
   ) {
     self.connection = connection
     self.hostLabel = hostLabel
+    self.shellLabel = shellLabel
     self.hostID = hostID
     self.openWorkspace = openWorkspace
     self.reconnect = reconnect
@@ -69,12 +110,25 @@ public struct PluginContext {
 @MainActor
 public protocol TetherPlugin: AnyObject {
   var metadata: PluginMetadata { get }
+  var commandDescriptors: [PluginCommandDescriptor] { get }
+  /// A data-only lamp shown beside the host selector, when the plugin has live status.
+  var statusBarItem: PluginStatusBarItem? { get }
+  /// The lamp itself, when the plugin draws it. Otherwise the host paints `statusBarItem`.
+  func statusBarLabel() -> AnyView?
+  /// Right-click on the lamp: a plugin that keeps its own settings window
+  /// opens it from here.
+  func statusBarSettings() -> (() -> Void)?
+  /// Status-bar-only plugins do not add a workspace command or tab.
+  var isStatusBarOnly: Bool { get }
+  /// A lightweight workspace presented when the status ribbon is clicked.
+  func statusBarWorkspace() -> (any PluginWorkspace)?
   /// Whether this plugin needs the tab's connection before it can be
-  /// launched. tmux does — it runs commands where the shell is. Nerve reads
-  /// the hub on this Mac and needs nothing from the tab at all.
+  /// launched. tmux does — it runs commands where the shell is. A status
+  /// plugin reporting on something of this device's own needs nothing from
+  /// the tab at all.
   ///
   /// Named for the remote case it was written for; it is the connection that
-  /// is needed, and a local session leases one too (`Decisions/0008`).
+  /// is needed, and a local session leases one too.
   var needsRemoteConnection: Bool { get }
   func activate()
   func deactivate()
@@ -82,6 +136,12 @@ public protocol TetherPlugin: AnyObject {
   func settings() -> AnyView
 }
 extension TetherPlugin {
+  public var commandDescriptors: [PluginCommandDescriptor] { [] }
+  public var statusBarItem: PluginStatusBarItem? { nil }
+  public func statusBarLabel() -> AnyView? { nil }
+  public func statusBarSettings() -> (() -> Void)? { nil }
+  public var isStatusBarOnly: Bool { false }
+  public func statusBarWorkspace() -> (any PluginWorkspace)? { nil }
   public var needsRemoteConnection: Bool { true }
   public func activate() {}
   public func deactivate() {}

@@ -7,27 +7,32 @@
 uniffi::setup_scaffolding!();
 
 mod files;
+mod history;
 mod input;
+mod keys;
 mod link;
 #[cfg(feature = "render")]
 mod render;
 mod screen;
 mod session;
+pub use history::SessionHistory;
 mod tmux;
 pub use tmux::*;
 
 #[cfg(feature = "render")]
 pub use render::{
-    render_font_families, FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
-    RgbaDto, SelectionDto,
+    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
+    RgbaDto, SelectionDto, render_font_families,
 };
 
 pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
 
 pub use input::{KeyModifiers, KeyPress, Resolved, TerminalInput};
+pub use keys::{KeyProblem, LockedKey, PassphrasePrompter, SkippedKey};
 pub use link::{LinkKind, LinkSpan, TerminalLink};
 pub use screen::{
-    CaretShape, CellColor, CellStyle, ColorName, ScreenFrame, ScreenRow, StyledRun, UnderlineStyle,
+    CaretShape, CellColor, CellStyle, ColorName, FrameUpdate, ScreenFrame, ScreenRow, StyledRun,
+    UnderlineStyle, UpdatedRow,
 };
 pub use session::{
     Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,
@@ -108,8 +113,12 @@ pub enum TetherError {
     #[error("the host key for {endpoint} was not trusted")]
     HostRejected { endpoint: String },
 
+    /// What the server would still accept, and the keys that were never
+    /// offered to it — "your key was not used, and here is why" is often the
+    /// whole story of a refused login. `remaining` is empty when nothing was
+    /// refused by the server at all: every key given was unusable.
     #[error("authentication failed; the server still wants: {}", .remaining.join(", "))]
-    AuthenticationFailed { remaining: Vec<String> },
+    AuthenticationFailed { remaining: Vec<String>, skipped: Vec<SkippedKey> },
 
     /// The credential was *accepted* and the server wants another factor, but
     /// none was left to offer. Distinct from a rejection, because telling
@@ -169,10 +178,16 @@ impl From<tether_core::ssh::SshError> for TetherError {
             SshError::ShellRefused { cause } => Self::ShellRefused { cause },
             SshError::Disconnected { cause } => Self::Disconnected { cause },
             SshError::Protocol { cause } => Self::Protocol { cause },
+            // `Dial` names the key a failure like this belongs to; one that
+            // arrives here has no position to name it by.
+            SshError::Key(problem) => Self::Protocol { cause: problem.to_string() },
             // Everything else is an authentication refusal with nothing more
             // specific to say. Matching exhaustively rather than with a
             // catch-all would break on an upstream variant we cannot see.
-            other => Self::AuthenticationFailed { remaining: vec![other.to_string()] },
+            other => Self::AuthenticationFailed {
+                remaining: vec![other.to_string()],
+                skipped: Vec::new(),
+            },
         }
     }
 }
@@ -181,7 +196,16 @@ impl From<tether_core::DialError> for TetherError {
     fn from(error: tether_core::DialError) -> Self {
         use tether_core::DialError;
         match error {
-            DialError::Refused { remaining } => Self::AuthenticationFailed { remaining },
+            DialError::Refused { remaining, skipped } => Self::AuthenticationFailed {
+                remaining,
+                skipped: skipped.into_iter().map(Into::into).collect(),
+            },
+            // Nothing reached the server to be refused; what went wrong is
+            // entirely which keys could not be used, and that is the list.
+            DialError::Unusable { skipped } => Self::AuthenticationFailed {
+                remaining: Vec::new(),
+                skipped: skipped.into_iter().map(Into::into).collect(),
+            },
             DialError::MoreFactorsNeeded { remaining } => Self::MoreFactorsNeeded { remaining },
             DialError::NothingToOffer => Self::NothingToOffer,
             DialError::Ssh(error) => error.into(),

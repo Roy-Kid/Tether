@@ -8,9 +8,12 @@ namespace TetherApp.Plugins;
 
 public sealed record PluginMetadata(string Id, string Name, string Glyph, string Summary);
 
+public sealed record PluginCommandDescriptor(string Id, string Title);
+
 public interface ITetherPlugin
 {
     PluginMetadata Metadata { get; }
+    IReadOnlyList<PluginCommandDescriptor> CommandDescriptors => [];
     void Activate();
     void Deactivate();
 }

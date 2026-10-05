@@ -14,21 +14,25 @@ struct HostEditor: View {
 
   @State private var host: Host
   @State private var password: String
-  let onSave: (Host, String?) -> Void
+  let onSave: (Host, String?) -> Bool
 
   @Environment(\.dismiss) private var dismiss
   @State private var picking = false
+  @State private var importProblem: String?
   @State private var authentication: Authentication
+  /// A key picked in this sheet, held until Save. Written to the keychain
+  /// only then, so a sheet cancelled after picking leaves nothing behind.
+  @State private var pickedKey: String?
 
   private var isNew: Bool { host.hostname.isEmpty && host.label.isEmpty }
 
   private var canSave: Bool {
     !host.hostname.trimmingCharacters(in: .whitespaces).isEmpty
       && !host.username.trimmingCharacters(in: .whitespaces).isEmpty
-      && (authentication == .password || host.offersConfiguredKey)
+      && (authentication == .password || host.offersConfiguredKey || pickedKey != nil)
   }
 
-  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Void) {
+  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Bool) {
     self.onSave = onSave
     _host = State(initialValue: host)
     _password = State(initialValue: password)
@@ -53,18 +57,34 @@ struct HostEditor: View {
             #endif
         }
 
+        if host.profile != nil {
+          Section("Identity") {
+            TextField("Account Identity", text: Binding(
+              get: { host.profile?.authentication.identity.name ?? "" },
+              set: { host.profile?.authentication.identity.name = $0 }))
+            Picker("Confirmation", selection: Binding(
+              get: { host.profile?.authentication.confirmation ?? .confirmAuthentication },
+              set: { host.profile?.authentication.confirmation = $0 })) {
+                Text("Automatic").tag(ConfirmationPolicy.automatic)
+                Text("Before Authentication").tag(ConfirmationPolicy.confirmAuthentication)
+                Text("Every Connection").tag(ConfirmationPolicy.confirmConnection)
+              }
+            if host.profile?.authentication.otp != nil {
+              TextField("OTP Challenge", text: Binding(
+                get: { host.profile?.authentication.otpPrompt ?? "" },
+                set: { host.profile?.authentication.otpPrompt = $0 }))
+            }
+          }
+        }
         Section {
           TextField("Username", text: $host.username)
             .hostFieldKeyboard()
             #if os(iOS)
               .textContentType(.username)
             #endif
-          Picker("Authentication", selection: $authentication) {
-            Text("Password").tag(Authentication.password)
-            Text("Key").tag(Authentication.key)
-          }
-          .pickerStyle(.segmented)
+          authenticationChoice
 
+          if let importProblem { Text(importProblem).foregroundStyle(.red) }
           if authentication == .password {
             // A row of its own. Nesting `SecureField` in an `HStack` inside a
             // `Form` is how iOS ends up with a password row that will not
@@ -78,15 +98,19 @@ struct HostEditor: View {
               picking = true
             } label: {
               LabeledContent("Key") {
-                Text(host.keyPath.map(shorten) ?? "Choose…")
+                Text(pickedKey != nil || host.credentialSecretID != nil ? "Stored on this device" : host.keyPath.map(shorten) ?? "Choose…")
                   .foregroundStyle(.secondary)
                   .adaptiveRowText()
                   .truncationMode(.head)
               }
             }
             .foregroundStyle(.primary)
-            if host.keyPath != nil {
-              Button("Clear Key", role: .destructive) { host.keyPath = nil }
+            if host.keyPath != nil || host.credentialSecretID != nil || pickedKey != nil {
+              Button("Clear Key", role: .destructive) {
+                host.keyPath = nil
+                host.credentialSecretID = nil
+                pickedKey = nil
+              }
             }
           }
         }
@@ -98,6 +122,8 @@ struct HostEditor: View {
       .onChange(of: authentication) { _, value in
         if value == .password {
           host.keyPath = nil
+          host.credentialSecretID = nil
+          pickedKey = nil
         } else {
           password = ""
         }
@@ -128,20 +154,72 @@ struct HostEditor: View {
       #endif
     }
     #if os(macOS)
-      .frame(minWidth: 440, minHeight: 480)
+      .frame(minWidth: Chrome.editorWidth, minHeight: Chrome.editorHeight)
     #endif
   }
 
+  private var authenticationChoice: some View {
+    HStack(spacing: UIStyle.Space.section) {
+      method(.password, "Password", "lock")
+      method(.key, "Key", "key")
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Authentication")
+  }
+
+  private func method(_ kind: Authentication, _ title: String, _ symbol: String) -> some View {
+    let selected = authentication == kind
+    return Button {
+      authentication = kind
+    } label: {
+      VStack(spacing: UIStyle.Space.small) {
+        Label(title, systemImage: symbol)
+          .labelStyle(.iconOnly)
+          .font(UIStyle.symbol)
+          .foregroundStyle(selected ? Theme.text : Theme.subtle)
+          .accessibilityHidden(true)
+        Rectangle()
+          .fill(selected ? Theme.text : Theme.stroke.opacity(0.35))
+          .frame(height: UIStyle.Mark.hairline)
+      }
+      .frame(maxWidth: .infinity)
+    }
+    .buttonStyle(.plain)
+    .help(title)
+    .accessibilityLabel(title)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+
+  /// A key picked here is written on Save and syncs with the host. A password
+  /// stays on this device.
   private func commit() {
     var saved = host
     if authentication == .password {
       saved.keyPath = nil
+      saved.credentialSecretID = nil
     }
     saved.label =
       host.label.trimmingCharacters(in: .whitespaces).isEmpty
       ? host.hostname : host.label
-    onSave(saved, authentication == .password ? password : "")
-    dismiss()
+    var written: UUID?
+    if authentication == .key, let pickedKey {
+      let id = UUID()
+      do {
+        try DeviceCredentialStore().write(pickedKey, id: id, label: saved.label)
+      } catch {
+        importProblem = error.localizedDescription
+        return
+      }
+      saved.credentialSecretID = id
+      saved.keyPath = nil
+      written = id
+    }
+    if onSave(saved, authentication == .password ? password : "") {
+      dismiss()
+    } else if let written {
+      // Not saved, so nothing points at it.
+      try? DeviceCredentialStore().forget(written)
+    }
   }
 
   /// `~/.ssh/id_ed25519` reads better than the whole path, and the whole
@@ -157,9 +235,10 @@ struct HostEditor: View {
   /// picker is SwiftUI's `fileImporter` on both — one code path, and the one
   /// that already knows how to reach a document provider on a phone.
   ///
-  /// The path is stored, never the key. Reading happens at connect time, so a
-  /// key that moved or had its permissions tightened is noticed when there is
-  /// someone to tell (spec §18).
+  /// The key itself is kept, in this device's keychain, not the path: a file
+  /// picked here is reachable only for the moment the picker grants — always
+  /// so on a phone — and a path that reads fine now would fail at connect
+  /// time. Held until Save; `commit` writes it.
   func adoptKey(_ result: Result<[URL], Error>) {
     guard case .success(let urls) = result, let url = urls.first else { return }
 
@@ -169,30 +248,12 @@ struct HostEditor: View {
     let reachable = url.startAccessingSecurityScopedResource()
     defer { if reachable { url.stopAccessingSecurityScopedResource() } }
 
-    host.keyPath = persistIdentity(url) ?? url.path
-  }
-
-  /// Copies a picked key into `~/.ssh` so connect-time reads do not depend
-  /// on a security-scoped URL that dies at the end of this call. On a phone
-  /// that is the difference between offering publickey and failing with
-  /// "the server still wants publickey, keyboard-interactive".
-  private func persistIdentity(_ url: URL) -> String? {
-    guard let data = try? Data(contentsOf: url) else { return nil }
-    let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-      .appending(path: ".ssh", directoryHint: .isDirectory)
-    try? FileManager.default.createDirectory(
-      at: directory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    let name = url.lastPathComponent.isEmpty ? "id_key" : url.lastPathComponent
-    let destination = directory.appending(path: name)
     do {
-      try data.write(to: destination, options: .atomic)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o600], ofItemAtPath: destination.path)
+      pickedKey = try String(contentsOf: url, encoding: .utf8)
+      importProblem = nil
     } catch {
-      return nil
+      importProblem = error.localizedDescription
     }
-    return contractingHome(destination.path)
   }
 
   /// The port as text, so an empty field is possible while typing.
@@ -215,63 +276,6 @@ private extension View {
       self.textInputAutocapitalization(.never).autocorrectionDisabled()
     #else
       self
-    #endif
-  }
-}
-
-/// Asks for the credential, once, at the moment of connecting.
-///
-/// Hosts that already have a password in the keychain, or a key, skip this.
-struct ConnectSheet: View {
-  let host: Host
-  let remembered: String?
-  let onConnect: (_ password: String, _ remember: Bool) -> Void
-
-  @State private var password: String
-  @State private var remember: Bool
-  @Environment(\.dismiss) private var dismiss
-
-  init(host: Host, remembered: String? = nil, onConnect: @escaping (String, Bool) -> Void) {
-    self.host = host
-    self.remembered = remembered
-    self.onConnect = onConnect
-    _password = State(initialValue: remembered ?? "")
-    _remember = State(initialValue: remembered != nil)
-  }
-
-  var body: some View {
-    NavigationStack {
-      Form {
-        Section {
-          SecureField("Password", text: $password)
-            #if os(iOS)
-              .textContentType(.password)
-            #endif
-          Toggle("Remember password", isOn: $remember)
-            .disabled(password.isEmpty)
-        }
-      }
-      .formStyle(.grouped)
-      .navigationTitle(host.label.isEmpty ? host.hostname : host.label)
-      #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }
-            .keyboardShortcut(.cancelAction)
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Connect") {
-            onConnect(password, remember && !password.isEmpty)
-            dismiss()
-          }
-          .keyboardShortcut(.defaultAction)
-        }
-      }
-    }
-    #if os(macOS)
-      .frame(minWidth: 380, minHeight: 240)
     #endif
   }
 }

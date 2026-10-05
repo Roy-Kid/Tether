@@ -1,5 +1,5 @@
-#if os(macOS)
-  import NervePlugin
+#if os(iOS)
+  import UIKit
 #endif
 import FilesPlugin
 import SwiftUI
@@ -17,7 +17,7 @@ struct TetherApp: App {
     #endif
     return HostStore()
   }()
-  @State private var tabs = TabSet()
+  @State private var tabs = TabSet(historyStore: SessionHistoryStore())
   /// One keychain for the process. Passwords are read at the moment of
   /// connecting and never held here (spec §18).
   private let secrets: any SecretStore = Keychain()
@@ -26,9 +26,6 @@ struct TetherApp: App {
     let registry = PluginRegistry()
     registry.register(TmuxPlugin())
     registry.register(FilesPlugin())
-    #if os(macOS)
-      registry.register(NervePlugin())
-    #endif
     return registry
   }()
 
@@ -39,12 +36,12 @@ struct TetherApp: App {
       // host list with nothing open in it.
       Window("Tether", id: "main") {
         root
-          .frame(minWidth: 860, minHeight: 520)
+          .frame(minWidth: Chrome.windowMinWidth, minHeight: Chrome.windowMinHeight)
       }
       // `.contentSize` would bind the window to the content's *ideal* size,
       // and a terminal has no ideal size — measured: the window opened
       // 44×89 points, off the bottom-left corner of the screen.
-      .defaultSize(width: 1100, height: 700)
+      .defaultSize(width: Chrome.windowWidth, height: Chrome.windowHeight)
       .windowResizability(.contentMinSize)
       .windowStyle(.hiddenTitleBar)
       .commands {
@@ -54,8 +51,14 @@ struct TetherApp: App {
       // A separate scene, because that is where a Mac keeps preferences and
       // where ⌘, already goes.
       Settings {
-        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets)
+        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
+          .background {
+            WorkspaceKeyBindingMonitor(enabled: false, textEditingEnabled: true) { _, _ in false }
+              .allowsHitTesting(false)
+          }
       }
+      .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
+      .windowResizability(.contentMinSize)
     #else
       // A phone has no preferences window and no menu bar; settings are
       // reached from the sidebar and presented over the app.
@@ -68,6 +71,14 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        tabs.reconcileClosedTabs(with: store.hosts)
+        tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
+        store.useKeyBindings(tabs.keyBindings)
+        store.sweepCredentials()
+        // Ask before copying ~/.ssh/config over the library. The file is
+        // not written. iCloud is a separate read.
+        store.offerConfigurationImport()
+        await store.startSync()
         await Task.yield()
         // The command line wins. Someone who typed `--open lab` asked for a
         // specific machine, and answering with a different one would be the
@@ -76,13 +87,33 @@ struct TetherApp: App {
           openLocalAtLaunch()
         }
       }
-      // The host list is `~/.ssh/config`, which belongs to the person rather
-      // than to this app: they may well have added a stanza in an editor
-      // while this was in the background. Coming back to the front is when
-      // that is worth finding out.
-      .onChange(of: phase) { _, phase in
-        if phase == .active { store.reload() }
+      .onChange(of: store.hosts) { _, hosts in
+        tabs.reconcileClosedTabs(with: hosts)
+        // A synchronized endpoint or policy change invalidates an in-flight
+        // attempt and its old lease. Stale tabs cannot keep granting channels.
+        for tab in tabs.tabs where tab.host.isManaged {
+          let current = hosts.first { $0.id == tab.host.id }
+          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id, remember: false) }
+        }
       }
+      .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }
+      // Coming forward reads the library through iCloud again. The SSH
+      // file is imported only from the question at open, or from Settings.
+      .onChange(of: phase) { _, phase in
+        if phase != .active { tabs.checkpointHistory() }
+        if phase == .active {
+          store.reload()
+          Task {
+            await store.startSync()
+            await store.syncNow()
+          }
+        }
+      }
+      #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+          for tab in tabs.tabs { tab.releaseHistory() }
+        }
+      #endif
   }
 }
 
@@ -91,9 +122,9 @@ extension TetherApp {
   ///
   /// The equivalent of typing `ssh lab`: someone who already knows which
   /// machine they want should not have to find it in a list. Only saved
-  /// hosts, and only ones with a key or an interactive server — there is
-  /// nowhere on a command line to put a password that would not end up in
-  /// a shell history.
+  /// hosts, and opened the way a click opens them — with the same password
+  /// question when one is needed, since there is nowhere on a command line
+  /// to put a password that would not end up in a shell history.
   @MainActor
   @discardableResult
   func openHostNamedOnCommandLine() -> Bool {
@@ -111,7 +142,7 @@ extension TetherApp {
       })
     else { return false }
 
-    tabs.open(host, password: "")
+    tabs.intent = .connect(host)
     return true
   }
 
@@ -132,5 +163,3 @@ extension TetherApp {
     tabs.open(.local, password: "")
   }
 }
-
-
