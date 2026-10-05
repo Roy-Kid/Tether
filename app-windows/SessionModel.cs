@@ -15,6 +15,10 @@ namespace TetherApp;
 public sealed class SessionModel : IAsyncDisposable
 {
     private TerminalSession? _session;
+    private WslSession? _wsl;
+    private string? _wslDirectory;
+    public string? WslDistribution => _wsl?.Distribution;
+    public Task<string?> WslTerminalNameAsync(CancellationToken token) => _wsl?.TerminalNameAsync(token) ?? Task.FromResult<string?>(null);
     private readonly object _gate = new();
     private readonly object _dialGate = new();
     private Palette _palette = Palette.Dark;
@@ -61,19 +65,29 @@ public sealed class SessionModel : IAsyncDisposable
     public ushort Columns => _columns;
     public ushort Rows => _rows;
     public SessionHistory? History { get; set; }
-    public string? WorkingDirectory => _session?.WorkingDirectory() ?? _session?.CurrentDirectory;
+    public string? WorkingDirectory => _session?.WorkingDirectory() ?? (!IsRemote && _wsl is not null ? _wslDirectory : _session?.CurrentDirectory);
+    public async Task<string?> ResolveWorkingDirectoryAsync(CancellationToken token)
+    {
+        var wsl = _wsl;
+        if (!IsRemote && wsl is not null)
+        {
+            var directory = await wsl.DirectoryAsync(token);
+            if (ReferenceEquals(wsl, _wsl)) _wslDirectory = directory;
+        }
+        return WorkingDirectory;
+    }
     public uint? LocalProcessId => _session?.LocalProcessId;
     public string? TerminalName => _session?.TerminalName;
     public void CheckpointHistory() => _session?.CheckpointHistory();
     public Task<string> ExecuteAsync(string command, CancellationToken token) =>
-        _session?.ExecuteAsync(command, token) ?? throw new IOException("No live connection.");
+        (!IsRemote && _wsl is not null ? _wsl.ExecuteAsync(command, token) : _session?.ExecuteAsync(command, token)) ?? throw new IOException("No live connection.");
     public Task<IReadOnlyList<TmuxSessionInfo>> TmuxSessionsAsync(CancellationToken token) =>
-        _session?.TmuxSessionsAsync(token) ?? throw new IOException("No live session.");
+        (!IsRemote && _wsl is not null ? _wsl.SessionsAsync(token) : _session?.TmuxSessionsAsync(token)) ?? throw new IOException("No live session.");
     public Task<TmuxSessionInfo> CreateTmuxAsync(string name, string? directory, CancellationToken token) =>
-        _session?.CreateTmuxAsync(name, directory, token) ?? throw new IOException("No live session.");
-    public Task RenameTmuxAsync(string id, string name) => _session?.RenameTmuxAsync(id, name) ?? Task.CompletedTask;
-    public Task EndTmuxAsync(string id) => _session?.EndTmuxAsync(id) ?? Task.CompletedTask;
-    public Task<string?> TmuxSessionForClientAsync(string tty) => _session?.TmuxSessionForClientAsync(tty) ?? Task.FromResult<string?>(null);
+        (!IsRemote && _wsl is not null ? _wsl.CreateAsync(name, directory, token) : _session?.CreateTmuxAsync(name, directory, token)) ?? throw new IOException("No live session.");
+    public Task RenameTmuxAsync(string id, string name) => (!IsRemote && _wsl is not null ? _wsl.ExecuteAsync("tmux rename-session -t " + WslSession.SessionId(id) + " " + WslSession.Quote(name)) : _session?.RenameTmuxAsync(id, name)) ?? Task.CompletedTask;
+    public Task EndTmuxAsync(string id) => (!IsRemote && _wsl is not null ? _wsl.ExecuteAsync("tmux kill-session -t " + WslSession.SessionId(id)) : _session?.EndTmuxAsync(id)) ?? Task.CompletedTask;
+    public Task<string?> TmuxSessionForClientAsync(string tty) => (!IsRemote && _wsl is not null ? _wsl.SessionForClientAsync(tty) : _session?.TmuxSessionForClientAsync(tty)) ?? Task.FromResult<string?>(null);
     public Task<RemoteFiles> OpenFilesAsync(CancellationToken token) =>
         _session?.OpenFilesAsync(token) ?? throw new InvalidOperationException("No live session.");
 
@@ -237,7 +251,7 @@ public sealed class SessionModel : IAsyncDisposable
     /// terminal with nothing in it is a missing feature, and every other
     /// terminal on this machine starts here too.
     /// </summary>
-    public async Task<bool> OpenLocalAsync(string? shell = null, CancellationToken cancellationToken = default, string? directory = null)
+    public async Task<bool> OpenLocalAsync(string? shell = null, CancellationToken cancellationToken = default, string? directory = null, string? wslDistribution = null)
     {
         if (!TerminalSession.LocalShellAvailable)
         {
@@ -246,11 +260,21 @@ public sealed class SessionModel : IAsyncDisposable
         }
         try
         {
-            var session = await TerminalSession.OpenLocalAsync(
-                directory: directory, shell: AppSettings.ResolveShellProgram(shell ?? AppSettings.Current.Shell), history: History).ConfigureAwait(true);
+            var profile = shell ?? AppSettings.Current.Shell;
+            WslSession? wsl = null;
+            TerminalSession session;
+            try
+            {
+                if (Path.GetFileNameWithoutExtension(profile).Equals("wsl", StringComparison.OrdinalIgnoreCase)) wsl = await WslSession.CreateAsync(cancellationToken, wslDistribution ?? AppSettings.Current.WslDistribution);
+                session = await TerminalSession.OpenLocalAsync(
+                    directory: wsl is null ? directory : null, shell: AppSettings.ResolveShellProgram(profile), history: History,
+                    arguments: wsl?.ShellArguments(directory)).ConfigureAwait(true);
+            }
+            catch { if (wsl is not null) await wsl.DisposeAsync(); throw; }
             IsRemote = false;
-            LocalProfile = shell ?? AppSettings.Current.Shell;
-            Adopt(session);
+            RemoteHost = null;
+            LocalProfile = profile;
+            Adopt(session, wsl);
             return true;
         }
         catch (Exception ex)
@@ -281,7 +305,7 @@ public sealed class SessionModel : IAsyncDisposable
     /// tells the far side about it — before the first byte, because a
     /// program can query `OSC 11` in its first breath.
     /// </summary>
-    private void Adopt(TerminalSession session)
+    private void Adopt(TerminalSession session, WslSession? wsl = null)
     {
         session.SetPalette(_palette.RemoteForm());
         // The control may already have measured its grid for the previous
@@ -289,6 +313,10 @@ public sealed class SessionModel : IAsyncDisposable
         session.Resize(_columns, _rows);
         var previous = _session;
         _session = session;
+        var previousWsl = _wsl;
+        _wsl = wsl;
+        _wslDirectory = null;
+        if (previousWsl is not null) _ = previousWsl.DisposeAsync();
         Generation++;
         previous?.Dispose();
         Apply(RemoteBar.Connected(), null);
@@ -383,6 +411,8 @@ public sealed class SessionModel : IAsyncDisposable
         Disarm();
         var previous = _session;
         _session = null;
+        var wsl = _wsl; _wsl = null;
+        if (wsl is not null) _ = wsl.DisposeAsync();
         Generation++;
         previous?.CheckpointHistory();
         previous?.Dispose();

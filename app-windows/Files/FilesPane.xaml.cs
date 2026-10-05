@@ -48,7 +48,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     {
         _source ??= _model.IsRemote
             ? new SftpSource(await _model.OpenFilesAsync(token))
-            : await LocalFileSource.CreateAsync(IsWsl, token);
+            : await LocalFileSource.CreateAsync(IsWsl, token, _model.WslDistribution);
     }
     private bool IsWsl => _model.IsWsl;
     private async Task<string> InitialDirectoryAsync()

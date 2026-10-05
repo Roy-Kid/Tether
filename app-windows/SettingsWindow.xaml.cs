@@ -20,9 +20,14 @@ public sealed partial class SettingsWindow : Window
         BuildExtensions();
         BuildTerminal();
         BuildWorkspaceSettings();
+        IdentitiesPane.Children.Add(new TextBlock { Text = "Manage account identities, SSH keys, passwords, TOTP and authentication confirmation policies.", TextWrapping = TextWrapping.Wrap });
+        var identities = new Button { Content = "Manage Identities" };
+        identities.Click += async (_, _) => { try { await IdentityManager.ShowAsync(SettingsRoot.ActualTheme); } catch (Exception ex) { SaveProblem.Text = ex.Message; } };
+        IdentitiesPane.Children.Add(identities);
         foreach (var profile in AppSettings.KnownShells)
             ShellPicker.Items.Add(new ComboBoxItem { Content = profile.Name, Tag = profile.Program });
         BuildSshPicker();
+        BuildWslPicker();
         // Preserve existing custom program preferences instead of silently replacing them.
         if (!AppSettings.KnownShells.Any(profile => profile.Program == AppSettings.Current.Shell))
             ShellPicker.Items.Add(new ComboBoxItem { Content = AppSettings.Current.Shell, Tag = AppSettings.Current.Shell });
@@ -63,7 +68,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
         var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
-        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "History", "files" => "Files", _ => "Startup" };
+        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "History", "files" => "Files", "identities" => "Identities", _ => "Startup" };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;
@@ -71,6 +76,7 @@ public sealed partial class SettingsWindow : Window
         KeysPane.Visibility = tag == "keys" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPane.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
         FilesPane.Visibility = tag == "files" ? Visibility.Visible : Visibility.Collapsed;
+        IdentitiesPane.Visibility = tag == "identities" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void BuildTerminal()

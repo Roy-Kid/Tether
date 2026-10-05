@@ -972,6 +972,8 @@ static class _UniFFILib {
 
 
 
+
+
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
         _UniFFILib.uniffiCheckApiChecksums();
@@ -2134,6 +2136,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ulong uniffi_tether_ffi_fn_func_open_local_with_arguments(RustBuffer @shell,RustBuffer @arguments
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ulong uniffi_tether_ffi_fn_func_ssh_master_running(RustBuffer @target
     );
 
@@ -2817,6 +2830,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_func_open_local(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_func_open_local_with_arguments(
     );
 
     #if NET8_0_OR_GREATER
@@ -3656,6 +3680,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_open_local();
             if (checksum != 11421) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_open_local` checksum `11421`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_func_open_local_with_arguments();
+            if (checksum != 13223) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_func_open_local_with_arguments` checksum `13223`, library returned `{checksum}`");
             }
         }
         {
@@ -13182,6 +13212,29 @@ internal static class TetherFfiMethods {
     return await _UniFFIAsync.UniffiRustCallAsync(
         // Get rust future
         _UniFFILib.uniffi_tether_ffi_fn_func_open_local(FfiConverterTypeLocalShell.INSTANCE.Lower(@shell)),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_u64(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_u64(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_u64(future),
+        // Lift
+        (result) => FfiConverterTypeSession.INSTANCE.Lift(result),
+        // Error
+        FfiConverterTypeTetherError.INSTANCE
+    );
+   }
+    /// <summary>
+    /// A local program with explicit arguments; consumers need not construct a command line.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+   public static async Task<Session> OpenLocalWithArguments(LocalShell @shell, string[] @arguments)
+   {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        _UniFFILib.uniffi_tether_ffi_fn_func_open_local_with_arguments(FfiConverterTypeLocalShell.INSTANCE.Lower(@shell), FfiConverterSequenceString.INSTANCE.Lower(@arguments)),
         // Poll
         (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_u64(future, continuation, data),
         // Complete

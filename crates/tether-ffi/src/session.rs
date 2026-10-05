@@ -268,12 +268,24 @@ pub fn local_shell_available() -> bool {
 /// an opaque `rustPanic`.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> {
+    open_local_with_arguments(shell, Vec::new()).await
+}
+
+/// A local program with explicit arguments; consumers need not construct a command line.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn open_local_with_arguments(
+    shell: LocalShell,
+    arguments: Vec<String>,
+) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(shell.columns, shell.rows);
 
     let mut command = match shell.shell.as_deref().map(str::trim) {
         Some(program) if !program.is_empty() => Command::shell(program),
         _ => Command::login_shell(),
     };
+    for argument in arguments {
+        command = command.arg(argument);
+    }
     if !shell.term.is_empty() {
         command = command.term(shell.term);
     }

@@ -8,6 +8,7 @@ public static class ShellTTY
     public static async Task<string?> FindAsync(SessionModel model, CancellationToken token)
     {
         if (model.TerminalName is { } known) return known;
+        if (!model.IsRemote && model.IsWsl) return await model.WslTerminalNameAsync(token);
         if (!model.IsRemote) return null;
         var text = await model.ExecuteAsync("printf '%s\\n' \"TETHER-TTY $$\"; ps -ax -o pid= -o ppid= -o tty=; printf '%s\\n' TETHER-TTY-END", token);
         var candidates = Candidates(text);

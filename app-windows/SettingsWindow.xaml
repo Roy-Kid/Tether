@@ -11,6 +11,7 @@
    <NavigationViewItem Content="Key Bindings" Tag="keys" Icon="Keyboard" />
    <NavigationViewItem Content="History" Tag="history" Icon="Clock" />
    <NavigationViewItem Content="Files" Tag="files" Icon="Folder" />
+   <NavigationViewItem Content="Identities" Tag="identities" Icon="Contact" />
    <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
   </NavigationView.MenuItems>
   <ScrollViewer Padding="{StaticResource SettingsPageInset}">
@@ -24,7 +25,8 @@
        Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
       <ComboBox x:Name="ShellPicker" HorizontalAlignment="Stretch"
        AutomationProperties.Name="Default profile" SelectionChanged="Shell_Changed" />
-      <TextBlock Text="WSL opens your default Linux distribution. PowerShell uses PowerShell 7 when available."
+      <ComboBox x:Name="WslPicker" Header="WSL distribution" HorizontalAlignment="Stretch" />
+      <TextBlock Text="PowerShell uses PowerShell 7 when available."
        Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
      </StackPanel>
     </Border>
@@ -69,6 +71,7 @@
     <StackPanel x:Name="KeysPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="HistoryPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="FilesPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="IdentitiesPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="ExtensionsPane" Visibility="Collapsed" Spacing="{StaticResource SpaceGroup}" />
     <TextBlock x:Name="SaveProblem" Foreground="{ThemeResource ChromeSubtleBrush}"
      TextWrapping="Wrap" Visibility="Collapsed" />

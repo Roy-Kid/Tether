@@ -19,6 +19,7 @@ public sealed record AppSettings(string Shell = "pwsh", string Appearance = "sys
     public bool UnlimitedHistory { get; init; }
     public ulong FilesPromptMegabytes { get; init; } = 50;
     public string DownloadDirectory { get; init; } = "";
+    public string? WslDistribution { get; init; }
     public TerminalPreferences Terminal { get; init; } = new();
 
     /// <summary>

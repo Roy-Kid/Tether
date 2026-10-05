@@ -3,7 +3,7 @@
 // The file is the store (Decisions/0009): a person's config carries
 // `ControlMaster`, `ForwardAgent`, a comment reminding them which machine is
 // which — none of which this app understands. What is parsed is an *index*,
-// and nothing is written back except by the `known_hosts` trust store.
+// and structured edits live in SshConfigEditor, preserving other directives.
 //
 // A setting comes from the first stanza that matches, wildcards included,
 // which is what `ssh` does. `ProxyJump` is part of that (Decisions/0019):
@@ -15,7 +15,8 @@
 
 namespace TetherApp;
 
-public sealed record Jump(string HostName, ushort Port, string? User, string? IdentityFile);
+public sealed record Jump(string HostName, ushort Port, string? User, string? IdentityFile,
+    [property: System.Text.Json.Serialization.JsonIgnore] string? Alias = null);
 
 public sealed record HostEntry(
     string Alias,
@@ -27,6 +28,8 @@ public sealed record HostEntry(
     string? JumpError = null,
     int? ConnectTimeoutSeconds = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> Unsupported { get; init; } = [];
     /// <summary>What the picker shows: the alias, which is the name a person types.</summary>
     public string Label => Alias;
 
@@ -69,6 +72,8 @@ public static class SshConfig
     /// <summary>Parses <paramref name="text"/> the way <see cref="Load"/> parses a file.</summary>
     public static IReadOnlyList<HostEntry> LoadText(string text) =>
         Document.Read(text.Replace("\r\n", "\n").Split('\n')).Entries;
+    public static IReadOnlyDictionary<string, string> ResolvedDirectives(string text, string alias) =>
+        Document.Read(text.Replace("\r\n", "\n").Split('\n')).Resolve(alias, preserveRaw: true);
 
     /// <summary>Every host the file names, in the order it names them.</summary>
     public static IReadOnlyList<HostEntry> Load(string? path = null)
@@ -108,7 +113,7 @@ public static class SshConfig
 
         public static Document Read(string[] lines)
         {
-            var blocks = new List<Block>();
+            var blocks = new List<Block> { new(["*"], -1, lines.Length) };
             for (var index = 0; index < lines.Length; index++)
             {
                 if (Directive(lines[index]) is not { } directive) continue;
@@ -128,10 +133,12 @@ public static class SshConfig
             get
             {
                 var entries = new List<HostEntry>();
+                var names = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var block in _blocks)
                 {
                     if (block.Patterns.Length == 0 || !IsLiteral(block.Patterns[0])) continue;
                     var alias = block.Patterns[0];
+                    if (!names.Add(alias)) continue;
                     var settings = Resolve(alias);
                     var (jumps, error) = Jumps(alias);
                     int? timeout = null;
@@ -147,13 +154,14 @@ public static class SshConfig
                         settings.GetValueOrDefault("identityfile"),
                         jumps,
                         error,
-                        timeout));
+                        timeout) { Unsupported = settings.Where(p => p.Key is "proxycommand" or "remotecommand" or "hostkeyalias" or "canonicalizehostname" or "sessiontype" or "include")
+                            .Where(p => p.Value is not ("none" or "no")).Select(p => p.Key).ToArray() });
                 }
                 return entries;
             }
         }
 
-        private Dictionary<string, string> Resolve(string alias)
+        public Dictionary<string, string> Resolve(string alias, bool preserveRaw = false)
         {
             var settings = new Dictionary<string, string>();
             foreach (var block in _blocks)
@@ -163,7 +171,7 @@ public static class SshConfig
                 {
                     if (Directive(_lines[index]) is not { } directive || directive.Keyword == "host") continue;
                     if (settings.ContainsKey(directive.Keyword)) continue;
-                    if (directive.Keyword == "proxyjump")
+                    if (preserveRaw || directive.Keyword == "proxyjump")
                     {
                         var value = directive.Value.Trim();
                         if (value.Length > 0) settings[directive.Keyword] = value;
@@ -221,7 +229,7 @@ public static class SshConfig
                         hop.GetValueOrDefault("hostname") ?? spec.Host,
                         port,
                         spec.User ?? hop.GetValueOrDefault("user"),
-                        hop.GetValueOrDefault("identityfile")));
+                        hop.GetValueOrDefault("identityfile"), spec.Host));
                     if (chain.Count > 16)
                         throw new JumpParseException($"ProxyJump for {alias} is too long.");
                 }

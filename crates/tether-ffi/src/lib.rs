@@ -36,7 +36,7 @@ pub use screen::{
 };
 pub use session::{
     Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,
-    connect_cancellable, local_shell_available, open_local,
+    connect_cancellable, local_shell_available, open_local, open_local_with_arguments,
 };
 
 /// One prompt from an interactive authentication exchange.

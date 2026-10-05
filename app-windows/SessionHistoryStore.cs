@@ -4,7 +4,7 @@ namespace TetherApp;
 
 /// <summary>Reopening metadata contains no passwords or private key contents.</summary>
 public sealed record ClosedTerminal(Guid Id, string Title, string Profile, string? Directory,
-    string? HostAlias, string? Target, int Index, string? Inspector, Dictionary<string, string>? Attachments = null, string? Configuration = null);
+    string? HostAlias, string? Target, int Index, string? Inspector, Dictionary<string, string>? Attachments = null, string? Configuration = null, string? WslDistribution = null);
 
 public sealed class SessionHistoryStore
 {

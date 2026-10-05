@@ -92,10 +92,13 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
         ushort rows = 24,
         uint scrollbackLines = 10_000,
         string? shell = null,
-        SessionHistory? history = null)
+        SessionHistory? history = null,
+        IReadOnlyList<string>? arguments = null)
     {
-        var inner = await Gen.TetherFfiMethods.OpenLocal(new Gen.LocalShell(
-            directory, term, columns, rows, scrollbackLines, shell, history?.Inner)).ConfigureAwait(false);
+        var configuration = new Gen.LocalShell(directory, term, columns, rows, scrollbackLines, shell, history?.Inner);
+        var inner = arguments is { Count: > 0 }
+            ? await Gen.TetherFfiMethods.OpenLocalWithArguments(configuration, arguments.ToArray()).ConfigureAwait(false)
+            : await Gen.TetherFfiMethods.OpenLocal(configuration).ConfigureAwait(false);
         return new TerminalSession(inner);
     }
 

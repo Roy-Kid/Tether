@@ -24,7 +24,7 @@ jobs:
       - name: Windows regressions
         shell: pwsh
         run: |
-          foreach ($project in @('terminal-experience','connection-errors','windows-files')) {
+          foreach ($project in @('terminal-experience','connection-errors','windows-files','windows-management')) {
             dotnet run --project "tests/$project"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

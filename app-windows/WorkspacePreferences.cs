@@ -19,6 +19,7 @@ public static class WorkspaceCommands
         new("nextTab", "Next Tab", "Ctrl+PageDown"),
         new("renameTerminal", "Rename Terminal", "Ctrl+Shift+N"),
         new("manageHosts", "Manage Hosts", ""),
+        new("manageIdentities", "Manage Identities", ""),
     ];
 
     public static string Binding(WorkspaceCommand command, AppSettings settings) =>

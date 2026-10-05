@@ -126,6 +126,7 @@ public sealed partial class MainWindow
                         ToggleInspector(plugin.Metadata.Id);
                     break;
                 case "manageHosts": await ShowHostEditorAsync(); break;
+                case "manageIdentities": await ShowIdentitiesAsync(); break;
             }
         }
         catch (Exception ex)
@@ -194,21 +195,15 @@ public sealed partial class MainWindow
 
     private async Task ShowHostEditorAsync()
     {
-        var editor = new TextBox
-        {
-            Text = File.Exists(SshConfig.DefaultPath) ? File.ReadAllText(SshConfig.DefaultPath) : "",
-            AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, MinWidth = 360, Height = 220,
-        };
         _connecting = true;
-        try
-        {
-            if (await Alerts.ContentAsync("SSH Config", editor, "Save", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
-            SshConfig.LoadText(editor.Text);
-            Directory.CreateDirectory(Path.GetDirectoryName(SshConfig.DefaultPath)!);
-            var temporary = SshConfig.DefaultPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try { File.WriteAllText(temporary, editor.Text); File.Move(temporary, SshConfig.DefaultPath, true); }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
-        }
-        finally { _connecting = false; }
+        try { await HostManager.ShowAsync(WorkspaceRoot.ActualTheme, host => _workspace.Tabs.Select(t => t.Model).FirstOrDefault(m =>
+            m.IsLive && m.IsRemote && m.RemoteHost is { } current && IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host))); }
+        finally { _connecting = false; _workspace.Active?.Surface.FocusTerminal(); }
+    }
+    private async Task ShowIdentitiesAsync()
+    {
+        _connecting = true;
+        try { await IdentityManager.ShowAsync(WorkspaceRoot.ActualTheme); }
+        finally { _connecting = false; _workspace.Active?.Surface.FocusTerminal(); }
     }
 }

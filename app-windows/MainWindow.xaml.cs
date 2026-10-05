@@ -540,7 +540,12 @@ public sealed partial class MainWindow : Window
         };
 
         var panel = new StackPanel { Spacing = 8, Padding = new Thickness(12) };
-        panel.Children.Add(query);
+        var searchRow = new Grid { ColumnSpacing = 8 };
+        searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        searchRow.Children.Add(query);
+        var manage = EditorDialog.Icon("\uE70F", "Manage Hosts", () => { _hostPicker?.Close(); _ = RunCommandAsync("manageHosts"); });
+        Grid.SetColumn(manage, 1); searchRow.Children.Add(manage); panel.Children.Add(searchRow);
         panel.Children.Add(problem);
         panel.Children.Add(list);
 
@@ -588,90 +593,60 @@ public sealed partial class MainWindow : Window
     private async Task OpenHostAsync(HostEntry host)
     {
         if (_workspace.Active is not { } tab) return;
-
         tab.Title = host.Alias;
         tab.Model.Keep(host);
-        OnWorkspaceChanged();
-
-        if (host.JumpError is { } problem)
+        if (host.JumpError is { } problem) { tab.Model.Fail(problem); return; }
+        if (host.Unsupported.Count > 0)
         {
-            tab.Model.Fail(problem);
-            OnWorkspaceChanged();
+            tab.Model.Fail("This host requires unsupported OpenSSH settings: " + string.Join(", ", host.Unsupported));
             return;
         }
-
         var plan = RemoteLink.Plan(host, Environment.UserName);
         tab.Model.Begin(host);
-        OnWorkspaceChanged();
-
-        // A live ControlMaster already spent the verification code. The alias
-        // is what `ssh -O check` is keyed on, not the resolved hostname.
-        // A master that then fails to attach is a failed attach, not a reason
-        // to start a second login and ask for the code again.
+        var dial = tab.Model.DialToken;
+        var generation = tab.Model.Generation;
         _connecting = true;
-        var mastered = false;
         try
         {
-            if (await TerminalSession.SshMasterRunningAsync(host.Alias))
+            var store = IdentityStore.Current;
+            var identity = store.ForHost(host);
+            var hops = plan.Hops.Select(h => (Hop: h, Host: IdentityAuthentication.HopHost(h))).ToArray();
+            // Reusing OpenSSH cannot silently substitute a different managed identity.
+            if (identity is null && hops.All(h => store.ForHost(h.Host) is null) && await TerminalSession.SshMasterRunningAsync(host.Alias))
             {
-                mastered = true;
                 await tab.Model.AttachMasterAsync(host.Alias);
+                return;
             }
-        }
-        finally
-        {
-            if (mastered || tab.Model.IsLive)
+            tab.Model.NoteAsking();
+            var prompter = new SessionModel.PromptDialog(Content.XamlRoot, tab.Model);
+            async Task<bool> ConfirmIdentity(AccountIdentity account, HostEntry endpoint)
             {
-                _connecting = false;
-                OnWorkspaceChanged();
-                if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null)
-                    tab.Surface.FocusTerminal();
+                var result = await Alerts.ContentAsync("Authenticate?", account.Name + " → " + endpoint.Target,
+                    "Authenticate", null, WorkspaceRoot.ActualTheme, _ => { });
+                return result == ContentDialogResult.Primary && !dial.IsCancellationRequested;
             }
+            var secrets = await IdentityAuthentication.CredentialsAsync(host, prompter, prompter, ConfirmIdentity);
+            var route = new List<Tether.Jump>();
+            foreach (var (hop, endpoint) in hops)
+            {
+                dial.ThrowIfCancellationRequested();
+                var hopSecrets = await IdentityAuthentication.CredentialsAsync(endpoint, prompter, prompter, ConfirmIdentity);
+                route.Add(new(hop.HostName, hop.Port, hop.User ?? Environment.UserName, hopSecrets));
+            }
+            if (dial.IsCancellationRequested || tab.Model.DialToken != dial || tab.Model.Generation != generation || !_workspace.Tabs.Contains(tab)) return;
+            tab.Model.NoteDialing();
+            await tab.Model.ConnectAsync(Content.XamlRoot, new Destination(plan.Host, plan.Port, plan.User), secrets, route);
         }
-        if (mastered || tab.Model.IsLive) return;
-
-        var prompter = new SessionModel.PromptDialog(Content.XamlRoot, tab.Model);
-        var destination = new Destination(plan.Host, plan.Port, plan.User);
-        // Don't focus the shell while a trust or password window is up; that
-        // dismisses it. The shell itself stays on screen.
-        try
+        catch (Exception ex)
         {
-            // An `IdentityFile` in the ssh config is already a credential, so a
-            // password is not required to start the handshake — the same thing
-            // `ssh host` does (HostStore.swift). Each hop logs in as itself.
-            var secrets = Credentials(plan.IdentityFile, prompter);
-            var jumps = plan.Hops.Select(hop => new Tether.Jump(
-                hop.HostName,
-                hop.Port,
-                hop.User ?? Environment.UserName,
-                Credentials(hop.IdentityFile, prompter))).ToArray();
-            await tab.Model.ConnectAsync(Content.XamlRoot, destination, secrets, jumps);
-        }
-        catch (IOException ex)
-        {
-            tab.Model.Fail(ex.Message);
+            if (tab.Model.DialToken == dial && tab.Model.Generation == generation) tab.Model.Fail(ex.Message);
         }
         finally
         {
             _connecting = false;
+            OnWorkspaceChanged();
+            if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null) tab.Surface.FocusTerminal();
         }
-        OnWorkspaceChanged();
-        // A late success must not pull the keyboard back if this tab is no longer the one on screen.
-        if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null)
-            tab.Surface.FocusTerminal();
-    }
-
-    /// <summary>
-    /// A configured key, then a prompt. The prompt is how a hop that wants a
-    /// passphrase can ask; the destination's password is not sent along.
-    /// </summary>
-    private static Secret[] Credentials(string? identityFile, SessionModel.PromptDialog prompter)
-    {
-        if (identityFile is not { Length: > 0 } key) return [new Secret.Interactive(prompter)];
-        var path = SshConfig.ExpandHome(key);
-        if (!File.Exists(path))
-            throw new IOException($"Could not read the key at {key}.");
-        return [new Secret.PrivateKey(File.ReadAllText(path), Unlock: prompter), new Secret.Interactive(prompter)];
     }
 
     private void CancelConnect_Click(object sender, RoutedEventArgs e) =>

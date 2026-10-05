@@ -8339,6 +8339,23 @@ public func openLocal(shell: LocalShell)async throws  -> Session  {
         )
 }
 /**
+ * A local program with explicit arguments; consumers need not construct a command line.
+ */
+public func openLocalWithArguments(shell: LocalShell, arguments: [String])async throws  -> Session  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_func_open_local_with_arguments(FfiConverterTypeLocalShell_lower(shell),FfiConverterSequenceString.lower(arguments)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_u64,
+            completeFunc: ffi_tether_ffi_rust_future_complete_u64,
+            freeFunc: ffi_tether_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSession_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+/**
  * Whether `ssh -O check` says a multiplexing master is already running
  * for this config alias.
  *
@@ -8402,6 +8419,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_func_open_local() != 11421) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_func_open_local_with_arguments() != 13223) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_func_ssh_master_running() != 5424) {

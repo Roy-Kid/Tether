@@ -94,7 +94,7 @@ sealed class TmuxAttachment : ITabAttachment
     }
     private async Task RefreshAsync()
     {
-        if (!_tab.Model.IsRemote || !_tab.Model.IsLive) throw new IOException("Connect to a host with tmux.");
+        if ((!_tab.Model.IsRemote && !_tab.Model.IsWsl) || !_tab.Model.IsLive) throw new IOException("Open a WSL terminal or connect to a host with tmux.");
         _sessions = await _tab.Model.TmuxSessionsAsync(_lifetime.Token);
         _tty = await ShellTTY.FindAsync(_tab.Model, _lifetime.Token);
         _session = _tty is null ? null : await _tab.Model.TmuxSessionForClientAsync(_tty);
@@ -144,7 +144,8 @@ sealed class TmuxAttachment : ITabAttachment
     private async Task CreateAsync()
     {
         if (await NameAsync("New Session", "") is not { } name) return;
-        var created = await _tab.Model.CreateTmuxAsync(name, _tab.Model.WorkingDirectory, _lifetime.Token);
+        var directory = await _tab.Model.ResolveWorkingDirectoryAsync(_lifetime.Token);
+        var created = await _tab.Model.CreateTmuxAsync(name, directory, _lifetime.Token);
         await RefreshAsync(); await OpenAsync(created, null);
     }
     private async Task RenameAsync()

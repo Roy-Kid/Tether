@@ -15,6 +15,7 @@ public static class ShellActivity
                 return names.Length == 0 ? null : "Running: " + string.Join(", ", names);
             }
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            if (model.IsWsl && !model.IsRemote) await model.ResolveWorkingDirectoryAsync(timeout.Token);
             var text = await model.ExecuteAsync(
                 "printf '%s\\n' TETHER-PROCESSES; LC_ALL=C ps -ax -o pid= -o ppid= -o tty= -o stat= -o comm= && printf '%s\\n' TETHER-PROCESSES-END",
                 timeout.Token).WaitAsync(timeout.Token);

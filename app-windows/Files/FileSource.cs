@@ -40,22 +40,23 @@ internal sealed class SftpSource(RemoteFiles files) : IFileSource
 
 internal sealed class LocalFileSource(string home, string? wslRoot = null) : IFileSource
 {
-    public static async Task<LocalFileSource> CreateAsync(bool wsl, CancellationToken token)
+    public static async Task<LocalFileSource> CreateAsync(bool wsl, CancellationToken token, string? distribution = null)
     {
         if (!wsl) return new(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         // ArgumentList avoids shell parsing. These fixed queries use the same
         // default distribution as the supported `wsl` terminal profile.
-        var distro = await WslAsync("printenv", "WSL_DISTRO_NAME", token);
-        var linuxHome = await WslAsync("printenv", "HOME", token);
+        var distro = await WslAsync("printenv", "WSL_DISTRO_NAME", token, distribution);
+        var linuxHome = await WslAsync("printenv", "HOME", token, distro);
         if (string.IsNullOrWhiteSpace(distro) || distro.IndexOfAny(['/', '\\', '\r', '\n']) >= 0 || !linuxHome.StartsWith('/'))
             throw new IOException("Could not find the default WSL distribution.");
         var root = @"\\wsl.localhost\" + distro;
         return new(root + linuxHome.Replace('/', '\\'), root);
     }
-    private static async Task<string> WslAsync(string program, string argument, CancellationToken token)
+    private static async Task<string> WslAsync(string program, string argument, CancellationToken token, string? distribution)
     {
         var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "wsl.exe"))
         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        if (distribution is not null) { start.ArgumentList.Add("--distribution"); start.ArgumentList.Add(distribution); }
         start.ArgumentList.Add("--exec"); start.ArgumentList.Add(program); start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new IOException("WSL could not start.");
         using var registration = token.Register(() => { try { process.Kill(true); } catch (InvalidOperationException) { } });

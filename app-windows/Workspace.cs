@@ -55,14 +55,14 @@ public sealed class Tab : IAsyncDisposable
         .ToDictionary(p => p.Key, p => p.Value.RestorationState!);
     public IEnumerable<ITabAttachment> Attachments => _attached.Values;
 
-    public async Task BindAsync(string? profile = null, string? directory = null, bool startShell = true)
+    public async Task BindAsync(string? profile = null, string? directory = null, bool startShell = true, string? wslDistribution = null)
     {
         await Surface.BindAsync(Model);
         // Every other terminal on this machine opens a local shell first and
         // offers SSH as the other thing it can do. So does this one.
         var shell = profile ?? AppSettings.Current.Shell;
         Title = AppSettings.KnownShells.FirstOrDefault(profile => profile.Program == shell).Name ?? shell;
-        if (startShell) await Model.OpenLocalAsync(shell, directory: directory);
+        if (startShell) await Model.OpenLocalAsync(shell, directory: directory, wslDistribution: wslDistribution);
     }
 
     public async ValueTask DisposeAsync()
@@ -86,7 +86,7 @@ public sealed class Workspace : IAsyncDisposable
     public bool CanRestore => _closed.Count > 0;
     public string? HistoryProblem => _historyStore.Problem ?? _tabs.Select(t => t.HistoryProblem).FirstOrDefault(p => p is not null);
     private ClosedTerminal Record(Tab tab, int index) => new(tab.Id, tab.Title, tab.Model.LocalProfile,
-        tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost));
+        tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost), tab.Model.WslDistribution);
     private static string? Fingerprint(HostEntry? host) => host is null ? null :
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(host))));
     public void Persist() => _historyStore.Save(_tabs.Select((tab, index) => Record(tab, index)), _closed);
@@ -110,7 +110,7 @@ public sealed class Workspace : IAsyncDisposable
         tab.Model.SessionChanged += NotifySessionChanged;
         _tabs.Insert(Math.Clamp(record.Index, 0, _tabs.Count), tab);
         _active = _tabs.IndexOf(tab);
-        try { await tab.BindAsync(record.Profile, record.Directory, startShell: host is null); }
+        try { await tab.BindAsync(record.Profile, record.Directory, startShell: host is null, wslDistribution: record.WslDistribution); }
         catch
         {
             tab.Model.SessionChanged -= NotifySessionChanged;
