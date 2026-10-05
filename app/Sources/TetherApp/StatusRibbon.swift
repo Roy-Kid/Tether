@@ -47,12 +47,15 @@ struct StatusRibbon: View {
   /// share, so a thin segment stays visible beside a wide one instead of
   /// being smeared into it.
   nonisolated static func stops(for segments: [PluginStatusSegment]) -> [Stop] {
-    let visible = segments.filter { $0.weight > 0 }
+    let visible = segments.filter { $0.weight.isFinite && $0.weight > 0 }
     guard let first = visible.first else { return [] }
     guard visible.count > 1 else { return [Stop(color: first.color, location: 0), Stop(color: first.color, location: 1)] }
 
-    let total = visible.reduce(0) { $0 + $1.weight }
-    let weights = visible.map { $0.weight / total }
+    // Scale first: valid finite shares can still overflow when added.
+    let largest = visible.map(\.weight).max()!
+    let scaled = visible.map { $0.weight / largest }
+    let total = scaled.reduce(0, +)
+    let weights = scaled.map { $0 / total }
     var stops: [Stop] = []
     var cursor = 0.0
     for (index, segment) in visible.enumerated() {

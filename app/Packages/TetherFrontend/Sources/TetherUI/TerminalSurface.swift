@@ -49,6 +49,7 @@ public struct TerminalSurface: View {
   @State private var selection: GridSelection?
   /// Whether the hovered link is known to be there.
   @State private var confirmed = false
+  @State private var hoverCheck: Task<Void, Never>?
   /// The size last given to the session. A keyboard animation changes height
   /// on every frame; resizing on each of those is a SIGWINCH per frame.
   @State private var fittedWidth: CGFloat = 0
@@ -187,7 +188,12 @@ public struct TerminalSurface: View {
       .onChange(of: metrics.lineHeight) { _, _ in rowCache.clear() }
       .onChange(of: appearance) { _, _ in rowCache.clear() }
       .onChange(of: scheme) { _, _ in rowCache.clear() }
-      .onDisappear { pendingFit?.cancel() }
+      .onDisappear {
+        pendingFit?.cancel()
+        hoverCheck?.cancel()
+        hovered = nil
+        confirmed = false
+      }
     }
   }
   @ViewBuilder
@@ -224,13 +230,14 @@ public struct TerminalSurface: View {
   /// there: solid if it is, gone if it is not. Text that only looks like a
   /// path is not left promising a file.
   private func hover(_ link: TerminalLink?) {
+    hoverCheck?.cancel()
     hovered = link
     confirmed = false
     guard let link else { return }
     let exists = links.exists
-    Task { @MainActor in
+    hoverCheck = Task { @MainActor in
       let there = await exists(link)
-      guard hovered == link else { return }
+      guard !Task.isCancelled, hovered == link else { return }
       if there {
         confirmed = true
       } else {

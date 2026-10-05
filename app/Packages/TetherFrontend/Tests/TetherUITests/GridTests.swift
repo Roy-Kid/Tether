@@ -115,6 +115,34 @@
       }
     }
 
+    @Test("row pictures follow display scale, geometry and palette without cell damage")
+    func rowPicturesInvalidate() throws {
+      let cache = RowPictureCache()
+      let metrics = FontMetrics(size: 13)
+      let line = ScreenRow(runs: [])
+      func picture(columns: UInt32 = 12, palette: Palette = .dark, scale: CGFloat = 1,
+                   font: FontMetrics? = nil, rows: Int = 1) throws -> CGImage {
+        let measured = font ?? metrics
+        cache.prepare(columns: columns, rows: rows, metrics: measured, palette: palette, scale: scale)
+        return try #require(cache.image(row: 0, line: line, columns: columns,
+                                       metrics: measured, palette: palette, fresh: false))
+      }
+      let original = try picture()
+      #expect(try picture() === original, "unchanged rows reuse the picture")
+      let retina = try picture(scale: 2)
+      #expect(retina.width == original.width * 2)
+      #expect(retina.height == original.height * 2)
+      let wider = try picture(columns: 24, scale: 2)
+      #expect(wider.width == retina.width * 2)
+      let light = try picture(columns: 24, palette: .light, scale: 2)
+      #expect(light !== wider, "a palette change repaints an undamaged row")
+      let larger = try picture(columns: 24, palette: .light, scale: 2, font: FontMetrics(size: 24))
+      #expect(larger.height > light.height)
+      cache.prepare(columns: 24, rows: 0, metrics: FontMetrics(size: 24), palette: .light, scale: 2)
+      #expect(try picture(columns: 24, palette: .light, scale: 2, font: FontMetrics(size: 24)) !== larger,
+              "rows outside the viewport are released")
+    }
+
     /// Resolves a run the way `TerminalView` draws it and reports its width.
     private func measure(_ text: String, metrics: FontMetrics, cells: Int) -> CGFloat {
       var width: CGFloat = 0
