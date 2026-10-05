@@ -31,6 +31,7 @@
 
 mod connection;
 mod dial;
+pub mod history;
 mod local;
 mod producer;
 mod session;

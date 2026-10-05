@@ -213,6 +213,7 @@ impl RemoteConnection {
         columns: u16,
         rows: u16,
         scrollback_lines: u32,
+        history: Option<Arc<crate::SessionHistory>>,
         cancellation: Arc<CancellationToken>,
     ) -> Result<Arc<crate::session::Session>, TetherError> {
         let size = tether_core::terminal::ScreenSize::new(columns, rows);
@@ -221,7 +222,7 @@ impl RemoteConnection {
         tokio::select! {
             biased;
             _ = cancellation.inner.cancelled() => Err(TetherError::Cancelled),
-            result = self.inner.shell(&term, size, options) => {
+            result = self.inner.shell_recorded(&term, size, options, history.map(|h| h.inner.clone())) => {
                 let session = result.map_err(|error| TetherError::ShellRefused { cause: error.cause })?;
                 Ok(crate::session::Session::wrap(session))
             }

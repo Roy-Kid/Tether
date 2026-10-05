@@ -11,9 +11,10 @@ import TetherUI
   import AppKit
 #endif
 
-/// Titlebar tabs, sharing a row with the native traffic lights.
+/// The same tabs in the titlebar or in a column beside the terminal.
 struct WorkspaceTabBar: View {
   @Bindable var tabs: TabSet
+  var layout: TabLayout = .horizontal
   var onClose: (UUID) -> Void
   /// The chip the pointer is over. A close box on every tab at once is a
   /// row of crosses; one that only appears under the pointer is a tab
@@ -27,29 +28,22 @@ struct WorkspaceTabBar: View {
     TetherUI.Palette.chosen(setting: appearance, scheme: scheme)
   }
 
+  @ViewBuilder
   var body: some View {
+    if layout == .vertical {
+      tabList
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.sidebar)
+    } else {
+      titlebar
+    }
+  }
+
+  private var titlebar: some View {
     HStack(spacing: 0) {
       Color.clear.frame(width: Chrome.trafficLights)
-      ScrollViewReader { proxy in
-        ScrollView(.horizontal) {
-          HStack(spacing: 0) {
-            ForEach(tabs.visibleTabs) { tab in
-              tabChip(id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil)
-                .id(tab.id)
-            }
-            ForEach(tabs.visibleExtensions) { entry in
-              tabChip(
-                id: entry.id, title: entry.workspace.title,
-                subtitle: entry.workspace.subtitle, symbol: entry.workspace.symbol)
-                .id(entry.id)
-            }
-          }
-        }
-        .scrollIndicators(.hidden)
-        .onChange(of: tabs.selected) { _, id in
-          if let id { proxy.scrollTo(id, anchor: .center) }
-        }
-      }
+      TabBarToggle(tabs: tabs)
+      tabList
       Spacer(minLength: 12)
         .background { WindowDragArea() }
     }
@@ -64,6 +58,32 @@ struct WorkspaceTabBar: View {
   /// page is the window, and the accent rule is what marks it open.
   private func joinsTerminal(_ id: UUID) -> Bool {
     tabs.tabs.contains { $0.id == id && $0.shown == nil }
+  }
+
+  private var tabList: some View {
+    ScrollViewReader { proxy in
+      ScrollView(layout == .vertical ? .vertical : .horizontal) {
+        let stack = layout == .vertical
+          ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+          : AnyLayout(HStackLayout(spacing: 0))
+        stack {
+          ForEach(tabs.visibleTabs) { tab in
+            tabChip(id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil)
+              .id(tab.id)
+          }
+          ForEach(tabs.visibleExtensions) { entry in
+            tabChip(
+              id: entry.id, title: entry.workspace.title,
+              subtitle: entry.workspace.subtitle, symbol: entry.workspace.symbol)
+              .id(entry.id)
+          }
+        }
+      }
+      .scrollIndicators(.hidden)
+      .onChange(of: tabs.selected, initial: true) { _, id in
+        if let id { proxy.scrollTo(id, anchor: .center) }
+      }
+    }
   }
 
   private func tabChip(id: UUID, title: String, subtitle: String, symbol: String?) -> some View {
@@ -82,18 +102,24 @@ struct WorkspaceTabBar: View {
               .font(UIStyle.symbol)
               .foregroundStyle(titleColor)
           }
-          Text(title)
-            .font(UIStyle.title)
-            .foregroundStyle(titleColor)
-            .lineLimit(1)
-          if !subtitle.isEmpty {
-            Text(subtitle)
-              .font(UIStyle.header)
-              .foregroundStyle(secondary)
+          let labels = layout == .vertical
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: UIStyle.Space.inline))
+          labels {
+            Text(title)
+              .font(UIStyle.title)
+              .foregroundStyle(titleColor)
               .lineLimit(1)
+            if !subtitle.isEmpty {
+              Text(subtitle)
+                .font(UIStyle.header)
+                .foregroundStyle(secondary)
+                .lineLimit(1)
+            }
           }
         }
-        .frame(maxWidth: Chrome.tabTitleWidth)
+        .frame(maxWidth: layout == .vertical ? .infinity : Chrome.tabTitleWidth,
+               alignment: layout == .vertical ? .leading : .center)
         .frame(height: Chrome.tab)
         .contentShape(Rectangle())
       }
@@ -128,11 +154,13 @@ struct WorkspaceTabBar: View {
         hovering = nil
       }
     }
-    .overlay(alignment: .bottom) {
+    .overlay(alignment: layout == .vertical ? .leading : .bottom) {
       if selected && !joined {
         Rectangle()
           .fill(Color.accentColor)
-          .frame(height: UIStyle.Mark.rule)
+          .frame(
+            width: layout == .vertical ? UIStyle.Mark.rule : nil,
+            height: layout == .vertical ? nil : UIStyle.Mark.rule)
       }
     }
     .accessibilityAddTraits(selected ? .isSelected : [])
@@ -157,7 +185,7 @@ struct WorkspaceTabBar: View {
       isPresented: Binding(
         get: { tabs.accessory?.tab == id },
         set: { if !$0 && tabs.accessory?.tab == id { tabs.accessory = nil } }
-      ), arrowEdge: .bottom
+      ), arrowEdge: layout == .vertical ? .trailing : .bottom
     ) {
       if let tab, let open = tabs.accessory, let attachment = tab.attachment(for: open.plugin) {
         attachment.accessoryContent()
@@ -169,6 +197,26 @@ struct WorkspaceTabBar: View {
           .allowsHitTesting(false)
       }
     #endif
+  }
+}
+
+struct TabBarToggle: View {
+  @Bindable var tabs: TabSet
+
+  var body: some View {
+    let title = tabs.title(for: .toggleTabBar)
+    let shortcut = tabs.keyBindings.summary(for: WorkspaceAction.toggleTabBar.command)
+    Button { tabs.perform(.toggleTabBar) } label: {
+      Image(systemName: "sidebar.left")
+        .font(UIStyle.symbol)
+        .foregroundStyle(tabs.showsTabBar ? Color.accentColor : Theme.subtle)
+        .frame(width: Chrome.tab, height: Chrome.tab)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .help(shortcut.isEmpty ? title : "\(title) (\(shortcut))")
+    .accessibilityLabel(title)
+    .accessibilityValue(tabs.showsTabBar ? "Shown" : "Hidden")
   }
 }
 
@@ -468,17 +516,16 @@ struct HostPicker: View {
     .onChange(of: orderedHosts.map(\.id), initial: true) { _, ids in
       selection.reconcile(ids)
     }
-    .onKeyPress(.escape) {
+    .onPickerCancel {
       tabs.hostPicker = false
-      return .handled
     }
-    .onKeyPress(.upArrow) {
-      selection.move(forward: false, in: orderedHosts.map(\.id))
-      return .handled
+    .onPickerNavigation { movement in
+      selection.navigate(movement, in: orderedHosts.map(\.id))
     }
-    .onKeyPress(.downArrow) {
-      selection.move(forward: true, in: orderedHosts.map(\.id))
-      return .handled
+    .onPickerQuickSelection(count: orderedHosts.count) { index in
+      let hosts = orderedHosts
+      guard hosts.indices.contains(index) else { return }
+      choose(hosts[index])
     }
   }
 
@@ -557,6 +604,7 @@ struct HostPicker: View {
           .foregroundStyle(Theme.text)
           .lineLimit(1)
         Spacer(minLength: 0)
+        PickerShortcutHint(index: orderedHosts.firstIndex { $0.id == host.id })
         Image(systemName: "checkmark")
           .font(UIStyle.accessory)
           .foregroundStyle(current ? Theme.text : .clear)

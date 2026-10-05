@@ -222,22 +222,43 @@ impl Connection {
         size: ScreenSize,
         options: Options,
     ) -> Result<TerminalSession, ConnectionError> {
+        self.shell_recorded(term, size, options, None).await
+    }
+
+    pub async fn shell_recorded(
+        &self,
+        term: &str,
+        size: ScreenSize,
+        options: Options,
+        history: Option<crate::history::HistoryArchive>,
+    ) -> Result<TerminalSession, ConnectionError> {
         match self {
             Self::Remote(session) => {
                 let shell = session
                     .shell(term, tether_ssh::WindowSize::new(size.columns as u32, size.rows as u32))
                     .await
                     .map_err(ConnectionError::new)?;
-                Ok(TerminalSession::start_with(shell, size, options, self.clone(), None, None))
+                Ok(TerminalSession::start_with(
+                    shell,
+                    size,
+                    options,
+                    self.clone(),
+                    None,
+                    None,
+                    history,
+                ))
             }
             Self::Local => Local::new()
                 .term(term)
                 .size(size)
                 .options(options)
+                .history(history)
                 .open()
                 .await
                 .map_err(ConnectionError::new),
-            Self::OpenSsh(client) => client.clone().connect(term, size, options).await,
+            Self::OpenSsh(client) => {
+                client.clone().connect_recorded(term, size, options, history).await
+            }
         }
     }
 }

@@ -17,7 +17,7 @@ struct TetherApp: App {
     #endif
     return HostStore()
   }()
-  @State private var tabs = TabSet()
+  @State private var tabs = TabSet(historyStore: SessionHistoryStore())
   /// One keychain for the process. Passwords are read at the moment of
   /// connecting and never held here (spec §18).
   private let secrets: any SecretStore = Keychain()
@@ -52,6 +52,10 @@ struct TetherApp: App {
       // where ⌘, already goes.
       Settings {
         AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs)
+          .background {
+            WorkspaceKeyBindingMonitor(enabled: false, textEditingEnabled: true) { _, _ in false }
+              .allowsHitTesting(false)
+          }
       }
       .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
       .windowResizability(.contentMinSize)
@@ -67,6 +71,9 @@ struct TetherApp: App {
   private var root: some View {
     RootView(store: store, tabs: tabs, registry: registry, secrets: secrets)
       .task {
+        tabs.reconcileClosedTabs(with: store.hosts)
+        tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
+        store.useKeyBindings(tabs.keyBindings)
         store.sweepCredentials()
         // Ask before copying ~/.ssh/config over the library. The file is
         // not written. iCloud is a separate read.
@@ -81,17 +88,19 @@ struct TetherApp: App {
         }
       }
       .onChange(of: store.hosts) { _, hosts in
+        tabs.reconcileClosedTabs(with: hosts)
         // A synchronized endpoint or policy change invalidates an in-flight
         // attempt and its old lease. Stale tabs cannot keep granting channels.
         for tab in tabs.tabs where tab.host.isManaged {
           let current = hosts.first { $0.id == tab.host.id }
-          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id) }
+          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id, remember: false) }
         }
       }
       .onChange(of: store.accountGeneration) { _, _ in tabs.closeAll() }
       // Coming forward reads the library through iCloud again. The SSH
       // file is imported only from the question at open, or from Settings.
       .onChange(of: phase) { _, phase in
+        if phase != .active { tabs.checkpointHistory() }
         if phase == .active {
           store.reload()
           Task {
@@ -154,4 +163,3 @@ extension TetherApp {
     tabs.open(.local, password: "")
   }
 }
-

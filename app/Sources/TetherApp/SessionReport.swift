@@ -9,6 +9,7 @@ struct SessionProblem: Hashable {
     /// It was up, and the connection went away. A shell that *exits*, even
     /// with a failure, is someone's `exit` — told in the tab, not by a dialog.
     case lost
+    case history
   }
 
   let id = UUID()
@@ -47,6 +48,7 @@ struct ConnectRequest: Hashable {
   let id = UUID()
   let host: Host
   var retrying: SessionTab.ID?
+  var restoring: UUID?
 }
 
 extension Host {

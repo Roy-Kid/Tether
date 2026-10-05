@@ -11,7 +11,7 @@ use crate::style::Style;
 /// cell holding several joined by zero-width joiners. A consumer that treated
 /// this as a `char` would split exactly the sequences people notice
 /// (spec §12).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cell {
     pub text: String,
     /// How many columns this cell occupies: 1 for most text, 2 for wide

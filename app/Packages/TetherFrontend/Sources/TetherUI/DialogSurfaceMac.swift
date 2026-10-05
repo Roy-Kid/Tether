@@ -12,6 +12,10 @@
       let alert: NSAlert
       weak var host: NSWindow?
       var withdrawn = false
+      var answering = false
+      var shortcuts: [(Dialog.Action.Shortcut, NSButton)] = []
+      var cancelButton: NSButton?
+      var keyMonitor: Any?
       /// Called once, however the dialog ends.
       var ended: ((NSApplication.ModalResponse) -> Void)?
       init(alert: NSAlert) { self.alert = alert }
@@ -19,6 +23,8 @@
       func end(_ response: NSApplication.ModalResponse) {
         guard let ended else { return }
         self.ended = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
         ended(response)
       }
     }
@@ -33,18 +39,37 @@
       alert.messageText = dialog.title
       alert.informativeText = dialog.message ?? ""
       let order = Self.buttonOrder(dialog)
+      let presentation = Presentation(alert: alert)
       for index in order {
         let action = dialog.actions[index]
         let button = alert.addButton(withTitle: action.title)
         switch action.role {
         case .destructive:
           button.hasDestructiveAction = true
+          // AppKit clears Return from destructive buttons when presenting
+          // the sheet. Explicit Enter shortcuts use the scoped monitor below.
           button.keyEquivalent = ""
         case .cancel:
           // Escape always; Return too when there is nothing else to press.
           button.keyEquivalent = dialog.actions.count == 1 ? "\r" : "\u{1b}"
         case .confirm:
           button.keyEquivalent = index == dialog.defaultAction ? "\r" : ""
+        }
+        button.keyEquivalentModifierMask = []
+        presentation.shortcuts += action.shortcuts.map { ($0, button) }
+        // Route both Return and keypad Enter even while a field editor owns
+        // focus. Destructive buttons still require an explicit Enter opt-in.
+        if button.keyEquivalent == "\r", !action.shortcuts.contains(.enter) {
+          presentation.shortcuts.append((.enter, button))
+        }
+        if index == dialog.cancelAction { presentation.cancelButton = button }
+        if !action.shortcuts.isEmpty {
+          button.toolTip = action.shortcuts.map {
+            switch $0 {
+            case .enter: "Enter"
+            case .command(let key): "⌘" + key.uppercased()
+            }
+          }.joined(separator: " / ")
         }
       }
       let boxes = dialog.fields.map(Self.box)
@@ -76,12 +101,11 @@
         NSLayoutConstraint.activate(width)
         stack.frame = NSRect(
           x: 0, y: 0, width: UIStyle.treeWidth,
-          height: CGFloat(boxes.count) * (UIStyle.controlHeight + UIStyle.Space.inline))
+          height: CGFloat(boxes.count) * UIStyle.controlHeight + CGFloat(boxes.count - 1) * UIStyle.Space.inline)
         alert.accessoryView = stack
         alert.window.initialFirstResponder = boxes.first
       }
 
-      let presentation = Presentation(alert: alert)
       current = presentation
       presentation.ended = { [weak self] response in
         let position = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -90,6 +114,12 @@
         }
         if self?.current === presentation { self?.current = nil }
         gone()
+      }
+      if !presentation.shortcuts.isEmpty || presentation.cancelButton != nil {
+        presentation.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+          guard let self else { return event }
+          return self.route(event)
+        }
       }
       if let window = Self.sheetHost(anchor?.window) {
         presentation.host = window
@@ -103,6 +133,35 @@
         }
       }
       return true
+    }
+
+    /// Only the visible, frontmost dialog owns these shortcuts. Consuming
+    /// repeats prevents held keys from confirming or cancelling a new dialog.
+    func route(_ event: NSEvent) -> NSEvent? {
+      guard event.type == .keyDown, let current, !current.withdrawn, current.ended != nil,
+        event.window === current.alert.window, current.alert.window.isVisible,
+        current.alert.window.attachedSheet == nil else { return event }
+      if let editor = current.alert.window.firstResponder as? NSTextInputClient,
+        editor.hasMarkedText() { return event }
+      let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+      let button: NSButton?
+      if modifiers.isEmpty && event.keyCode == 53 {
+        button = current.cancelButton
+      } else {
+        button = current.shortcuts.first { shortcut, _ in
+          switch shortcut {
+          case .enter: modifiers.isEmpty && (event.keyCode == 36 || event.keyCode == 76)
+          case .command(let key):
+            modifiers == .command && event.charactersIgnoringModifiers?.lowercased() == key.lowercased()
+          }
+        }?.1
+      }
+      guard let button else { return event }
+      if !event.isARepeat, !current.answering, button.isEnabled {
+        current.answering = true
+        button.performClick(nil)
+      }
+      return nil
     }
 
     /// Ends the sheet, and the dialog with it even when AppKit does not —
@@ -193,6 +252,9 @@
       let box: NSTextField = field.isSecure ? NSSecureTextField(string: field.initial) : NSTextField(string: field.initial)
       box.placeholderString = field.placeholder
       box.font = .systemFont(ofSize: NSFont.systemFontSize)
+      box.cell?.usesSingleLineMode = true
+      box.cell?.isScrollable = true
+      box.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
       return box
     }
 

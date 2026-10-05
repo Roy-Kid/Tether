@@ -34,6 +34,31 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @MainActor
 @Suite("tmux on a tab")
 struct TmuxTabTests {
+  @Test("restore metadata keeps the session identity without retaining a client")
+  func restorationMetadata() async throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let original = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    #expect(original.restorationState == nil)
+    original.sessions = [info("$7", "work")]
+    original.shellSessionID = "$7"
+    let data = try #require(original.restorationState)
+    let saved = try JSONDecoder().decode(TmuxTab.Restoration.self, from: data)
+    #expect(saved.sessionID == "$7")
+    #expect(saved.sessionName == "work")
+    original.shellSessionID = nil
+    #expect(original.restorationState == nil)
+    original.close()
+
+    let restored = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { restored.close() }
+    restored.restore(from: data)
+    for _ in 0..<100 where restored.busy { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(!restored.busy)
+    #expect(restored.error != nil, "reopening needs a fresh lease; metadata cannot keep one alive")
+    #expect(restored.shellSessionID == nil)
+  }
+
   @Test("choosing a session on another tab does not take this terminal over")
   func anotherTerminalStays() async throws {
     let host = HostProbe()

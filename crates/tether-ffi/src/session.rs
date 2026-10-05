@@ -122,6 +122,7 @@ pub struct Destination {
     pub columns: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+    pub history: Option<Arc<crate::SessionHistory>>,
 }
 
 /// Connects, authenticates and opens a shell.
@@ -167,6 +168,7 @@ pub async fn connect(
     .term(destination.term)
     .size(size)
     .options(Options { scrollback_lines: destination.scrollback_lines as usize })
+    .history(destination.history.map(|h| h.inner.clone()))
     .connect(credentials)
     .await?;
 
@@ -207,6 +209,7 @@ pub struct LocalShell {
     pub columns: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+    pub history: Option<Arc<crate::SessionHistory>>,
 }
 
 /// Whether this platform lets an application start a shell.
@@ -234,7 +237,8 @@ pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> 
     let mut local = Local::running(Command::login_shell())
         .term(shell.term)
         .size(size)
-        .options(Options { scrollback_lines: shell.scrollback_lines as usize });
+        .options(Options { scrollback_lines: shell.scrollback_lines as usize })
+        .history(shell.history.map(|h| h.inner.clone()));
 
     // A local shell starts in the user's home, regardless of the working
     // directory inherited by an app launched from Finder or the Dock.
@@ -268,7 +272,12 @@ pub async fn connect_over_ssh_client(
 ) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(shell.columns, shell.rows);
     let session = SshClient::new(target)
-        .connect(shell.term, size, Options { scrollback_lines: shell.scrollback_lines as usize })
+        .connect_recorded(
+            shell.term,
+            size,
+            Options { scrollback_lines: shell.scrollback_lines as usize },
+            shell.history.map(|h| h.inner.clone()),
+        )
         .await
         .map_err(|error| TetherError::ShellRefused { cause: error.cause })?;
     Ok(Arc::new(Session { inner: session }))
@@ -406,6 +415,14 @@ impl Session {
     /// What changed since the last call. Rows that did not change are absent.
     pub fn update(&self) -> crate::FrameUpdate {
         crate::FrameUpdate::from_delta(&self.inner.take_frame_delta())
+    }
+
+    pub fn checkpoint_history(&self) {
+        self.inner.checkpoint_history();
+    }
+
+    pub fn history_error(&self) -> Option<String> {
+        self.inner.history_error()
     }
 
     /// Text a remote program asked to place on the local clipboard (`OSC 52`).

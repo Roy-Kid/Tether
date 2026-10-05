@@ -40,6 +40,10 @@ For either shape:
   plugin in the application's composition root. That line is the only place
   the app may name it; CI fails on any other.
 - Store nonsecret preferences with `PluginPreferences(pluginID:)`.
+- Expose stable `commandDescriptors` on the plugin for commands that should
+  appear in Settings → Key Bindings before connecting. Their IDs must match
+  the commands returned by attachments or workspaces. The host namespaces IDs
+  by plugin and dispatches against the selected tab's current commands.
 
 The host renders each workspace plugin as a toolbar and palette entry.
 A tab plugin kept beside the terminal is a button at the bottom right of
@@ -50,6 +54,150 @@ Turning a plugin off closes its tabs and attachments before deactivation.
 `TetherPluginKitTests` verifies both shapes independently of tmux;
 `app/Plugins/Tmux/Tests` verifies tmux without a server. This interface is a
 Swift source API, not a binary ABI or a permission sandbox.
+
+# Key bindings (macOS)
+
+Settings → Appearance → Tab Layout switches between the horizontal titlebar
+and a vertical tab list on the left. The layout is saved across launches.
+Cmd+S shows or hides the entire tab bar in either layout, without closing any
+sessions. The titlebar button and View → Show/Hide Tab Bar do the same thing.
+Visibility is saved locally and restored on the next launch in either layout.
+Zen temporarily hides the bar without changing this preference.
+Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
+The same **Toggle Tab Bar** command is available in the Cmd+Shift+P command menu,
+whether the tab bar is currently shown or hidden.
+Showing tabs from Zen Mode exits Zen Mode; opening a tab's accessory also
+reveals a hidden tab bar so its popover has a visible anchor.
+
+Settings → Key Bindings lists workspace and plugin commands, including commands
+without a default shortcut. Search by command, group or shortcut, or toggle grouping
+with the button beside the search field. Both controls stay visible while scrolling.
+Each command has independent Primary and
+Secondary shortcuts; either runs the same action. Click a slot and press a
+combination of ⌃, ⌥, ⇧ and ⌘ with a key, or a function key.
+macOS displays these modifier symbols throughout shortcut settings, menus and
+tooltips. Search also accepts modifier names such as `ctrl`, `option` and `cmd`.
+Esc cancels recording. Consecutive key sequences are not supported.
+
+Changes apply immediately and persist locally across launches. With an iCloud-enabled
+signed build, custom bindings sync through the existing iCloud account and **Sync Now**
+action. Offline edits are queued; incoming changes update shortcuts and menus without
+restarting. Clear a slot with
+its × button; reset a modified row to restore its defaults. Duplicate bindings
+are rejected across both slots and all known commands, including disabled plugins.
+The menu shows the first assigned shortcut; the command palette shows both.
+
+Closing a terminal checks its processes. An idle shell or ended session closes
+without confirmation; foreground, background and stopped jobs prompt before
+closing, with the process names and a warning about interrupted work. If the
+process check fails, times out or cannot identify the remote terminal, closing
+still asks and explains that the process state is unknown. Active file transfers
+also require confirmation; a tmux attachment that only detaches does not.
+Plugins report interruptible work through `requiresCloseConfirmation` and describe
+the consequences in `closeNote`.
+
+The close-tab confirmation accepts Enter (including keypad Enter) or Cmd+W to
+close the tab. Escape cancels. Holding a confirmation key does not count as a
+second press; these shortcuts apply only while that confirmation is visible.
+
+Sync stores one record per command in the private `TetherKeyBindings` zone
+(`TetherKeyBinding`, with a `value` Bytes field). Both alternatives travel together.
+Different commands merge independently; concurrent edits to the same command use
+the later recorded modification time, with a stable revision identifier breaking ties.
+Clearing a slot and restoring defaults are distinct: resets remain as records so an
+offline device cannot resurrect an older assignment. A fresh installation uploads
+no defaults. Existing local overrides migrate once into the first signed-in account;
+an existing cloud revision of the same command takes precedence over a legacy
+override without an edit time. Each Apple account keeps a separate offline cache.
+Signing out switches to local settings; cloud settings never move to another account.
+The first sync after upgrading reads the account in full, even when an older
+app has already advanced the CloudKit change token past key binding records.
+
+Concurrent edits to different commands can assign the same combination. Explicit
+assignments take precedence over defaults, then the newer command revision wins.
+The losing assignment is retained and shown in orange with a hover explanation,
+but does not dispatch or appear as an active menu shortcut. Reassign or clear it
+to resolve the conflict. Assignments for unavailable plugins are retained as well.
+
+Ad-hoc builds remain local and show the existing iCloud-unavailable status. Real
+sync needs the same developer team, container entitlement and provisioning setup
+as host sync (`./scripts/tether.sh --provision --team <TEAMID>`, then
+`./scripts/tether.sh --build-app --team <TEAMID>`). Development builds can create
+the record type in the development database; deploy the new record type and its
+field to the container's production schema before shipping an App Store build.
+Validate on two devices signed into the same Apple account: edit different
+commands offline, reconnect, clear/reset a binding, and verify both devices agree.
+
+Assigned combinations take priority over terminal input in the workspace window.
+Unbound Ctrl/Alt keys still reach the shell or remote editor. Sheets, Settings and
+input-method composition retain their own keyboard handling. Plugin actions run
+only when provided by the selected tab's current attachment or workspace. Native
+text editing, file-list navigation and dialog confirmation keys keep their normal
+context-specific behavior; this page configures workspace commands.
+
+New Terminal defaults to Cmd+N (primary) and Cmd+T (secondary). These take
+priority over terminal input in the workspace; personal overrides remain unchanged.
+**Restore Tab** defaults to Cmd+Shift+T and is available in File, the command menu
+and Key Bindings. Each press reopens the most recently closed terminal, selecting
+its original host and restoring its name and position. The last 20 closed
+terminals are remembered for the current app run; cancelling a password prompt
+keeps the entry available. The action is disabled when history is empty.
+Local shells reopen in their previous directory when it still exists. SSH uses
+the usual authentication flow and opens a fresh shell. Closed processes and shell
+scrollback cannot be recovered. tmux attachments reconnect to the previous session
+if it still exists, and Files restores its browser directory. Active transfers
+are not restarted. Quitting or switching accounts clears this history.
+Tab plugins can implement `restorationState` and `restore(from:)` to save
+nonsecret metadata and apply it to a new attachment after authentication.
+Rename Terminal defaults to Cmd+R and renames the selected terminal.
+In its dialog, Return or keypad Enter saves the name; Escape cancels.
+Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to the terminal.
+Unassigned Control letters are sent unchanged as control input;
+the shell or editor decides what they do, including when cursor-key mode changes.
+The command palette, Quick Switch and host picker accept Ctrl+P/N as Up/Down.
+On macOS, these popups and the tmux session/window picker also show Cmd+1 through
+Cmd+9 beside their first nine available items. Pressing a number with Cmd immediately
+activates that item; filtering or entering a submenu updates the numbers. Disabled
+items are skipped. While a popup is open, these keys take priority over workspace
+bindings; closing it restores the usual bindings.
+Their search fields keep native Ctrl+B/F character movement and Ctrl+A/E
+beginning/end movement. The file tree accepts Ctrl+P/N to select rows and
+Ctrl+B/F as Left/Right to collapse/expand folders or move to their parent/first
+child. Except for a popup's numbered shortcuts, custom workspace bindings still
+take priority when explicitly assigned.
+
+Common operations follow the focused control. Native text fields in the workspace,
+Settings, sheets and popovers use AppKit editing, with these additional Unix-style
+aliases; no system-wide key binding preferences are changed:
+
+| Operation | Keys |
+| --- | --- |
+| Character / line movement | Ctrl+B/F, Ctrl+A/E |
+| Word movement / word selection | Alt+B/F, Alt+Shift+B/F |
+| Character deletion | Ctrl+H/D, Backspace / Delete |
+| Word deletion | Ctrl+W / Alt+Backspace backward, Alt+D forward |
+| Delete to beginning / end | Ctrl+U / Ctrl+K |
+| Yank deleted text / transpose characters | Ctrl+Y / Ctrl+T |
+| Undo / redo | Ctrl+_ or Cmd+Z / Cmd+Shift+Z |
+| Select text | Shift+arrows; Ctrl+Shift+B/F/A/E |
+| Select all / cut / copy / paste | Cmd+A/X/C/V |
+| Confirm / cancel | Return or Ctrl+M/J / Escape or Ctrl+G |
+| Next / previous field | Tab or Ctrl+I / Shift+Tab |
+
+Command, host, settings, file and session lists support Up/Down or Ctrl+P/N,
+Page Up/Down or Alt+V/Ctrl+V, and Home/End or `Alt+<` / `Alt+>`. Selection stays within
+available items; Shift+arrows remain available for native text or multi-row
+selection. File and session trees also accept Ctrl+B/F as Left/Right. Return keeps
+the control's existing action (for example, rename in the file list). Escape and
+Ctrl+G cancel pickers; in a session submenu they first return to the parent level.
+
+These are common single-key editing aliases, not a complete Emacs implementation:
+there is no prefix-key sequence, universal argument or application-side mark ring.
+Ctrl+U uses line-editing behavior. The terminal receives original Control/Alt input,
+so history search (Ctrl+R), job control (Ctrl+C/D/Z), completion, marks and editor
+commands remain the shell/editor's responsibility. Input-method composition and
+shortcut recording keep their own keyboard handling. This settings page still
+configures workspace commands; context-specific editing/list keys are defaults.
 
 # Web plugin host
 

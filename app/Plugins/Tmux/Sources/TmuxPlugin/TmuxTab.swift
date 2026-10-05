@@ -72,6 +72,42 @@ public final class TmuxTab: TabAttachment {
   }
   public var isDisconnected: Bool { false }
   public var closeNote: String? { shellSessionID == nil ? nil : "tmux stays on the host." }
+
+  struct Restoration: Codable {
+    let sessionID: String
+    let sessionName: String
+  }
+
+  /// The tmux session this terminal is attached to, so reopening the tab can
+  /// attach it again. A shell that has left tmux has nothing to restore.
+  public var restorationState: Data? {
+    guard let id = shellSessionID else { return nil }
+    let name = shellSessionName.isEmpty
+      ? (sessions.first { $0.id == id }?.name ?? "")
+      : shellSessionName
+    guard !name.isEmpty else { return nil }
+    return try? JSONEncoder().encode(Restoration(sessionID: id, sessionName: name))
+  }
+
+  public func restore(from state: Data) {
+    guard let saved = try? JSONDecoder().decode(Restoration.self, from: state) else { return }
+    if connection == nil, let leased = tab.plugin.connection {
+      connection = leased
+    }
+    run { [self] in
+      sessions = try await lease().tmuxSessions()
+      guard !closed, !Task.isCancelled else { return }
+      guard let restored = sessions.first(where: {
+        $0.id == saved.sessionID && $0.name == saved.sessionName
+      }) else {
+        error = "The previous tmux session is no longer available."
+        return
+      }
+      // Another tab may have reattached while this one was closed.
+      guard owner(restored.id) == nil || owner(restored.id) === self else { return }
+      try await open(restored, windowID: nil)
+    }
+  }
   public var commands: [PluginCommand] {
     guard shellSessionID != nil else { return [] }
     return [

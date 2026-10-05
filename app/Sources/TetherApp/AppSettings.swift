@@ -22,6 +22,19 @@ enum LaunchPreference {
   static let `default` = true
 }
 
+enum TabLayout: String {
+  case horizontal, vertical
+
+  static let preferenceKey = "tabLayout"
+  static let `default`: Self = .horizontal
+}
+
+/// The last tab-bar visibility on this device, independent of layout and Zen.
+enum TabBarPreference {
+  static let key = "tabBarVisible"
+  static let `default` = true
+}
+
 /// What happens once a close leaves the window with nothing open.
 ///
 /// The key and the two values live together so the picker, the close path
@@ -69,10 +82,13 @@ struct AppSettings: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
   #endif
   @AppStorage("appearance") private var appearance = "system"
+  @State private var fallbackKeyBindings = KeyBindingStore()
 
   private enum Section: String, Identifiable, CaseIterable {
     case general
     case appearance
+    case history
+    case keyBindings
     case security
     case identities
     case extensions
@@ -83,6 +99,8 @@ struct AppSettings: View {
       switch self {
       case .general: "General"
       case .appearance: "Appearance"
+      case .history: "Session History"
+      case .keyBindings: "Key Bindings"
       case .security: "Security"
       case .identities: "Identities"
       case .extensions: "Extensions"
@@ -93,9 +111,23 @@ struct AppSettings: View {
       switch self {
       case .general: "gearshape.fill"
       case .appearance: "paintpalette.fill"
+      case .history: "clock.arrow.circlepath"
+      case .keyBindings: "keyboard.fill"
       case .security: "lock.shield.fill"
       case .identities: "person.badge.key.fill"
       case .extensions: "puzzlepiece.extension.fill"
+      }
+    }
+
+    var subtitle: String {
+      switch self {
+      case .general: "What opens when Tether launches"
+      case .appearance: "Window, terminal, and drawing"
+      case .history: "Terminal content saved on this device"
+      case .keyBindings: "Two shortcuts for every command"
+      case .security: "Host keys and saved passwords"
+      case .identities: "Hosts, keys, iCloud, and SSH configuration"
+      case .extensions: "Accessories on a terminal tab"
       }
     }
 
@@ -103,6 +135,8 @@ struct AppSettings: View {
       switch self {
       case .general: .gray
       case .appearance: .indigo
+      case .history: .blue
+      case .keyBindings: .blue
       case .security: .orange
       case .identities: .teal
       case .extensions: .purple
@@ -111,7 +145,12 @@ struct AppSettings: View {
 
     /// Sections a platform has nothing to put in are not shown empty.
     static var available: [Self] {
-      allCases.filter { $0 != .general || TerminalSession.isLocalAvailable }
+      allCases.filter {
+        #if !os(macOS)
+          if $0 == .keyBindings { return false }
+        #endif
+        return $0 != .general || TerminalSession.isLocalAvailable
+      }
     }
   }
 
@@ -124,6 +163,11 @@ struct AppSettings: View {
             .accessibilityLabel(item.title)
         }
         .listStyle(.sidebar)
+        .onPickerNavigation { movement in
+          var choice = PickerSelection(id: section)
+          choice.navigate(movement, in: Section.available)
+          section = choice.id
+        }
         .navigationSplitViewColumnWidth(
           min: Chrome.settingsSidebarMin,
           ideal: Chrome.settingsSidebarIdeal,
@@ -138,7 +182,7 @@ struct AppSettings: View {
       .navigationSplitViewStyle(.balanced)
       .toolbar(removing: .sidebarToggle)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-      .frame(minWidth: Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
+      .frame(minWidth: section == .keyBindings ? 820 : Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
       .background { SettingsWindowChrome() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
     #else
@@ -212,8 +256,18 @@ struct AppSettings: View {
 
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
-    SettingsPage(title: section.title) {
-      form(section)
+    SettingsPage(title: section.title, subtitle: section.subtitle) {
+      #if os(macOS)
+        if section == .keyBindings {
+          KeyBindingSettings(
+            store: connections?.keyBindings ?? fallbackKeyBindings,
+            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
+        } else {
+          form(section)
+        }
+      #else
+        form(section)
+      #endif
     }
     #if os(iOS)
       // The page already shows the section title, the same as the Mac pane
@@ -232,6 +286,10 @@ struct AppSettings: View {
         SyncSettings(store: store)
       case .general: GeneralSettings()
       case .appearance: AppearanceSettings()
+      case .history: HistorySettings()
+      case .keyBindings:
+        // This pane owns its scroll area so its search field can stay fixed.
+        EmptyView()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
       case .extensions: ExtensionSettings(registry: registry)
       }
@@ -268,17 +326,24 @@ private struct SettingsSidebarLabel: View {
 
 private struct SettingsPage<Content: View>: View {
     let title: String
+    let subtitle: String
     @ViewBuilder var content: Content
 
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
-        Text(title)
-          .font(.title2.weight(.semibold))
-          .accessibilityAddTraits(.isHeader)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, UIStyle.Space.wide)
-          .padding(.top, UIStyle.Space.page)
-          .padding(.bottom, UIStyle.panelRadius)
+        VStack(alignment: .leading, spacing: UIStyle.Space.small) {
+          Text(title)
+            .font(.title2.weight(.semibold))
+            .accessibilityAddTraits(.isHeader)
+
+          Text(subtitle)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, UIStyle.Space.wide)
+        .padding(.top, UIStyle.Space.page)
+        .padding(.bottom, UIStyle.panelRadius)
 
         content
           .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -331,6 +396,7 @@ private struct AppearanceSettings: View {
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
+  @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
 
   var body: some View {
     SwiftUI.Section("Window") {
@@ -339,6 +405,12 @@ private struct AppearanceSettings: View {
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
+      #if os(macOS)
+        Picker("Tab Layout", selection: $tabLayout) {
+          Text("Horizontal").tag(TabLayout.horizontal)
+          Text("Vertical").tag(TabLayout.vertical)
+        }
+      #endif
     }
 
     SwiftUI.Section("Terminal") {
@@ -508,6 +580,30 @@ private struct SecuritySettings: View {
       reload()
     } catch {
       problem = error.localizedDescription
+    }
+  }
+}
+
+private struct HistorySettings: View {
+  @AppStorage(HistoryPreference.linesKey) private var lines = HistoryPreference.defaultLines
+  @AppStorage(HistoryPreference.unlimitedKey) private var unlimited = false
+
+  var body: some View {
+    SwiftUI.Section {
+      Toggle("Unlimited", isOn: $unlimited)
+      if !unlimited {
+        TextField("Lines per Session", value: $lines, format: .number.grouping(.never))
+          .onChange(of: lines) { _, value in if value < 1 { lines = 1 } }
+      }
+    } header: {
+      Text("Saved History")
+    } footer: {
+      Text("Keeps the most recent lines plus the current screen. Applies to newly opened or restored sessions. Unlimited history uses more disk space.")
+    }
+    SwiftUI.Section {
+      LabeledContent("Recently Closed Tabs", value: "20")
+    } footer: {
+      Text("Session content is stored only on this device. Restoring a tab starts a new shell or connection; running processes are not restored.")
     }
   }
 }

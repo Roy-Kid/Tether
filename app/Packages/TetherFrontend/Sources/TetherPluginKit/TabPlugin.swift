@@ -212,6 +212,13 @@ public protocol TabAttachment: AnyObject {
   /// One line under the tab's close confirmation, when closing leaves
   /// something behind a person would otherwise wonder about.
   var closeNote: String? { get }
+  /// Work closing would interrupt, such as an active file transfer.
+  /// A session that merely detaches and keeps running need not ask.
+  var requiresCloseConfirmation: Bool { get }
+  /// Nonsecret metadata for reopening a closed tab. Never retain a connection
+  /// or credentials here; the host supplies a newly authenticated attachment.
+  var restorationState: Data? { get }
+  func restore(from state: Data)
   /// For the menu bar and the palette, under the plugin's name.
   var commands: [PluginCommand] { get }
   /// Drawn in place of the shell while `isShowing`.
@@ -253,6 +260,9 @@ public protocol TabAttachment: AnyObject {
 }
 
 extension TabAttachment {
+  public var requiresCloseConfirmation: Bool { false }
+  public var restorationState: Data? { nil }
+  public func restore(from state: Data) {}
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
   public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool { false }

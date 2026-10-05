@@ -55,6 +55,16 @@ public struct PluginCommand: Identifiable {
   }
 }
 
+/// Stable command metadata, available before a connection or workspace exists.
+public struct PluginCommandDescriptor: Identifiable, Sendable {
+  public let id: String
+  public let title: String
+  public init(id: String, title: String) {
+    self.id = id
+    self.title = title
+  }
+}
+
 /// An extension owns its content; the host owns its tab and lifetime.
 @MainActor
 public protocol PluginWorkspace: AnyObject, Identifiable where ID == UUID {
@@ -100,6 +110,7 @@ public struct PluginContext {
 @MainActor
 public protocol TetherPlugin: AnyObject {
   var metadata: PluginMetadata { get }
+  var commandDescriptors: [PluginCommandDescriptor] { get }
   /// A data-only lamp shown beside the host selector, when the plugin has live status.
   var statusBarItem: PluginStatusBarItem? { get }
   /// The lamp itself, when the plugin draws it. Otherwise the host paints `statusBarItem`.
@@ -125,6 +136,7 @@ public protocol TetherPlugin: AnyObject {
   func settings() -> AnyView
 }
 extension TetherPlugin {
+  public var commandDescriptors: [PluginCommandDescriptor] { [] }
   public var statusBarItem: PluginStatusBarItem? { nil }
   public func statusBarLabel() -> AnyView? { nil }
   public func statusBarSettings() -> (() -> Void)? { nil }

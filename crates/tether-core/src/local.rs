@@ -24,6 +24,7 @@ pub struct Local {
     command: Command,
     size: ScreenSize,
     options: Options,
+    history: Option<crate::history::HistoryArchive>,
 }
 
 impl Local {
@@ -39,7 +40,7 @@ impl Local {
 
     /// A session on something other than the login shell.
     pub fn running(command: Command) -> Self {
-        Self { command, size: ScreenSize::new(80, 24), options: Options::default() }
+        Self { command, size: ScreenSize::new(80, 24), options: Options::default(), history: None }
     }
 
     /// Where the shell starts. The person's home directory when unset.
@@ -56,6 +57,11 @@ impl Local {
 
     pub fn size(mut self, size: ScreenSize) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn history(mut self, history: Option<crate::history::HistoryArchive>) -> Self {
+        self.history = history;
         self
     }
 
@@ -85,6 +91,7 @@ impl Local {
             crate::Connection::Local,
             terminal_name,
             process_id,
+            self.history,
         ))
     }
 }

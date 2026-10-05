@@ -31,6 +31,9 @@ enum ConnectionDialog {
     case .couldNotConnect:
       title = "Could Not Connect to \(name)"
       verb = "Retry"
+    case .history:
+      title = "Could Not Save History for \(name)"
+      verb = "OK"
     case .lost:
       title = "Connection to \(name) Lost"
       verb = report.host.isLocal ? "Restart" : "Reconnect"
@@ -71,7 +74,16 @@ struct ConnectionDialogs: ViewModifier {
           request, connect: { connect(request, $0) }, cancel: { cancelConnect(request) })
       }
       .dialog(for: tabs.problem) { report in
-        ConnectionDialog.problem(report, close: { tabs.close(report.tab) }, again: { retry(report) })
+        if report.problem.kind == .history {
+          Dialog(title: "Could Not Save Session History", message: report.problem.reason,
+            actions: [Dialog.Action("OK") { _ in tabs.tabs.first { $0.id == report.tab }?.acknowledge() }])
+        } else {
+          ConnectionDialog.problem(report, close: { tabs.close(report.tab) }, again: { retry(report) })
+        }
+      }
+      .dialog(for: tabs.historyProblem) { problem in
+        Dialog(title: "Could Not Save Session History", message: problem,
+          actions: [Dialog.Action("OK") { _ in tabs.historyProblem = nil }])
       }
       .dialog(for: tabs.passwordOffer) { offer in
         ConnectionDialog.keep(

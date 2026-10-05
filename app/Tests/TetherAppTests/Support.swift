@@ -107,6 +107,8 @@ final class StubAttachment: TabAttachment {
   var subtitle: String
   var isDisconnected = false
   var closeNote: String?
+  var requiresCloseConfirmation = false
+  var restorationState: Data?
   var commands: [PluginCommand] { [] }
   private(set) var closed = false
 

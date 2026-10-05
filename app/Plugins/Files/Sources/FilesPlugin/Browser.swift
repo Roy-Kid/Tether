@@ -88,8 +88,18 @@ struct Browser: View {
 private struct FileList: View {
   @Bindable var model: FilesTab
   @FocusState private var listFocused: Bool
+  @State private var listHeight = UIStyle.listHeight
 
   var body: some View {
+    ScrollViewReader { proxy in
+      listing
+        .onChange(of: model.selection) { _, paths in
+          if paths.count == 1, let path = paths.first { proxy.scrollTo(path) }
+        }
+    }
+  }
+
+  private var listing: some View {
     List(selection: $model.selection) {
       if let problem = model.problem {
         Label(problem, systemImage: "exclamationmark.triangle")
@@ -114,6 +124,7 @@ private struct FileList: View {
     }
     #if os(macOS)
       .listStyle(.inset)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
       .focused($listFocused)
       .background { ListKeyboardClaim() }
       .onAppear { listFocused = true }
@@ -141,10 +152,8 @@ private struct FileList: View {
         model.previewSelection()
         return .handled
       }
-      .onKeyPress(.return) {
-        guard model.renaming == nil, model.selection.count == 1 else { return .ignored }
+      .onPickerSubmit(enabled: model.renaming == nil && model.selection.count == 1) {
         model.renaming = model.selection.first
-        return .handled
       }
       .onKeyPress(keys: [.delete, .deleteForward]) { _ in
         guard model.renaming == nil, !model.selection.isEmpty else { return .ignored }
@@ -155,6 +164,26 @@ private struct FileList: View {
         guard model.renaming == nil, press.modifiers.isEmpty else { return .ignored }
         if press.key == .rightArrow { model.expandOrDescend() } else { model.collapseOrAscend() }
         return .handled
+      }
+      // Control+F/B arrive as control codes, so a key of "f" never sees them.
+      // A selected folder takes them, the same as the arrows. Find takes
+      // Control+F when the selection is not a folder.
+      .onKeyPress(phases: .down) { press in
+        guard model.renaming == nil, let chord = treeChord(press) else { return .ignored }
+        guard chord == .back || model.selection.first.flatMap(model.entry)?.kind == .directory
+        else { return .ignored }
+        if chord == .forward { model.expandOrDescend() } else { model.collapseOrAscend() }
+        return .handled
+      }
+      .onPickerNavigation(enabled: model.renaming == nil) { movement in
+        switch movement {
+        case .first, .last:
+          let row = movement == .first ? model.rows.first : model.rows.last
+          model.selection = row.map { [$0.id] } ?? []
+        default:
+          let offset = movement.offset(pageSize: max(1, Int(listHeight / UIStyle.rowHeight)))
+          model.moveSelection(forward: offset > 0, steps: abs(offset))
+        }
       }
       .onKeyPress(keys: [.upArrow, .downArrow]) { press in
         guard press.modifiers.contains(.command) else { return .ignored }
@@ -174,6 +203,12 @@ private struct FileList: View {
       // is still forward-char for the shell.
       .onKeyPress(phases: .down) { press in
         guard findChord(press) else { return .ignored }
+        // The folder row keeps Control+F as Right Arrow. Find is the other case.
+        if model.renaming == nil, model.selection.count == 1,
+          model.selection.first.flatMap(model.entry)?.kind == .directory
+        {
+          return .ignored
+        }
         model.beginFind()
         return .handled
       }
@@ -255,44 +290,22 @@ private struct FileRow: View {
   @FocusState private var editing: Bool
 
   var body: some View {
-    HStack(spacing: UIStyle.Space.inline) {
+    Group {
       #if os(macOS)
-        disclosure
+        GeometryReader { geometry in
+          // Deep paths must give up indentation before they consume the name
+          // editor. Reserve room for the name, icons and a transfer indicator.
+          let indentation = min(CGFloat(depth) * FileRow.indent,
+            max(0, geometry.size.width - FileRow.contentWidth))
+          content
+            .padding(.leading, indentation)
+            .frame(maxHeight: .infinity)
+        }
+        .frame(height: UIStyle.rowHeight)
+      #else
+        content
       #endif
-      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
-        .font(UIStyle.symbol)
-        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
-        .frame(width: UIStyle.Mark.glyph)
-      if model.renaming == entry.path {
-        TextField("Name", text: $draft)
-          .textFieldStyle(.plain)
-          .font(UIStyle.title)
-          .focused($editing)
-          .onAppear {
-            draft = entry.name
-            editing = true
-          }
-          .onSubmit { Task { await model.rename(entry, to: draft) } }
-          #if os(macOS)
-            .onExitCommand { model.renaming = nil }
-          #endif
-      } else {
-        Text(Names.display(entry.name))
-          .font(UIStyle.title)
-          .adaptiveRowText()
-          .truncationMode(.middle)
-      }
-      Spacer(minLength: 0)
-      if let transfer = model.transfers.item(for: entry.path) {
-        ProgressView(value: transfer.fraction)
-          .progressViewStyle(.circular)
-          .controlSize(.mini)
-      }
     }
-    #if os(macOS)
-      .padding(.leading, CGFloat(depth) * FileRow.indent)
-      .frame(minHeight: UIStyle.rowHeight)
-    #endif
     .help(detail)
     .accessibilityElement(children: .combine)
     .accessibilityValue(detail)
@@ -314,6 +327,44 @@ private struct FileRow: View {
         }
       }
     #endif
+  }
+
+  private var content: some View {
+    HStack(spacing: UIStyle.Space.inline) {
+      #if os(macOS)
+        disclosure
+      #endif
+      Image(systemName: Names.symbol(for: entry.name, kind: entry.kind))
+        .font(UIStyle.symbol)
+        .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
+        .frame(width: UIStyle.Mark.glyph)
+      if model.renaming == entry.path {
+        TextField("Name", text: $draft)
+          .textFieldStyle(.plain)
+          .font(UIStyle.title)
+          .focused($editing)
+          .onAppear {
+            draft = entry.name
+            editing = true
+          }
+          .onSubmit { Task { await model.rename(entry, to: draft) } }
+          #if os(macOS)
+            .frame(minWidth: FileRow.nameWidth, maxWidth: .infinity)
+            .onExitCommand { model.renaming = nil }
+          #endif
+      } else {
+        Text(Names.display(entry.name))
+          .font(UIStyle.title)
+          .adaptiveRowText()
+          .truncationMode(.middle)
+      }
+      Spacer(minLength: 0)
+      if let transfer = model.transfers.item(for: entry.path) {
+        ProgressView(value: transfer.fraction)
+          .progressViewStyle(.circular)
+          .controlSize(.mini)
+      }
+    }
   }
 
   #if os(macOS)
@@ -343,6 +394,9 @@ private struct FileRow: View {
 
     static let indent: CGFloat = 12
     static let chevron = UIStyle.Mark.chevron
+    static let nameWidth: CGFloat = 80
+    static let contentWidth = nameWidth + chevron + UIStyle.Mark.glyph
+      + UIStyle.controlHeight + 4 * UIStyle.Space.inline
   #endif
 
   /// Size and date, for the tooltip and VoiceOver: the window itself shows
@@ -508,6 +562,23 @@ private struct PathMenu: View {
         Label("Hidden Files", systemImage: "eye")
       }
     }
+  }
+}
+
+/// Control+B/F for the file tree. The character with Control held is the
+/// control code, not the letter.
+private enum TreeChord { case forward, back }
+
+private func treeChord(_ press: KeyPress) -> TreeChord? {
+  guard press.modifiers.contains(.control),
+    !press.modifiers.contains(.command),
+    !press.modifiers.contains(.option),
+    !press.modifiers.contains(.shift)
+  else { return nil }
+  switch press.characters {
+  case "f", "F", "\u{06}": return .forward
+  case "b", "B", "\u{02}": return .back
+  default: return nil
   }
 }
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The rest of Identities: the library's iCloud copy, and on a Mac the SSH
-/// configuration that feeds it.
+/// The rest of Identities: the library's iCloud copy, key bindings, and on a
+/// Mac the SSH configuration that feeds it.
 struct SyncSettings: View {
   @Bindable var store: HostStore
 
@@ -12,6 +12,10 @@ struct SyncSettings: View {
         LabeledContent("Last Synced") { Text(last, format: .relative(presentation: .named)) }
       }
       LabeledContent("Hosts", value: String(store.hosts.count))
+      if let bindings = store.keyBindings {
+        LabeledContent("Key Bindings", value: bindings.pending.isEmpty
+          ? "Included in sync" : "\(bindings.pending.count) pending changes")
+      }
       if let failure = store.syncFailure {
         Text(failure).foregroundStyle(.red).textSelection(.enabled)
       }

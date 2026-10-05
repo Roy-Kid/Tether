@@ -238,13 +238,6 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     // working, and a terminal has nothing to send for them anyway.
     guard !hasMarkedText(), window?.firstResponder === self, !event.modifierFlags.contains(.command)
     else { return false }
-    // Control-Shift-P is the command menu. It must not become terminal bytes.
-    if event.modifierFlags.contains(.control),
-      event.modifierFlags.contains(.shift),
-      event.charactersIgnoringModifiers?.lowercased() == "p"
-    {
-      return false
-    }
     if !event.modifierFlags.intersection([.control, .option]).isEmpty {
     } else if Self.namedKey(for: event) == nil {
       return false

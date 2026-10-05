@@ -22,11 +22,33 @@ fn plain_characters_go_out_as_themselves() {
 
 #[test]
 fn control_chords_become_control_characters() {
+    for letter in b'a'..=b'z' {
+        assert_eq!(key(Key::Char(letter as char), Modifiers::control()), vec![letter - b'a' + 1]);
+    }
     assert_eq!(key(Key::Char('c'), Modifiers::control()), vec![0x03]);
     assert_eq!(key(Key::Char('C'), Modifiers::control()), vec![0x03], "case does not matter");
     assert_eq!(key(Key::Char('d'), Modifiers::control()), vec![0x04]);
     assert_eq!(key(Key::Char(' '), Modifiers::control()), vec![0x00]);
     assert_eq!(key(Key::Char('['), Modifiers::control()), vec![0x1b]);
+}
+
+#[test]
+fn unix_navigation_chords_remain_distinct_from_arrow_sequences() {
+    let mut term = terminal();
+    // Even application cursor mode must not turn Control letters into arrows:
+    // the shell or editor owns the meaning of these bytes.
+    for mode in [b"\x1b[?1l", b"\x1b[?1h"] {
+        term.feed(mode);
+        for (letter, byte) in [('p', 0x10), ('n', 0x0e), ('f', 0x06), ('b', 0x02)] {
+            assert_eq!(
+                term.encode(&Input::Key {
+                    key: Key::Char(letter),
+                    modifiers: Modifiers::control()
+                }),
+                vec![byte]
+            );
+        }
+    }
 }
 
 /// A chord with no defined control character must still send the keystroke.

@@ -40,5 +40,15 @@ private enum InterfaceFixture {
   }
   .background(Theme.window)
 }
+
+#Preview("Mac · vertical tabs", traits: .fixedLayout(width: 860, height: 520)) {
+  HStack(spacing: 0) {
+    WorkspaceTabBar(tabs: InterfaceFixture.tabs(), layout: .vertical, onClose: { _ in })
+      .frame(width: Chrome.tabSidebarIdeal)
+    Divider()
+    EmptyWorkspace().frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+  .background(Theme.window)
+}
 #endif
 #endif

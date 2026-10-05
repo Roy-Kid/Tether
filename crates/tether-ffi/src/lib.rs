@@ -7,11 +7,13 @@
 uniffi::setup_scaffolding!();
 
 mod files;
+mod history;
 mod input;
 mod keys;
 mod link;
 mod screen;
 mod session;
+pub use history::SessionHistory;
 mod tmux;
 pub use tmux::*;
 

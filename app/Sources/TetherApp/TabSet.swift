@@ -42,6 +42,7 @@ enum Palette: Equatable {
 
 enum WorkspaceIntent: Equatable {
   case newTerminal
+  case restoreTab(UUID)
   case connect(Host)
   case edit(Host)
   case launchPlugin(String)
@@ -51,11 +52,23 @@ enum WorkspaceIntent: Equatable {
 @MainActor
 @Observable
 final class TabSet {
+  let keyBindings = KeyBindingStore()
   var tabs: [SessionTab] = []
+  /// Recent user closes, newest last; persisted when a history store is supplied.
+  var closedTabs: [ClosedTerminal] = []
+  var restoringTab: UUID?
+  static let closedTabLimit = 20
   var extensions: [WorkspaceEntry] = []
   var selected: SessionTab.ID?
   var currentHost: Host?
   var zen = false
+  private(set) var tabBarVisible: Bool {
+    didSet {
+      if tabBarVisible != oldValue {
+        defaults.set(tabBarVisible, forKey: TabBarPreference.key)
+      }
+    }
+  }
   var inspector = false
   var hostPicker = false
   var manageHosts = false
@@ -72,6 +85,10 @@ final class TabSet {
   var accessories: [PluginAccessory] = []
   var palette: Palette?
   var pendingClose: SessionTab.ID?
+  private(set) var checkingClose: SessionTab.ID?
+  private var closeCheck: Task<Void, Never>?
+  private var closeActivity: ShellActivity = .idle
+  private let inspectActivity: @MainActor (SessionTab) async -> ShellActivity
   var renaming: SessionTab.ID?
   var intent: WorkspaceIntent?
   var paletteQuery = ""
@@ -87,6 +104,27 @@ final class TabSet {
   private var recents: [UUID] = []
   private var inspectorBeforeZen = false
   private var terminalSerial: [UUID: Int] = [:]
+  private let defaults: UserDefaults
+  private let historyStore: SessionHistoryStore?
+  var historyProblem: String?
+  private var reportedHistoryProblem: String?
+
+  init(
+    defaults: UserDefaults = .standard,
+    historyStore: SessionHistoryStore? = nil,
+    inspectActivity: @escaping @MainActor (SessionTab) async -> ShellActivity = {
+      await $0.activityForClose()
+    }
+  ) {
+    self.defaults = defaults
+    self.historyStore = historyStore
+    closedTabs = historyStore?.load() ?? []
+    historyProblem = historyStore?.problem
+    reportedHistoryProblem = historyStore?.problem
+    self.inspectActivity = inspectActivity
+    tabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
+      ?? TabBarPreference.default
+  }
 
   var current: SessionTab? {
     tabs.first { $0.id == selected }
@@ -112,6 +150,8 @@ final class TabSet {
   }
 
   var recentHostIDs: [UUID] { recents }
+
+  var showsTabBar: Bool { tabBarVisible && !zen }
 
   func open(_ host: Host, password: String, typedNow: Bool = false) {
     show(host)
@@ -148,14 +188,41 @@ final class TabSet {
     return "Terminal \(next)"
   }
 
-  func adopt(_ tab: SessionTab) {
+  func adopt(_ tab: SessionTab, at index: Int? = nil) {
+    if let historyStore, historyStore.canWrite {
+      let restoring = tab.historyID != nil
+      let id = tab.historyID ?? UUID()
+      do {
+        tab.history = try SessionHistory(directory: historyStore.location(id),
+          lineLimit: HistoryPreference.limit(in: defaults), restoring: restoring)
+        tab.historyID = id
+      } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
+      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
+    }
     show(tab.host)
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
     // A person who declined a question the login asked has closed it.
     let id = tab.id
-    tab.onDeclined = { [weak self] in self?.close(id) }
-    tabs.append(tab)
+    tab.onDeclined = { [weak self] in self?.close(id, remember: false) }
+    tabs.insert(tab, at: min(max(index ?? tabs.count, 0), tabs.count))
     select(tab.id)
+    persistHistory()
+  }
+
+  func persistHistory() {
+    historyStore?.save(open: tabs.enumerated().map { ClosedTerminal($0.element, index: $0.offset) }, closed: closedTabs)
+    if let problem = historyStore?.problem { reportHistoryProblem(problem) }
+  }
+
+  private func reportHistoryProblem(_ message: String) {
+    guard reportedHistoryProblem != message else { return }
+    reportedHistoryProblem = message
+    historyProblem = message
+  }
+
+  func checkpointHistory() {
+    tabs.forEach { $0.checkpointHistory() }
+    persistHistory()
   }
 
   /// The first tab with something to tell the person.
@@ -227,6 +294,7 @@ final class TabSet {
 
   func openTabMenu(_ id: UUID) {
     select(id)
+    revealTabBar()
     tabMenu = id
   }
 
@@ -240,6 +308,7 @@ final class TabSet {
     #endif
     let wanted = AccessoryRef(tab: id, plugin: pluginID)
     accessory = accessory == wanted ? nil : wanted
+    if accessory != nil { revealTabBar() }
   }
 
   /// Brings a plugin's accessory up on a tab without closing it if it is
@@ -252,6 +321,7 @@ final class TabSet {
       }
     #endif
     select(id)
+    revealTabBar()
     accessory = AccessoryRef(tab: id, plugin: pluginID)
   }
 
@@ -283,7 +353,19 @@ final class TabSet {
   /// decides whether that means staying on the empty window.
   var onEmptied: (() -> Void)?
 
+  func shutdown() {
+    checkpointHistory()
+    tabs.forEach { $0.onHistoryChanged = nil; $0.close() }
+    extensions.forEach { $0.workspace.close() }
+  }
+
   func closeAll() {
+    closedTabs.removeAll()
+    restoringTab = nil
+    if case .restoreTab = intent { intent = nil }
+    closeCheck?.cancel()
+    closeCheck = nil
+    checkingClose = nil
     tabs.forEach { $0.close() }
     extensions.forEach { $0.workspace.close() }
     tabs.removeAll()
@@ -292,6 +374,7 @@ final class TabSet {
     currentHost = nil
     lastByHost = [:]
     recents = []
+    persistHistory()
     tabMenu = nil
     accessory = nil
     sheet = nil
@@ -307,13 +390,7 @@ final class TabSet {
     for tab in tabs { tab.detach(pluginID) }
   }
 
-  /// Asks before closing anything.
-  ///
-  /// Every time, not only for a live session: what a tab holds is the
-  /// scrollback as much as the connection, closing is not undoable, and on a
-  /// phone the button is under a thumb that is already over the screen.
-  /// A selector that is open is dismissed first — it is what the gesture
-  /// was aimed at.
+  /// Checks for work before closing a terminal. Open selectors dismiss first.
   func requestClose(_ id: SessionTab.ID) {
     if tabMenu == id {
       tabMenu = nil
@@ -323,7 +400,39 @@ final class TabSet {
       accessory = nil
       return
     }
-    pendingClose = id
+    guard pendingClose == nil, checkingClose != id else { return }
+    closeCheck?.cancel()
+    closeCheck = nil
+    checkingClose = nil
+    closeActivity = .idle
+    guard let tab = tabs.first(where: { $0.id == id }) else {
+      if extensions.contains(where: { $0.id == id }) { pendingClose = id }
+      return
+    }
+    guard tab.isLive else {
+      finishCloseRequest(id, activity: .idle)
+      return
+    }
+    checkingClose = id
+    let inspect = inspectActivity
+    closeCheck = Task { [weak self] in
+      let activity = await inspect(tab)
+      guard !Task.isCancelled, let self, self.checkingClose == id else { return }
+      self.checkingClose = nil
+      self.closeCheck = nil
+      self.finishCloseRequest(id, activity: tab.isLive ? activity : .idle)
+    }
+  }
+
+  private func finishCloseRequest(_ id: SessionTab.ID, activity: ShellActivity) {
+    guard let tab = tabs.first(where: { $0.id == id }) else { return }
+    let pluginIsBusy = tab.attachments.contains { $0.attachment.requiresCloseConfirmation }
+    if activity == .idle && !pluginIsBusy {
+      close(id)
+    } else {
+      closeActivity = activity
+      pendingClose = id
+    }
   }
 
   /// The confirmation's title: what is being closed, and the verb.
@@ -336,10 +445,12 @@ final class TabSet {
     return "Close \(name)?"
   }
 
-  /// The one extra line under the question, when a plugin on the tab leaves
-  /// something behind.
+  /// Why closing needs confirmation, followed by any plugin consequences.
   var closeNote: String? {
-    tabs.first { $0.id == pendingClose }?.attachments.lazy.compactMap(\.attachment.closeNote).first
+    guard let tab = tabs.first(where: { $0.id == pendingClose }) else { return nil }
+    let notes = [closeActivity.closeMessage].compactMap { $0 }
+      + tab.attachments.compactMap(\.attachment.closeNote)
+    return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
   }
 
   func requestCloseSelected() {
@@ -369,7 +480,12 @@ final class TabSet {
     close(id)
   }
 
-  func close(_ id: SessionTab.ID) {
+  func close(_ id: SessionTab.ID, remember: Bool = true) {
+    if checkingClose == id {
+      closeCheck?.cancel()
+      closeCheck = nil
+      checkingClose = nil
+    }
     if tabMenu == id { tabMenu = nil }
     if accessory?.tab == id { accessory = nil }
     if sheet?.tab == id { sheet = nil }
@@ -385,8 +501,17 @@ final class TabSet {
     }
     guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
     let hostID = tabs[index].host.id
+    if remember {
+      closedTabs.append(ClosedTerminal(tabs[index], index: index))
+      if closedTabs.count > Self.closedTabLimit,
+        let oldest = closedTabs.firstIndex(where: { $0.id != restoringTab }) {
+        closedTabs.remove(at: oldest)
+      }
+    }
     tabs[index].close()
+    if let error = tabs[index].history?.error { reportHistoryProblem(error) }
     tabs.remove(at: index)
+    persistHistory()
 
     // Stay on this host even when the last tab closes. Jumping to another
     // machine is a choice, not a side effect of tidying.
@@ -423,6 +548,27 @@ final class TabSet {
   func toggleInspector() {
     guard !zen else { return }
     inspector.toggle()
+  }
+
+  func toggleTabBar() {
+    if zen {
+      revealTabBar()
+    } else {
+      tabBarVisible.toggle()
+      if !tabBarVisible {
+        tabMenu = nil
+        accessory = nil
+      }
+    }
+  }
+
+  /// A popover needs a visible tab to anchor to, including when opened by
+  /// a command or a terminal link while the tab bar is hidden.
+  private func revealTabBar() {
+    #if os(macOS)
+      if zen { toggleZen() }
+      tabBarVisible = true
+    #endif
   }
 
   func openPalette(_ kind: Palette) {
