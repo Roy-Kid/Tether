@@ -53,12 +53,25 @@ extension FilesTab {
   func expand(_ entry: FileEntry) async {
     guard entry.kind == .directory else { return }
     expanded.insert(entry.path)
-    guard listings[entry.path] == nil else { return }
+    guard listings[entry.path] == nil, openingRequests[entry.path] == nil else { return }
+    let request = UUID()
+    let mine = generation
+    openingRequests[entry.path] = request
     opening.insert(entry.path)
-    defer { opening.remove(entry.path) }
+    defer {
+      if openingRequests[entry.path] == request {
+        openingRequests[entry.path] = nil
+        opening.remove(entry.path)
+      }
+    }
     do {
-      listings[entry.path] = FilesTab.sorted(try await source().list(entry.path))
+      let listed = try await source().list(entry.path)
+      guard mine == generation, openingRequests[entry.path] == request,
+        expanded.contains(entry.path), !Task.isCancelled else { return }
+      listings[entry.path] = FilesTab.sorted(listed)
     } catch {
+      guard mine == generation, openingRequests[entry.path] == request,
+        !Task.isCancelled else { return }
       expanded.remove(entry.path)
       problem = describe(error)
     }
@@ -142,6 +155,8 @@ extension FilesTab {
 
   /// Drops a folder, and everything open under it, from the tree.
   func forget(_ path: String) {
+    openingRequests = openingRequests.filter { key, _ in key != path && !key.hasPrefix(path + "/") }
+    opening = opening.filter { $0 != path && !$0.hasPrefix(path + "/") }
     expanded = expanded.filter { $0 != path && !$0.hasPrefix(path + "/") }
     listings = listings.filter { key, _ in key == directory || (key != path && !key.hasPrefix(path + "/")) }
   }

@@ -111,4 +111,34 @@ struct MetalRenderTests {
     let band = CGRect(x: 0, y: 0, width: metrics.cellWidth * 4, height: metrics.lineHeight)
     #expect(inked(decorated, band) > inked(plain, band) + Int(metrics.cellWidth) * 4)
   }
+  @Test("cached rows survive cursor updates and rebuild when text changes")
+  func cachedRowsAndCursor() throws {
+    guard let device = MTLCreateSystemDefaultDevice() else { return }
+    let view = TerminalMetalView(device: device)
+    let lines = [row("hello", style()), row("    ", style())]
+    func snapshot() throws -> MetalSnapshot {
+      try #require(view.snapshot(width: 120, height: 48, scale: scale))
+    }
+    view.present(frame: frame(lines), dirtyRows: nil, metrics: metrics, palette: .dark)
+    let original = try snapshot()
+    view.present(frame: frame(lines, cursor: .block), dirtyRows: [], metrics: metrics, palette: .dark)
+    let cursor = try snapshot()
+    #expect(cursor.bytes != original.bytes)
+    view.present(frame: frame(lines), dirtyRows: [], metrics: metrics, palette: .dark)
+    #expect(try snapshot().bytes == original.bytes)
+    let changed = [row("world", style()), lines[1]]
+    view.present(frame: frame(changed), dirtyRows: [0], metrics: metrics, palette: .dark)
+    #expect(try snapshot().bytes != original.bytes)
+    // Restyling invalidates cached geometry even with empty damage.
+    view.present(frame: frame(changed), dirtyRows: [], metrics: metrics, palette: .light)
+    let fresh = TerminalMetalView(device: device)
+    fresh.present(frame: frame(changed), dirtyRows: nil, metrics: metrics, palette: .light)
+    let reference = try #require(fresh.snapshot(width: 120, height: 48, scale: scale))
+    #expect(try snapshot().bytes == reference.bytes)
+    view.present(frame: frame([]), dirtyRows: [], metrics: metrics, palette: .light)
+    fresh.present(frame: frame([]), dirtyRows: nil, metrics: metrics, palette: .light)
+    let empty = try #require(fresh.snapshot(width: 120, height: 48, scale: scale))
+    #expect(try snapshot().bytes == empty.bytes, "a smaller grid must release old row geometry")
+  }
+
 }

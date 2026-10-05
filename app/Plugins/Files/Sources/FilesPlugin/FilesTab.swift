@@ -36,6 +36,7 @@ public final class FilesTab: TabAttachment {
   var expanded: Set<String> = []
   /// Folders whose contents are on their way.
   var opening: Set<String> = []
+  var openingRequests: [String: UUID] = [:]
   private(set) var history: [String] = []
   private(set) var loading = false
   /// The one line shown instead of a listing when something failed.
@@ -97,7 +98,7 @@ public final class FilesTab: TabAttachment {
   static let resolvedFor: TimeInterval = 3
   /// Bumped by every navigation, so a slow listing that finishes after a
   /// newer one does not put the browser back where it was.
-  private var generation = 0
+  private(set) var generation = 0
 
   init(
     tab: TabContext, cache: FileCache? = nil,
@@ -191,6 +192,8 @@ public final class FilesTab: TabAttachment {
     let old = session
     session = nil
     generation += 1
+    openingRequests.removeAll()
+    opening.removeAll()
     loading = false
     Task { await (try? await old?.value)?.close() }
     refresh()
@@ -200,6 +203,8 @@ public final class FilesTab: TabAttachment {
     restorationTask?.cancel()
     restorationTask = nil
     generation += 1
+    openingRequests.removeAll()
+    opening.removeAll()
     transfers.cancelAll()
     let old = session
     session = nil
@@ -293,6 +298,8 @@ public final class FilesTab: TabAttachment {
   /// the back stack unless `remember` is off (a refresh, or going back).
   func go(to path: String, remember: Bool = true) async {
     generation += 1
+    openingRequests.removeAll()
+    opening.removeAll()
     let mine = generation
     loading = true
     defer { if mine == generation { loading = false } }

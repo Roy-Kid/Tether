@@ -116,6 +116,10 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
   private var queue: MTLCommandQueue?
   private var atlas: GlyphAtlas?
   private var rowVertices: [Int: [Vertex]] = [:]
+  // Immutable while commands are in flight. Cursor-only updates reuse it.
+  private var screenBuffer: MTLBuffer?
+  private var screenVertexCount = 0
+  private var screenBufferDirty = true
   /// The scale the built rows' glyphs were rasterized at.
   private var builtScale: CGFloat = 0
   private let source = """
@@ -185,12 +189,18 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
     let restyled = metrics.cellWidth != self.metrics.cellWidth || metrics.lineHeight != self.metrics.lineHeight
       || palette != self.palette || contentScale != builtScale
       || screen?.columns != frame.columns || screen?.rows != frame.rows
-    if restyled { rowVertices.removeAll() }
+    if restyled {
+      rowVertices.removeAll()
+      screenBufferDirty = true
+    }
     screen = frame
     self.metrics = metrics
     self.palette = palette
     build(MetalMesh.rowsToBuild(dirty: dirtyRows, lines: frame.lines.count, built: Set(rowVertices.keys)))
-    rowVertices = rowVertices.filter { frame.lines.indices.contains($0.key) }
+    if rowVertices.keys.contains(where: { !frame.lines.indices.contains($0) }) {
+      rowVertices = rowVertices.filter { frame.lines.indices.contains($0.key) }
+      screenBufferDirty = true
+    }
     requestDraw()
   }
 
@@ -198,6 +208,7 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
   /// row built before it did, so then the whole screen is built once more.
   private func build(_ rows: [Int]) {
     guard let atlas, let screen else { return }
+    if !rows.isEmpty { screenBufferDirty = true }
     builtScale = contentScale
     atlas.allowsReset = true
     let generation = atlas.generation
@@ -213,6 +224,7 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
   private func rebuildAll() {
     guard let screen else { return }
     rowVertices.removeAll()
+    screenBufferDirty = true
     build(Array(screen.lines.indices))
     requestDraw()
   }
@@ -293,23 +305,34 @@ final class TerminalMetalView: MTKView, MTKViewDelegate {
     guard let command = queue.makeCommandBuffer(),
       let encoder = command.makeRenderCommandEncoder(descriptor: descriptor)
     else { return nil }
-    var vertices: [Vertex] = []
-    if let screen {
-      vertices.reserveCapacity(screen.lines.count * 6)
-      for index in screen.lines.indices {
-        vertices.append(contentsOf: rowVertices[index] ?? [])
+    if screenBufferDirty {
+      var vertices: [Vertex] = []
+      vertices.reserveCapacity(rowVertices.values.reduce(0) { $0 + $1.count })
+      if let screen {
+        for index in screen.lines.indices {
+          vertices.append(contentsOf: rowVertices[index] ?? [])
+        }
       }
-      vertices.append(contentsOf: cursorVertices(screen))
+      screenVertexCount = vertices.count
+      screenBuffer = vertices.isEmpty ? nil : device?.makeBuffer(
+        bytes: vertices, length: MemoryLayout<Vertex>.stride * vertices.count)
+      screenBufferDirty = !vertices.isEmpty && screenBuffer == nil
     }
-    if !vertices.isEmpty,
-      let buffer = device?.makeBuffer(bytes: vertices, length: MemoryLayout<Vertex>.stride * vertices.count)
-    {
-      var viewSize = SIMD2<Float>(max(points.x, 1), max(points.y, 1))
-      encoder.setRenderPipelineState(pipeline)
-      encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-      encoder.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-      encoder.setFragmentTexture(atlas.texture, index: 0)
-      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+    var viewSize = SIMD2<Float>(max(points.x, 1), max(points.y, 1))
+    encoder.setRenderPipelineState(pipeline)
+    encoder.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+    encoder.setFragmentTexture(atlas.texture, index: 0)
+    if let screenBuffer, screenVertexCount > 0 {
+      encoder.setVertexBuffer(screenBuffer, offset: 0, index: 0)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: screenVertexCount)
+    }
+    if let screen {
+      let cursor = cursorVertices(screen)
+      if !cursor.isEmpty {
+        // A cursor is six vertices, small enough for Metal's inline storage.
+        encoder.setVertexBytes(cursor, length: MemoryLayout<Vertex>.stride * cursor.count, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: cursor.count)
+      }
     }
     encoder.endEncoding()
     return command

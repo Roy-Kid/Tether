@@ -58,7 +58,7 @@ enum LastTabPreference {
     #if os(macOS)
       NSApplication.shared.terminate(nil)
     #else
-      UIApplication.shared.perform(Selector(("suspend")))
+      UIApplication.shared.perform(NSSelectorFromString("suspend"))
     #endif
   }
 }

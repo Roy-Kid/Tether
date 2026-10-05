@@ -125,6 +125,7 @@ struct WorkspaceTabBar: View {
       }
       .buttonStyle(ChromeButtonStyle())
       .help(subtitle.isEmpty ? title : "\(title) · \(subtitle)")
+      .accessibilityAddTraits(selected ? .isSelected : [])
       // The space is held whether or not the cross is drawn: a tab that
       // grew by 18pt under the pointer would push the strip along.
       Button {

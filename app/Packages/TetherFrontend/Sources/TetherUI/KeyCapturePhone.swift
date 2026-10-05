@@ -112,7 +112,7 @@
       let tap = UITapGestureRecognizer(target: self, action: #selector(takeFocus(_:)))
       tap.require(toFail: pan)
       addGestureRecognizer(tap)
-      let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled))
+      let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled(_:)))
       wheel.minimumNumberOfTouches = 2
       wheel.maximumNumberOfTouches = 2
       addGestureRecognizer(wheel)
@@ -493,19 +493,14 @@
         availableWidth,
       ])
       restyle()
+      registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: KeyBar, _: UITraitCollection) in
+        view.restyle()
+        view.invalidateIntrinsicContentSize()
+      }
     }
 
     override var intrinsicContentSize: CGSize {
       CGSize(width: UIView.noIntrinsicMetric, height: fittingHeight)
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-      super.traitCollectionDidChange(previousTraitCollection)
-      guard traitCollection.preferredContentSizeCategory
-        != previousTraitCollection?.preferredContentSizeCategory
-      else { return }
-      restyle()
-      invalidateIntrinsicContentSize()
     }
 
     private func restyle() {

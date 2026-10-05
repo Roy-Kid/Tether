@@ -300,7 +300,9 @@ extension HostStore {
       for step in steps {
         switch step {
         case .add(let entry):
-          guard var (profile, password) = added[entry.alias] else { continue }
+          guard let addedHost = added[entry.alias] else { continue }
+          var profile = addedHost.0
+          let password = addedHost.1
           profile.modified = when(entry)
           profile.unsupported = unsupported(entry)
           guard (try? profile.validate()) != nil else { continue }

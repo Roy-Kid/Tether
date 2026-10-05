@@ -212,7 +212,9 @@ final class AuthenticationCoordinator {
     guard !cancelled, !Task.isCancelled else { return nil }
     let ask = self.ask
     expired = false
-    let pending = Task { await ask(question) { [weak self] in self?.startDeadline() } }
+    let pending = Task { [weak self] in
+      await ask(question) { [weak self] in self?.startDeadline() }
+    }
     asking = pending
     defer {
       deadline?.cancel()

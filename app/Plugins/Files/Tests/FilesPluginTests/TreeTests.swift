@@ -138,4 +138,69 @@ struct TreeTests {
     #expect(shape(model) == ["notes.md"])
     #expect(model.expanded.isEmpty)
   }
+  @Test("a collapsed folder discards an in-flight listing")
+  func collapseDuringListing() async throws {
+    let source = StubSource(tree)
+    source.listDelay["/home/ada/src"] = .milliseconds(80)
+    let model = model(source)
+    await model.go(to: "/home/ada")
+    let folder = try #require(model.entry("/home/ada/src"))
+    let pending = Task { await model.expand(folder) }
+    while !model.opening.contains(folder.path) { await Task.yield() }
+    model.collapse(folder)
+    await pending.value
+    #expect(model.listings[folder.path] == nil)
+    #expect(model.opening.isEmpty)
+    #expect(!model.expanded.contains(folder.path))
+  }
+
+  @Test("an older expansion cannot clear the loading state of a reopened folder")
+  func reopenDuringListing() async throws {
+    let source = StubSource(tree)
+    source.listDelay["/home/ada/src"] = .milliseconds(80)
+    let model = model(source)
+    await model.go(to: "/home/ada")
+    let folder = try #require(model.entry("/home/ada/src"))
+    let first = Task { await model.expand(folder) }
+    while !model.opening.contains(folder.path) { await Task.yield() }
+    model.collapse(folder)
+    let second = Task { await model.expand(folder) }
+    while !model.opening.contains(folder.path) { await Task.yield() }
+    await first.value
+    await second.value
+    #expect(model.listings[folder.path]?.contains { $0.name == "main.rs" } == true)
+    #expect(model.expanded.contains(folder.path))
+    #expect(model.opening.isEmpty)
+  }
+
+  @Test("closing the browser discards pending folder results")
+  func closeDuringListing() async throws {
+    let source = StubSource(tree)
+    source.listDelay["/home/ada/src"] = .milliseconds(80)
+    let model = model(source)
+    await model.go(to: "/home/ada")
+    let folder = try #require(model.entry("/home/ada/src"))
+    let pending = Task { await model.expand(folder) }
+    while !model.opening.contains(folder.path) { await Task.yield() }
+    model.close()
+    await pending.value
+    #expect(model.listings[folder.path] == nil)
+    #expect(model.opening.isEmpty)
+  }
+
+  @Test("repeated expansion shares one pending listing")
+  func repeatedExpansion() async throws {
+    let source = StubSource(tree)
+    source.listDelay["/home/ada/src"] = .milliseconds(80)
+    let model = model(source)
+    await model.go(to: "/home/ada")
+    let folder = try #require(model.entry("/home/ada/src"))
+    let pending = Task { await model.expand(folder) }
+    while !model.opening.contains(folder.path) { await Task.yield() }
+    await model.expand(folder)
+    await pending.value
+    #expect(source.lists.filter { $0 == folder.path }.count == 1)
+    #expect(model.listings[folder.path] != nil)
+  }
+
 }

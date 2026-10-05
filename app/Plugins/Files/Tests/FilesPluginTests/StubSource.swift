@@ -15,6 +15,8 @@ final class StubSource: FileSource, @unchecked Sendable {
   private(set) var closed = false
   /// Every `stat`, in order. A name filter must not add to it.
   private var recordedStats: [String] = []
+  private var recordedLists: [String] = []
+  var lists: [String] { lock.withLock { recordedLists } }
   var stats: [String] { lock.withLock { recordedStats } }
   var homePath = "/home/ada"
   var isLocal = false
@@ -34,6 +36,7 @@ final class StubSource: FileSource, @unchecked Sendable {
   func home() async throws -> String { homePath }
 
   func list(_ directory: String) async throws -> [FileEntry] {
+    lock.withLock { recordedLists.append(directory) }
     if let delay = lock.withLock({ listDelay[directory] }) { try await Task.sleep(for: delay) }
     return try lock.withLock {
       guard files[directory] == .directory else { throw FileError.notFound(path: directory) }

@@ -13,6 +13,7 @@
     /// One dialog's window and ending. Its own, so an action handler that
     /// runs late — after its dialog was withdrawn and the next one shown —
     /// can only ever end the dialog it belongs to.
+    @MainActor
     private final class Presentation {
       var window: UIWindow?
       /// The app's window, handed the keyboard back when the dialog goes.

@@ -104,7 +104,7 @@ enum QuickLook {
   }
 #else
   @MainActor
-  private final class PhoneViewer: NSObject, @preconcurrency QLPreviewControllerDataSource {
+  private final class PhoneViewer: NSObject, QLPreviewControllerDataSource {
     static let shared = PhoneViewer()
     private var urls: [URL] = []
 

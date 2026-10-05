@@ -372,21 +372,23 @@ private struct FileRow: View {
     /// gets the chevron's width, so names line up under their folder.
     @ViewBuilder private var disclosure: some View {
       if entry.kind == .directory {
-        Group {
-          if model.opening.contains(entry.path) {
-            ProgressView().controlSize(.mini)
-          } else {
-            Image(systemName: "chevron.right")
-              .font(UIStyle.accessory)
-              .foregroundStyle(Theme.subtle)
-              .rotationEffect(.degrees(model.isExpanded(entry) ? 90 : 0))
+        Button { model.toggle(entry) } label: {
+          Group {
+            if model.opening.contains(entry.path) {
+              ProgressView().controlSize(.mini).accessibilityLabel("Loading files")
+            } else {
+              Image(systemName: "chevron.right")
+                .font(UIStyle.accessory)
+                .foregroundStyle(Theme.subtle)
+                .rotationEffect(.degrees(model.isExpanded(entry) ? 90 : 0))
+            }
           }
+          .frame(width: FileRow.chevron, height: UIStyle.rowHeight)
+          .contentShape(Rectangle())
         }
-        .frame(width: FileRow.chevron, height: UIStyle.rowHeight)
-        .contentShape(Rectangle())
-        .onTapGesture { model.toggle(entry) }
-        .accessibilityLabel(model.isExpanded(entry) ? "Collapse" : "Expand")
-        .accessibilityAddTraits(.isButton)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(model.isExpanded(entry) ? "Collapse" : "Expand") \(Names.display(entry.name))")
+        .accessibilityValue(model.opening.contains(entry.path) ? "Loading" : (model.isExpanded(entry) ? "Expanded" : "Collapsed"))
       } else {
         Color.clear.frame(width: FileRow.chevron, height: UIStyle.Mark.hairline)
       }
@@ -618,7 +620,7 @@ private func findChord(_ press: KeyPress) -> Bool {
             .allowsHitTesting(!model.loading)
             .accessibilityHidden(model.loading)
           if model.loading {
-            ProgressView().controlSize(.mini)
+            ProgressView().controlSize(.mini).accessibilityLabel("Loading files")
           }
         }
         .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
@@ -953,7 +955,9 @@ private struct Confirmations: ViewModifier {
       }
     }
     if let conflict = model.conflicts.first {
-      let settle = { (choice: Conflict.Choice) in Task { await model.resolve(conflict, choice) } }
+      let settle: (Conflict.Choice) -> Void = { choice in
+        Task { await model.resolve(conflict, choice) }
+      }
       return Dialog(
         title: "Replace “\(Names.display(conflict.name))”?",
         actions: [

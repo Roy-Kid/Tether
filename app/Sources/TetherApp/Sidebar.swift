@@ -243,6 +243,7 @@ private struct SidebarActions: ViewModifier {
 struct SyncButton: View {
   let store: HostStore
   @State private var failure: SyncFailure?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     Button {
@@ -252,11 +253,12 @@ struct SyncButton: View {
       }
     } label: {
       Label("Sync", systemImage: "arrow.triangle.2.circlepath")
-        .symbolEffect(.rotate, options: .repeating, isActive: store.syncing)
+        .symbolEffect(.rotate, options: .repeating, isActive: store.syncing && !reduceMotion)
     }
     .buttonStyle(.iconOnly)
     .disabled(store.syncing)
-    .help("Sync")
+    .help(store.syncing ? "Syncing" : "Sync")
+    .accessibilityValue(store.syncing ? "Syncing" : "Idle")
     .dialog(for: failure) { shown in
       Dialog.notice("Could not sync", message: shown.message) { failure = nil }
     }
