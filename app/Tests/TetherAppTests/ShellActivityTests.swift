@@ -57,7 +57,7 @@ struct ShellActivityTests {
     let connection = try #require(session.connection)
     let tty = try #require(session.terminalName)
 
-    func waitFor(_ expected: ShellActivity) async throws {
+    func waitFor(_ expected: ShellActivity, phase: String) async throws {
       let deadline = ContinuousClock.now.advanced(by: .seconds(10))
       var result: ShellActivity = .unknown
       repeat {
@@ -66,20 +66,31 @@ struct ShellActivityTests {
         if result == expected { return }
         try await Task.sleep(for: .milliseconds(50))
       } while ContinuousClock.now < deadline
-      #expect(result == expected)
+      try #require(result == expected, "\(phase): \(result)")
     }
 
-    try await waitFor(.idle)
-    try session.send(.key(.text("sleep 30")))
+    try await waitFor(.idle, phase: "initial prompt")
+    // A process can appear in ps before the shell gives its group the tty.
+    // Wait for output from that foreground group before sending SIGINT.
+    let ready = "TETHER-FOREGROUND-READY"
+    try session.send(.key(.text("sh -c 'printf \"%s\\n\" \(ready); exec sleep 30'")))
     try session.send(.key(.enter))
-    try await waitFor(.running(["sleep"]))
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    func foregroundReady() -> Bool {
+      session.frame().lines.contains { $0.runs.map(\.text).joined().trimmingCharacters(in: .whitespaces) == ready }
+    }
+    while !foregroundReady(), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    try #require(foregroundReady(), "foreground job did not acquire the terminal")
+    try await waitFor(.running(["sleep"]), phase: "foreground job")
     try session.send(.key(.text("c"), KeyModifiers(control: true)))
-    try await waitFor(.idle)
+    try await waitFor(.idle, phase: "interrupted foreground job")
     try session.send(.key(.text("sleep 30 &")))
     try session.send(.key(.enter))
-    try await waitFor(.running(["sleep"]))
+    try await waitFor(.running(["sleep"]), phase: "background job")
     try session.send(.key(.text("kill $!; wait")))
     try session.send(.key(.enter))
-    try await waitFor(.idle)
+    try await waitFor(.idle, phase: "reaped background job")
   }
 }

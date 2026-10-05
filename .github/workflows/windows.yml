@@ -20,7 +20,7 @@ jobs:
       - name: Install C# binding generator
         run: cargo install --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
       - run: ./scripts/build-windows.ps1 -DebugBuild
-      - run: dotnet build app-windows/TetherApp.Windows.csproj -c Debug
+      - run: dotnet build app-windows/TetherApp.Windows.csproj -c Debug -p:Platform=x64
       - name: Windows regressions
         shell: pwsh
         run: |
