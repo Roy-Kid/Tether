@@ -603,7 +603,7 @@ public sealed partial class MainWindow : Window
         if (_preview) { HostName.Text = host.Label; return; }
 #endif
         if (_workspace.Active is not { } source) return;
-        var note = source.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(source.Model);
+        var note = await CloseNotesAsync(source);
         if (note is not null && await Alerts.ContentAsync("Change Host?", note, "Connect", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
         var replacement = new TerminalPane();
         replacement.Model.SetPalette(_workspace.CurrentPalette);
@@ -737,11 +737,18 @@ public sealed partial class MainWindow : Window
         if (target is not null) { _workspace.Focus(target); target.Surface.FocusTerminal(); }
     }
 
+    private static async Task<string?> CloseNotesAsync(TerminalPane pane)
+    {
+        var notes = pane.Attachments.Select(a => a.CloseNote).Where(n => n is not null).Cast<string>().ToList();
+        if (await ShellActivity.CloseNoteAsync(pane.Model) is { } shell) notes.Add(shell);
+        return notes.Count == 0 ? null : string.Join("\n", notes);
+    }
+
     private async Task CloseSelectedAsync()
     {
         if (_workspace.Active is not { } pane) return;
         if (_workspace.ActiveGroup?.Layout.Leaves.Count() == 1) { await CloseTabAsync(_workspace.ActiveGroup); return; }
-        var note = pane.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(pane.Model);
+        var note = await CloseNotesAsync(pane);
         if (note is not null && await Alerts.ContentAsync("Close Pane?", note, "Close", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
         await _workspace.ClosePaneAsync(pane);
         _workspace.Active?.Surface.FocusTerminal();
@@ -755,9 +762,9 @@ public sealed partial class MainWindow : Window
         try
         {
             var notes = new List<string>();
-            foreach (var pane in tab.Panes)
+            foreach (var pane in tab.Panes.ToArray())
             {
-                var consequence = pane.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(pane.Model);
+                var consequence = await CloseNotesAsync(pane);
                 if (consequence is not null) notes.Add(pane.Title + ": " + consequence);
             }
             var note = notes.Count == 0 ? null : string.Join("\n", notes);
@@ -771,7 +778,7 @@ public sealed partial class MainWindow : Window
                 }
                 finally { _connecting = false; }
             }
-        await _workspace.CloseAsync(index);
+        await _workspace.CloseAsync(_workspace.Tabs.ToList().IndexOf(tab));
         if (_workspace.Tabs.Count == 0) await _workspace.AddAsync();
         }
         finally { _closingTabs.Remove(tab); }

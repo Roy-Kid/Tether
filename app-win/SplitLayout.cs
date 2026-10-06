@@ -19,6 +19,9 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
         ratio = double.IsFinite(ratio) ? Math.Clamp(ratio, .0001, .9999) : .5;
         return before ? new(null, vertical, ratio, Leaf(pane), this) : new(null, vertical, ratio, this, Leaf(pane));
     }
+    public (double Width, double Height) MinimumSize => Pane is not null ? (160, 100) : Vertical
+        ? (Math.Max(First!.MinimumSize.Width, Second!.MinimumSize.Width), First.MinimumSize.Height + 5 + Second.MinimumSize.Height)
+        : (First!.MinimumSize.Width + 5 + Second!.MinimumSize.Width, Math.Max(First.MinimumSize.Height, Second.MinimumSize.Height));
     public bool IsValid(IReadOnlySet<Guid> panes) => Validate(panes, new HashSet<Guid>()) && Leaves.Count() == panes.Count;
     private bool Validate(IReadOnlySet<Guid> panes, HashSet<Guid> seen) => Pane is { } id
         ? First is null && Second is null && panes.Contains(id) && seen.Add(id)

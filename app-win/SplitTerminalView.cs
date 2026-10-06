@@ -61,8 +61,10 @@ public sealed class SplitTerminalView : Grid
         {
             var extent = (node.Vertical ? grid.ActualHeight : grid.ActualWidth) - 5;
             if (extent <= 0) return;
-            var minimum = Math.Min(.5, (node.Vertical ? 100 : 160) / extent);
-            current = Math.Clamp(current + (node.Vertical ? e.VerticalChange : e.HorizontalChange) / extent, minimum, 1 - minimum);
+            var minimumFirst = node.Vertical ? node.First!.MinimumSize.Height : node.First!.MinimumSize.Width;
+            var minimumSecond = node.Vertical ? node.Second!.MinimumSize.Height : node.Second!.MinimumSize.Width;
+            if (extent < minimumFirst + minimumSecond) return;
+            current = Math.Clamp(current + (node.Vertical ? e.VerticalChange : e.HorizontalChange) / extent, minimumFirst / extent, 1 - minimumSecond / extent);
             if (node.Vertical)
             {
                 grid.RowDefinitions[0].Height = new GridLength(current, GridUnitType.Star);

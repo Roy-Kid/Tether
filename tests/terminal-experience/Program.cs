@@ -8,6 +8,7 @@ var secondPane = Guid.NewGuid();
 var thirdPane = Guid.NewGuid();
 var splitTree = SplitLayout.Leaf(firstPane).Split(firstPane, secondPane, false).Split(secondPane, thirdPane, true);
 Check(splitTree.Leaves.SequenceEqual(new[] { firstPane, secondPane, thirdPane }), "recursive split order");
+Check(splitTree.MinimumSize == (325d, 205d), "nested branches reserve all pane minimums");
 Check(splitTree.IsValid(new HashSet<Guid> { firstPane, secondPane, thirdPane }), "saved layout references exactly its panes");
 Check(!splitTree.IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject missing saved pane");
 Check(!new SplitLayout(null, Ratio: double.NaN, First: SplitLayout.Leaf(firstPane), Second: SplitLayout.Leaf(secondPane)).IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject non-finite split ratio");

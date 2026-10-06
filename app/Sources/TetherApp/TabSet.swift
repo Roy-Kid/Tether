@@ -58,6 +58,7 @@ final class TabSet {
   var terminalWorkspaces: [UUID: TerminalWorkspace] = [:]
   var suppressPersistence = false
   var preparingHistoryIDs: Set<UUID> = []
+  var splitInProgress = false
   var pendingSplit: (pane: UUID, vertical: Bool)?
   var visiblePaneIDs: Set<UUID> {
     if let workspace = currentWorkspace { return Set(workspace.maximized ? [workspace.focused] : workspace.layout.leaves) }
@@ -75,7 +76,8 @@ final class TabSet {
     persistHistory()
   }
   func prepareSplit(_ vertical: Bool) {
-    guard let current, pendingSplit == nil else { return }
+    guard let current, pendingSplit == nil, !splitInProgress else { return }
+    splitInProgress = true
     pendingSplit = (current.id, vertical)
     intent = .splitTerminal(vertical)
   }
@@ -473,7 +475,7 @@ final class TabSet {
   }
 
   func canSplit(vertical: Bool) -> Bool {
-    guard pendingSplit == nil, let workspace = currentWorkspace, let frame = workspace.paneFrames[workspace.focused] else { return false }
+    guard pendingSplit == nil, !splitInProgress, let workspace = currentWorkspace, let frame = workspace.paneFrames[workspace.focused] else { return false }
     return vertical ? frame.height >= 205 : frame.width >= 325
   }
   func movePaneFocus(dx: Double, dy: Double) {

@@ -10,6 +10,7 @@ struct TerminalLayoutTests {
     let layout = TerminalLayout.pane(a).splitting(a, adding: b, vertical: false)
       .splitting(b, adding: c, vertical: true)
     #expect(layout.leaves == [a, b, c])
+    #expect(layout.minimumSize == CGSize(width: 321, height: 201))
     #expect(layout.isValid(panes: [a, b, c]))
     #expect(!layout.isValid(panes: [a, b]))
     #expect(!TerminalLayout.split(vertical: false, ratio: .nan, first: .pane(a), second: .pane(b)).isValid(panes: [a, b]))

@@ -105,8 +105,9 @@ public sealed class Workspace : IAsyncDisposable
     private int _active;
     private readonly SessionHistoryStore _historyStore = new();
     private readonly List<ClosedTerminal> _closed;
+    private bool _restoring;
     public Workspace() => _closed = _historyStore.Load().ToList();
-    public bool CanRestore => _closed.Count > 0;
+    public bool CanRestore => _closed.Count > 0 && !_restoring;
     public string? HistoryProblem => _historyStore.Problem ?? AllPanes.Select(t => t.HistoryProblem).FirstOrDefault(p => p is not null);
     private ClosedTerminal RecordPane(TerminalPane tab, int index) => new(tab.Id, tab.Title, tab.Model.LocalProfile,
         tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost), tab.Model.WslDistribution);
@@ -124,6 +125,9 @@ public sealed class Workspace : IAsyncDisposable
     public async Task<(Tab Tab, HostEntry? Host)?> RestoreAsync(Func<TerminalPane, HostEntry, Task<bool>>? connect = null)
     {
         if (!CanRestore) return null;
+        _restoring = true;
+        try
+        {
         var record = _closed[^1];
         var records = record.Panes ?? [record];
         var prepared = new List<TerminalPane>();
@@ -177,9 +181,11 @@ public sealed class Workspace : IAsyncDisposable
             _active = _tabs.IndexOf(group);
         }
         foreach (var pane in prepared) pane.Model.SessionChanged += NotifySessionChanged;
-        _closed.RemoveAt(_closed.Count - 1);
+        _closed.Remove(record);
         Persist(); Changed?.Invoke();
         return (group, null);
+        }
+        finally { _restoring = false; Changed?.Invoke(); }
     }
 
     public IReadOnlyList<Tab> Tabs => _tabs;

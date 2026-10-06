@@ -20,8 +20,7 @@ public sealed partial class MainWindow
             var notes = new List<string>();
             foreach (var tab in _workspace.AllPanes.ToArray())
             {
-                var note = tab.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null)
-                    ?? await ShellActivity.CloseNoteAsync(tab.Model);
+                var note = await CloseNotesAsync(tab);
                 if (note is not null) notes.Add(tab.Title + ": " + note);
             }
             if (notes.Count > 0 && await Alerts.ContentAsync("Close Window?", string.Join("\n", notes), "Close", null,

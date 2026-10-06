@@ -13,6 +13,15 @@ indirect enum TerminalLayout: Codable, Equatable {
     }
   }
 
+  var minimumSize: CGSize {
+    switch self {
+    case .pane: return CGSize(width: 160, height: 100)
+    case .split(let vertical, _, let a, let b):
+      return vertical ? CGSize(width: max(a.minimumSize.width, b.minimumSize.width), height: a.minimumSize.height + 1 + b.minimumSize.height)
+        : CGSize(width: a.minimumSize.width + 1 + b.minimumSize.width, height: max(a.minimumSize.height, b.minimumSize.height))
+    }
+  }
+
   func isValid(panes: Set<UUID>) -> Bool {
     func valid(_ node: Self) -> Bool {
       switch node {

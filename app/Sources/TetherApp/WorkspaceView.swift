@@ -270,8 +270,11 @@ struct RootView: View {
   }
 
   private func splitTerminal(_ vertical: Bool) async {
-    guard let source = tabs.current, let groupID = tabs.workspaceID(for: source.id),
-      let workspace = tabs.terminalWorkspaces[groupID] else { tabs.pendingSplit = nil; return }
+    let sourceID = tabs.pendingSplit?.pane ?? tabs.current?.id
+    tabs.pendingSplit = nil
+    defer { tabs.splitInProgress = false }
+    guard let source = tabs.tabs.first(where: { $0.id == sourceID }), let groupID = tabs.workspaceID(for: source.id),
+      let workspace = tabs.terminalWorkspaces[groupID] else { return }
     // Commit the tree only after a new independent shell is ready.
     do {
       let pane = try await preparedSession(host: source.host, name: "Terminal", directory: source.workingDirectory)

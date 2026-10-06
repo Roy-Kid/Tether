@@ -19,6 +19,7 @@ struct TerminalWorkspaceView: NSViewRepresentable {
     var tabs: TabSet?
     var hosts: [UUID: PaneHost] = [:]
     var splits: [ObjectIdentifier: [UUID]] = [:]
+    var minimums: [ObjectIdentifier: (CGFloat, CGFloat)] = [:]
     var shape = ""
     var applying = false
     weak var container: NSView?
@@ -45,6 +46,7 @@ struct TerminalWorkspaceView: NSViewRepresentable {
         hosts.values.forEach { $0.removeFromSuperview() }
         view.subviews.forEach { $0.removeFromSuperview() }
         splits.removeAll()
+        minimums.removeAll()
         let root = build(layout)
         root.frame = view.bounds
         root.autoresizingMask = [.width, .height]
@@ -94,17 +96,21 @@ struct TerminalWorkspaceView: NSViewRepresentable {
         split.addArrangedSubview(build(b))
         split.delegate = self
         splits[ObjectIdentifier(split)] = node.leaves
+        minimums[ObjectIdentifier(split)] = vertical ? (a.minimumSize.height, b.minimumSize.height) : (a.minimumSize.width, b.minimumSize.width)
         return split
       }
     }
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat {
-      min((splitView.isVertical ? splitView.bounds.width : splitView.bounds.height) / 2, splitView.isVertical ? 160 : 100)
+      let extent = (splitView.isVertical ? splitView.bounds.width : splitView.bounds.height) - splitView.dividerThickness
+      let minimum = minimums[ObjectIdentifier(splitView)] ?? (160, 160)
+      return extent >= minimum.0 + minimum.1 ? minimum.0 : max(0, extent / 2)
     }
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat,
                    ofSubviewAt dividerIndex: Int) -> CGFloat {
-      let extent = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
-      return max(extent / 2, extent - (splitView.isVertical ? 160 : 100))
+      let extent = (splitView.isVertical ? splitView.bounds.width : splitView.bounds.height) - splitView.dividerThickness
+      let minimum = minimums[ObjectIdentifier(splitView)] ?? (160, 160)
+      return extent >= minimum.0 + minimum.1 ? extent - minimum.1 : max(0, extent / 2)
     }
     func splitViewDidResizeSubviews(_ notification: Notification) {
       guard !applying, let split = notification.object as? NSSplitView,
