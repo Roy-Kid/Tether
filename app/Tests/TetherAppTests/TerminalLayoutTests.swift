@@ -5,6 +5,7 @@ import AppKit
 import SwiftUI
 #endif
 @testable import TetherApp
+import struct TetherApp.Host
 
 @Suite("Native terminal layouts")
 struct TerminalLayoutTests {
@@ -108,6 +109,35 @@ struct TerminalLayoutTests {
     #expect(coordinator.hosts[a.id] === first)
     #expect(coordinator.hosts[b.id] === second)
     #expect(root.subviews.first is NSSplitView)
+  }
+
+  @MainActor @Test("mixed host restoration validates every pane before changing the workspace")
+  func mixedRestoration() throws {
+    let set = TabSet()
+    let remote = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
+    func pane(_ host: Host) -> SessionTab { SessionTab(preview: host, known: KnownHosts(), name: host.label, live: false) }
+    let a = pane(.local), b = pane(remote)
+    set.adopt(a); set.pendingSplit = (a.id, false); set.adopt(b)
+    let workspace = try #require(set.currentWorkspace)
+    let id = workspace.id
+    set.closeWorkspace(try #require(set.selected))
+    set.requestRestoreTab()
+    let record = try #require(set.restoration(for: try #require(set.restoringTab)))
+    var changed = remote
+    changed.accountScope = "another-account"
+    let invalid = [pane(.local), pane(changed)]
+    #expect(!set.commitRestoration(record, panes: invalid))
+    #expect(set.tabs.isEmpty)
+    #expect(set.closedTabs.count == 1)
+    invalid.forEach { $0.close() }
+    let restored = [pane(.local), pane(remote)]
+    #expect(set.commitRestoration(record, panes: restored))
+    #expect(set.currentWorkspace?.id == id)
+    #expect(set.currentWorkspace?.host == .local)
+    #expect(set.current?.host == remote)
+    #expect(set.visibleTabs.count == 1)
+    #expect(set.currentWorkspace?.layout.leaves == restored.map(\.id))
+    set.closeAll()
   }
 
   @MainActor @Test("restoring a closed root pane preserves its side and stable workspace identity")

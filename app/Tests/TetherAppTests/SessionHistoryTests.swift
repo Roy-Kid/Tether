@@ -37,6 +37,27 @@ struct SessionHistoryTests {
     #expect(second.historyProblem == nil)
   }
 
+  @Test("version one single-terminal history restores into a single-leaf workspace")
+  func legacyManifest() throws {
+    let directory = temporaryFile("legacy-history")
+    defer { removeDirectory(of: directory) }
+    let store = SessionHistoryStore(directory: directory)
+    let original = tab("Legacy")
+    let record = ClosedTerminal(original, index: 0)
+    let manifest = SessionHistoryStore.Manifest(version: 1, closed: [record], open: [])
+    try JSONEncoder().encode(manifest).write(to: directory.appending(path: "tabs.json"))
+    let tabs = TabSet(historyStore: store)
+    #expect(tabs.tabs.isEmpty)
+    tabs.requestRestoreTab()
+    let restored = tab("Legacy")
+    #expect(tabs.completeRestore(record.id, with: restored))
+    #if os(macOS)
+      #expect(tabs.currentWorkspace?.layout == .pane(restored.id))
+    #endif
+    #expect(tabs.current?.id == restored.id)
+    tabs.closeAll()
+  }
+
   @Test("eviction deletes the oldest archive and keeps open tabs")
   func eviction() throws {
     let directory = temporaryFile("history")

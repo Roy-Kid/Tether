@@ -81,6 +81,17 @@ try
     Check(!saved.Contains("Password") && !saved.Contains("PrivateKey"), "manifest contains no credential fields");
     var recovered = new SessionHistoryStore(temporary).Load();
     Check(recovered.Count == 20 && recovered[^1].Id == open.Id, "relaunch recovers open tabs and retains latest twenty");
+    File.WriteAllText(Path.Combine(temporary, "tabs.json"), JsonSerializer.Serialize(new { Version = 1, Open = new[] { open }, Closed = Array.Empty<ClosedTerminal>() }));
+    var legacy = new SessionHistoryStore(temporary).Load();
+    Check(legacy.Count == 1 && legacy[0].Id == open.Id && legacy[0].Layout is null, "version one single-pane metadata migrates without reconnecting");
+    var panes = new[] { open with { Id = firstPane }, open with { Id = secondPane, HostAlias = "lab", Target = "lab.example" }, open with { Id = thirdPane, WslDistribution = "Ubuntu" } };
+    foreach (var pane in panes) Directory.CreateDirectory(Path.Combine(temporary, pane.Id.ToString()));
+    var layoutStore = new SessionHistoryStore(temporary);
+    layoutStore.Load();
+    layoutStore.Save([open with { Layout = splitTree, Panes = panes, FocusedPane = secondPane }], []);
+    var mixed = new SessionHistoryStore(temporary).Load().Single();
+    Check(mixed.Layout == splitTree && mixed.FocusedPane == secondPane && mixed.Panes!.Select(p => p.Id).SequenceEqual(splitTree.Leaves), "mixed local SSH and WSL metadata restores with its focused pane");
+    Check(panes.All(p => Directory.Exists(Path.Combine(temporary, p.Id.ToString()))), "all nested pane history archives are retained");
     File.WriteAllText(Path.Combine(temporary, "tabs.json"), "broken");
     var damaged = new SessionHistoryStore(temporary);
     Check(damaged.Load().Count == 0 && damaged.Problem is not null, "corruption is reported");
