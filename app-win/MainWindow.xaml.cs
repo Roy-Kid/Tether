@@ -16,6 +16,7 @@ public sealed partial class MainWindow : Window
     private bool _refreshingTabs;
     private bool _revealPending;
     private bool _connecting;
+    private bool _splitting;
     private readonly HashSet<TerminalPane> _wiredPanes = [];
     private readonly Dictionary<Tab, SplitTerminalView> _splitViews = [];
     private Window? _hostPicker;
@@ -709,13 +710,17 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSplitButtons()
     {
-        SplitRightButton.IsEnabled = _workspace.Active?.Surface.ActualWidth >= 325;
-        SplitDownButton.IsEnabled = _workspace.Active?.Surface.ActualHeight >= 205;
+        SplitRightButton.IsEnabled = !_splitting && _workspace.Active?.Surface.ActualWidth >= 325;
+        SplitDownButton.IsEnabled = !_splitting && _workspace.Active?.Surface.ActualHeight >= 205;
     }
 
     private async Task SplitSelectedAsync(bool vertical)
     {
-        if (_workspace.Active is not { } source || (vertical ? source.Surface.ActualHeight < 205 : source.Surface.ActualWidth < 325)) return;
+        if (_splitting || _connecting || _workspace.Active is not { } source || (vertical ? source.Surface.ActualHeight < 205 : source.Surface.ActualWidth < 325)) return;
+        _splitting = true;
+        UpdateSplitButtons();
+        try
+        {
         var pane = await _workspace.SplitAsync(vertical);
         if (pane is null) return;
         if (source.Model.RemoteHost is { } host)
@@ -724,6 +729,8 @@ public sealed partial class MainWindow : Window
             if (!pane.Model.IsLive) { await _workspace.ClosePaneAsync(pane, remember: false); _workspace.Focus(source); return; }
         }
         pane.Surface.FocusTerminal();
+        }
+        finally { _splitting = false; UpdateSplitButtons(); }
     }
     private void FocusPane(int dx, int dy)
     {

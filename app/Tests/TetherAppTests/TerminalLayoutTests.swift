@@ -89,6 +89,13 @@ struct TerminalLayoutTests {
     split.setPosition(200, ofDividerAt: 0)
     coordinator.update(root, workspace: workspace, tabs: set) { _ in AnyView(Color.clear) }
     #expect(root.subviews.first === split)
+    let ratio = try #require((split as? TerminalWorkspaceView.ProportionalSplit)?.initialRatio)
+    root.setFrameSize(NSSize(width: 240, height: 180))
+    root.layoutSubtreeIfNeeded()
+    #expect(abs(first.frame.width / (split.bounds.width - split.dividerThickness) - ratio) < 0.001)
+    root.setFrameSize(NSSize(width: 640, height: 480))
+    root.layoutSubtreeIfNeeded()
+    #expect(abs(first.frame.width / (split.bounds.width - split.dividerThickness) - ratio) < 0.001)
     #expect(coordinator.hosts[a.id] === first)
     #expect(coordinator.hosts[b.id] === second)
     workspace.maximized = true

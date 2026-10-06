@@ -113,12 +113,13 @@ struct TerminalWorkspaceView: NSViewRepresentable {
       return extent >= minimum.0 + minimum.1 ? extent - minimum.1 : max(0, extent / 2)
     }
     func splitViewDidResizeSubviews(_ notification: Notification) {
-      guard !applying, let split = notification.object as? NSSplitView,
+      guard !applying, let split = notification.object as? ProportionalSplit, !split.resizing,
         let ids = splits[ObjectIdentifier(split)], let workspace, !workspace.maximized,
         let first = split.arrangedSubviews.first else { return }
       let extent = (split.isVertical ? split.bounds.width : split.bounds.height) - split.dividerThickness
       guard extent > 0 else { return }
       let ratio = (split.isVertical ? first.frame.width : first.frame.height) / extent
+      split.initialRatio = ratio
       workspace.layout = workspace.layout.replacing(ids, ratio: ratio)
       tabs?.persistHistory()
       if let root = container {
@@ -130,12 +131,26 @@ struct TerminalWorkspaceView: NSViewRepresentable {
   @MainActor final class ProportionalSplit: NSSplitView {
     var initialRatio = 0.5
     var initialized = false
+    var resizing = false
+    override func resizeSubviews(withOldSize oldSize: NSSize) { applyRatio() }
     override func layout() {
       super.layout()
-      let extent = (isVertical ? bounds.width : bounds.height) - dividerThickness
-      if !initialized && extent > 0 {
-        initialized = true
-        setPosition(extent * initialRatio, ofDividerAt: 0)
+      if !initialized { applyRatio() }
+    }
+    private func applyRatio() {
+      guard arrangedSubviews.count == 2 else { return }
+      let extent = max(0, (isVertical ? bounds.width : bounds.height) - dividerThickness)
+      guard extent > 0 else { return }
+      resizing = true
+      defer { resizing = false }
+      initialized = true
+      let first = extent * initialRatio
+      if isVertical {
+        arrangedSubviews[0].frame = CGRect(x: 0, y: 0, width: first, height: bounds.height)
+        arrangedSubviews[1].frame = CGRect(x: first + dividerThickness, y: 0, width: extent - first, height: bounds.height)
+      } else {
+        arrangedSubviews[0].frame = CGRect(x: 0, y: 0, width: bounds.width, height: first)
+        arrangedSubviews[1].frame = CGRect(x: 0, y: first + dividerThickness, width: bounds.width, height: extent - first)
       }
     }
   }
