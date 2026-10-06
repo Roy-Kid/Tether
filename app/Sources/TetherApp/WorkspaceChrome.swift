@@ -68,7 +68,7 @@ struct WorkspaceTabBar: View {
           : AnyLayout(HStackLayout(spacing: 0))
         stack {
           ForEach(tabs.visibleTabs) { tab in
-            tabChip(id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil)
+            tabChip(id: tab.id, title: tabs.terminalWorkspaces[tab.id]?.name ?? tab.title, subtitle: tab.subtitle, symbol: nil)
               .id(tab.id)
           }
           ForEach(tabs.visibleExtensions) { entry in

@@ -9,6 +9,16 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
     public SplitLayout Split(Guid id, Guid added, bool vertical) => Pane == id
         ? new(null, vertical, .5, this, Leaf(added))
         : Pane is not null ? this : this with { First = First!.Split(id, added, vertical), Second = Second!.Split(id, added, vertical) };
+    public SplitLayout RestoreBeside(IReadOnlySet<Guid> neighbors, Guid pane, bool vertical, bool before, double ratio)
+    {
+        if (Pane is null)
+        {
+            if (neighbors.All(First!.Leaves.Contains)) return this with { First = First.RestoreBeside(neighbors, pane, vertical, before, ratio) };
+            if (neighbors.All(Second!.Leaves.Contains)) return this with { Second = Second.RestoreBeside(neighbors, pane, vertical, before, ratio) };
+        }
+        ratio = double.IsFinite(ratio) ? Math.Clamp(ratio, .0001, .9999) : .5;
+        return before ? new(null, vertical, ratio, Leaf(pane), this) : new(null, vertical, ratio, this, Leaf(pane));
+    }
     public bool IsValid(IReadOnlySet<Guid> panes) => Validate(panes, new HashSet<Guid>()) && Leaves.Count() == panes.Count;
     private bool Validate(IReadOnlySet<Guid> panes, HashSet<Guid> seen) => Pane is { } id
         ? First is null && Second is null && panes.Contains(id) && seen.Add(id)

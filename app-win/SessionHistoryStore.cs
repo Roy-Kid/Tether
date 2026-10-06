@@ -6,7 +6,7 @@ namespace TetherApp;
 public sealed record ClosedTerminal(Guid Id, string Title, string Profile, string? Directory,
     string? HostAlias, string? Target, int Index, string? Inspector, Dictionary<string, string>? Attachments = null, string? Configuration = null, string? WslDistribution = null,
     SplitLayout? Layout = null, ClosedTerminal[]? Panes = null, Guid? FocusedPane = null,
-    Guid? ParentId = null, Guid? Neighbor = null, bool SplitVertical = false);
+    Guid? ParentId = null, Guid? Neighbor = null, bool SplitVertical = false, bool SplitBefore = false, double SplitRatio = .5, Guid[]? NeighborPanes = null);
 
 public sealed class SessionHistoryStore
 {

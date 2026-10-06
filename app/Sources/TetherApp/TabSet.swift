@@ -59,6 +59,10 @@ final class TabSet {
   var suppressPersistence = false
   var preparingHistoryIDs: Set<UUID> = []
   var pendingSplit: (pane: UUID, vertical: Bool)?
+  var visiblePaneIDs: Set<UUID> {
+    if let workspace = currentWorkspace { return Set(workspace.maximized ? [workspace.focused] : workspace.layout.leaves) }
+    return Set([selected].compactMap { $0 })
+  }
   var currentWorkspace: TerminalWorkspace? { selected.flatMap { terminalWorkspaces[$0] } }
   func workspaceID(for pane: UUID) -> UUID? { terminalWorkspaces.first { $0.value.layout.leaves.contains(pane) }?.key }
   func focusPane(_ id: UUID) {
@@ -221,7 +225,11 @@ final class TabSet {
         tab.historyID = id
         preparingHistoryIDs.insert(id)
       } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
-      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
+      tab.onHistoryChanged = { [weak self, weak tab] in
+        guard let self, let tab else { return }
+        if let workspace = self.terminalWorkspaces[tab.id], workspace.layout.leaves.count == 1 { workspace.name = tab.name }
+        self.persistHistory()
+      }
     }
   }
 
@@ -635,12 +643,17 @@ final class TabSet {
     let workspace = groupID.flatMap { terminalWorkspaces[$0] }
     let hostID = workspace?.host.id ?? tabs[index].host.id
     if remember {
-      var record = ClosedTerminal(tabs[index], index: index)
-      if let workspace, workspace.layout.leaves.count > 1, let neighbor = workspace.layout.neighbor(of: id) {
+      let position = groupID.flatMap { key in visibleWorkspaceRoots.firstIndex(where: { $0.id == key }) } ?? index
+      var record = ClosedTerminal(tabs[index], index: position)
+      if let workspace, workspace.layout.leaves.count > 1, let sibling = workspace.layout.sibling(of: id) {
         record.parentID = workspace.id
-        record.neighbor = neighbor.0
-        record.splitVertical = neighbor.1
+        record.neighbor = sibling.node.leaves.first
+        record.neighborPanes = sibling.node.leaves
+        record.splitVertical = sibling.vertical
+        record.splitBefore = sibling.before
+        record.splitRatio = sibling.ratio
       }
+      if let workspace, workspace.layout.leaves.count == 1 { record = ClosedTerminal(workspace: workspace, root: tabs[index], panes: [tabs[index]], index: position) }
       closedTabs.append(record)
       if closedTabs.count > Self.closedTabLimit,
         let oldest = closedTabs.firstIndex(where: { $0.id != restoringTab }) {
@@ -658,7 +671,6 @@ final class TabSet {
         if groupID == id {
           terminalWorkspaces.removeValue(forKey: groupID)
           terminalWorkspaces[workspace.focused] = workspace
-          if let root = tabs.first(where: { $0.id == workspace.focused }) { root.name = workspace.name }
           if selected == groupID { selected = workspace.focused }
         }
       } else { terminalWorkspaces.removeValue(forKey: groupID) }
@@ -746,7 +758,7 @@ final class TabSet {
     guard !trimmed.isEmpty, let tab = tabs.first(where: { $0.id == id }) else { return }
     if let key = workspaceID(for: id), let workspace = terminalWorkspaces[key] {
       workspace.name = trimmed
-      tabs.first(where: { $0.id == key })?.name = trimmed
+      if workspace.layout.leaves.count == 1 { tabs.first(where: { $0.id == key })?.name = trimmed }
     } else { tab.name = trimmed }
     persistHistory()
   }

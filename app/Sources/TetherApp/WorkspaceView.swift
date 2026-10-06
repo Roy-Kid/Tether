@@ -288,7 +288,6 @@ struct RootView: View {
 
   private func restoreWorkspace(_ record: ClosedTerminal) async {
     var prepared: [SessionTab] = []
-    var ids: [UUID: UUID] = [:]
     var leases: [UUID: RemoteConnection] = [:]
     do {
       for saved in record.panes ?? [record] {
@@ -299,33 +298,10 @@ struct RootView: View {
         let pane = try await preparedSession(host: host, name: saved.name, directory: saved.directory,
           historyID: saved.historyID, leases: leases)
         prepared.append(pane)
-        ids[saved.id] = pane.id
         if let connection = pane.connection, host.allowsConnectionReuse { leases[host.id] = connection }
       }
-      guard tabs.restoringTab == record.id, let root = prepared.first else { throw CancellationError() }
       tabs.pendingSplit = nil
-      tabs.suppressPersistence = true
-      for pane in prepared { tabs.adopt(pane, at: record.index) }
-      #if os(macOS)
-      if let parent = tabs.terminalWorkspaces.first(where: { $0.value.id == record.parentID }) {
-        tabs.terminalWorkspaces.removeValue(forKey: root.id)
-        let neighbor = parent.value.layout.leaves.contains(record.neighbor ?? UUID()) ? record.neighbor! : parent.value.focused
-        parent.value.layout = parent.value.layout.splitting(neighbor, adding: root.id, vertical: record.splitVertical ?? false)
-        parent.value.focused = root.id
-        tabs.selected = parent.key
-      } else {
-        let workspace = TerminalWorkspace(root, host: record.groupHost)
-        workspace.layout = (record.layout ?? .pane(record.id)).remapping(ids)
-        workspace.focused = ids[record.focusedPane ?? record.id] ?? root.id
-        for pane in prepared { tabs.terminalWorkspaces.removeValue(forKey: pane.id) }
-        tabs.terminalWorkspaces[root.id] = workspace
-        tabs.selected = root.id
-      }
-      #endif
-      tabs.closedTabs.removeAll { $0.id == record.id }
-      tabs.restoringTab = nil
-      tabs.suppressPersistence = false
-      tabs.persistHistory()
+      guard tabs.commitRestoration(record, panes: prepared) else { throw CancellationError() }
       for (saved, pane) in zip(record.panes ?? [record], prepared) { finishRestore(saved, tab: pane) }
     } catch {
       prepared.forEach { tabs.discardPrepared($0) }
@@ -754,7 +730,7 @@ extension RootView {
     }
     .dialog(for: tabs.renaming) { id in
       Dialog.input(
-        "Rename", field: Dialog.Field("Name", initial: tabs.tabs.first { $0.id == id }?.name ?? ""),
+        "Rename", field: Dialog.Field("Name", initial: tabs.terminalWorkspaces[id]?.name ?? tabs.tabs.first { $0.id == id }?.name ?? ""),
         verb: "Save", cancel: { tabs.renaming = nil }, perform: { tabs.rename(id, to: $0) })
     }
     #if !os(macOS)
@@ -825,11 +801,14 @@ extension RootView {
       }
       // The inspector follows the selected tab, so the tab now in front needs
       // its own attachment the first time it is shown there.
-      .onChange(of: [tabs.inspectorPlugin, tabs.selected?.uuidString]) { _, _ in
+      .onChange(of: [tabs.inspectorPlugin, tabs.current?.id.uuidString]) { _, _ in
         guard let pluginID = tabs.inspectorPlugin, let tab = tabs.current else { return }
         prepareAttachment(pluginID, on: tab)
       }
       .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
+      .onChange(of: tabs.currentWorkspace?.layout) { _, _ in refreshFramePublishing() }
+      .onChange(of: tabs.currentWorkspace?.maximized) { _, _ in refreshFramePublishing() }
+      .onChange(of: tabs.currentWorkspace?.focused) { _, _ in refreshFramePublishing() }
       .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
       .onChange(of: phase) { _, _ in refreshFramePublishing() }
       .onChange(of: registry.disabled, initial: true) { _, _ in
@@ -976,8 +955,9 @@ extension RootView {
   /// the screen they copy is the current one.
   private func refreshFramePublishing() {
     let foreground = phase != .background
+    let visible = tabs.visiblePaneIDs
     for tab in tabs.tabs {
-      tab.setPublishesFrames(foreground && tab.id == tabs.selected)
+      tab.setPublishesFrames(foreground && visible.contains(tab.id))
       if foreground {
         tab.resumeReading()
       } else {
@@ -1029,7 +1009,7 @@ extension RootView {
       showAccessory: { tabs.showAccessory(pluginID, on: id) },
       linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
       shells: {
-        tabs.visibleTabs.map { ShellChoice(id: $0.id, title: $0.title, current: $0.id == tabs.selected) }
+        tabs.visibleTabs.map { ShellChoice(id: $0.id, title: tabs.terminalWorkspaces[$0.id]?.name ?? $0.title, current: $0.id == tabs.selected) }
       },
       openShell: { tabs.select($0) },
       newShell: { tabs.intent = .newTerminal },

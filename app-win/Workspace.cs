@@ -160,7 +160,9 @@ public sealed class Workspace : IAsyncDisposable
             var restored = prepared[0];
             var neighbor = parent.Layout.Leaves.Contains(record.Neighbor ?? Guid.Empty) ? record.Neighbor!.Value : parent.FocusedPane;
             parent.Panes.Add(restored);
-            parent.Layout = parent.Layout.Split(neighbor, restored.Id, record.SplitVertical);
+            var neighbors = (record.NeighborPanes ?? [neighbor]).Where(parent.Layout.Leaves.Contains).ToHashSet();
+            if (neighbors.Count == 0) neighbors.Add(parent.FocusedPane);
+            parent.Layout = parent.Layout.RestoreBeside(neighbors, restored.Id, record.SplitVertical, record.SplitBefore, record.SplitRatio);
             parent.FocusedPane = restored.Id;
             group = parent;
             _active = _tabs.IndexOf(parent);
@@ -257,7 +259,7 @@ public sealed class Workspace : IAsyncDisposable
         if (remember)
         {
             pane.Model.CheckpointHistory();
-            _closed.Add(RecordPane(pane, _tabs.IndexOf(group)) with { ParentId = group.Id, Neighbor = neighbor, SplitVertical = parent.Vertical });
+            _closed.Add(RecordPane(pane, _tabs.IndexOf(group)) with { ParentId = group.Id, Neighbor = neighbor, SplitVertical = parent.Vertical, SplitBefore = parent.First!.Pane == pane.Id, SplitRatio = parent.Ratio, NeighborPanes = (parent.First!.Pane == pane.Id ? parent.Second! : parent.First!).Leaves.ToArray() });
             if (_closed.Count > 20) _closed.RemoveAt(0);
         }
         group.Layout = group.Layout.Remove(pane.Id)!;

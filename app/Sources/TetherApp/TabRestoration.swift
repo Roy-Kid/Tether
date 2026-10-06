@@ -8,10 +8,10 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
     let state: Data
   }
 
-  let id: UUID
+  var id: UUID
   let historyID: UUID?
   let host: Host
-  let name: String
+  var name: String
   let directory: String?
   let index: Int
   let attachments: [Attachment]
@@ -22,6 +22,9 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
   var parentID: UUID?
   var neighbor: UUID?
   var splitVertical: Bool?
+  var splitBefore: Bool?
+  var splitRatio: Double?
+  var neighborPanes: [UUID]?
 
   @MainActor
   init(_ tab: SessionTab, index: Int) {
@@ -38,6 +41,8 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
   @MainActor
   init(workspace: TerminalWorkspace, root: SessionTab, panes: [SessionTab], index: Int) {
     self.init(root, index: index)
+    id = workspace.id
+    name = workspace.name
     layout = workspace.layout
     self.panes = panes.map { ClosedTerminal($0, index: index) }
     focusedPane = workspace.focused
@@ -66,17 +71,56 @@ extension TabSet {
 
   /// Consume history once the replacement tab is ready to begin connecting.
   @discardableResult
+  func commitRestoration(_ record: ClosedTerminal, panes: [SessionTab]) -> Bool {
+    let saved = record.panes ?? [record]
+    guard restoringTab == record.id, panes.count == saved.count, !panes.isEmpty,
+      zip(saved, panes).allSatisfy({ $0.1.host.sameSessionTarget(as: $0.0.host) }) else { return false }
+    var ids: [UUID: UUID] = [:]
+    suppressPersistence = true
+    let roots = visibleWorkspaceRoots
+    let insertion = record.index < roots.count && record.index >= 0
+      ? (tabs.firstIndex(where: { $0.id == roots[record.index].id }) ?? tabs.count) : tabs.count
+    for (offset, pair) in zip(saved, panes).enumerated() {
+      let (old, pane) = pair
+      pane.historyID = old.historyID
+      ids[old.id] = pane.id
+      adopt(pane, at: insertion + offset)
+    }
+    let root = panes[0]
+    #if os(macOS)
+      if let parent = terminalWorkspaces.first(where: { $0.value.id == record.parentID }) {
+        terminalWorkspaces.removeValue(forKey: root.id)
+        var neighbors = Set(record.neighborPanes ?? [record.neighbor ?? parent.value.focused])
+          .intersection(parent.value.layout.leaves)
+        if neighbors.isEmpty { neighbors.insert(parent.value.focused) }
+        parent.value.layout = parent.value.layout.restoring(root.id, beside: neighbors,
+          vertical: record.splitVertical ?? false, before: record.splitBefore ?? false, ratio: record.splitRatio ?? 0.5)
+        parent.value.focused = root.id
+        select(parent.key)
+      } else {
+        let workspace = TerminalWorkspace(root, host: record.groupHost, id: record.id)
+        workspace.name = record.name
+        workspace.layout = (record.layout ?? .pane(record.id)).remapping(ids)
+        workspace.focused = ids[record.focusedPane ?? record.id] ?? root.id
+        for pane in panes { terminalWorkspaces.removeValue(forKey: pane.id) }
+        terminalWorkspaces[root.id] = workspace
+        select(root.id)
+      }
+    #endif
+    closedTabs.removeAll { $0.id == record.id }
+    restoringTab = nil
+    suppressPersistence = false
+    persistHistory()
+    return true
+  }
+
+  @discardableResult
   func completeRestore(_ id: UUID, with tab: SessionTab) -> Bool {
-    guard let record = restoration(for: id), tab.host.sameSessionTarget(as: record.host)
-    else {
+    guard let record = restoration(for: id), commitRestoration(record, panes: [tab]) else {
       tab.close()
       cancelRestore(id)
       return false
     }
-    tab.historyID = record.historyID
-    closedTabs.removeAll { $0.id == id }
-    restoringTab = nil
-    adopt(tab, at: record.index)
     return true
   }
 

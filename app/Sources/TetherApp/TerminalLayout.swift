@@ -51,6 +51,22 @@ indirect enum TerminalLayout: Codable, Equatable {
       return .split(vertical: axis, ratio: ratio, first: a.remapping(ids), second: b.remapping(ids))
     }
   }
+  func sibling(of id: UUID) -> (node: Self, vertical: Bool, before: Bool, ratio: Double)? {
+    guard case .split(let axis, let ratio, let a, let b) = self else { return nil }
+    if a == .pane(id) { return (b, axis, true, ratio) }
+    if b == .pane(id) { return (a, axis, false, ratio) }
+    return a.sibling(of: id) ?? b.sibling(of: id)
+  }
+  func restoring(_ pane: UUID, beside neighbors: Set<UUID>, vertical: Bool, before: Bool, ratio: Double) -> Self {
+    if case .split(let axis, let old, let a, let b) = self {
+      if neighbors.isSubset(of: Set(a.leaves)) { return .split(vertical: axis, ratio: old,
+        first: a.restoring(pane, beside: neighbors, vertical: vertical, before: before, ratio: ratio), second: b) }
+      if neighbors.isSubset(of: Set(b.leaves)) { return .split(vertical: axis, ratio: old,
+        first: a, second: b.restoring(pane, beside: neighbors, vertical: vertical, before: before, ratio: ratio)) }
+    }
+    let ratio = ratio.isFinite ? min(0.9999, max(0.0001, ratio)) : 0.5
+    return .split(vertical: vertical, ratio: ratio, first: before ? .pane(pane) : self, second: before ? self : .pane(pane))
+  }
   func neighbor(of id: UUID) -> (UUID, Bool)? {
     guard case .split(let axis, _, let a, let b) = self else { return nil }
     if a == .pane(id) { return (b.leaves[0], axis) }
@@ -76,8 +92,8 @@ final class TerminalWorkspace {
   var paneFrames: [UUID: CGRect] = [:]
   let host: Host
   var name: String
-  init(_ tab: SessionTab, host: Host? = nil) {
-    id = tab.id
+  init(_ tab: SessionTab, host: Host? = nil, id: UUID? = nil) {
+    self.id = id ?? UUID()
     layout = .pane(tab.id)
     focused = tab.id
     self.host = host ?? tab.host

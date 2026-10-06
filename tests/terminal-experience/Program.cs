@@ -13,6 +13,7 @@ Check(!splitTree.IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject m
 Check(!new SplitLayout(null, Ratio: double.NaN, First: SplitLayout.Leaf(firstPane), Second: SplitLayout.Leaf(secondPane)).IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject non-finite split ratio");
 Check(!new SplitLayout(null, First: SplitLayout.Leaf(firstPane), Second: SplitLayout.Leaf(firstPane)).IsValid(new HashSet<Guid> { firstPane }), "reject duplicate pane identities");
 Check(splitTree.Remove(secondPane)!.Leaves.SequenceEqual(new[] { firstPane, thirdPane }), "close collapses only its branch");
+Check(splitTree.Remove(firstPane)!.RestoreBeside(new HashSet<Guid> { secondPane, thirdPane }, firstPane, false, true, .5) == splitTree, "restore original side around the whole neighboring branch");
 Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Pane == thirdPane, "collapse to final leaf");
 Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Remove(thirdPane) is null, "last pane empties layout");
 Check(JsonSerializer.Deserialize<SplitLayout>(JsonSerializer.Serialize(splitTree)) == splitTree, "layout survives restart");
