@@ -97,9 +97,10 @@ struct ShellActivityTests {
     let text = try #require(String(data: listing.stdout, encoding: .utf8))
     let pids = text.split(whereSeparator: \.isNewline).compactMap { line -> Int? in
       let fields = line.split(maxSplits: 4, whereSeparator: \.isWhitespace)
-      guard fields.count == 5, ShellTTY.device(String(fields[2])) == tty,
-        fields[4].split(separator: "/").last == "sleep"
-      else { return nil }
+      guard fields.count == 5, ShellTTY.device(String(fields[2])) == tty else { return nil }
+      // ps pads its columns; match the production parser's normalization.
+      let command = fields[4].trimmingCharacters(in: .whitespaces)
+      guard command.split(separator: "/").last == "sleep" else { return nil }
       return Int(fields[0])
     }
     try #require(pids.count == 1)
