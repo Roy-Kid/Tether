@@ -89,8 +89,23 @@ struct ShellActivityTests {
     try session.send(.key(.text("sleep 30 &")))
     try session.send(.key(.enter))
     try await waitFor(.running(["sleep"]), phase: "background job")
-    try session.send(.key(.text("kill $!; wait")))
-    try session.send(.key(.enter))
+    // Seeing the child in ps does not mean the interactive prompt is ready
+    // to accept another line. Clean up through the independent connection,
+    // restricted to the sleep process on this test's own terminal.
+    let listing = try await connection.execute(ShellActivity.listCommand)
+    try #require(listing.status == 0)
+    let text = try #require(String(data: listing.stdout, encoding: .utf8))
+    let pids = text.split(whereSeparator: \.isNewline).compactMap { line -> Int? in
+      let fields = line.split(maxSplits: 4, whereSeparator: \.isWhitespace)
+      guard fields.count == 5, ShellTTY.device(String(fields[2])) == tty,
+        fields[4].split(separator: "/").last == "sleep"
+      else { return nil }
+      return Int(fields[0])
+    }
+    try #require(pids.count == 1)
+    let pid = try #require(pids.first)
+    let killed = try await connection.execute("kill -TERM \(pid)")
+    try #require(killed.status == 0)
     try await waitFor(.idle, phase: "reaped background job")
   }
 }
