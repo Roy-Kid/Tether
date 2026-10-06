@@ -517,7 +517,7 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     model.close()
-    try await Task.sleep(for: .milliseconds(50))
+    try await settle(model) { source.closed }
     #expect(source.closed)
   }
 

@@ -12,7 +12,8 @@ final class StubSource: FileSource, @unchecked Sendable {
   private(set) var removedTrees: [String] = []
   private(set) var removed: [String] = []
   private(set) var renames: [(String, String, Bool)] = []
-  private(set) var closed = false
+  private var recordedClosed = false
+  var closed: Bool { lock.withLock { recordedClosed } }
   /// Every `stat`, in order. A name filter must not add to it.
   private var recordedStats: [String] = []
   private var recordedLists: [String] = []
@@ -118,7 +119,7 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
   }
 
-  func close() async { lock.withLock { closed = true } }
+  func close() async { lock.withLock { recordedClosed = true } }
 
   func has(_ path: String) -> Bool { lock.withLock { files[path] != nil } }
 
