@@ -136,6 +136,8 @@ public struct TerminalPreferencesEditor: View {
 
 enum TerminalPastePolicy {
   static func requiresConfirmation(_ text: String, threshold: Int) -> Bool {
-    text.utf16.count >= max(1, threshold) || text.contains("\n") || text.contains("\r")
+    // Swift groups CRLF into one Character, so contains("\n") misses it.
+    text.utf16.count >= max(1, threshold)
+      || text.unicodeScalars.contains { $0.value == 10 || $0.value == 13 }
   }
 }
