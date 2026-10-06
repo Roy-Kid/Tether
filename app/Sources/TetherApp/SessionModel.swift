@@ -136,7 +136,9 @@ final class SessionTab: Identifiable {
     self.known = known
     self.name = name
     self.startingDirectory = directory
-    dialTask = Task { await attach(connection) }
+    dialTask = Task {
+      if host.isLocal { await open() } else { await attach(connection) }
+    }
   }
 
   /// A tab that does not dial. Ownership tests need the object, not a PTY.

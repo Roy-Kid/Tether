@@ -1,5 +1,9 @@
 import Foundation
 import Testing
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 @testable import TetherApp
 
 @Suite("Native terminal layouts")
@@ -62,6 +66,43 @@ struct TerminalLayoutTests {
   }
 
   #if os(macOS)
+  @MainActor @Test("AppKit divider dragging and maximization retain terminal view instances")
+  func nativeViews() throws {
+    _ = NSApplication.shared
+    let set = TabSet()
+    let a = SessionTab(preview: .local, known: KnownHosts(), name: "A", live: false)
+    let b = SessionTab(preview: .local, known: KnownHosts(), name: "B", live: false)
+    set.adopt(a); set.pendingSplit = (a.id, false); set.adopt(b)
+    let workspace = try #require(set.currentWorkspace)
+    let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 640, height: 480),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let root = NSView(frame: CGRect(x: 0, y: 0, width: 640, height: 480))
+    window.contentView = root
+    defer { window.contentView = nil; window.close(); set.closeAll() }
+    let coordinator = TerminalWorkspaceView.Coordinator()
+    coordinator.update(root, workspace: workspace, tabs: set) { _ in AnyView(Color.clear) }
+    root.layoutSubtreeIfNeeded()
+    let split = try #require(root.subviews.first as? NSSplitView)
+    let first = try #require(coordinator.hosts[a.id])
+    let second = try #require(coordinator.hosts[b.id])
+    split.setPosition(200, ofDividerAt: 0)
+    coordinator.update(root, workspace: workspace, tabs: set) { _ in AnyView(Color.clear) }
+    #expect(root.subviews.first === split)
+    #expect(coordinator.hosts[a.id] === first)
+    #expect(coordinator.hosts[b.id] === second)
+    workspace.maximized = true
+    coordinator.update(root, workspace: workspace, tabs: set) { _ in AnyView(Color.clear) }
+    #expect(root.subviews.first === second)
+    #expect(set.tabs.count == 2)
+    workspace.maximized = false
+    coordinator.update(root, workspace: workspace, tabs: set) { _ in AnyView(Color.clear) }
+    root.layoutSubtreeIfNeeded()
+    #expect(coordinator.hosts[a.id] === first)
+    #expect(coordinator.hosts[b.id] === second)
+    #expect(root.subviews.first is NSSplitView)
+  }
+
   @MainActor @Test("restoring a closed root pane preserves its side and stable workspace identity")
   func restorePanePosition() throws {
     let set = TabSet()

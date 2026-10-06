@@ -159,6 +159,22 @@ struct TabRestorationTests {
     ])
   }
 
+  @Test("a local pane opened on an existing lease retains its requested directory",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func localSplitDirectory() async throws {
+    let location = temporaryFile("split-directory").deletingLastPathComponent().resolvingSymlinksInPath()
+    defer { try? FileManager.default.removeItem(at: location) }
+    let original = SessionTab(host: .local, password: "", known: KnownHosts(), name: "Original")
+    defer { original.close() }
+    let lease = try await original.connectionReady()
+    let pane = SessionTab(host: .local, connection: lease, known: KnownHosts(), name: "Pane", directory: location.path)
+    defer { pane.close() }
+    _ = try await pane.connectionReady()
+    #expect(pane.workingDirectory == location.path)
+    #expect(original.isLive)
+    #expect(pane.isLive)
+  }
+
   @Test("a real local shell reopens in its previous directory with its previous name",
     .enabled(if: TerminalSession.isLocalAvailable))
   func localDirectory() async throws {

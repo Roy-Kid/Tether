@@ -235,8 +235,8 @@ struct RootView: View {
   private func preparedSession(host: Host, name: String, directory: String?, historyID: UUID? = nil,
                                leases: [UUID: RemoteConnection] = [:]) async throws -> SessionTab {
     if let issue = host.connectionProblem { throw NSError(domain: "TetherWorkspace", code: 1, userInfo: [NSLocalizedDescriptionKey: issue]) }
-    var connection = leases[host.id]
-    if connection == nil { connection = try? await tabs.lease(for: host) }
+    var connection: RemoteConnection? = host.isLocal ? nil : leases[host.id]
+    if connection == nil && !host.isLocal { connection = try? await tabs.lease(for: host) }
     let pane: SessionTab
     if let connection {
       pane = SessionTab(host: host, connection: connection, known: tabs.known, name: name, directory: directory)
