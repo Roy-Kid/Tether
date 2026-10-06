@@ -21,7 +21,7 @@ struct TerminalExperienceTests {
       strikethrough: false, inverse: false, hidden: false)
     let frame = ScreenFrame(
       columns: 6, rows: 2, cursorRow: 0, cursorColumn: 0, cursorShape: .hidden,
-      cursorVisible: false, alternateScreen: false, viewportOffset: 0, historyLines: 0,
+      cursorVisible: false, alternateScreen: false, mouse: .off, viewportOffset: 0, historyLines: 0,
       title: "", lines: [
         ScreenRow(runs: [StyledRun(text: "a", columns: 1, style: style),
           StyledRun(text: "中", columns: 2, style: style),
