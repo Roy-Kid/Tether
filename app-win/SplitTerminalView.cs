@@ -78,14 +78,11 @@ public sealed class SplitTerminalView : Grid
         };
         thumb.DragCompleted += (_, _) =>
         {
-            _group.Layout = Replace(_group.Layout, node, node with { Ratio = current });
+            _group.Layout = _group.Layout.WithRatio(node.Leaves, current);
             _layout = _group.Layout;
             _workspace.Persist();
         };
         grid.Children.Add(first); grid.Children.Add(thumb); grid.Children.Add(second);
         return grid;
     }
-    private static SplitLayout Replace(SplitLayout root, SplitLayout old, SplitLayout replacement) =>
-        root.Leaves.SequenceEqual(old.Leaves) ? replacement : root.Pane is not null ? root :
-        root with { First = Replace(root.First!, old, replacement), Second = Replace(root.Second!, old, replacement) };
 }

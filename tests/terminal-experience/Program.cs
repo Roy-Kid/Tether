@@ -17,6 +17,8 @@ Check(splitTree.Remove(secondPane)!.Leaves.SequenceEqual(new[] { firstPane, thir
 Check(splitTree.Remove(firstPane)!.RestoreBeside(new HashSet<Guid> { secondPane, thirdPane }, firstPane, false, true, .5) == splitTree, "restore original side around the whole neighboring branch");
 Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Pane == thirdPane, "collapse to final leaf");
 Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Remove(thirdPane) is null, "last pane empties layout");
+var dragged = splitTree.WithRatio(new[] { secondPane, thirdPane }, .3).WithRatio(splitTree.Leaves, .65);
+Check(dragged.Ratio == .65 && dragged.Second!.Ratio == .3, "dragging an outer divider preserves the latest inner ratio");
 Check(JsonSerializer.Deserialize<SplitLayout>(JsonSerializer.Serialize(splitTree)) == splitTree, "layout survives restart");
 
 var preferences = new TerminalPreferences();

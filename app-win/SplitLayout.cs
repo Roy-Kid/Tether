@@ -27,6 +27,12 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
         ? First is null && Second is null && panes.Contains(id) && seen.Add(id)
         : First is not null && Second is not null && double.IsFinite(Ratio) && Ratio > 0 && Ratio < 1 &&
           First.Validate(panes, seen) && Second.Validate(panes, seen);
+    public SplitLayout WithRatio(IEnumerable<Guid> branch, double ratio)
+    {
+        if (Pane is not null) return this;
+        if (Leaves.SequenceEqual(branch)) return this with { Ratio = Math.Clamp(ratio, .0001, .9999) };
+        return this with { First = First!.WithRatio(branch, ratio), Second = Second!.WithRatio(branch, ratio) };
+    }
     public SplitLayout ReplacePane(Guid id, Guid replacement) => Pane == id ? Leaf(replacement) : Pane is not null ? this :
         this with { First = First!.ReplacePane(id, replacement), Second = Second!.ReplacePane(id, replacement) };
     public SplitLayout? Remove(Guid id)
