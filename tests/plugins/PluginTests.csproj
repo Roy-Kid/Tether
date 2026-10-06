@@ -8,11 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\app-windows\Plugins\PluginRegistry.cs" />
-    <Compile Include="..\..\app-windows\Plugins\FilesPaths.cs" />
-    <Compile Include="..\..\app-windows\Plugins\WebPluginPackage.cs" />
-    <Compile Include="..\..\app-windows\Plugins\WebPluginNetwork.cs" />
-    <Compile Include="..\..\app-windows\Plugins\WebPluginServices.cs" />
+    <Compile Include="..\..\app-win\Plugins\PluginRegistry.cs" />
+    <Compile Include="..\..\app-win\Plugins\FilesPaths.cs" />
+    <Compile Include="..\..\app-win\Plugins\WebPluginPackage.cs" />
+    <Compile Include="..\..\app-win\Plugins\WebPluginNetwork.cs" />
+    <Compile Include="..\..\app-win\Plugins\WebPluginServices.cs" />
   </ItemGroup>
 
   <ItemGroup>

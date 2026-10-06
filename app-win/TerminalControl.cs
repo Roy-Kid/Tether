@@ -58,7 +58,7 @@ public sealed class TerminalControl : Control
     private int _backedWidth;
     private int _backedHeight;
 
-    private static readonly Rgba SelectionTint = new(0.3f, 0.55f, 1f, 0.12f);
+    private static readonly Rgba SelectionTint = new(0.45f, 0.65f, 0.90f, 0.25f);
     private static readonly Rgba LinkTint = new(0.3f, 0.55f, 1f, 1f);
     private static readonly TimeSpan ClickInterval = TimeSpan.FromMilliseconds(400);
 
@@ -912,13 +912,15 @@ public sealed class TerminalControl : Control
 
     private void Zoom(int delta)
     {
-        var size = delta == 0 ? 13 : Math.Clamp(_fontSize + delta, 10, 32);
+        var size = delta == 0 ? new TerminalPreferences().FontSize : Math.Clamp(_fontSize + delta, 10, 32);
         (AppSettings.Current with { Terminal = AppSettings.Current.Terminal with { FontSize = size } }).Save();
     }
 
     private void ApplyPreferences()
     {
         _fontSize = AppSettings.Current.Terminal.FontSize;
+        var inset = new Thickness(AppSettings.Current.Terminal.Inset);
+        if (Margin != inset) Margin = inset;
         if (_surface is null) return;
         _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
         _metrics = _surface.Measure((float)(_fontSize * DpiScale));

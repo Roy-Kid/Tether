@@ -6,7 +6,9 @@ public sealed record TerminalPreferences
 {
     public string FontFamily { get; init; } = "Consolas";
     public string WideFontFamily { get; init; } = "Microsoft YaHei UI";
-    public double FontSize { get; init; } = 13;
+    public double FontSize { get; init; } = 14;
+    public double Inset { get; init; } = 12;
+    public string ColorScheme { get; init; } = "soft";
     public int PasteThreshold { get; init; } = 4096;
     public string Copy { get; init; } = "Ctrl+Shift+C";
     public string Paste { get; init; } = "Ctrl+Shift+V";
@@ -22,6 +24,8 @@ public sealed record TerminalPreferences
     {
         if (string.IsNullOrWhiteSpace(FontFamily) || string.IsNullOrWhiteSpace(WideFontFamily)) return "Choose a font for both text and wide characters.";
         if (!double.IsFinite(FontSize) || FontSize is < 10 or > 32) return "Font size must be between 10 and 32.";
+        if (!double.IsFinite(Inset) || Inset is < 0 or > 40) return "Terminal padding must be between 0 and 40.";
+        if (ColorScheme is not ("soft" or "classic")) return "Choose a terminal color scheme.";
         if (PasteThreshold is < 1 or > 1000000) return "Paste threshold must be between 1 and 1,000,000 characters.";
         var seen = new HashSet<Shortcut>();
         foreach (var (name, chord) in Bindings)

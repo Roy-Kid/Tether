@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\app-windows\SshConfig.cs" />
-    <Compile Include="..\..\app-windows\RemoteLink.cs" />
+    <Compile Include="..\..\app-win\SshConfig.cs" />
+    <Compile Include="..\..\app-win\RemoteLink.cs" />
   </ItemGroup>
 
   <ItemGroup>

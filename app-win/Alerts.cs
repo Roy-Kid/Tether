@@ -258,6 +258,7 @@ public static class Alerts
     private static Window NewDialog(string title, int width, int height)
     {
         var window = new Window { Title = title };
+        AppBranding.Apply(window);
         var presenter = OverlappedPresenter.CreateForDialog();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;

@@ -6,6 +6,6 @@
  </PropertyGroup>
  <ItemGroup>
   <ProjectReference Include="../../dotnet/Tether/Tether.csproj"/>
-  <Compile Include="../../app-windows/Files/FileSource.cs" Link="FileSource.cs"/>
+  <Compile Include="../../app-win/Files/FileSource.cs" Link="FileSource.cs"/>
  </ItemGroup>
 </Project>

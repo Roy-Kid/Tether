@@ -9,6 +9,7 @@ internal static class EditorDialog
     {
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var window = new Window { Title = title };
+        AppBranding.Apply(window);
         var root = new Grid { Padding = new Thickness(20), RowSpacing = 12, RequestedTheme = Appearance.RequestedTheme,
             Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ChromeWindowBrush"] };
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

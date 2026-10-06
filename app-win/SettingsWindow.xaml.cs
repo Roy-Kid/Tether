@@ -17,6 +17,7 @@ public sealed partial class SettingsWindow : Window
     {
         _plugins = plugins;
         InitializeComponent();
+        AppBranding.Apply(this);
         BuildExtensions();
         BuildTerminal();
         BuildWorkspaceSettings();
@@ -83,6 +84,11 @@ public sealed partial class SettingsWindow : Window
     {
         TerminalPane.Children.Clear();
         var preferences = AppSettings.Current.Terminal;
+        var scheme = new ComboBox { Header = "Color scheme", HorizontalAlignment = HorizontalAlignment.Stretch };
+        scheme.Items.Add(new ComboBoxItem { Content = "Soft", Tag = "soft" });
+        scheme.Items.Add(new ComboBoxItem { Content = "Classic", Tag = "classic" });
+        scheme.SelectedIndex = preferences.ColorScheme == "classic" ? 1 : 0;
+        TerminalPane.Children.Add(scheme);
         var family = new ComboBox { Header = "Terminal font", HorizontalAlignment = HorizontalAlignment.Stretch };
         var wideFamily = new ComboBox { Header = "CJK / wide-character font", HorizontalAlignment = HorizontalAlignment.Stretch };
         family.Items.Add(preferences.FontFamily);
@@ -107,6 +113,8 @@ public sealed partial class SettingsWindow : Window
         };
         var threshold = new NumberBox { Header = "Confirm paste at character count", Minimum = 1, Maximum = 1000000, Value = preferences.PasteThreshold };
         TerminalPane.Children.Add(size);
+        var inset = new NumberBox { Header = "Terminal padding", Minimum = 0, Maximum = 40, Value = preferences.Inset, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+        TerminalPane.Children.Add(inset);
         TerminalPane.Children.Add(threshold);
         TerminalPane.Children.Add(new TextBlock { Text = "Multi-line pastes always ask. Shortcuts use Ctrl or Alt, optional Shift, and a letter, digit, Equals or Minus.", TextWrapping = TextWrapping.Wrap });
         var fields = new List<TextBox>();
@@ -124,6 +132,7 @@ public sealed partial class SettingsWindow : Window
             {
                 FontFamily = (string)family.SelectedItem, WideFontFamily = (string)wideFamily.SelectedItem,
                 FontSize = size.Value,
+                Inset = inset.Value, ColorScheme = (string)((ComboBoxItem)scheme.SelectedItem).Tag,
                 PasteThreshold = double.IsFinite(threshold.Value) ? (int)threshold.Value : 0,
                 Copy = fields[0].Text, Paste = fields[1].Text, ZoomIn = fields[2].Text,
                 ZoomOut = fields[3].Text, ZoomReset = fields[4].Text,

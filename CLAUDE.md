@@ -74,6 +74,12 @@ together. Read it before touching architecture.
 
 ## Working here
 
+Install the repository-local commit gate once per clone with
+`python scripts/install-hooks.py`. It rejects partial staging and runs the same
+host-platform checks as CI. See `docs/commit-checks.md` for tool requirements,
+the audited failure history and cross-platform coverage. Run
+`python scripts/check.py` to check the working tree before staging.
+
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place
 ./scripts/tether.sh --check                       # cargo clippy --workspace -- -D warnings

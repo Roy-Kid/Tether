@@ -22,6 +22,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        AppBranding.Apply(this);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBarDragArea);
         WorkspaceRoot.Loaded += (_, _) =>
@@ -89,7 +90,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTerminalPalette()
     {
-        var palette = WorkspaceRoot.ActualTheme == ElementTheme.Dark ? Palette.Dark : Palette.Light;
+        var palette = TerminalAppearance.Choose(WorkspaceRoot.ActualTheme == ElementTheme.Dark);
         _workspace.CurrentPalette = palette;
         Appearance.SetCanvas(palette);
         foreach (var tab in _workspace.Tabs) tab.Surface.SetPalette(palette);
@@ -552,6 +553,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(list);
 
         var window = new Window { Title = "Hosts", Content = panel };
+        AppBranding.Apply(window);
         var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForDialog();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;

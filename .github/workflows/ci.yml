@@ -29,6 +29,11 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install -r scripts/check-requirements.txt
+
       - uses: Swatinem/rust-cache@v2
 
       # The shaping regression exercises actual CJK glyph advances. Minimal
@@ -38,87 +43,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
 
-      - name: Format
-        run: cargo fmt --all --check
-
-      # --all-targets so tests and examples are linted too; they are where the
-      # dead imports collect.
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets
-
-      # The whole workspace in one invocation. Building crates separately is
-      # what let a caller and its callee disagree for two commits.
-      - name: Build
-        run: cargo build --workspace --all-targets
-
-      - name: Test
-        run: cargo test --workspace
-
-      # CLAUDE.md states this as law and names this command as the test, so the
-      # command runs rather than being quoted. `cargo tree` exits 0 whatever it
-      # prints, so the grep is the assertion.
-      - name: tether-terminal links no SSH symbol
-        run: |
-          if cargo tree -p tether-terminal | grep -q russh; then
-            echo "::error::tether-terminal reached russh (CLAUDE.md law, spec §3, §8)"
-            cargo tree -p tether-terminal | grep -B5 russh
-            exit 1
-          fi
-          echo "clean: no russh in tether-terminal's tree"
-
-      # The same law from the other side. tether-local exists so that "a
-      # consumer who wants to render a local terminal" (spec §3) can have one
-      # without a protocol stack coming along; a dependency edge to tether-ssh
-      # would make that sentence false while every test still passed.
-      - name: the two producers do not reach each other
-        run: |
-          if cargo tree -p tether-local | grep -q russh; then
-            echo "::error::tether-local reached russh (spec §3, §8)"
-            cargo tree -p tether-local | grep -B5 russh
-            exit 1
-          fi
-          if cargo tree -p tether-ssh | grep -q portable-pty; then
-            echo "::error::tether-ssh reached portable-pty (spec §3, §8)"
-            cargo tree -p tether-ssh | grep -B5 portable-pty
-            exit 1
-          fi
-          echo "clean: tether-local and tether-ssh share no backend"
-
-      # A plugin reaches the app through TetherPluginKit and nothing else.
-      # The one line allowed to know a plugin by name is the one that
-      # registers it; anything more is the host growing a special case the
-      # seam should have carried (Decisions/0012).
-      - name: the app names no plugin
-        run: |
-          leaks=$(grep -rniE 'tmux|FilesPlugin|FilesTab' app/Sources \
-            | grep -vE 'import (Tmux|Files)Plugin$|registry\.register\((Tmux|Files)Plugin\(\)\)' || true)
-          if [ -n "$leaks" ]; then
-            echo "::error::the app reaches past the plugin seam (Decisions/0012)"
-            echo "$leaks"
-            exit 1
-          fi
-          echo "clean: tmux and files are only registered, never named"
-
-      # One presentation path for every dialog (CLAUDE.md, "One dialog path"):
-      # a second one is how a question ends up behind a sheet, unanswered.
-      - name: one dialog path
-        run: |
-          leaks=$(grep -rnE '\.alert\(|\.confirmationDialog\(|UIAlertController|NSAlert\b' \
-            app/Sources app/Plugins/*/Sources app/Packages/TetherFrontend/Sources \
-            app/Packages/TetherPluginHost/Sources \
-            | grep -v 'TetherUI/DialogSurface' || true)
-          if [ -n "$leaks" ]; then
-            echo "::error::a dialog presented outside DialogPresenter (CLAUDE.md, One dialog path)"
-            echo "$leaks"
-            exit 1
-          fi
-          echo "clean: every dialog goes through DialogPresenter"
-
-      # The spec mirrors this file byte-for-byte into molab-apple. A copy that
-      # silently diverges is worse than no copy, so the hash is printed for a
-      # reviewer to compare against the other repository.
-      - name: Specification hash
-        run: shasum -a 256 .claude/notes/remote-platform-spec.md
+      - name: Shared source, Rust and boundary gate
+        run: python3 scripts/check.py --common-only
 
   apple:
     name: aws-lc-rs for Apple targets
@@ -131,6 +57,10 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -151,12 +81,7 @@ jobs:
       # (Decisions/0012) — and the app, which links nothing from outside.
       - name: Swift facade, frontend, plugin and app tests
         run: |
-          swift test --package-path swift
-          swift test --package-path app/Packages/TetherFrontend
-          swift test --package-path app/Packages/TetherPluginHost
-          swift test --package-path app/Plugins/Tmux
-          swift test --package-path app/Plugins/Files
-          swift test --package-path app
+          python3 scripts/check.py --apple-only
 
   fuzz:
     name: fuzz the parsers

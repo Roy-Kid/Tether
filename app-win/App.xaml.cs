@@ -21,6 +21,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        AppBranding.Initialize();
         AppSettings.Load();
         Plugins = new Plugins.PluginRegistry(
             AppSettings.Current.DisabledPlugins,

@@ -7,7 +7,7 @@
 # (Decisions/0004's lesson: `-parse` accepting anything syntactically valid is
 # why the negative check carries a positive control).
 param(
-    [string]$Sample = "app-windows"
+    [string]$Sample = "app-win"
 )
 
 $ErrorActionPreference = "Stop"

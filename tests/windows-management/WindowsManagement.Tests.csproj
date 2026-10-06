@@ -8,14 +8,14 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../dotnet/Tether/Tether.csproj" />
-    <Compile Include="../../app-windows/SshConfig.cs" Link="SshConfig.cs" />
-    <Compile Include="../../app-windows/SshConfigEditor.cs" Link="SshConfigEditor.cs" />
-    <Compile Include="../../app-windows/IdentityStore.cs" Link="IdentityStore.cs" />
-    <Compile Include="../../app-windows/RemoteAuthorization.cs" Link="RemoteAuthorization.cs" />
-    <Compile Include="../../app-windows/IdentityAuthentication.cs" Link="IdentityAuthentication.cs" />
-    <Compile Include="../../app-windows/Totp.cs" Link="Totp.cs" />
-    <Compile Include="../../app-windows/BoundedProcess.cs" Link="BoundedProcess.cs" />
-    <Compile Include="../../app-windows/WslSession.cs" Link="WslSession.cs" />
-    <Compile Include="../../app-windows/ProcessTable.cs" Link="ProcessTable.cs" />
+    <Compile Include="../../app-win/SshConfig.cs" Link="SshConfig.cs" />
+    <Compile Include="../../app-win/SshConfigEditor.cs" Link="SshConfigEditor.cs" />
+    <Compile Include="../../app-win/IdentityStore.cs" Link="IdentityStore.cs" />
+    <Compile Include="../../app-win/RemoteAuthorization.cs" Link="RemoteAuthorization.cs" />
+    <Compile Include="../../app-win/IdentityAuthentication.cs" Link="IdentityAuthentication.cs" />
+    <Compile Include="../../app-win/Totp.cs" Link="Totp.cs" />
+    <Compile Include="../../app-win/BoundedProcess.cs" Link="BoundedProcess.cs" />
+    <Compile Include="../../app-win/WslSession.cs" Link="WslSession.cs" />
+    <Compile Include="../../app-win/ProcessTable.cs" Link="ProcessTable.cs" />
   </ItemGroup>
 </Project>

@@ -173,6 +173,7 @@ public sealed partial class MainWindow
             list.SelectedIndex = list.Items.Count > 0 ? 0 : -1;
         }
         var window = new Window { Title = quick ? "Quick Switch" : "Command Menu" };
+        AppBranding.Apply(window);
         async Task Choose(PickerRow row) { window.Close(); await row.Run(); }
         query.TextChanged += (_, _) => Reload();
         list.ItemClick += async (_, e) => { if (e.ClickedItem is PickerRow row) await Choose(row); };

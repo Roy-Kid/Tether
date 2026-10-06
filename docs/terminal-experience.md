@@ -40,8 +40,16 @@ On Windows:
 
 ```powershell
 dotnet run --project tests/terminal-experience
-dotnet build app-windows/TetherApp.Windows.csproj -p:Platform=x64
+dotnet build app-win/TetherApp.Windows.csproj -p:Platform=x64
 ```
+
+For distribution, run `./scripts/publish-windows.ps1`. It builds the release
+native library and publishes a self-contained, compressed single EXE using
+`app-win/Properties/PublishProfiles/Portable.pubxml`. The ZIP is written to
+`artifacts/windows-portable/Tether-win-x64.zip`; CI uploads the same archive.
+Debug symbols and SDK XML documentation are omitted. The executable extracts
+its bundled runtime on first launch. Debug builds keep their normal layout.
+Trimming is disabled to preserve WinUI and reflection-based serialization.
 
 On macOS:
 

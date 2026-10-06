@@ -79,7 +79,7 @@ keyboard selection/overflow/close controls, Flyout light dismissal, ListView and
 TextBox behavior, dialogs and system scrollbars. Never copy traffic-light offsets,
 AppKit titlebar hooks, SF Symbols or menu-bar conventions. Keep existing Ctrl+N/W.
 
-WinUI resources in `app-windows/Design.xaml` supply the implemented roles. Native
+WinUI resources in `app-win/Design.xaml` supply the implemented roles. Native
 TabView templates retain their state machinery. The selected tab fill is the
 terminal canvas brush, and unselected tabs stay transparent on the caption strip.
 Status controls have 32-unit minimum height (33 including separator), rather than squeezing Windows controls into 24.
@@ -109,8 +109,8 @@ inspector, panel and host-tile concepts are deliberately not implemented yet.
 
 ## Validation
 
-Build with Visual Studio MSBuild, `app-windows/TetherApp.Windows.csproj /p:Platform=x64`.
-Both Visual Studio MSBuild and `dotnet build app-windows/TetherApp.Windows.csproj -p:Platform=x64 --no-restore` pass. No SDK or business-logic changes were made.
+Build with Visual Studio MSBuild, `app-win/TetherApp.Windows.csproj /p:Platform=x64`.
+Both Visual Studio MSBuild and `dotnet build app-win/TetherApp.Windows.csproj -p:Platform=x64 --no-restore` pass. No SDK or business-logic changes were made.
 
 Debug executable accepts `--ui-preview` (dark) and `--ui-preview --light`. This uses
 the real workspace XAML and native tabs, twenty deterministic labels including a

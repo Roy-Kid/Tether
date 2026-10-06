@@ -27,10 +27,11 @@ swift/Artifacts/
 # runtimes/ is produced by scripts/build-windows.ps1 and never committed
 # (Decisions/0017).
 .vs/
-/app-windows/bin/
+/.check-deps/
+/app-win/bin/
 /dotnet/**/bin/
 /tests/**/bin/
-/app-windows/obj/
+/app-win/obj/
 /dotnet/**/obj/
 /tests/**/obj/
 /dotnet/Tether/runtimes/

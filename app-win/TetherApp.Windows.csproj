@@ -12,6 +12,18 @@
     <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
     <RootNamespace>TetherApp</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Tether.ico</ApplicationIcon>
+    <AssemblyTitle>Tether</AssemblyTitle>
+    <Product>Tether</Product>
+    <Company>Tether contributors</Company>
+    <Description>Tether — SSH, local shells and extensible terminal workspaces.</Description>
+    <Copyright>Copyright © 2026 Tether contributors</Copyright>
+    <Version>0.0.0</Version>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+    <FileVersion>0.0.0.0</FileVersion>
+    <RepositoryUrl>https://github.com/Roy-Kid/Tether</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <!--
       WinUI 3 has no AnyCPU: an architecture-less build produces a process
       that dies at bootstrap with "This application could not be started".
@@ -37,6 +49,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets\Tether.ico" LogicalName="TetherApp.Icon" />
+    <EmbeddedResource Include="..\LICENSE" LogicalName="TetherApp.License" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.3916" />
   </ItemGroup>

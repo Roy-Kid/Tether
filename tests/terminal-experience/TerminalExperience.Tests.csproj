@@ -7,12 +7,12 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../dotnet/Tether/Tether.csproj" />
-    <Compile Include="../../app-windows/TerminalPreferences.cs" Link="TerminalPreferences.cs" />
-    <Compile Include="../../app-windows/ProcessTable.cs" Link="ProcessTable.cs" />
-    <Compile Include="../../app-windows/SessionHistoryStore.cs" Link="SessionHistoryStore.cs" />
-    <Compile Include="../../app-windows/WorkspacePreferences.cs" Link="WorkspacePreferences.cs" />
-    <Compile Include="../../app-windows/Selection.cs" Link="Selection.cs" />
-    <Compile Include="../../app-windows/Settings.cs" Link="Settings.cs" />
-    <Compile Include="../../app-windows/SessionStatus.cs" Link="SessionStatus.cs" />
+    <Compile Include="../../app-win/TerminalPreferences.cs" Link="TerminalPreferences.cs" />
+    <Compile Include="../../app-win/ProcessTable.cs" Link="ProcessTable.cs" />
+    <Compile Include="../../app-win/SessionHistoryStore.cs" Link="SessionHistoryStore.cs" />
+    <Compile Include="../../app-win/WorkspacePreferences.cs" Link="WorkspacePreferences.cs" />
+    <Compile Include="../../app-win/Selection.cs" Link="Selection.cs" />
+    <Compile Include="../../app-win/Settings.cs" Link="Settings.cs" />
+    <Compile Include="../../app-win/SessionStatus.cs" Link="SessionStatus.cs" />
   </ItemGroup>
 </Project>
