@@ -55,6 +55,8 @@ struct TerminalLayoutTests {
     set.close(a.id)
     #expect(set.visibleTabs.count == 1)
     #expect(set.current?.id == c.id)
+    c.onHistoryChanged?()
+    #expect(workspace.name == "A")
     set.close(c.id)
     #expect(set.tabs.isEmpty)
   }

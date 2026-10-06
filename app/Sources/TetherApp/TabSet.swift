@@ -227,15 +227,18 @@ final class TabSet {
         tab.historyID = id
         preparingHistoryIDs.insert(id)
       } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
-      tab.onHistoryChanged = { [weak self, weak tab] in
-        guard let self, let tab else { return }
-        if let workspace = self.terminalWorkspaces[tab.id], workspace.layout.leaves.count == 1 { workspace.name = tab.name }
-        self.persistHistory()
-      }
+      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
     }
   }
 
+  private func watchName(_ tab: SessionTab) {
+    tab.onNameChanged = { [weak self, weak tab] in
+      guard let self, let tab, let workspace = self.terminalWorkspaces[tab.id] else { return }
+      workspace.name = tab.name
+    }
+  }
   func adopt(_ tab: SessionTab, at index: Int? = nil) {
+    watchName(tab)
     if tab.history == nil && tab.historyID == nil { prepareHistory(tab) }
     if pendingSplit == nil { show(tab.host) }
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
@@ -266,6 +269,7 @@ final class TabSet {
   func replacePane(_ source: SessionTab, with replacement: SessionTab) {
     guard let key = workspaceID(for: source.id), let workspace = terminalWorkspaces[key],
       let index = tabs.firstIndex(where: { $0.id == source.id }) else { discardPrepared(replacement); return }
+    watchName(replacement)
     workspace.layout = workspace.layout.remapping([source.id: replacement.id])
     workspace.focused = replacement.id
     replacement.onDeclined = { [weak self] in self?.close(replacement.id, remember: false) }
@@ -572,7 +576,7 @@ final class TabSet {
   var closeQuestion: String {
     guard let id = pendingClose else { return "Close?" }
     let name =
-      tabs.first { $0.id == id }?.title
+      (closingWorkspace == id ? terminalWorkspaces[id]?.name : nil) ?? tabs.first { $0.id == id }?.title
       ?? extensions.first { $0.id == id }?.workspace.title
     guard let name, !name.isEmpty else { return "Close?" }
     return "Close \(name)?"

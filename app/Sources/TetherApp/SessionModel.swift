@@ -29,9 +29,10 @@ final class SessionTab: Identifiable {
   /// The host as it was when this tab last dialled.
   private(set) var host: Host
   /// Stable work-position name (`Terminal 1`), not the remote title.
-  var name: String { didSet { onHistoryChanged?() } }
+  var name: String { didSet { onNameChanged?(); onHistoryChanged?() } }
   var historyID: UUID?
   var history: SessionHistory?
+  var onNameChanged: (() -> Void)?
   var onHistoryChanged: (() -> Void)?
   private var reportedHistoryError = false
   private var lastHistoryUpdate = Date.distantPast
