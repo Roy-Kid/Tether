@@ -130,10 +130,11 @@ final class SessionTab: Identifiable {
   }
 
   /// A tab that opens a shell on a connection that is already authenticated.
-  init(host: Host, connection: RemoteConnection, known: KnownHosts, name: String) {
+  init(host: Host, connection: RemoteConnection, known: KnownHosts, name: String, directory: String? = nil) {
     self.host = host
     self.known = known
     self.name = name
+    self.startingDirectory = directory
     dialTask = Task { await attach(connection) }
   }
 
@@ -250,6 +251,11 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
+    if !host.isLocal, let directory = startingDirectory, !directory.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+      let quoted = "'" + directory.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+      try? session.send(.key(.text("cd -- " + quoted + "\r")))
+      startingDirectory = nil
+    }
     reportHistoryError()
     // Before the first byte where possible: a program can ask what the
     // background is in its first breath, and an unanswered question is

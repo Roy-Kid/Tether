@@ -15,6 +15,13 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
   let directory: String?
   let index: Int
   let attachments: [Attachment]
+  var layout: TerminalLayout?
+  var panes: [ClosedTerminal]?
+  var focusedPane: UUID?
+  var groupHost: Host?
+  var parentID: UUID?
+  var neighbor: UUID?
+  var splitVertical: Bool?
 
   @MainActor
   init(_ tab: SessionTab, index: Int) {
@@ -28,6 +35,15 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
       entry.attachment.restorationState.map { Attachment(pluginID: entry.pluginID, state: $0) }
     }
   }
+  @MainActor
+  init(workspace: TerminalWorkspace, root: SessionTab, panes: [SessionTab], index: Int) {
+    self.init(root, index: index)
+    layout = workspace.layout
+    self.panes = panes.map { ClosedTerminal($0, index: index) }
+    focusedPane = workspace.focused
+    groupHost = workspace.host
+  }
+
 }
 
 extension TabSet {
@@ -80,7 +96,7 @@ extension TabSet {
   /// Deleted hosts or changed security policies must not return through history.
   func reconcileClosedTabs(with hosts: [Host]) {
     closedTabs.removeAll { record in
-      record.host.isManaged && !hosts.contains { $0.sameSessionTarget(as: record.host) }
+      (record.panes ?? [record]).contains { pane in pane.host.isManaged && !hosts.contains { $0.sameSessionTarget(as: pane.host) } }
     }
     persistHistory()
     if let restoringTab, !closedTabs.contains(where: { $0.id == restoringTab }) {

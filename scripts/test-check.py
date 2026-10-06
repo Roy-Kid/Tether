@@ -40,6 +40,20 @@ class GateTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=self.root, check=check,
                               capture_output=True, text=True)
 
+    def test_cjk_preflight_uses_a_supported_language_tag(self):
+        def command(*args, **kwargs):
+            if args[0] == "fc-match":
+                self.assertEqual(args[-1], ":lang=zh-cn")
+                return "en|zh-cn|zh-tw"
+            return ""
+        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", side_effect=command):
+            gate.common()
+
+    def test_missing_cjk_font_blocks(self):
+        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", return_value="en|fr"):
+            with self.assertRaisesRegex(RuntimeError, "fonts-noto-cjk"):
+                gate.common()
+
     def test_unstaged_content_blocks(self):
         path = self.root / "example.txt"
         path.write_text("staged\n")

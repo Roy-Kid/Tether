@@ -42,6 +42,7 @@ enum Palette: Equatable {
 
 enum WorkspaceIntent: Equatable {
   case newTerminal
+  case splitTerminal(Bool)
   case restoreTab(UUID)
   case connect(Host)
   case edit(Host)
@@ -54,6 +55,26 @@ enum WorkspaceIntent: Equatable {
 final class TabSet {
   let keyBindings = KeyBindingStore()
   var tabs: [SessionTab] = []
+  var terminalWorkspaces: [UUID: TerminalWorkspace] = [:]
+  var suppressPersistence = false
+  var preparingHistoryIDs: Set<UUID> = []
+  var pendingSplit: (pane: UUID, vertical: Bool)?
+  var currentWorkspace: TerminalWorkspace? { selected.flatMap { terminalWorkspaces[$0] } }
+  func workspaceID(for pane: UUID) -> UUID? { terminalWorkspaces.first { $0.value.layout.leaves.contains(pane) }?.key }
+  func focusPane(_ id: UUID) {
+    guard let key = workspaceID(for: id), let workspace = terminalWorkspaces[key] else { return }
+    if selected == key && workspace.focused == id { return }
+    selected = key
+    workspace.focused = id
+    currentHost = workspace.host
+    accessory = nil
+    persistHistory()
+  }
+  func prepareSplit(_ vertical: Bool) {
+    guard let current, pendingSplit == nil else { return }
+    pendingSplit = (current.id, vertical)
+    intent = .splitTerminal(vertical)
+  }
   /// Recent user closes, newest last; persisted when a history store is supplied.
   var closedTabs: [ClosedTerminal] = []
   var restoringTab: UUID?
@@ -84,6 +105,8 @@ final class TabSet {
   /// status bar, not something a tab click toggles.
   var accessories: [PluginAccessory] = []
   var palette: Palette?
+  var closingWorkspace: UUID?
+  var workspaceCloseNotes: [String] = []
   var pendingClose: SessionTab.ID?
   private(set) var checkingClose: SessionTab.ID?
   private var closeCheck: Task<Void, Never>?
@@ -127,7 +150,7 @@ final class TabSet {
   }
 
   var current: SessionTab? {
-    tabs.first { $0.id == selected }
+    tabs.first { $0.id == (currentWorkspace?.focused ?? selected) }
   }
 
   var currentExtension: (any PluginWorkspace)? {
@@ -136,7 +159,7 @@ final class TabSet {
 
   var visibleTabs: [SessionTab] {
     guard let currentHost else { return [] }
-    return tabs.filter { $0.host.id == currentHost.id }
+    return tabs.filter { terminalWorkspaces[$0.id]?.host.id == currentHost.id || (terminalWorkspaces[$0.id] == nil && workspaceID(for: $0.id) == nil && $0.host.id == currentHost.id) }
   }
 
   var visibleExtensions: [WorkspaceEntry] {
@@ -155,13 +178,13 @@ final class TabSet {
 
   func open(_ host: Host, password: String, typedNow: Bool = false) {
     show(host)
-    adopt(SessionTab(host: host, password: password, typedNow: typedNow, known: known, name: nextName(for: host)))
+    adopt(SessionTab(host: host, password: password, typedNow: typedNow, known: known, name: nextName(for: host), directory: pendingSplit.flatMap { pending in tabs.first { $0.id == pending.pane }?.workingDirectory }))
   }
 
   /// Opens a new terminal on a connection that is already authenticated.
   func open(_ host: Host, on connection: RemoteConnection) {
     show(host)
-    adopt(SessionTab(host: host, connection: connection, known: known, name: nextName(for: host)))
+    adopt(SessionTab(host: host, connection: connection, known: known, name: nextName(for: host), directory: pendingSplit.flatMap { pending in tabs.first { $0.id == pending.pane }?.workingDirectory }))
   }
 
   /// The authenticated lease for this host, if one is already in hand.
@@ -188,7 +211,7 @@ final class TabSet {
     return "Terminal \(next)"
   }
 
-  func adopt(_ tab: SessionTab, at index: Int? = nil) {
+  func prepareHistory(_ tab: SessionTab) {
     if let historyStore, historyStore.canWrite {
       let restoring = tab.historyID != nil
       let id = tab.historyID ?? UUID()
@@ -196,21 +219,66 @@ final class TabSet {
         tab.history = try SessionHistory(directory: historyStore.location(id),
           lineLimit: HistoryPreference.limit(in: defaults), restoring: restoring)
         tab.historyID = id
+        preparingHistoryIDs.insert(id)
       } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
       tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
     }
-    show(tab.host)
+  }
+
+  func adopt(_ tab: SessionTab, at index: Int? = nil) {
+    if tab.history == nil && tab.historyID == nil { prepareHistory(tab) }
+    if pendingSplit == nil { show(tab.host) }
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
     // A person who declined a question the login asked has closed it.
     let id = tab.id
     tab.onDeclined = { [weak self] in self?.close(id, remember: false) }
     tabs.insert(tab, at: min(max(index ?? tabs.count, 0), tabs.count))
-    select(tab.id)
+    if let split = pendingSplit, let groupID = workspaceID(for: split.pane), let workspace = terminalWorkspaces[groupID] {
+      workspace.layout = workspace.layout.splitting(split.pane, adding: tab.id, vertical: split.vertical)
+      workspace.focused = tab.id
+      workspace.maximized = false
+      selected = groupID
+      pendingSplit = nil
+    } else {
+      terminalWorkspaces[tab.id] = TerminalWorkspace(tab)
+      select(tab.id)
+    }
+    if let historyID = tab.historyID { preparingHistoryIDs.remove(historyID) }
     persistHistory()
   }
 
+  func discardPrepared(_ pane: SessionTab) {
+    pane.onHistoryChanged = nil
+    if let id = pane.historyID { preparingHistoryIDs.remove(id) }
+    pane.close()
+  }
+
+  func replacePane(_ source: SessionTab, with replacement: SessionTab) {
+    guard let key = workspaceID(for: source.id), let workspace = terminalWorkspaces[key],
+      let index = tabs.firstIndex(where: { $0.id == source.id }) else { discardPrepared(replacement); return }
+    workspace.layout = workspace.layout.remapping([source.id: replacement.id])
+    workspace.focused = replacement.id
+    replacement.onDeclined = { [weak self] in self?.close(replacement.id, remember: false) }
+    tabs[index] = replacement
+    source.onHistoryChanged = nil
+    source.close()
+    if key == source.id {
+      terminalWorkspaces.removeValue(forKey: key)
+      terminalWorkspaces[replacement.id] = workspace
+      selected = replacement.id
+    }
+    if let id = replacement.historyID { preparingHistoryIDs.remove(id) }
+    persistHistory()
+  }
+
+  var visibleWorkspaceRoots: [SessionTab] { tabs.filter { terminalWorkspaces[$0.id] != nil || workspaceID(for: $0.id) == nil } }
+  func rootRecord(_ tab: SessionTab, index: Int) -> ClosedTerminal {
+    guard let workspace = terminalWorkspaces[tab.id] else { return ClosedTerminal(tab, index: index) }
+    return ClosedTerminal(workspace: workspace, root: tab, panes: tabs.filter { workspace.layout.leaves.contains($0.id) }, index: index)
+  }
   func persistHistory() {
-    historyStore?.save(open: tabs.enumerated().map { ClosedTerminal($0.element, index: $0.offset) }, closed: closedTabs)
+    guard !suppressPersistence else { return }
+    historyStore?.save(open: visibleWorkspaceRoots.enumerated().map { rootRecord($0.element, index: $0.offset) }, closed: closedTabs, retaining: preparingHistoryIDs)
     if let problem = historyStore?.problem { reportHistoryProblem(problem) }
   }
 
@@ -264,10 +332,11 @@ final class TabSet {
   }
 
   func select(_ id: UUID) {
+    if let key = workspaceID(for: id), key != id { focusPane(id); tabMenu = nil; return }
     selected = id
     if let tab = tabs.first(where: { $0.id == id }) {
-      currentHost = tab.host
-      lastByHost[tab.host.id] = id
+      currentHost = terminalWorkspaces[id]?.host ?? tab.host
+      lastByHost[currentHost!.id] = id
     } else if let host = currentHost {
       lastByHost[host.id] = id
     }
@@ -278,7 +347,7 @@ final class TabSet {
   /// First click on another tab selects it; click the active tab to open its menu.
   func handleTabClick(_ id: UUID) {
     if selected == id {
-      if let tab = tabs.first(where: { $0.id == id }) {
+      if let tab = current {
         if let picker = accessories.first(where: { $0.accessory.placement == .popover }),
           tab.canOpen(picker.id)
         {
@@ -369,6 +438,9 @@ final class TabSet {
     tabs.forEach { $0.close() }
     extensions.forEach { $0.workspace.close() }
     tabs.removeAll()
+    preparingHistoryIDs.removeAll()
+    terminalWorkspaces.removeAll()
+    pendingSplit = nil
     extensions.removeAll()
     selected = nil
     currentHost = nil
@@ -379,6 +451,8 @@ final class TabSet {
     accessory = nil
     sheet = nil
     pendingClose = nil
+    closingWorkspace = nil
+    workspaceCloseNotes = []
   }
 
   /// Everything a plugin has open, closed before it is turned off.
@@ -388,6 +462,55 @@ final class TabSet {
     if inspectorPlugin == pluginID { inspectorPlugin = nil }
     if sheet?.plugin == pluginID { sheet = nil }
     for tab in tabs { tab.detach(pluginID) }
+  }
+
+  func canSplit(vertical: Bool) -> Bool {
+    guard pendingSplit == nil, let workspace = currentWorkspace, let frame = workspace.paneFrames[workspace.focused] else { return false }
+    return vertical ? frame.height >= 205 : frame.width >= 325
+  }
+  func movePaneFocus(dx: Double, dy: Double) {
+    guard let workspace = currentWorkspace, !workspace.maximized, let source = workspace.paneFrames[workspace.focused] else { return }
+    let target = workspace.layout.leaves.filter { $0 != workspace.focused }.compactMap { id -> (UUID, Double)? in
+      guard let frame = workspace.paneFrames[id] else { return nil }
+      let x = Double(frame.midX - source.midX), y = Double(frame.midY - source.midY)
+      guard dx != 0 ? x * dx > 1 : y * -dy > 1 else { return nil }
+      return (id, x * x + y * y)
+    }.min { $0.1 < $1.1 }
+    if let target { focusPane(target.0) }
+  }
+  func requestCloseWorkspace(_ id: UUID) {
+    guard let workspace = terminalWorkspaces[id], workspace.layout.leaves.count > 1 else { requestClose(id); return }
+    guard pendingClose == nil, checkingClose == nil else { return }
+    checkingClose = id
+    workspaceCloseNotes = []
+    closeCheck = Task { [weak self] in
+      guard let self else { return }
+      for paneID in workspace.layout.leaves {
+        guard let pane = self.tabs.first(where: { $0.id == paneID }) else { continue }
+        let activity = pane.isLive ? await self.inspectActivity(pane) : .idle
+        if let note = activity.closeMessage { self.workspaceCloseNotes.append(pane.title + ": " + note) }
+        self.workspaceCloseNotes += pane.attachments.compactMap(\.attachment.closeNote)
+        if pane.attachments.contains(where: { $0.attachment.requiresCloseConfirmation }), self.workspaceCloseNotes.isEmpty {
+          self.workspaceCloseNotes.append(pane.title)
+        }
+      }
+      guard !Task.isCancelled, self.checkingClose == id else { return }
+      self.checkingClose = nil
+      self.closeCheck = nil
+      if self.workspaceCloseNotes.isEmpty { self.closeWorkspace(id) }
+      else { self.closingWorkspace = id; self.pendingClose = id }
+    }
+  }
+  func closeWorkspace(_ id: UUID) {
+    guard let workspace = terminalWorkspaces[id], let root = tabs.first(where: { $0.id == id }) else { close(id); return }
+    let index = visibleWorkspaceRoots.firstIndex(where: { $0.id == id }) ?? 0
+    closedTabs.append(rootRecord(root, index: index))
+    closedTabs = Array(closedTabs.suffix(Self.closedTabLimit))
+    let ids = workspace.layout.leaves
+    suppressPersistence = true
+    for pane in ids { close(pane, remember: false) }
+    suppressPersistence = false
+    persistHistory()
   }
 
   /// Checks for work before closing a terminal. Open selectors dismiss first.
@@ -447,6 +570,7 @@ final class TabSet {
 
   /// Why closing needs confirmation, followed by any plugin consequences.
   var closeNote: String? {
+    if closingWorkspace != nil { return workspaceCloseNotes.joined(separator: "\n\n") }
     guard let tab = tabs.first(where: { $0.id == pendingClose }) else { return nil }
     let notes = [closeActivity.closeMessage].compactMap { $0 }
       + tab.attachments.compactMap(\.attachment.closeNote)
@@ -471,13 +595,20 @@ final class TabSet {
       return
     }
     guard let selected else { return }
-    requestClose(selected)
+    requestClose(current?.id ?? selected)
+  }
+
+  func cancelClose() {
+    pendingClose = nil
+    closingWorkspace = nil
+    workspaceCloseNotes = []
   }
 
   func confirmClose() {
     guard let id = pendingClose else { return }
     pendingClose = nil
-    close(id)
+    if closingWorkspace == id { closeWorkspace(id) } else { close(id) }
+    closingWorkspace = nil
   }
 
   func close(_ id: SessionTab.ID, remember: Bool = true) {
@@ -500,9 +631,17 @@ final class TabSet {
       return
     }
     guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-    let hostID = tabs[index].host.id
+    let groupID = workspaceID(for: id)
+    let workspace = groupID.flatMap { terminalWorkspaces[$0] }
+    let hostID = workspace?.host.id ?? tabs[index].host.id
     if remember {
-      closedTabs.append(ClosedTerminal(tabs[index], index: index))
+      var record = ClosedTerminal(tabs[index], index: index)
+      if let workspace, workspace.layout.leaves.count > 1, let neighbor = workspace.layout.neighbor(of: id) {
+        record.parentID = workspace.id
+        record.neighbor = neighbor.0
+        record.splitVertical = neighbor.1
+      }
+      closedTabs.append(record)
       if closedTabs.count > Self.closedTabLimit,
         let oldest = closedTabs.firstIndex(where: { $0.id != restoringTab }) {
         closedTabs.remove(at: oldest)
@@ -511,12 +650,25 @@ final class TabSet {
     tabs[index].close()
     if let error = tabs[index].history?.error { reportHistoryProblem(error) }
     tabs.remove(at: index)
+    if let groupID, let workspace {
+      if let remaining = workspace.layout.removing(id) {
+        workspace.layout = remaining
+        workspace.focused = remaining.leaves.first!
+        workspace.maximized = false
+        if groupID == id {
+          terminalWorkspaces.removeValue(forKey: groupID)
+          terminalWorkspaces[workspace.focused] = workspace
+          if let root = tabs.first(where: { $0.id == workspace.focused }) { root.name = workspace.name }
+          if selected == groupID { selected = workspace.focused }
+        }
+      } else { terminalWorkspaces.removeValue(forKey: groupID) }
+    }
     persistHistory()
 
     // Stay on this host even when the last tab closes. Jumping to another
     // machine is a choice, not a side effect of tidying.
-    if selected == id {
-      let remaining = tabs.filter { $0.host.id == hostID }.map(\.id)
+    if selected == id && terminalWorkspaces[id] == nil {
+      let remaining = visibleTabs.filter { (terminalWorkspaces[$0.id]?.host.id ?? $0.host.id) == hostID }.map(\.id)
         + extensions.filter { $0.hostID == hostID || $0.hostID == nil }.map(\.id)
       selected = remaining.last
       if let host = currentHost {
@@ -592,7 +744,11 @@ final class TabSet {
     if renaming == id { renaming = nil }
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, let tab = tabs.first(where: { $0.id == id }) else { return }
-    tab.name = trimmed
+    if let key = workspaceID(for: id), let workspace = terminalWorkspaces[key] {
+      workspace.name = trimmed
+      tabs.first(where: { $0.id == key })?.name = trimmed
+    } else { tab.name = trimmed }
+    persistHistory()
   }
 
   /// A word only when the green dot is not enough. Connected is the

@@ -89,6 +89,7 @@ public sealed class ChildHwnd : IDisposable
     public nint Handle => _hwnd;
 
     public bool IsAlive => _hwnd != 0;
+    public Action? Focused { get; set; }
 
     /// <summary>
     /// Creates the child inside <paramref name="parent"/>, filling
@@ -248,6 +249,7 @@ public sealed class ChildHwnd : IDisposable
 
         switch (msg)
         {
+            case 0x0007: child.Focused?.Invoke(); break;
             case WM_POINTERWHEEL:
                 child._pointerInput = true;
                 child.DispatchPointer(hWnd, ChildPointerKind.Wheel, lParam, screenPoint: true, (short)(wParam >> 16));

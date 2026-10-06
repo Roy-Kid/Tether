@@ -19,7 +19,7 @@ enum HistoryPreference {
 @MainActor
 final class SessionHistoryStore {
   struct Manifest: Codable, Equatable {
-    var version = 1
+    var version = 2
     var closed: [ClosedTerminal]
     var open: [ClosedTerminal]
   }
@@ -49,7 +49,13 @@ final class SessionHistoryStore {
     guard FileManager.default.fileExists(atPath: path.path) else { return [] }
     do {
       let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: path))
-      guard manifest.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+      guard (1...2).contains(manifest.version) else { throw CocoaError(.fileReadCorruptFile) }
+      for record in manifest.open + manifest.closed {
+        guard let layout = record.layout else { continue }
+        let panes = Set((record.panes ?? []).map(\.id))
+        guard record.panes != nil, record.panes?.count == panes.count, layout.isValid(panes: panes),
+          record.focusedPane.map({ panes.contains($0) }) ?? true else { throw CocoaError(.fileReadCorruptFile) }
+      }
       lastSaved = manifest
       // Open sessions left by an exit/crash are recoverable too. Nothing is
       // reconnected until the person asks to restore a tab.
@@ -61,7 +67,7 @@ final class SessionHistoryStore {
     }
   }
 
-  func save(open: [ClosedTerminal], closed: [ClosedTerminal]) {
+  func save(open: [ClosedTerminal], closed: [ClosedTerminal], retaining: Set<UUID> = []) {
     guard canWrite else { return }
     let manifest = Manifest(closed: closed, open: open)
     guard manifest != lastSaved else { return }
@@ -71,7 +77,7 @@ final class SessionHistoryStore {
       try data.write(to: path, options: [.atomic])
       try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
       lastSaved = manifest
-      let retained = Set((open + closed).compactMap(\.historyID))
+      let retained = Set((open + closed).flatMap { [$0] + ($0.panes ?? []) }.compactMap(\.historyID)).union(retaining)
       for child in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
         if let id = UUID(uuidString: child.lastPathComponent), !retained.contains(id) {
           try FileManager.default.removeItem(at: child)

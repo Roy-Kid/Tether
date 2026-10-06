@@ -15,12 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / ".check-deps"))
 
 
-def run(*command, capture=False):
+def run(*command, capture=False, cwd=None):
     command = list(map(str, command))
     if command[0] == "dotnet" and sys.platform == "win32" and not shutil.which("dotnet"):
         command[0] = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "dotnet/dotnet.exe")
     print("+ " + " ".join(map(str, command)), flush=True)
-    return subprocess.run(command, cwd=ROOT, check=True,
+    return subprocess.run(command, cwd=cwd or ROOT, check=True,
                           text=True, encoding="utf-8", errors="replace",
                           stdout=subprocess.PIPE if capture else None).stdout
 
@@ -84,7 +84,7 @@ def common():
     run(sys.executable, "scripts/test-check.py")
     source_checks()
     if sys.platform.startswith("linux"):
-        languages = run("fc-match", "--format=%{lang}", ":lang=zh", capture=True)
+        languages = run("fc-match", "--format=%{lang}", ":lang=zh-cn", capture=True)
         require("zh" in languages, "Install fonts-dejavu-core and fonts-noto-cjk before checking.")
     run("cargo", "fmt", "--all", "--check")
     run("cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings")
@@ -142,6 +142,8 @@ def apple(build=True):
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
                     "app/Plugins/Tmux", "app/Plugins/Files", "app"):
         run("swift", "test", "--package-path", package)
+    run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
+        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "build", cwd=ROOT / "app")
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
         run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession")

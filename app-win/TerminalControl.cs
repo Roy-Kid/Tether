@@ -81,6 +81,7 @@ public sealed class TerminalControl : Control
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
+        LayoutUpdated += (_, _) => { if (_ready) _child?.Fit(this); };
         GotFocus += (_, _) => FocusTerminal();
         KeyDown += OnKeyDown;
         CharacterReceived += OnCharacterReceived;
@@ -172,7 +173,7 @@ public sealed class TerminalControl : Control
         }
         await EnsureSurfaceAsync();
         Redraw();
-        FocusTerminal();
+        if (WantsFocus?.Invoke() ?? true) FocusTerminal();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -188,6 +189,20 @@ public sealed class TerminalControl : Control
     /// the XAML press or activation that asked is still in flight and would
     /// take focus back to the XAML island once it finishes.
     /// </summary>
+    public void DisposeSurface()
+    {
+        _ready = false;
+        _autoScroll.Stop();
+        _gridResize.Stop();
+        AppSettings.Changed -= ApplyPreferences;
+        _surface?.Dispose(); _surface = null;
+        _child?.Dispose(); _child = null;
+        TerminalFocused = null;
+    }
+
+    public Func<bool>? WantsFocus { get; set; }
+    public Action? TerminalFocused { get; set; }
+
     public void FocusTerminal()
     {
         _uiQueue.TryEnqueue(() =>
@@ -218,6 +233,7 @@ public sealed class TerminalControl : Control
     private async Task CreateSurfaceAsync(nint parent)
     {
         _child ??= ChildHwnd.Create(parent, this, SendText, HandleKey, OnChildPointer);
+        _child.Focused = () => TerminalFocused?.Invoke();
         _child.Fit(this);
         var (width, height) = _child.Size;
         _backedWidth = width;
@@ -312,7 +328,7 @@ public sealed class TerminalControl : Control
             if (!_ready) return;
             await EnsureSurfaceAsync();
             Redraw();
-            FocusTerminal();
+            if (WantsFocus?.Invoke() ?? true) FocusTerminal();
             return;
         }
         // Follow the control now, but do not rebuild the swap chain or ask

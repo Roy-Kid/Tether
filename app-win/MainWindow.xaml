@@ -79,7 +79,12 @@
       Content="&#xE72C;" Visibility="Collapsed" Click="Reconnect_Click"
       ToolTipService.ToolTip="Reconnect" AutomationProperties.Name="Reconnect" />
     </Grid>
-    <StackPanel x:Name="PluginButtons" Grid.Column="2" Orientation="Horizontal" />
+    <StackPanel Grid.Column="2" Orientation="Horizontal">
+     <Button x:Name="SplitRightButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89F;" Click="SplitRight_Click" ToolTipService.ToolTip="Split Left/Right" AutomationProperties.Name="Split Left/Right" />
+     <Button x:Name="SplitDownButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A0;" Click="SplitDown_Click" ToolTipService.ToolTip="Split Top/Bottom" AutomationProperties.Name="Split Top/Bottom" />
+     <Button Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE740;" Click="MaximizePane_Click" ToolTipService.ToolTip="Maximize/Restore Pane" AutomationProperties.Name="Maximize/Restore Pane" />
+     <StackPanel x:Name="PluginButtons" Orientation="Horizontal" />
+    </StackPanel>
     <Button x:Name="SettingsButton" Grid.Column="3" Style="{StaticResource ChromeIconButtonStyle}"
      Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings" Content="&#xE713;" />
    </Grid>

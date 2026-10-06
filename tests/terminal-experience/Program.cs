@@ -3,6 +3,20 @@ using Tether;
 using TetherApp;
 using Windows.System;
 
+var firstPane = Guid.NewGuid();
+var secondPane = Guid.NewGuid();
+var thirdPane = Guid.NewGuid();
+var splitTree = SplitLayout.Leaf(firstPane).Split(firstPane, secondPane, false).Split(secondPane, thirdPane, true);
+Check(splitTree.Leaves.SequenceEqual(new[] { firstPane, secondPane, thirdPane }), "recursive split order");
+Check(splitTree.IsValid(new HashSet<Guid> { firstPane, secondPane, thirdPane }), "saved layout references exactly its panes");
+Check(!splitTree.IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject missing saved pane");
+Check(!new SplitLayout(null, Ratio: double.NaN, First: SplitLayout.Leaf(firstPane), Second: SplitLayout.Leaf(secondPane)).IsValid(new HashSet<Guid> { firstPane, secondPane }), "reject non-finite split ratio");
+Check(!new SplitLayout(null, First: SplitLayout.Leaf(firstPane), Second: SplitLayout.Leaf(firstPane)).IsValid(new HashSet<Guid> { firstPane }), "reject duplicate pane identities");
+Check(splitTree.Remove(secondPane)!.Leaves.SequenceEqual(new[] { firstPane, thirdPane }), "close collapses only its branch");
+Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Pane == thirdPane, "collapse to final leaf");
+Check(splitTree.Remove(firstPane)!.Remove(secondPane)!.Remove(thirdPane) is null, "last pane empties layout");
+Check(JsonSerializer.Deserialize<SplitLayout>(JsonSerializer.Serialize(splitTree)) == splitTree, "layout survives restart");
+
 var preferences = new TerminalPreferences();
 Check(preferences.Validate() is null, "defaults are valid");
 Check(!preferences.ConfirmPaste("echo hello"), "short single-line paste");

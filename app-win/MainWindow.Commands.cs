@@ -18,7 +18,7 @@ public sealed partial class MainWindow
         try
         {
             var notes = new List<string>();
-            foreach (var tab in _workspace.Tabs.ToArray())
+            foreach (var tab in _workspace.AllPanes.ToArray())
             {
                 var note = tab.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null)
                     ?? await ShellActivity.CloseNoteAsync(tab.Model);
@@ -32,6 +32,9 @@ public sealed partial class MainWindow
         }
         finally { _checkingWindowClose = false; _connecting = false; }
     }
+    private async void SplitRight_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitRight");
+    private async void SplitDown_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitDown");
+    private async void MaximizePane_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("maximizePane");
     private Window? _commandPicker;
 
     private void ApplyWorkspaceVisibility()
@@ -94,8 +97,18 @@ public sealed partial class MainWindow
                 case "newTerminal": await _workspace.AddAsync(); break;
                 case "changeHost": ShowHostPicker(); break;
                 case "closeTab": await CloseSelectedAsync(); break;
+                case "closeWorkspace": if (_workspace.ActiveGroup is { } group) await CloseTabAsync(group); break;
+                case "splitRight": await SplitSelectedAsync(false); break;
+                case "splitDown": await SplitSelectedAsync(true); break;
+                case "maximizePane":
+                    if (_workspace.ActiveGroup is { } active) { active.Maximized = !active.Maximized; OnWorkspaceChanged(); _workspace.Active?.Surface.FocusTerminal(); }
+                    break;
+                case "focusLeft": FocusPane(-1, 0); break;
+                case "focusRight": FocusPane(1, 0); break;
+                case "focusUp": FocusPane(0, -1); break;
+                case "focusDown": FocusPane(0, 1); break;
                 case "restoreTab":
-                    if (await _workspace.RestoreAsync() is { } restored)
+                    if (await _workspace.RestoreAsync(async (pane, host) => { await OpenHostAsync(host, pane); return pane.Model.IsLive; }) is { } restored)
                     {
                         var title = restored.Tab.Title;
                         if (restored.Host is { } host) await OpenHostAsync(host);
@@ -197,7 +210,7 @@ public sealed partial class MainWindow
     private async Task ShowHostEditorAsync()
     {
         _connecting = true;
-        try { await HostManager.ShowAsync(WorkspaceRoot.ActualTheme, host => _workspace.Tabs.Select(t => t.Model).FirstOrDefault(m =>
+        try { await HostManager.ShowAsync(WorkspaceRoot.ActualTheme, host => _workspace.AllPanes.Select(t => t.Model).FirstOrDefault(m =>
             m.IsLive && m.IsRemote && m.RemoteHost is { } current && IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host)), ChooseHostAsync); }
         finally { _connecting = false; _workspace.Active?.Surface.FocusTerminal(); }
     }

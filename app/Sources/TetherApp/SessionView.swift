@@ -8,6 +8,8 @@ struct SessionView: View {
   /// What pointing at the terminal's text does. The workspace decides,
   /// because it is what knows the tab's plugins.
   var links: TerminalLinks = .none
+  var active = true
+  var onFocus: () -> Void = {}
   @AppStorage("terminalAppearance") private var appearance = "system"
   @Environment(\.colorScheme) private var scheme
 
@@ -54,8 +56,10 @@ struct SessionView: View {
       TerminalSurface(
         frame: frame,
         dirtyRows: tab.dirtyRows,
+        active: active,
         onInput: { tab.send($0) },
         onResize: { tab.resize(columns: $0, rows: $1) },
+        onFocus: onFocus,
         onScroll: { tab.scroll($0) },
         onClaimWheel: { tab.claimWheel($0, column: $1, row: $2) },
         links: links)

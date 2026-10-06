@@ -5,12 +5,13 @@ enum WorkspaceAction: String, CaseIterable {
   case previousTab, nextTab, renameTerminal, manageHosts
   case toggleTabBar
   case restoreTab
+  case splitRight, splitDown, maximizePane, closeWorkspace, focusLeft, focusRight, focusUp, focusDown
 
   static var available: [Self] {
     #if os(macOS)
       allCases
     #else
-      allCases.filter { $0 != .inspector && $0 != .toggleTabBar }
+      allCases.filter { ![.inspector, .toggleTabBar, .splitRight, .splitDown, .maximizePane, .closeWorkspace, .focusLeft, .focusRight, .focusUp, .focusDown].contains($0) }
     #endif
   }
 
@@ -20,7 +21,15 @@ enum WorkspaceAction: String, CaseIterable {
     switch self {
     case .newTerminal: definition("New Terminal", "File", KeyBinding("n"), KeyBinding("t"))
     case .changeHost: definition("Change Host…", "File", KeyBinding("h", [.command, .shift]))
-    case .closeTab: definition("Close Tab", "File", KeyBinding("w"))
+    case .closeTab: definition("Close Pane", "File", KeyBinding("w"))
+    case .splitRight: definition("Split Left/Right", "Terminal", KeyBinding("d"))
+    case .splitDown: definition("Split Top/Bottom", "Terminal", KeyBinding("d", [.command, .shift]))
+    case .maximizePane: definition("Maximize/Restore Pane", "Terminal", KeyBinding("return", [.command, .shift]))
+    case .closeWorkspace: definition("Close Tab", "File", KeyBinding("w", [.command, .shift]))
+    case .focusLeft: definition("Focus Left Pane", "Terminal", KeyBinding("left", [.command, .shift]))
+    case .focusRight: definition("Focus Right Pane", "Terminal", KeyBinding("right", [.command, .shift]))
+    case .focusUp: definition("Focus Upper Pane", "Terminal", KeyBinding("up", [.command, .shift]))
+    case .focusDown: definition("Focus Lower Pane", "Terminal", KeyBinding("down", [.command, .shift]))
     case .restoreTab: definition("Restore Tab", "File", KeyBinding("t", [.command, .shift]))
     case .commandMenu:
       definition("Command Menu", "View", KeyBinding("p", [.command, .shift]), KeyBinding("p", [.control, .shift]))
@@ -83,6 +92,9 @@ extension TabSet {
     switch action {
     case .closeTab: selected != nil || palette != nil || hostPicker || accessory != nil || tabMenu != nil
     case .restoreTab: canRestoreTab
+    case .splitRight: canSplit(vertical: false)
+    case .splitDown: canSplit(vertical: true)
+    case .maximizePane, .closeWorkspace, .focusLeft, .focusRight, .focusUp, .focusDown: currentWorkspace != nil
     case .renameTerminal: current != nil
     case .inspector: !zen
     case .previousTab, .nextTab: !visibleIDs.isEmpty
@@ -93,6 +105,14 @@ extension TabSet {
   func perform(_ action: WorkspaceAction) {
     guard canPerform(action) else { return }
     switch action {
+    case .splitRight: prepareSplit(false)
+    case .splitDown: prepareSplit(true)
+    case .maximizePane: currentWorkspace?.maximized.toggle()
+    case .closeWorkspace: if let selected { requestCloseWorkspace(selected) }
+    case .focusLeft: movePaneFocus(dx: -1, dy: 0)
+    case .focusRight: movePaneFocus(dx: 1, dy: 0)
+    case .focusUp: movePaneFocus(dx: 0, dy: 1)
+    case .focusDown: movePaneFocus(dx: 0, dy: -1)
     case .newTerminal: intent = .newTerminal
     case .changeHost: hostPicker = true
     case .closeTab: requestCloseSelected()

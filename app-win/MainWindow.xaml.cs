@@ -16,6 +16,8 @@ public sealed partial class MainWindow : Window
     private bool _refreshingTabs;
     private bool _revealPending;
     private bool _connecting;
+    private readonly HashSet<TerminalPane> _wiredPanes = [];
+    private readonly Dictionary<Tab, SplitTerminalView> _splitViews = [];
     private Window? _hostPicker;
     private readonly Workspace _workspace = new();
 
@@ -93,7 +95,7 @@ public sealed partial class MainWindow : Window
         var palette = TerminalAppearance.Choose(WorkspaceRoot.ActualTheme == ElementTheme.Dark);
         _workspace.CurrentPalette = palette;
         Appearance.SetCanvas(palette);
-        foreach (var tab in _workspace.Tabs) tab.Surface.SetPalette(palette);
+        foreach (var tab in _workspace.AllPanes) tab.Surface.SetPalette(palette);
     }
 
     private void UpdateTitleBar()
@@ -163,16 +165,22 @@ public sealed partial class MainWindow : Window
         var current = _workspace.Active;
         // A status/title refresh must not unload the active terminal and
         // hide its native child window. Reparent only when switching tabs.
-        if (TerminalHostPlaceholder.Children.FirstOrDefault() != current?.Surface)
+        if (_workspace.ActiveGroup is { } group)
         {
-            TerminalHostPlaceholder.Children.Clear();
-            if (current is not null) TerminalHostPlaceholder.Children.Add(current.Surface);
+            if (!_splitViews.TryGetValue(group, out var view)) _splitViews[group] = view = new SplitTerminalView(group, _workspace);
+            view.Update();
+            if (TerminalHostPlaceholder.Children.FirstOrDefault() != view)
+            {
+                TerminalHostPlaceholder.Children.Clear();
+                TerminalHostPlaceholder.Children.Add(view);
+            }
+            foreach (var pane in group.Panes) Wire(pane);
         }
-        if (current is not null)
-        {
-            Wire(current);
-        }
+        else TerminalHostPlaceholder.Children.Clear();
+        foreach (var removed in _splitViews.Keys.Where(t => !_workspace.Tabs.Contains(t)).ToArray()) _splitViews.Remove(removed);
+        _wiredPanes.RemoveWhere(pane => !_workspace.Contains(pane));
         _workspace.Persist();
+        UpdateSplitButtons();
         RefreshStatusBar();
         ApplyWorkspaceVisibility();
         UpdateInspector();
@@ -200,7 +208,7 @@ public sealed partial class MainWindow : Window
 
     private void OnPluginsChanged()
     {
-        foreach (var tab in _workspace.Tabs)
+        foreach (var tab in _workspace.AllPanes)
         {
             if (tab.OpenInspector is { } open && !App.Plugins.IsEnabled(open)) tab.OpenInspector = null;
         }
@@ -211,7 +219,7 @@ public sealed partial class MainWindow : Window
 
     private async Task DetachDisabledAsync()
     {
-        foreach (var tab in _workspace.Tabs)
+        foreach (var tab in _workspace.AllPanes)
         {
             foreach (var plugin in App.Plugins.Plugins.Where(plugin => !App.Plugins.IsEnabled(plugin.Metadata.Id)))
                 await tab.DetachAsync(plugin.Metadata.Id);
@@ -253,7 +261,7 @@ public sealed partial class MainWindow : Window
             plugin.Metadata.Id == id && App.Plugins.IsEnabled(plugin.Metadata.Id)
             && plugin.Accessory.Placement == AccessoryPlacement.Inspector);
 
-    private void HideInspector(Tab tab)
+    private void HideInspector(TerminalPane tab)
     {
         tab.OpenInspector = null;
         if (_workspace.Active == tab)
@@ -263,7 +271,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private TabContext Context(Tab tab, ITabPlugin plugin) => new()
+    private TabContext Context(TerminalPane tab, ITabPlugin plugin) => new()
     {
         Model = tab.Model,
         InsertText = text => tab.Model.Send(new TerminalInput.Paste(text)),
@@ -280,19 +288,22 @@ public sealed partial class MainWindow : Window
         Dismiss = () => HideInspector(tab),
         WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
         DialogRoot = () => WorkspaceRoot.XamlRoot,
-        Overlay = tab.Surface.SetOverlayVisible,
+        Overlay = visible => { foreach (var pane in _workspace.AllPanes) pane.Surface.SetOverlayVisible(visible); },
     };
 
-    private void Wire(Tab tab)
+    private void Wire(TerminalPane tab)
     {
+        if (_wiredPanes.Add(tab)) tab.Surface.SizeChanged += (_, _) => UpdateSplitButtons();
         tab.Surface.WorkspaceShortcut = HandleWorkspaceShortcut;
+        tab.Surface.WantsFocus = () => _workspace.Active == tab;
+        tab.Surface.TerminalFocused = () => _workspace.Focus(tab);
         tab.Surface.QueryLink = link => QueryLinkAsync(tab, link);
         tab.Surface.TryOpenLink = link => TryOpenLink(tab, link);
         tab.Surface.LinkCommands = link => LinkCommands(tab, link);
         tab.Surface.ReceiveDrop = paths => ReceiveDropAsync(tab, paths);
     }
 
-    private IEnumerable<ITabAttachment> Interested(Tab tab)
+    private IEnumerable<ITabAttachment> Interested(TerminalPane tab)
     {
         foreach (var plugin in App.Plugins.Plugins.OfType<ITabPlugin>())
         {
@@ -301,7 +312,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<bool?> QueryLinkAsync(Tab tab, TerminalLink link)
+    private async Task<bool?> QueryLinkAsync(TerminalPane tab, TerminalLink link)
     {
         foreach (var attachment in Interested(tab))
         {
@@ -311,7 +322,7 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
-    private bool TryOpenLink(Tab tab, TerminalLink link)
+    private bool TryOpenLink(TerminalPane tab, TerminalLink link)
     {
         foreach (var attachment in Interested(tab))
         {
@@ -322,7 +333,7 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
-    private IReadOnlyList<(string Title, Action Run)> LinkCommands(Tab tab, TerminalLink link)
+    private IReadOnlyList<(string Title, Action Run)> LinkCommands(TerminalPane tab, TerminalLink link)
     {
         var commands = new List<(string, Action)>();
         foreach (var attachment in Interested(tab))
@@ -336,7 +347,7 @@ public sealed partial class MainWindow : Window
         return commands;
     }
 
-    private async Task ReceiveDropAsync(Tab tab, IReadOnlyList<string> paths)
+    private async Task ReceiveDropAsync(TerminalPane tab, IReadOnlyList<string> paths)
     {
         foreach (var attachment in Interested(tab))
         {
@@ -591,12 +602,21 @@ public sealed partial class MainWindow : Window
 #if DEBUG
         if (_preview) { HostName.Text = host.Label; return; }
 #endif
-        await OpenHostAsync(host);
+        if (_workspace.Active is not { } source) return;
+        var note = source.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(source.Model);
+        if (note is not null && await Alerts.ContentAsync("Change Host?", note, "Connect", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+        var replacement = new TerminalPane();
+        replacement.Model.SetPalette(_workspace.CurrentPalette);
+        await replacement.BindAsync(startShell: false);
+        await OpenHostAsync(host, replacement);
+        if (!replacement.Model.IsLive) { await replacement.DisposeAsync(); return; }
+        await _workspace.ReplacePaneAsync(source, replacement);
+        replacement.Surface.FocusTerminal();
     }
 
-    private async Task OpenHostAsync(HostEntry host)
+    private async Task OpenHostAsync(HostEntry host, TerminalPane? target = null)
     {
-        if (_workspace.Active is not { } tab) return;
+        if ((target ?? _workspace.Active) is not { } tab) return;
         tab.Title = host.Alias;
         tab.Model.Keep(host);
         if (host.JumpError is { } problem) { tab.Model.Fail(problem); return; }
@@ -637,7 +657,7 @@ public sealed partial class MainWindow : Window
                 var hopSecrets = await IdentityAuthentication.CredentialsAsync(endpoint, prompter, prompter, ConfirmIdentity);
                 route.Add(new(hop.HostName, hop.Port, hop.User ?? Environment.UserName, hopSecrets));
             }
-            if (dial.IsCancellationRequested || tab.Model.DialToken != dial || tab.Model.Generation != generation || !_workspace.Tabs.Contains(tab)) return;
+            if (dial.IsCancellationRequested || tab.Model.DialToken != dial || tab.Model.Generation != generation || (! _workspace.Contains(tab) && target is null)) return;
             tab.Model.NoteDialing();
             await tab.Model.ConnectAsync(Content.XamlRoot, new Destination(plan.Host, plan.Port, plan.User), secrets, route);
         }
@@ -648,6 +668,12 @@ public sealed partial class MainWindow : Window
         finally
         {
             _connecting = false;
+            if (tab.Model.IsLive && tab.StartingDirectory is { } directory && !directory.Any(char.IsControl))
+            {
+                var quoted = "'" + directory.Replace("'", "'\"'\"'") + "'";
+                if (Tether.KeyInput.FromVirtualKey(Windows.System.VirtualKey.None, false, false, false, "cd -- " + quoted + "\r") is { } input) tab.Model.Send(input);
+                tab.StartingDirectory = null;
+            }
             OnWorkspaceChanged();
             if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null) tab.Surface.FocusTerminal();
         }
@@ -681,9 +707,44 @@ public sealed partial class MainWindow : Window
             Down(Windows.System.VirtualKey.Control), Down(Windows.System.VirtualKey.Menu)));
     }
 
+    private void UpdateSplitButtons()
+    {
+        SplitRightButton.IsEnabled = _workspace.Active?.Surface.ActualWidth >= 325;
+        SplitDownButton.IsEnabled = _workspace.Active?.Surface.ActualHeight >= 205;
+    }
+
+    private async Task SplitSelectedAsync(bool vertical)
+    {
+        if (_workspace.Active is not { } source || (vertical ? source.Surface.ActualHeight < 205 : source.Surface.ActualWidth < 325)) return;
+        var pane = await _workspace.SplitAsync(vertical);
+        if (pane is null) return;
+        if (source.Model.RemoteHost is { } host)
+        {
+            await OpenHostAsync(host, pane);
+            if (!pane.Model.IsLive) { await _workspace.ClosePaneAsync(pane, remember: false); _workspace.Focus(source); return; }
+        }
+        pane.Surface.FocusTerminal();
+    }
+    private void FocusPane(int dx, int dy)
+    {
+        if (_workspace.Active is not { } source || _workspace.ActiveGroup is not { } group || group.Maximized) return;
+        Windows.Foundation.Point Center(TerminalPane pane) => pane.Surface.TransformToVisual(TerminalHostPlaceholder)
+            .TransformPoint(new Windows.Foundation.Point(pane.Surface.ActualWidth / 2, pane.Surface.ActualHeight / 2));
+        var origin = Center(source);
+        var target = group.Panes.Where(p => p != source).Select(p => (Pane: p, Point: Center(p)))
+            .Where(p => dx != 0 ? (p.Point.X - origin.X) * dx > 1 : (p.Point.Y - origin.Y) * dy > 1)
+            .OrderBy(p => Math.Pow(p.Point.X - origin.X, 2) + Math.Pow(p.Point.Y - origin.Y, 2)).FirstOrDefault().Pane;
+        if (target is not null) { _workspace.Focus(target); target.Surface.FocusTerminal(); }
+    }
+
     private async Task CloseSelectedAsync()
     {
-        if (_workspace.Active is { } tab) await CloseTabAsync(tab);
+        if (_workspace.Active is not { } pane) return;
+        if (_workspace.ActiveGroup?.Layout.Leaves.Count() == 1) { await CloseTabAsync(_workspace.ActiveGroup); return; }
+        var note = pane.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(pane.Model);
+        if (note is not null && await Alerts.ContentAsync("Close Pane?", note, "Close", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+        await _workspace.ClosePaneAsync(pane);
+        _workspace.Active?.Surface.FocusTerminal();
     }
 
     private async Task CloseTabAsync(Tab tab)
@@ -693,8 +754,13 @@ public sealed partial class MainWindow : Window
         if (!_closingTabs.Add(tab)) return;
         try
         {
-            var note = tab.Attachments.Select(attachment => attachment.CloseNote).FirstOrDefault(note => note is not null)
-                ?? await ShellActivity.CloseNoteAsync(tab.Model);
+            var notes = new List<string>();
+            foreach (var pane in tab.Panes)
+            {
+                var consequence = pane.Attachments.Select(a => a.CloseNote).FirstOrDefault(n => n is not null) ?? await ShellActivity.CloseNoteAsync(pane.Model);
+                if (consequence is not null) notes.Add(pane.Title + ": " + consequence);
+            }
+            var note = notes.Count == 0 ? null : string.Join("\n", notes);
             if (note is not null)
             {
                 _connecting = true;

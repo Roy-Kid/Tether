@@ -184,11 +184,11 @@ struct WorkspaceTabBar: View {
     }
     .popover(
       isPresented: Binding(
-        get: { tabs.accessory?.tab == id },
-        set: { if !$0 && tabs.accessory?.tab == id { tabs.accessory = nil } }
+        get: { tabs.accessory.map { (tabs.workspaceID(for: $0.tab) ?? $0.tab) == id } == true },
+        set: { if !$0 && tabs.accessory.map { (tabs.workspaceID(for: $0.tab) ?? $0.tab) == id } == true { tabs.accessory = nil } }
       ), arrowEdge: layout == .vertical ? .trailing : .bottom
     ) {
-      if let tab, let open = tabs.accessory, let attachment = tab.attachment(for: open.plugin) {
+      if let open = tabs.accessory, let pane = tabs.tabs.first(where: { $0.id == open.tab }), let attachment = pane.attachment(for: open.plugin) {
         attachment.accessoryContent()
       }
     }
@@ -320,6 +320,9 @@ struct HostStatusBar: View {
           inspectorButton(plugin)
         }
         #if os(macOS)
+          paneButton(.splitRight, symbol: "rectangle.split.2x1")
+          paneButton(.splitDown, symbol: "rectangle.split.1x2")
+          paneButton(.maximizePane, symbol: "arrow.up.left.and.arrow.down.right")
           settingsButton
         #endif
       }
@@ -329,6 +332,19 @@ struct HostStatusBar: View {
     .background(Theme.sidebar)
     .overlay(alignment: .top) { Divider() }
   }
+
+  #if os(macOS)
+  private func paneButton(_ action: WorkspaceAction, symbol: String) -> some View {
+    Button { tabs.perform(action) } label: {
+      Image(systemName: symbol).font(UIStyle.symbol)
+        .frame(width: UIStyle.Mark.icon, height: Chrome.status)
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .disabled(!tabs.canPerform(action))
+    .help(action.command.title)
+    .accessibilityLabel(action.command.title)
+  }
+  #endif
 
   /// An inspector plugin, beside Settings on the trailing edge: one
   /// toggle for the column beside the terminal, not an icon on every tab.
@@ -352,7 +368,7 @@ struct HostStatusBar: View {
   }
 
   private var hostLabel: String {
-    guard let host = tabs.currentHost else { return "Choose host" }
+    guard let host = tabs.current?.host ?? tabs.currentHost else { return "Choose host" }
     return host.label.isEmpty ? host.hostname : host.label
   }
 

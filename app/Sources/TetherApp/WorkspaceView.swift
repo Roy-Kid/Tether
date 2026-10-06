@@ -94,7 +94,7 @@ struct RootView: View {
       ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
           if tabs.showsTabBar && tabLayout == .horizontal {
-            WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestClose($0) })
+            WorkspaceTabBar(tabs: tabs, onClose: { tabs.requestCloseWorkspace($0) })
           } else {
             HStack(spacing: 0) {
               Color.clear.frame(width: Chrome.trafficLights)
@@ -106,7 +106,7 @@ struct RootView: View {
           }
           HSplitView {
             if tabs.showsTabBar && tabLayout == .vertical {
-              WorkspaceTabBar(tabs: tabs, layout: .vertical, onClose: { tabs.requestClose($0) })
+              WorkspaceTabBar(tabs: tabs, layout: .vertical, onClose: { tabs.requestCloseWorkspace($0) })
                 .frame(minWidth: Chrome.tabSidebarMin, idealWidth: Chrome.tabSidebarIdeal,
                        maxWidth: Chrome.tabSidebarMax)
             }
@@ -218,8 +218,128 @@ struct RootView: View {
     }
   }
 
+  private func sessionPassword(for host: Host) async throws -> (String, Bool) {
+    switch await passwordSource(for: host) {
+    case .none: return ("", false)
+    case .saved(let password): return (password, false)
+    case .ask:
+      let request = ConnectRequest(host: host)
+      let password: String = try await withCheckedThrowingContinuation { continuation in
+        reconnectAnswers[request.id] = continuation
+        ask(request)
+      }
+      return (password, true)
+    }
+  }
+
+  private func preparedSession(host: Host, name: String, directory: String?, historyID: UUID? = nil,
+                               leases: [UUID: RemoteConnection] = [:]) async throws -> SessionTab {
+    if let issue = host.connectionProblem { throw NSError(domain: "TetherWorkspace", code: 1, userInfo: [NSLocalizedDescriptionKey: issue]) }
+    var connection = leases[host.id]
+    if connection == nil { connection = try? await tabs.lease(for: host) }
+    let pane: SessionTab
+    if let connection {
+      pane = SessionTab(host: host, connection: connection, known: tabs.known, name: name, directory: directory)
+    } else {
+      let (password, typed) = try await sessionPassword(for: host)
+      pane = SessionTab(host: host, password: password, typedNow: typed, known: tabs.known, name: name, directory: directory)
+    }
+    pane.historyID = historyID
+    tabs.prepareHistory(pane)
+    do { _ = try await pane.connectionReady() }
+    catch { tabs.discardPrepared(pane); throw error }
+    return pane
+  }
+
+  private func changePaneHost(_ host: Host) async {
+    guard let source = tabs.current else { open(host); return }
+    tabs.hostPicker = false
+    let activity = source.isLive ? await source.activityForClose() : .idle
+    let notes = [activity.closeMessage].compactMap { $0 } + source.attachments.compactMap(\.attachment.closeNote)
+    if activity != .idle || source.attachments.contains(where: { $0.attachment.requiresCloseConfirmation }) {
+      let reply = await DialogPresenter.ask(Dialog(title: "Change Host?", message: notes.joined(separator: "\n"),
+        actions: [.cancel(), Dialog.Action("Connect") { _ in }]))
+      guard reply?.action == 1 else { return }
+    }
+    do {
+      let replacement = try await preparedSession(host: host, name: source.name, directory: nil)
+      tabs.replacePane(source, with: replacement)
+    } catch {
+      if !(error is CancellationError) { notice = WorkspaceNotice(title: "Could Not Connect", message: error.localizedDescription) }
+    }
+  }
+
+  private func splitTerminal(_ vertical: Bool) async {
+    guard let source = tabs.current, let groupID = tabs.workspaceID(for: source.id),
+      let workspace = tabs.terminalWorkspaces[groupID] else { tabs.pendingSplit = nil; return }
+    // Commit the tree only after a new independent shell is ready.
+    do {
+      let pane = try await preparedSession(host: source.host, name: "Terminal", directory: source.workingDirectory)
+      guard tabs.tabs.contains(where: { $0.id == source.id }) else { tabs.discardPrepared(pane); tabs.pendingSplit = nil; return }
+      tabs.pendingSplit = (source.id, vertical)
+      tabs.adopt(pane)
+      workspace.focused = pane.id
+    } catch {
+      tabs.pendingSplit = nil
+      tabs.focusPane(source.id)
+      if !(error is CancellationError) { notice = WorkspaceNotice(title: "Could Not Split Terminal", message: error.localizedDescription) }
+    }
+  }
+
+  private func restoreWorkspace(_ record: ClosedTerminal) async {
+    var prepared: [SessionTab] = []
+    var ids: [UUID: UUID] = [:]
+    var leases: [UUID: RemoteConnection] = [:]
+    do {
+      for saved in record.panes ?? [record] {
+        let host = latest(saved.host)
+        guard host.sameSessionTarget(as: saved.host), !host.isManaged || store.hosts.contains(where: { $0.sameSessionTarget(as: saved.host) }) else {
+          throw NSError(domain: "TetherWorkspace", code: 2, userInfo: [NSLocalizedDescriptionKey: "The saved host was removed or changed."])
+        }
+        let pane = try await preparedSession(host: host, name: saved.name, directory: saved.directory,
+          historyID: saved.historyID, leases: leases)
+        prepared.append(pane)
+        ids[saved.id] = pane.id
+        if let connection = pane.connection, host.allowsConnectionReuse { leases[host.id] = connection }
+      }
+      guard tabs.restoringTab == record.id, let root = prepared.first else { throw CancellationError() }
+      tabs.pendingSplit = nil
+      tabs.suppressPersistence = true
+      for pane in prepared { tabs.adopt(pane, at: record.index) }
+      #if os(macOS)
+      if let parent = tabs.terminalWorkspaces.first(where: { $0.value.id == record.parentID }) {
+        tabs.terminalWorkspaces.removeValue(forKey: root.id)
+        let neighbor = parent.value.layout.leaves.contains(record.neighbor ?? UUID()) ? record.neighbor! : parent.value.focused
+        parent.value.layout = parent.value.layout.splitting(neighbor, adding: root.id, vertical: record.splitVertical ?? false)
+        parent.value.focused = root.id
+        tabs.selected = parent.key
+      } else {
+        let workspace = TerminalWorkspace(root, host: record.groupHost)
+        workspace.layout = (record.layout ?? .pane(record.id)).remapping(ids)
+        workspace.focused = ids[record.focusedPane ?? record.id] ?? root.id
+        for pane in prepared { tabs.terminalWorkspaces.removeValue(forKey: pane.id) }
+        tabs.terminalWorkspaces[root.id] = workspace
+        tabs.selected = root.id
+      }
+      #endif
+      tabs.closedTabs.removeAll { $0.id == record.id }
+      tabs.restoringTab = nil
+      tabs.suppressPersistence = false
+      tabs.persistHistory()
+      for (saved, pane) in zip(record.panes ?? [record], prepared) { finishRestore(saved, tab: pane) }
+    } catch {
+      prepared.forEach { tabs.discardPrepared($0) }
+      tabs.cancelRestore(record.id)
+      if !(error is CancellationError) { notice = WorkspaceNotice(title: "Could Not Restore Tab", message: error.localizedDescription) }
+    }
+  }
+
   private func restoreTab(_ id: UUID) {
     guard let record = tabs.restoration(for: id) else { return }
+    if record.panes != nil || record.parentID != nil {
+      Task { await restoreWorkspace(record) }
+      return
+    }
     let host = latest(record.host)
     if host.isLocal {
       finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
@@ -335,6 +455,7 @@ struct RootView: View {
     reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
     if let id = request.restoring { tabs.cancelRestore(id) }
     if let id = request.retrying { tabs.close(id) }
+    if request.restoring == nil && request.retrying == nil { tabs.pendingSplit = nil }
   }
 
   /// A password that worked, kept — or said why not.
@@ -352,15 +473,19 @@ struct RootView: View {
         workspace.content().id(workspace.id)
           .padding(Chrome.margin)
       } else if let tab = tabs.current {
-        if let shown = tab.shown {
-          shown.content().id(tab.id)
-            .padding(Chrome.margin)
-        } else {
-          // The grid is the column. A window-colored gutter around it read
-          // as a second frame; the glyph margin lives inside the surface.
-          SessionView(tab: tab, links: links(for: tab)).id(tab.id)
-            .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
-        }
+        #if os(macOS)
+          if let workspace = tabs.currentWorkspace {
+            TerminalWorkspaceView(workspace: workspace, tabs: tabs) { pane in
+              AnyView(Group {
+                if let shown = pane.shown { shown.content() }
+                else { SessionView(tab: pane, links: links(for: pane), active: workspace.focused == pane.id, onFocus: { tabs.focusPane(pane.id) }).modifier(TerminalDrop(tab: pane) { drop($0, on: pane) }) }
+              }.terminalInputEnabled(terminalInputAllowed))
+            }
+          } else { SessionView(tab: tab, links: links(for: tab)).id(tab.id) }
+        #else
+          if let shown = tab.shown { shown.content().id(tab.id).padding(Chrome.margin) }
+          else { SessionView(tab: tab, links: links(for: tab)).id(tab.id).modifier(TerminalDrop(tab: tab) { drop($0, on: tab) }) }
+        #endif
       } else if tabs.currentHost != nil {
         EmptyWorkspace()
           .padding(Chrome.margin)
@@ -566,6 +691,7 @@ extension RootView {
       tabs.intent = nil
       switch intent {
       case .restoreTab(let id): restoreTab(id)
+      case .splitTerminal(let vertical): Task { await splitTerminal(vertical) }
       case .newTerminal:
         if let host = tabs.currentHost {
           open(host)
@@ -574,7 +700,13 @@ extension RootView {
         } else {
           tabs.hostPicker = true
         }
-      case .connect(let host): open(host)
+      case .connect(let host):
+        #if os(macOS)
+          if tabs.currentWorkspace != nil { Task { await changePaneHost(host) } }
+          else { open(host) }
+        #else
+          open(host)
+        #endif
       case .edit(let host):
         tabs.hostPicker = false
         editing = host
@@ -618,7 +750,7 @@ extension RootView {
       Dialog.confirm(
         tabs.closeQuestion, message: tabs.closeNote, verb: "Close Tab", role: .destructive,
         shortcuts: [.enter, .command("w")],
-        cancel: { tabs.pendingClose = nil }, perform: { tabs.confirmClose() })
+        cancel: { tabs.cancelClose() }, perform: { tabs.confirmClose() })
     }
     .dialog(for: tabs.renaming) { id in
       Dialog.input(
