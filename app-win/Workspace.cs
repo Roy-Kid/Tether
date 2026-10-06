@@ -1,4 +1,4 @@
-// Tabs. One job per conversation; a tab is a session.
+// Workspaces own split trees; every terminal pane owns an independent session.
 //
 // A new tab starts the local profile selected in Settings.
 
@@ -7,7 +7,7 @@ using TetherApp.Plugins;
 
 namespace TetherApp;
 
-/// <summary>One tab: a session and the surface that draws it.</summary>
+/// <summary>One terminal pane: a session and the surface that draws it.</summary>
 public sealed class TerminalPane : IAsyncDisposable
 {
     public Guid Id { get; }
@@ -52,11 +52,19 @@ public sealed class TerminalPane : IAsyncDisposable
         await attachment.DisposeAsync();
     }
 
-    public Dictionary<string, string> AttachmentStates => _attached.Where(p => p.Value.RestorationState is not null)
-        .ToDictionary(p => p.Key, p => p.Value.RestorationState!);
+    public Dictionary<string, string> AttachmentStates
+    {
+        get
+        {
+            var states = new Dictionary<string, string>(PendingAttachments);
+            foreach (var (id, attachment) in _attached)
+                if (attachment.RestorationState is { } state) states[id] = state;
+            return states;
+        }
+    }
     public IEnumerable<ITabAttachment> Attachments => _attached.Values;
 
-    public async Task BindAsync(string? profile = null, string? directory = null, bool startShell = true, string? wslDistribution = null)
+    public async Task BindAsync(string? profile = null, string? directory = null, bool startShell = true, string? wslDistribution = null, bool requireShell = false)
     {
         StartingDirectory = directory;
         await Surface.BindAsync(Model);
@@ -64,7 +72,7 @@ public sealed class TerminalPane : IAsyncDisposable
         // offers SSH as the other thing it can do. So does this one.
         var shell = profile ?? AppSettings.Current.Shell;
         Title = AppSettings.KnownShells.FirstOrDefault(profile => profile.Program == shell).Name ?? shell;
-        if (startShell && !await Model.OpenLocalAsync(shell, directory: directory, wslDistribution: wslDistribution)) throw new IOException(Model.Status);
+        if (startShell && !await Model.OpenLocalAsync(shell, directory: directory, wslDistribution: wslDistribution) && requireShell) throw new IOException(Model.LastError ?? Model.Status);
     }
 
     public async ValueTask DisposeAsync()
@@ -146,7 +154,7 @@ public sealed class Workspace : IAsyncDisposable
                 prepared.Add(pane);
                 pane.Model.SetPalette(CurrentPalette);
                 foreach (var (id, state) in saved.Attachments ?? []) pane.PendingAttachments[id] = state;
-                await pane.BindAsync(saved.Profile, saved.Directory, startShell: host is null, wslDistribution: saved.WslDistribution);
+                await pane.BindAsync(saved.Profile, saved.Directory, startShell: host is null, wslDistribution: saved.WslDistribution, requireShell: host is null);
                 if (host is not null)
                 {
                     pane.Model.Keep(host);
@@ -199,6 +207,7 @@ public sealed class Workspace : IAsyncDisposable
     {
         var group = _tabs.FirstOrDefault(t => t.Panes.Contains(pane));
         if (group is null || group.FocusedPane == pane.Id) return;
+        pane.OpenInspector = group.Focused.OpenInspector;
         group.FocusedPane = pane.Id;
         Changed?.Invoke();
     }
@@ -210,11 +219,12 @@ public sealed class Workspace : IAsyncDisposable
         try
         {
             await pane.BindAsync(source.Model.LocalProfile, await source.Model.ResolveWorkingDirectoryAsync(CancellationToken.None),
-                startShell: source.Model.RemoteHost is null, wslDistribution: source.Model.WslDistribution);
+                startShell: source.Model.RemoteHost is null, wslDistribution: source.Model.WslDistribution, requireShell: true);
             if (source.Model.RemoteHost is { } host) pane.Model.Keep(host);
         }
         catch { await pane.DisposeAsync(); throw; }
         if (!_tabs.Contains(group) || !group.Panes.Contains(source)) { await pane.DisposeAsync(); return null; }
+        pane.OpenInspector = source.OpenInspector;
         pane.Model.SessionChanged += NotifySessionChanged;
         group.Panes.Add(pane);
         group.Layout = group.Layout.Split(source.Id, pane.Id, vertical);
@@ -268,6 +278,7 @@ public sealed class Workspace : IAsyncDisposable
             _closed.Add(RecordPane(pane, _tabs.IndexOf(group)) with { ParentId = group.Id, Neighbor = neighbor, SplitVertical = parent.Vertical, SplitBefore = parent.First!.Pane == pane.Id, SplitRatio = parent.Ratio, NeighborPanes = (parent.First!.Pane == pane.Id ? parent.Second! : parent.First!).Leaves.ToArray() });
             if (_closed.Count > 20) _closed.RemoveAt(0);
         }
+        group.Panes.First(p => p.Id == neighbor).OpenInspector = pane.OpenInspector;
         group.Layout = group.Layout.Remove(pane.Id)!;
         group.FocusedPane = neighbor;
         group.Maximized = false;
@@ -280,6 +291,7 @@ public sealed class Workspace : IAsyncDisposable
     {
         var group = _tabs.FirstOrDefault(t => t.Panes.Contains(source));
         if (group is null) { await replacement.DisposeAsync(); return; }
+        replacement.OpenInspector = source.OpenInspector;
         group.Panes.Add(replacement);
         group.Layout = group.Layout.ReplacePane(source.Id, replacement.Id);
         group.FocusedPane = replacement.Id;

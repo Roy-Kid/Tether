@@ -133,6 +133,30 @@ struct TerminalLayoutTests {
   }
   #endif
 
+  @MainActor @Test("directional focus chooses the nearest visible pane and stays put at an edge")
+  func directionalFocus() throws {
+    let set = TabSet()
+    let a = SessionTab(preview: .local, known: KnownHosts(), name: "A", live: false)
+    let b = SessionTab(preview: .local, known: KnownHosts(), name: "B", live: false)
+    let c = SessionTab(preview: .local, known: KnownHosts(), name: "C", live: false)
+    set.adopt(a); set.pendingSplit = (a.id, false); set.adopt(b)
+    set.pendingSplit = (b.id, true); set.adopt(c)
+    let workspace = try #require(set.currentWorkspace)
+    workspace.paneFrames = [a.id: CGRect(x: 0, y: 0, width: 160, height: 100),
+      b.id: CGRect(x: 200, y: 0, width: 160, height: 100), c.id: CGRect(x: 200, y: 200, width: 160, height: 100)]
+    set.focusPane(a.id)
+    set.movePaneFocus(dx: 1, dy: 0)
+    #expect(set.current?.id == b.id)
+    set.movePaneFocus(dx: 0, dy: -1)
+    #expect(set.current?.id == c.id)
+    set.movePaneFocus(dx: 1, dy: 0)
+    #expect(set.current?.id == c.id)
+    workspace.maximized = true
+    set.movePaneFocus(dx: -1, dy: 0)
+    #expect(set.current?.id == c.id)
+    set.closeAll()
+  }
+
   @MainActor @Test("all pane histories survive restart without reconnecting")
   func persistence() throws {
     let directory = temporaryFile("split-history")

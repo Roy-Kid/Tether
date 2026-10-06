@@ -159,6 +159,26 @@ struct TabRestorationTests {
     ])
   }
 
+  @Test("unopened and disabled plugin restoration state survives another close")
+  func pendingPluginState() throws {
+    let tabs = TabSet()
+    let original = tab("A")
+    let state = Data("saved-directory".utf8)
+    original.pendingAttachments["test.files"] = state
+    tabs.adopt(original)
+    tabs.close(original.id)
+    let record = try takeRequest(tabs)
+    let restored = tab("A")
+    #expect(tabs.completeRestore(record.id, with: restored))
+    #expect(restored.pendingAttachments["test.files"] == state)
+    #expect(ClosedTerminal(restored, index: 0).attachments.first?.state == state)
+    let attachment = StubAttachment()
+    restored.attach(attachment, for: "test.files")
+    #expect(attachment.restorationState == state)
+    #expect(restored.pendingAttachments.isEmpty)
+    tabs.closeAll()
+  }
+
   @Test("a local pane opened on an existing lease retains its requested directory",
     .enabled(if: TerminalSession.isLocalAvailable))
   func localSplitDirectory() async throws {

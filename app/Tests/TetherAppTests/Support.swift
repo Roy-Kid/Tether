@@ -93,6 +93,7 @@ final class StubWorkspace: PluginWorkspace {
 
   func content() -> AnyView { AnyView(EmptyView()) }
   func inspector() -> AnyView { AnyView(EmptyView()) }
+  func restore(from state: Data) { restorationState = state }
   func close() { closed = true }
 }
 

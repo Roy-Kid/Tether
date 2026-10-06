@@ -351,8 +351,7 @@ struct RootView: View {
         tabs.tabs.contains(where: { $0.id == tab.id }) else { return }
       for saved in record.attachments {
         guard registry.isEnabled(saved.pluginID) else { continue }
-        prepareAttachment(saved.pluginID, on: tab)
-        tab.attachment(for: saved.pluginID)?.restore(from: saved.state)
+        if tab.attachment(for: saved.pluginID) == nil { prepareAttachment(saved.pluginID, on: tab) }
       }
     }
   }

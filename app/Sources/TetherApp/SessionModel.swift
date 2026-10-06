@@ -53,6 +53,7 @@ final class SessionTab: Identifiable {
 
   /// What tab plugins keep on this tab, in the order they first opened here.
   private(set) var attachments: [TabAttachmentEntry] = []
+  var pendingAttachments: [String: Data] = [:]
 
   /// Something the person has to be told, until they have been.
   private(set) var problem: SessionProblem?
@@ -668,6 +669,7 @@ final class SessionTab: Identifiable {
   func attach(_ attachment: any TabAttachment, for pluginID: String) {
     precondition(self.attachment(for: pluginID) == nil, "One attachment per plugin per tab")
     attachments.append(TabAttachmentEntry(pluginID: pluginID, attachment: attachment))
+    if let saved = pendingAttachments.removeValue(forKey: pluginID) { attachment.restore(from: saved) }
     onHistoryChanged?()
   }
 

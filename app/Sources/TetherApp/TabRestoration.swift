@@ -34,9 +34,11 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
     name = tab.name
     directory = tab.workingDirectory
     self.index = index
-    attachments = tab.attachments.compactMap { entry in
-      entry.attachment.restorationState.map { Attachment(pluginID: entry.pluginID, state: $0) }
+    var states = tab.pendingAttachments
+    for entry in tab.attachments {
+      if let state = entry.attachment.restorationState { states[entry.pluginID] = state }
     }
+    attachments = states.sorted { $0.key < $1.key }.map { Attachment(pluginID: $0.key, state: $0.value) }
   }
   @MainActor
   init(workspace: TerminalWorkspace, root: SessionTab, panes: [SessionTab], index: Int) {
@@ -83,6 +85,7 @@ extension TabSet {
     for (offset, pair) in zip(saved, panes).enumerated() {
       let (old, pane) = pair
       pane.historyID = old.historyID
+      pane.pendingAttachments = Dictionary(old.attachments.map { ($0.pluginID, $0.state) }, uniquingKeysWith: { _, latest in latest })
       ids[old.id] = pane.id
       adopt(pane, at: insertion + offset)
     }
