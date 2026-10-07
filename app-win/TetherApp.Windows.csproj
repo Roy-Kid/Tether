@@ -18,9 +18,9 @@
     <Company>Tether contributors</Company>
     <Description>Tether — SSH, local shells and extensible terminal workspaces.</Description>
     <Copyright>Copyright © 2026 Tether contributors</Copyright>
-    <Version>0.0.0</Version>
-    <AssemblyVersion>0.0.0.0</AssemblyVersion>
-    <FileVersion>0.0.0.0</FileVersion>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
     <RepositoryUrl>https://github.com/Roy-Kid/Tether</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -5,18 +5,26 @@
   IsSettingsVisible="False" IsPaneToggleButtonVisible="False" OpenPaneLength="220"
   Background="{ThemeResource ChromeWindowBrush}" SelectionChanged="Section_Changed">
   <NavigationView.MenuItems>
-   <NavigationViewItem Content="Startup" Tag="startup" Icon="Play" IsSelected="True" />
+   <NavigationViewItem Content="General" Tag="startup" Icon="Play" IsSelected="True" />
    <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
    <NavigationViewItem Content="Terminal" Tag="terminal" Icon="Keyboard" />
    <NavigationViewItem Content="Key Bindings" Tag="keys" Icon="Keyboard" />
-   <NavigationViewItem Content="History" Tag="history" Icon="Clock" />
+   <NavigationViewItem Content="Session History" Tag="history" Icon="Clock" />
    <NavigationViewItem Content="Files" Tag="files" Icon="Folder" />
    <NavigationViewItem Content="Identities" Tag="identities" Icon="Contact" />
    <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
   </NavigationView.MenuItems>
+  <NavigationView.PaneFooter>
+   <Border Padding="16,10" BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="0,1,0,0">
+    <Grid>
+     <TextBlock Text="Tether" VerticalAlignment="Center" />
+     <TextBlock x:Name="VersionLabel" Text="v0.1.0" HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.6" />
+    </Grid>
+   </Border>
+  </NavigationView.PaneFooter>
   <ScrollViewer Padding="{StaticResource SettingsPageInset}">
    <StackPanel Spacing="{StaticResource SpaceSection}" MaxWidth="640" HorizontalAlignment="Stretch">
-    <TextBlock x:Name="PageHeading" Text="Startup" Style="{StaticResource SubtitleTextBlockStyle}" />
+    <TextBlock x:Name="PageHeading" Text="General" Style="{StaticResource SubtitleTextBlockStyle}" />
     <Border x:Name="StartupPane" Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
      Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
      <StackPanel Spacing="{StaticResource SpaceGroup}">

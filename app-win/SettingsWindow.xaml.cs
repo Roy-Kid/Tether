@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -17,6 +18,8 @@ public sealed partial class SettingsWindow : Window
     {
         _plugins = plugins;
         InitializeComponent();
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        VersionLabel.Text = version is null ? "v0.1.0" : $"v{version.Major}.{version.Minor}.{version.Build}";
         AppBranding.Apply(this);
         BuildExtensions();
         BuildTerminal();
@@ -69,7 +72,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
         var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
-        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "History", "files" => "Files", "identities" => "Identities", _ => "Startup" };
+        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "Session History", "files" => "Files", "identities" => "Identities", _ => "General" };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;

@@ -24,7 +24,7 @@ built before using `-SkipNativeBuild`. Debug output retains separate files.
   windows without shipping a separate image file.
 - `Roy-Kid.Tether` is the process AppUserModelID and manifest identity.
 - Product, description, copyright, repository, license and version metadata are
-  declared in `TetherApp.Windows.csproj`. Version `0.0.0` matches the current
+  declared in `TetherApp.Windows.csproj`. Version `0.1.0` matches the current
   SDK and Apple app; update the manifest's four-part version with release bumps.
 - `app.manifest` requests normal user privileges, Windows 10/11 compatibility,
   per-monitor DPI awareness and long-path support. The project minimum is

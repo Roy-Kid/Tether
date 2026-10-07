@@ -138,8 +138,8 @@ cat > "$APP/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>$TETHER_BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>TetherApp</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.0.0</string>
-    <key>CFBundleVersion</key><string>0</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
     <key>CFBundleIcons</key>
     <dict>
         <key>CFBundlePrimaryIcon</key>

@@ -16,7 +16,7 @@
     <RootNamespace>Tether</RootNamespace>
     <AssemblyName>Tether</AssemblyName>
     <Description>Embeddable SSH terminal components — the C# façade.</Description>
-    <Version>0.0.0</Version>
+    <Version>0.1.0</Version>
     <!-- UniFFI's generated code uses unsafe blocks for the FFI seam. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Generated code carries Rust doc comments in a C# shape the compiler
