@@ -13,6 +13,7 @@ namespace TetherApp;
 
 public sealed partial class MainWindow : Window
 {
+    private TrayHost? _tray;
     private bool _refreshingTabs;
     private bool _revealPending;
     private bool _connecting;
@@ -46,10 +47,11 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => CompositionTarget.Rendering -= RevealSelectedTab;
         AppWindow.Closing += (sender, e) =>
         {
-            if (_windowCloseApproved) return;
+            if (_windowCloseApproved || _tray is null) return;
             e.Cancel = true;
-            _ = RequestWindowCloseAsync();
+            AppWindow.Hide();
         };
+        Closed += (_, _) => _tray?.Dispose();
         Closed += async (_, _) => await _workspace.DisposeAsync();
         BuildPluginButtons();
         App.Plugins.Changed += OnPluginsChanged;
@@ -57,6 +59,9 @@ public sealed partial class MainWindow : Window
 #if DEBUG
         if (TryShowPreview()) return;
 #endif
+        _tray = new TrayHost(
+            () => DispatcherQueue.TryEnqueue(ShowFromBackground),
+            () => DispatcherQueue.TryEnqueue(() => _ = QuitAsync()));
         AppSettings.Load();
         AppSettings.Changed += ApplyAppearance;
         Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;

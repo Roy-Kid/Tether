@@ -36,6 +36,8 @@
       <ComboBox x:Name="WslPicker" Header="WSL distribution" HorizontalAlignment="Stretch" />
       <TextBlock Text="PowerShell uses PowerShell 7 when available."
        Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <TextBlock Text="Closing the window keeps sessions running. Open Tether from the notification area. Quit Tether ends them."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
      </StackPanel>
     </Border>
     <Border Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"

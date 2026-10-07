@@ -11,7 +11,13 @@ public sealed partial class MainWindow
     private readonly HashSet<Tab> _closingTabs = [];
     private bool _zen;
     private bool _windowCloseApproved, _checkingWindowClose;
-    private async Task RequestWindowCloseAsync()
+    private void ShowFromBackground()
+    {
+        AppWindow.Show();
+        Activate();
+    }
+
+    private async Task QuitAsync()
     {
         if (_checkingWindowClose) return;
         _checkingWindowClose = true;
@@ -24,7 +30,7 @@ public sealed partial class MainWindow
                 var note = await CloseNotesAsync(tab);
                 if (note is not null) notes.Add(tab.Title + ": " + note);
             }
-            if (notes.Count > 0 && await Alerts.ContentAsync("Close Window?", string.Join("\n", notes), "Close", null,
+            if (notes.Count > 0 && await Alerts.ContentAsync("Quit Tether?", string.Join("\n", notes), "Quit", null,
                 WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
             _windowCloseApproved = true;
             _workspace.Persist();

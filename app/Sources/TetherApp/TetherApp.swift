@@ -1,11 +1,40 @@
 #if os(iOS)
   import UIKit
+#elseif os(macOS)
+  import AppKit
 #endif
 import FilesPlugin
 import SwiftUI
 import Tether
 import TetherPluginKit
 import TmuxPlugin
+
+#if os(macOS)
+  /// Closing the window is not quitting. Sessions stay up; the Dock and the
+  /// menu bar are how the window comes back.
+  final class TetherAppDelegate: NSObject, NSApplicationDelegate {
+    var reopen: () -> Void = {}
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+      false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+      if !flag { reopen() }
+      return true
+    }
+  }
+
+  private struct TetherMenuBar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+      Button("Show Tether") { openWindow(id: "main") }
+      Divider()
+      Button("Quit Tether") { NSApplication.shared.terminate(nil) }
+    }
+  }
+#endif
 
 @main
 struct TetherApp: App {
@@ -22,6 +51,9 @@ struct TetherApp: App {
   /// connecting and never held here (spec §18).
   private let secrets: any SecretStore = Keychain()
   @Environment(\.scenePhase) private var phase
+  #if os(macOS)
+    @NSApplicationDelegateAdaptor(TetherAppDelegate.self) private var appDelegate
+  #endif
   @State private var registry: PluginRegistry = {
     let registry = PluginRegistry()
     registry.register(TmuxPlugin())
@@ -36,6 +68,9 @@ struct TetherApp: App {
       // host list with nothing open in it.
       Window("Tether", id: "main") {
         root
+          .background {
+            MacWindowRestore(reopen: { appDelegate.reopen = $0 })
+          }
           .frame(minWidth: Chrome.windowMinWidth, minHeight: Chrome.windowMinHeight)
       }
       // `.contentSize` would bind the window to the content's *ideal* size,
@@ -47,6 +82,11 @@ struct TetherApp: App {
       .commands {
         WorkspaceCommands(tabs: tabs)
       }
+
+      MenuBarExtra("Tether", systemImage: "terminal") {
+        TetherMenuBar()
+      }
+      .menuBarExtraStyle(.menu)
 
       // A separate scene, because that is where a Mac keeps preferences and
       // where ⌘, already goes.
@@ -116,6 +156,20 @@ struct TetherApp: App {
       #endif
   }
 }
+
+#if os(macOS)
+  /// Records how to open the main window again after it has been closed.
+  private struct MacWindowRestore: View {
+    let reopen: (@escaping () -> Void) -> Void
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+      Color.clear
+        .frame(width: 0, height: 0)
+        .onAppear { reopen { openWindow(id: "main") } }
+    }
+  }
+#endif
 
 extension TetherApp {
   /// `Tether.app --open lab` connects to a saved host on launch.

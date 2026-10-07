@@ -380,6 +380,14 @@ private struct GeneralSettings: View {
         isOn: $openLocalAtLaunch)
     }
 
+    #if os(macOS)
+      SwiftUI.Section("Background") {
+        Text("Closing the window keeps sessions running. Open Tether again from the Dock or the menu bar. Quit Tether ends them.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    #endif
+
     SwiftUI.Section("When the Last Tab Closes") {
       Picker("After the Last Tab", selection: $closeLastTab) {
         Text("No open terminals").tag(LastTabPreference.stay)

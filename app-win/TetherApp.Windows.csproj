@@ -41,6 +41,7 @@
     -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <UseWinUI>true</UseWinUI>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
