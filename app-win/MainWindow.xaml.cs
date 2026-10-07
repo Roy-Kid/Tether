@@ -187,24 +187,60 @@ public sealed partial class MainWindow : Window
         UpdateInspector();
     }
 
+    private readonly Dictionary<string, (Button Button, Flyout Flyout)> _popovers = new();
+
     private void BuildPluginButtons()
     {
         PluginButtons.Children.Clear();
-        foreach (var plugin in App.Plugins.Plugins.OfType<ITabPlugin>()
-            .Where(plugin => plugin.Accessory.Placement == AccessoryPlacement.Inspector && App.Plugins.IsEnabled(plugin.Metadata.Id)))
+        _popovers.Clear();
+        foreach (var plugin in App.Plugins.Plugins.OfType<ITabPlugin>().Where(plugin => App.Plugins.IsEnabled(plugin.Metadata.Id)))
         {
-            var button = new ToggleButton
+            if (plugin.Accessory.Placement == AccessoryPlacement.Inspector)
             {
-                Style = (Style)Application.Current.Resources["ChromeIconToggleStyle"],
-                Content = plugin.Accessory.Glyph,
-                IsChecked = _workspace.Active?.OpenInspector == plugin.Metadata.Id,
-                Tag = plugin.Metadata.Id,
-            };
-            ToolTipService.SetToolTip(button, plugin.Accessory.Name);
-            AutomationProperties.SetName(button, plugin.Accessory.Name);
-            button.Click += (_, _) => ToggleInspector(plugin.Metadata.Id);
-            PluginButtons.Children.Add(button);
+                var button = new ToggleButton
+                {
+                    Style = (Style)Application.Current.Resources["ChromeIconToggleStyle"],
+                    Content = plugin.Accessory.Glyph,
+                    IsChecked = _workspace.Active?.OpenInspector == plugin.Metadata.Id,
+                    Tag = plugin.Metadata.Id,
+                };
+                ToolTipService.SetToolTip(button, plugin.Accessory.Name);
+                AutomationProperties.SetName(button, plugin.Accessory.Name);
+                button.Click += (_, _) => ToggleInspector(plugin.Metadata.Id);
+                PluginButtons.Children.Add(button);
+            }
+            else
+            {
+                var button = new Button
+                {
+                    Style = (Style)Application.Current.Resources["ChromeIconButtonStyle"],
+                    Content = plugin.Accessory.Glyph,
+                };
+                var flyout = new Flyout { Placement = FlyoutPlacementMode.TopEdgeAlignedLeft };
+                flyout.Closed += (_, _) => { flyout.Content = null; };
+                ToolTipService.SetToolTip(button, plugin.Accessory.Name);
+                AutomationProperties.SetName(button, plugin.Accessory.Name);
+                button.Click += (_, _) => ShowPopover(plugin, button, flyout);
+                _popovers[plugin.Metadata.Id] = (button, flyout);
+                PluginButtons.Children.Add(button);
+            }
         }
+    }
+
+    private void ShowPopover(ITabPlugin plugin, Button button, Flyout flyout)
+    {
+#if DEBUG
+        if (_preview) return;
+#endif
+        if (_workspace.Active is not { } tab) return;
+        var context = Context(tab, plugin);
+        context = context with { Dismiss = () => flyout.Hide() };
+        var attachment = tab.Attach(plugin, context);
+        if (attachment is TmuxAttachment tmux) tmux.UseDismiss(() => flyout.Hide());
+        flyout.Content = null;
+        flyout.Content = attachment.View;
+        flyout.ShowAt(button);
+        _ = attachment.ShownAsync();
     }
 
     private void OnPluginsChanged()
@@ -287,6 +323,18 @@ public sealed partial class MainWindow : Window
             }
         },
         Dismiss = () => HideInspector(tab),
+        HostLabel = tab.Model.RemoteHost?.Label ?? "localhost",
+        ShellLabel = string.IsNullOrWhiteSpace(tab.Title) ? "Shell" : tab.Title,
+        Shells = () => _workspace.AllPanes.Select(pane => new ShellChoice(pane.Id, pane.Title, pane == _workspace.Active)).ToArray(),
+        OpenShell = id =>
+        {
+            var pane = _workspace.AllPanes.FirstOrDefault(item => item.Id == id);
+            if (pane is null) return;
+            var index = _workspace.Tabs.ToList().FindIndex(group => group.Panes.Contains(pane));
+            if (index >= 0) _workspace.Select(index);
+            _workspace.Focus(pane);
+        },
+        NewShell = () => _ = _workspace.AddAsync(),
         WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
         DialogRoot = () => WorkspaceRoot.XamlRoot,
         Overlay = visible => { foreach (var pane in _workspace.AllPanes) pane.Surface.SetOverlayVisible(visible); },

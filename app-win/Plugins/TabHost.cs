@@ -10,9 +10,18 @@ using Tether;
 
 namespace TetherApp.Plugins;
 
-public enum AccessoryPlacement { Inspector }
+public enum AccessoryPlacement
+{
+    /// <summary>A chooser dismissed once chosen. A flyout on Windows, a popover on Mac.</summary>
+    Popover,
+    /// <summary>Kept beside the terminal. The window inspector.</summary>
+    Inspector,
+}
 
 public sealed record TabAccessory(string Glyph, string Name, AccessoryPlacement Placement);
+
+/// <summary>Another terminal on this machine, listed beside the tmux rows.</summary>
+public sealed record ShellChoice(Guid Id, string Title, bool Current);
 
 /// <summary>What a plugin offers for something a person pointed at.</summary>
 public sealed class LinkActions
@@ -23,13 +32,18 @@ public sealed class LinkActions
 }
 
 /// <summary>One terminal tab, as a plugin attached to it sees it.</summary>
-public sealed class TabContext
+public sealed record TabContext
 {
     public required SessionModel Model { get; init; }
     public required Action<string> InsertText { get; init; }
     public required Func<string?> WorkingDirectory { get; init; }
     public required Action Show { get; init; }
     public required Action Dismiss { get; init; }
+    public string HostLabel { get; init; } = "localhost";
+    public string ShellLabel { get; init; } = "Shell";
+    public Func<IReadOnlyList<ShellChoice>> Shells { get; init; } = () => [];
+    public Action<Guid> OpenShell { get; init; } = _ => { };
+    public Action NewShell { get; init; } = () => { };
     public required Func<nint> WindowHandle { get; init; }
     public required Func<XamlRoot?> DialogRoot { get; init; }
     public required Action<bool> Overlay { get; init; }

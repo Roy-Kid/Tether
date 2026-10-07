@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using TetherApp.Plugins;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
@@ -134,7 +135,7 @@ public sealed partial class MainWindow
                 case "zen": _zen = !_zen; ApplyWorkspaceVisibility(); if (!_zen) UpdateInspector(); break;
                 case "inspector":
                     if (_workspace.Active?.OpenInspector is not null) HideInspector(_workspace.Active);
-                    else if (App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().FirstOrDefault(p => App.Plugins.IsEnabled(p.Metadata.Id)) is { } plugin)
+                    else if (App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().FirstOrDefault(p => App.Plugins.IsEnabled(p.Metadata.Id) && p.Accessory.Placement == AccessoryPlacement.Inspector) is { } plugin)
                         ToggleInspector(plugin.Metadata.Id);
                     break;
                 case "manageHosts": await ShowHostEditorAsync(); break;
@@ -173,7 +174,13 @@ public sealed partial class MainWindow
             }
             foreach (var plugin in App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().Where(p => App.Plugins.IsEnabled(p.Metadata.Id)))
             {
-                rows.Add(new("Open " + plugin.Metadata.Name, plugin.Metadata.Name, () => { ToggleInspector(plugin.Metadata.Id); return Task.CompletedTask; }));
+                rows.Add(new("Open " + plugin.Metadata.Name, plugin.Metadata.Name, () =>
+                {
+                    if (plugin.Accessory.Placement == AccessoryPlacement.Popover && _popovers.TryGetValue(plugin.Metadata.Id, out var popover))
+                        ShowPopover(plugin, popover.Button, popover.Flyout);
+                    else ToggleInspector(plugin.Metadata.Id);
+                    return Task.CompletedTask;
+                }));
                 if (_workspace.Active is { } tab)
                     foreach (var command in tab.Attach(plugin, Context(tab, plugin)).Commands)
                         rows.Add(new(command.Title, command.Title, command.Run));
