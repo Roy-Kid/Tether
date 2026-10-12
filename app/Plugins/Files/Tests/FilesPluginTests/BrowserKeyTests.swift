@@ -168,6 +168,38 @@
       #expect(model.renaming == nil)
     }
 
+    /// SwiftUI routes a key to the list through the table's own responder
+    /// chain. A responder spliced in after the table — one per rebuilt view,
+    /// since a stale one could not unsplice itself — left space with nothing
+    /// to preview. The chain stays SwiftUI's.
+    @Test("the list's responder chain is left as SwiftUI built it")
+    func responderChainUntouched() async throws {
+      let source = StubSource([
+        "/": .directory, "/home": .directory, "/home/ada": .directory, "/home/ada/notes.txt": .file,
+      ])
+      let model = FilesTab(
+        tab: context(),
+        cache: FileCache(
+          host: UUID(),
+          base: FileManager.default.temporaryDirectory.appendingPathComponent("chain-\(UUID())")),
+        open: { _ in source }, defaults: cleanDefaults())
+      await model.go(to: "/home/ada")
+      let window = NSWindow(
+        contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.orderFrontRegardless()
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(500))
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      var responder = table.nextResponder
+      while let current = responder, current !== window {
+        let module = String(reflecting: type(of: current))
+        #expect(!module.hasPrefix("FilesPlugin."), "\(module) sits in the list's responder chain")
+        responder = current.nextResponder
+      }
+    }
+
     @Test("space previews a text file and Delete requests its removal")
     func spacePreviews() async throws {
       let source = StubSource([

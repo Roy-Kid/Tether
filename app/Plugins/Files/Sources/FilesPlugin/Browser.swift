@@ -262,8 +262,6 @@ private struct FileList: View {
   private final class ListKeyboardClaimView: NSView {
     var pasteFiles: (([URL]) -> Bool)?
     private var monitor: Any?
-    private let pasteSink = FilePasteSink()
-    private weak var attached: NSTableView?
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -278,21 +276,17 @@ private struct FileList: View {
         self.takeKeyboard(event)
         return event
       }
-      // The table is built on the layout pass that is still running.
-      DispatchQueue.main.async { [weak self] in self?.attach() }
     }
 
     func stop() {
       if let monitor { NSEvent.removeMonitor(monitor) }
       monitor = nil
-      detach()
     }
 
     /// ⌘V pastes. ⌃V does too when Finder left files on the pasteboard;
     /// otherwise it stays page down.
     private func pasteKey(_ event: NSEvent) -> NSEvent? {
       guard event.window === window else { return event }
-      attach()
       guard isPaste(event), ownsFirstResponder() else { return event }
       let files = CopiedFiles.urls()
       let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -328,7 +322,6 @@ private struct FileList: View {
       }
       if let table {
         window.makeFirstResponder(table)
-        attach(table)
       } else if let fallback {
         window.makeFirstResponder(fallback)
       }
@@ -344,28 +337,6 @@ private struct FileList: View {
         view = current.superview
       }
       return false
-    }
-
-    private func attach() {
-      guard let table = nearestTable() else { return }
-      attach(table)
-    }
-
-    private func attach(_ table: NSTableView) {
-      pasteSink.accept = { [weak self] in self?.pasteFiles?(CopiedFiles.urls()) ?? false }
-      if attached === table, table.nextResponder === pasteSink { return }
-      detach()
-      pasteSink.nextResponder = table.nextResponder
-      table.nextResponder = pasteSink
-      attached = table
-    }
-
-    private func detach() {
-      if let attached, attached.nextResponder === pasteSink {
-        attached.nextResponder = pasteSink.nextResponder
-      }
-      attached = nil
-      pasteSink.nextResponder = nil
     }
 
     /// The table this claim sits behind. The first ancestor that contains
@@ -385,22 +356,6 @@ private struct FileList: View {
         if let table = findTable(in: child) { return table }
       }
       return nil
-    }
-  }
-
-  /// Behind the list in the responder chain, so Edit ▸ Paste uploads the
-  /// files Finder copied. The table does not implement paste.
-  private final class FilePasteSink: NSResponder, NSMenuItemValidation {
-    var accept: (() -> Bool)?
-
-    @objc func paste(_ sender: Any?) {
-      if accept?() == true { return }
-      nextResponder?.tryToPerform(#selector(paste(_:)), with: sender)
-    }
-
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-      guard menuItem.action == #selector(paste(_:)) else { return true }
-      return !CopiedFiles.urls().isEmpty
     }
   }
 
