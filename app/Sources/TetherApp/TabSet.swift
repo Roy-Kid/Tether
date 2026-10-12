@@ -889,7 +889,7 @@ final class TabSet {
   }
 
   /// What a page's chip says beside its name: what stands in for its
-  /// focused shell — the tmux session it is attached to. Not the host: the
+  /// focused shell — the session a plugin attached it to. Not the host: the
   /// strip only ever shows the host bar's own host, so naming it on every
   /// chip would say the same word twice. Names are facts, not copy.
   func caption(for page: TerminalWorkspace) -> String {

@@ -78,7 +78,10 @@ struct ShellActivityTests {
     try session.send(.key(.text("sleep 30 &")))
     try session.send(.key(.enter))
     try await waitFor(.running(["sleep"]))
-    try session.send(.key(.text("kill $!; wait")))
+    // A job number, not `$!`: interactive bash reads `!;` as a history
+    // event, refuses the whole line, and the job outlives the test — the
+    // shell on CI's macOS runners is bash.
+    try session.send(.key(.text("kill %1; wait")))
     try session.send(.key(.enter))
     try await waitFor(.idle)
   }
