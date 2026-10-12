@@ -509,6 +509,8 @@ name = "tether-terminal"
 version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
+ "cursor-icon",
+ "serde",
  "thiserror",
  "tracing",
 ]
