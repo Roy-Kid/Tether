@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 import TetherUI
 
@@ -44,10 +45,38 @@ extension KeyBinding {
   /// that one is tried first. `nil` when the two are the same.
   static func unshifted(_ event: NSEvent) -> KeyBinding? {
     guard let typed = KeyBinding(event: event), typed.modifiers.contains(.shift),
-      let base = event.characters(byApplyingModifiers: []), base.count == 1
+      let base = asciiCharacter(keyCode: event.keyCode) ?? event.characters(byApplyingModifiers: []),
+      base.count == 1
     else { return nil }
     let unshifted = KeyBinding(base, typed.modifiers)
     return unshifted == typed || KeyBinding.namedKeys[typed.key] != nil || typed.isFunctionKey ? nil : unshifted
+  }
+
+  /// What a key types with no modifiers on the ASCII-capable layout.
+  ///
+  /// A shortcut is a chord of keys, and macOS reads ⌘ chords from that
+  /// layout whatever input method is active: with Pinyin on, the "[" key
+  /// types "【", but ⇧⌘[ is still ⇧⌘[. Reading the active input source
+  /// instead made the chord depend on what language someone was typing.
+  static func asciiCharacter(keyCode: UInt16) -> String? {
+    guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+      let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
+    else { return nil }
+    let layout = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue() as Data
+    var deadKeys: UInt32 = 0
+    var length = 0
+    var characters = [UniChar](repeating: 0, count: 4)
+    let status = layout.withUnsafeBytes { raw -> OSStatus in
+      guard let keyboard = raw.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else {
+        return OSStatus(paramErr)
+      }
+      return UCKeyTranslate(
+        keyboard, keyCode, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+        OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &deadKeys, characters.count, &length,
+        &characters)
+    }
+    guard status == noErr, length > 0 else { return nil }
+    return String(utf16CodeUnits: characters, count: length)
   }
 
 }
