@@ -84,10 +84,17 @@ final class PortTable {
 
   /// A scan is a command run on the far side, so it is not run more often
   /// than what it finds changes: soon after a change, then less and less
-  /// often while the ports stay as they were.
+  /// often while the ports stay as they were. Forwarding automatically is
+  /// the exception — it promises a server is reachable soon after it starts,
+  /// and a quiet spell is exactly when one is about to.
   enum Cadence {
     static let quickest: Duration = .seconds(3)
     static let slowest: Duration = .seconds(30)
+
+    static func next(after current: Duration, changed: Bool, forwarding: Bool) -> Duration {
+      if changed || forwarding { return quickest }
+      return min(current * 2, slowest)
+    }
   }
 
   init(lease: any PortLease) { self.lease = lease }
@@ -117,7 +124,8 @@ final class PortTable {
       return nil
     }
     let changed = await scanOnce(defaults: defaults)
-    interval = changed ? Cadence.quickest : min(interval * 2, Cadence.slowest)
+    interval = Cadence.next(
+      after: interval, changed: changed, forwarding: PortsPreferences.automatic(defaults))
     return interval
   }
 

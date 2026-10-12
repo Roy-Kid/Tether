@@ -120,13 +120,14 @@ struct PortTableTests {
     #expect(assigned.value)
   }
 
-  @Test("polling slows while nothing changes, and quickens on a change or on being shown")
+  @Test("a list watched without forwarding slows while nothing changes, and quickens on a change or on being shown")
   func backoff() async {
     let host = UUID()
     let lease = FakeLease()
     let table = PortTables.retain(host: host, lease: lease, polling: false)
     defer { PortTables.release(host: host) }
-    let store = defaults(automatic: true)
+    let store = defaults(automatic: false)
+    table.shown()
     lease.text = "8000\tmolab"
     var waits: [Duration?] = []
     for _ in 0..<6 { waits.append(await table.pollOnce(defaults: store)) }
@@ -134,9 +135,23 @@ struct PortTableTests {
     lease.text = "8000\tmolab\n9000\tother"
     #expect(await table.pollOnce(defaults: store) == .seconds(3))
     _ = await table.pollOnce(defaults: store)
+    table.hidden()
     table.shown()
     #expect(table.interval == .seconds(3))
     table.hidden()
+  }
+
+  @Test("forwarding automatically keeps the quick cadence, so a new server is forwarded within seconds")
+  func automaticStaysQuick() async {
+    let host = UUID()
+    let lease = FakeLease()
+    let table = PortTables.retain(host: host, lease: lease, polling: false)
+    defer { PortTables.release(host: host) }
+    let store = defaults(automatic: true)
+    lease.text = "8000\tmolab"
+    var waits: [Duration?] = []
+    for _ in 0..<5 { waits.append(await table.pollOnce(defaults: store)) }
+    #expect(waits == Array(repeating: .seconds(3), count: 5))
   }
 
   @Test("with nothing forwarded automatically, polling stops while no list is shown")
