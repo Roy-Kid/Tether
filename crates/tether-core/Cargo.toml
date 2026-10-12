@@ -10,7 +10,7 @@ description = "Session orchestration and the public API a consumer imports."
 tether-terminal = { path = "../tether-terminal" }
 tether-ssh = { path = "../tether-ssh" }
 tether-local = { path = "../tether-local" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 sha1 = "0.10"

@@ -558,6 +558,12 @@ impl Terminal {
         crate::input::encode(input, self.read_modes())
     }
 
+    /// The modes the remote program has set, as input would be encoded
+    /// against them now.
+    pub fn modes(&self) -> Modes {
+        self.read_modes()
+    }
+
     /// Where the viewport is, and how much history is behind it.
     pub fn viewport(&self) -> Viewport {
         Viewport { offset: self.inner.grid().display_offset(), history: self.history_lines() }

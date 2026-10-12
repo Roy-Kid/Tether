@@ -114,7 +114,7 @@ struct UnixTextEditingTests {
     defer { monitor.stop() }
     monitor.enabled = true
     monitor.textEditingEnabled = true
-    monitor.handle = { _, _ in true }
+    monitor.handle = { _, _, _ in true }
     let event = try key("w", .control, in: window)
     #expect(monitor.route(event) == nil)
     #expect(editor.string == "alpha beta")

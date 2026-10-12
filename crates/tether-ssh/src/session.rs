@@ -6,13 +6,24 @@
 //! not a convention a caller can forget (law: explicit flow).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::auth::{Challenge, Method, Prompt, Prompter};
 use crate::error::SshError;
 use crate::host::{Endpoint, HostVerifier, Verdict};
 use crate::key::{KeyError, KeyUnlocker, PrivateKey, Unlocking};
 use crate::shell::{Shell, WindowSize};
+
+/// Distinguishes one authenticated session from the next.
+///
+/// A consumer is handed a fresh wrapper every time it asks for the lease.
+/// The wrappers are not the session: this number is, so a forward opened on
+/// one wrapper is the same forward when the next wrapper arrives, and a
+/// redial — a new session — is not.
+fn next_session_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Bridges russh's callbacks onto our own policy interfaces.
 struct ClientHandler {
@@ -217,6 +228,7 @@ impl Connection {
                     return Ok(Step::Authenticated(Session {
                         handle: self.handle,
                         endpoint: self.endpoint,
+                        id: next_session_id(),
                     }));
                 }
                 Response::Failure { remaining_methods, partial_success } => {
@@ -264,9 +276,11 @@ impl Connection {
 
     fn step_from(self, result: russh::client::AuthResult) -> Step {
         match result {
-            russh::client::AuthResult::Success => {
-                Step::Authenticated(Session { handle: self.handle, endpoint: self.endpoint })
-            }
+            russh::client::AuthResult::Success => Step::Authenticated(Session {
+                handle: self.handle,
+                endpoint: self.endpoint,
+                id: next_session_id(),
+            }),
             russh::client::AuthResult::Failure { remaining_methods, partial_success } => {
                 let remaining = remaining_methods.iter().map(|m| Method(String::from(m))).collect();
                 if partial_success {
@@ -342,11 +356,17 @@ impl std::fmt::Debug for Connection {
 pub struct Session {
     handle: russh::client::Handle<ClientHandler>,
     endpoint: Endpoint,
+    id: u64,
 }
 
 impl Session {
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// Stable for this authenticated session, including across cloned leases.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Opens an interactive shell with a pseudo-terminal attached.
@@ -383,6 +403,21 @@ impl Session {
         let mut channel = self.handle.channel_open_session().await?;
         channel.exec(true, command).await?;
         confirm(&mut channel, "the command").await?;
+        Ok(Shell { channel, size: WindowSize::default() })
+    }
+
+    /// Opens a direct-tcpip channel to `host:port` as the server sees it.
+    ///
+    /// This is what `ssh -L` does for each accepted local connection
+    /// (RFC 4254 §7): the bytes are a TCP stream, not a shell, and the
+    /// server is the one that connects onward. Callers in this crate only
+    /// ever ask for the server's own loopback.
+    pub async fn direct_tcpip(&self, host: &str, port: u16) -> Result<Shell, SshError> {
+        let channel = self
+            .handle
+            .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+            .await
+            .map_err(|error| SshError::ShellRefused { cause: error.to_string() })?;
         Ok(Shell { channel, size: WindowSize::default() })
     }
 

@@ -39,6 +39,7 @@ extension HostStore {
   /// often: when nothing changed it writes nothing.
   func reconcile() {
     #if os(macOS)
+      ensureConfiguration()
       guard !unreadable else { return }
       let steps = ConfigImport.plan(.init(
         entries: config.entries, modified: Self.modificationDates(of: config.files),
@@ -51,12 +52,12 @@ extension HostStore {
   }
 
   /// Asks, when the file would change a host, whether to copy it over the
-  /// library. Called once, when the app opens. Declining leaves both as
-  /// they are.
+  /// library. Called once, when the app opens, after `refresh` has read the
+  /// file off the main actor. Declining leaves both as they are.
   func offerConfigurationImport() {
     #if os(macOS)
+      ensureConfiguration()
       guard !unreadable else { return }
-      reload()
       guard let offer = configurationOffer() else {
         pendingImport = nil
         return

@@ -7,13 +7,17 @@
 //! was written once and never learns which it got.
 use crate::{CancellationToken, Resolved, ScreenFrame, TerminalInput, TetherError};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tether_core::{Channel, Connection};
+use tether_core::{Channel, Connection, Listener};
 use tether_tmux::{Action, Transport};
 
 fn error(error: impl ToString) -> TetherError {
     TetherError::Protocol { cause: error.to_string() }
+}
+
+fn forwarded(listener: &Listener) -> ForwardedPort {
+    ForwardedPort { local_port: listener.local_port(), already_local: listener.already_local() }
 }
 
 /// How much a command run for its answer may produce before it is refused.
@@ -42,6 +46,27 @@ impl Transport for Control {
 #[derive(uniffi::Object)]
 pub struct RemoteConnection {
     pub(crate) inner: Connection,
+    /// Listeners opened through this wrapper. A later wrapper of the same
+    /// session is a different object; the plugin keeps the one it forwarded on.
+    forwards: Mutex<HashMap<u16, Listener>>,
+}
+
+/// How many forwards one lease will hold at once.
+const FORWARD_LIMIT: usize = 20;
+
+/// A port forwarded to `127.0.0.1` on this machine.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ForwardedPort {
+    pub local_port: u16,
+    /// The shell is already on this machine, so `local_port` is the
+    /// program's own port and nothing was bound over it.
+    pub already_local: bool,
+}
+
+impl RemoteConnection {
+    pub(crate) fn from_connection(inner: Connection) -> Arc<Self> {
+        Arc::new(Self { inner, forwards: Mutex::new(HashMap::new()) })
+    }
 }
 /// A window discovered by listing, not by attaching. Listing is a capture;
 /// it must not open a control client.
@@ -71,6 +96,49 @@ pub struct CommandOutput {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl RemoteConnection {
+    /// Which authenticated session this lease is. Equal across wrappers of
+    /// one session, and different after a redial.
+    pub fn lease_id(&self) -> u64 {
+        self.inner.lease_id()
+    }
+
+    /// Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+    /// where this lease's shell is running.
+    ///
+    /// Asking again for a port that is already forwarded returns the existing
+    /// listener. A local shell reports the port and does not bind.
+    pub async fn forward_port(&self, port: u16) -> Result<ForwardedPort, TetherError> {
+        if port < 1024 {
+            return Err(error("ports below 1024 are not forwarded"));
+        }
+        {
+            let existing =
+                self.forwards.lock().map_err(|_| error("the forward table is unavailable"))?;
+            if let Some(listener) = existing.get(&port) {
+                return Ok(forwarded(listener));
+            }
+            if existing.len() >= FORWARD_LIMIT {
+                return Err(error("too many forwarded ports"));
+            }
+        }
+        let listener = self.inner.listen(port).await.map_err(error)?;
+        let mut forwards =
+            self.forwards.lock().map_err(|_| error("the forward table is unavailable"))?;
+        if let Some(listener) = forwards.get(&port) {
+            return Ok(forwarded(listener));
+        }
+        let result = forwarded(&listener);
+        forwards.insert(port, listener);
+        Ok(result)
+    }
+
+    /// Closes the local listener for `port`, and the connections it accepted.
+    pub fn stop_forward(&self, port: u16) {
+        if let Ok(mut forwards) = self.forwards.lock() {
+            forwards.remove(&port);
+        }
+    }
+
     /// Executes without creating a terminal or performing another authentication.
     /// Both output size and duration are bounded at this public boundary.
     pub async fn execute(

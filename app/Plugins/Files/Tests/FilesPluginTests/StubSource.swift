@@ -26,6 +26,11 @@ final class StubSource: FileSource, @unchecked Sendable {
   var listDelay: [String: Duration] = [:]
   /// Held for the length of every download; cancelling the task ends it.
   var downloadDelay: Duration?
+  /// What `lstat` answers instead, as a server that will not say whether a
+  /// name is free does.
+  var lstatFailure: FileError?
+  /// What every upload fails with, when set.
+  var uploadFailure: FileError?
   /// Destinations a download finished writing. A move out of the cache does
   /// not add to this.
   private var recordedDownloads: [String] = []
@@ -54,7 +59,10 @@ final class StubSource: FileSource, @unchecked Sendable {
       return entry(path)
     }
   }
-  func lstat(_ path: String) async throws -> FileEntry { try known(path) }
+  func lstat(_ path: String) async throws -> FileEntry {
+    if let lstatFailure { throw lstatFailure }
+    return try known(path)
+  }
 
   private func known(_ path: String) throws -> FileEntry {
     try lock.withLock {
@@ -79,6 +87,9 @@ final class StubSource: FileSource, @unchecked Sendable {
   func upload(
     _ source: String, to path: String, replacing: Bool, progress: (@Sendable (UInt64) -> Void)?
   ) async throws -> UInt64 {
+    if let uploadFailure { throw uploadFailure }
+    // As `RemoteFiles` does: a cancelled task is not sent.
+    if Task.isCancelled { throw FileError.cancelled }
     try lock.withLock {
       if files[path] != nil && !replacing { throw FileError.exists(path: path) }
       files[path] = .file

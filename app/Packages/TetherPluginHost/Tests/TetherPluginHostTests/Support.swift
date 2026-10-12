@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TetherPluginKit
 
 @testable import TetherPluginHost
 
@@ -17,9 +18,16 @@ final class ScriptedConsent: ConsentAsking {
 }
 
 @MainActor
-final class RecordedNotifier: HostNotifying {
-  var titles: [String] = []
-  func notify(title: String) async { titles.append(title) }
+final class RecordedPresenter: PluginPresenting {
+  var notes: [(String, String)] = []
+  var prompts: [PluginPrompt] = []
+  var answer = PluginAnswer(action: "confirm", value: "")
+
+  func notify(title: String, body: String) async { notes.append((title, body)) }
+  func ask(_ prompt: PluginPrompt) async -> PluginAnswer {
+    prompts.append(prompt)
+    return answer
+  }
 }
 
 @MainActor

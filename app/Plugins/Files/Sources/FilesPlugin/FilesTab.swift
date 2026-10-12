@@ -18,7 +18,7 @@ public final class FilesTab: TabAttachment {
   /// wins; this is what a person gets until they change it.
   static let previewLimit: UInt64 = UInt64(FilesPreferences.defaultMegabytes) * 1_000_000
   /// How much the preview cache keeps for one host.
-  static let cacheLimit: Int64 = 1024 * 1024 * 1024
+  nonisolated static let cacheLimit: Int64 = 1024 * 1024 * 1024
 
   public let tab: TabContext
   let cache: FileCache
@@ -45,6 +45,9 @@ public final class FilesTab: TabAttachment {
   var selection: Set<String> = []
   /// The entry whose name is being edited in place.
   var renaming: String?
+  /// True until the next turn after a paste was accepted. ⌘V arrives both as
+  /// a key and as the Paste menu; one of them has to be the paste.
+  private var pasteDelivered = false
   /// The find field occupies the directory name's slot. Closed, the browser
   /// shows the name. ⌃F opens it only while the list or the field has the
   /// keyboard — a shortcut on the window would take ⌃F from the shell.
@@ -741,6 +744,7 @@ extension FilesTab {
 
   /// Moves entries into another directory on the same machine.
   func move(_ moving: [FileEntry], into destination: String) async {
+    var failure: String?
     for entry in moving where Paths.parent(entry.path) != destination {
       // Into itself would be a loop the server refuses anyway; saying
       // nothing is kinder than relaying its complaint.
@@ -751,11 +755,11 @@ extension FilesTab {
       } catch FileError.exists {
         conflicts.append(Conflict(name: entry.name, target: target, action: .move(from: entry.path)))
       } catch {
-        problem = describe(error)
+        failure = describe(error)
       }
     }
     moving.forEach { forget($0.path) }
-    await relist(Set(moving.map { Paths.parent($0.path) } + [destination]))
+    await relist(Set(moving.map { Paths.parent($0.path) } + [destination]), keeping: failure)
   }
 
   func requestDelete(_ chosen: [FileEntry]) {
@@ -768,6 +772,7 @@ extension FilesTab {
   func confirmDelete(_ confirmed: [FileEntry]? = nil) async {
     let doomed = confirmed ?? pendingDeletion
     pendingDeletion = []
+    var failure: String?
     for entry in doomed {
       do {
         if entry.kind == .directory {
@@ -776,37 +781,66 @@ extension FilesTab {
           try await source().remove(entry.path)
         }
       } catch {
-        problem = describe(error)
+        failure = describe(error)
         break
       }
     }
     selection.subtract(doomed.map(\.path))
     doomed.forEach { forget($0.path) }
-    await relist(Set(doomed.map { Paths.parent($0.path) }))
+    await relist(Set(doomed.map { Paths.parent($0.path) }), keeping: failure)
   }
 
   // MARK: - Transfers
 
+  /// Files copied on this machine, sent where a new file would go.
+  ///
+  /// A folder that is not the root is opened so the copies show up in the
+  /// tree. Returns whether the paste was accepted: an empty board was not,
+  /// and a second delivery of the same ⌘V was already accepted.
+  @discardableResult
+  func pasteLocalFiles(_ files: [URL]) -> Bool {
+    let files = files.filter(\.isFileURL)
+    guard !files.isEmpty, let destination = targetDirectory else { return false }
+    guard claimPaste() else { return true }
+    if destination != directory { expanded.insert(destination) }
+    let scoped = files.filter { $0.startAccessingSecurityScopedResource() }
+    Task {
+      defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+      await upload(files, into: destination)
+    }
+    return true
+  }
+
+  /// One ⌘V is delivered twice, by the key and by the Paste menu.
+  private func claimPaste() -> Bool {
+    guard !pasteDelivered else { return false }
+    pasteDelivered = true
+    Task { @MainActor [weak self] in self?.pasteDelivered = false }
+    return true
+  }
+
   /// Sends files from this machine into `destination`, returning the paths
   /// that arrived. A name already there is asked about, not overwritten.
+  ///
+  /// Not stated first. The upload refuses a taken name itself, where it can
+  /// tell; a server that will not stat a name that is not there yet must
+  /// not stop the file before it has even shown a row.
   @discardableResult
   func upload(_ files: [URL], into destination: String) async -> [String] {
     var arrived: [String] = []
+    var failure: String?
     for file in files {
       let target = Paths.join(destination, file.lastPathComponent)
       do {
-        if try await exists(target) {
-          conflicts.append(
-            Conflict(name: file.lastPathComponent, target: target, action: .upload(file)))
-          continue
-        }
         try await send(file, to: target, replacing: false)
         arrived.append(target)
+      } catch FileError.exists {
+        conflicts.append(Conflict(name: file.lastPathComponent, target: target, action: .upload(file)))
       } catch {
-        if (error as? FileError) != .cancelled { problem = describe(error) }
+        if (error as? FileError) != .cancelled { failure = describe(error) }
       }
     }
-    await relist([destination])
+    await relist([destination], keeping: failure)
     return arrived
   }
 
@@ -821,6 +855,7 @@ extension FilesTab {
       target = Paths.join(destination, Names.free(conflict.name, taken: Set(taken)))
     }
     let replacing = choice == .replace
+    var failure: String?
     do {
       switch conflict.action {
       case .upload(let file):
@@ -829,14 +864,14 @@ extension FilesTab {
         try await source().rename(from, to: target, replacing: replacing)
       }
     } catch {
-      if (error as? FileError) != .cancelled { problem = describe(error) }
+      if (error as? FileError) != .cancelled { failure = describe(error) }
     }
     var touched: Set<String> = [destination]
     if case .move(let from) = conflict.action {
       touched.insert(Paths.parent(from))
       forget(from)
     }
-    await relist(touched)
+    await relist(touched, keeping: failure)
   }
 
   /// Opens with whatever this Mac opens the type with. Never something that
@@ -912,6 +947,14 @@ extension FilesTab {
     return entry.path
   }
 
+  /// What a drag or a share of `entry` fetches, when something asks for the
+  /// bytes. Made here, on the main actor; used from wherever the asking is.
+  func fetch(_ entry: FileEntry, insideThisApp: (@Sendable () -> Bool)? = nil) -> FileFetch {
+    var fetch = FileFetch(entry: entry, session: session, cache: cache)
+    if let insideThisApp { fetch.insideThisApp = insideThisApp }
+    return fetch
+  }
+
   /// Types the entries' paths at the tab's prompt.
   func insertPaths(_ chosen: [FileEntry]) {
     guard !chosen.isEmpty else { return }
@@ -934,15 +977,6 @@ extension FilesTab {
       // or on a network that came back, should try again.
       if session == task { session = nil }
       throw error
-    }
-  }
-
-  private func exists(_ path: String) async throws -> Bool {
-    do {
-      _ = try await source().lstat(path)
-      return true
-    } catch FileError.notFound {
-      return false
     }
   }
 

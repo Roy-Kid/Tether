@@ -93,6 +93,7 @@ swift test --package-path app/Packages/TetherFrontend  # frontend
 swift test --package-path app/Packages/TetherPluginHost # web plugin host
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
+swift test --package-path app/Plugins/Ports
 swift test --package-path app                          # the app's own state
 ```
 
@@ -185,6 +186,11 @@ The browser is a tab plugin kept in the inspector, and a
 path printed in the terminal opens with ⌘-click, a force click or a
 long-press: the terminal finds the shape, the plugin
 checks it exists.
+
+A session can forward the user's own loopback ports on that machine to this
+device. The listener is on this side of the lease — a direct-tcpip channel,
+`ssh -W` through a ControlMaster, or the port itself when the shell is
+already here — and the inspector lists them.
 
 A consumer can hand its palette down, and the engine answers the far side's
 colour queries from it. Cells still report colour *names* —

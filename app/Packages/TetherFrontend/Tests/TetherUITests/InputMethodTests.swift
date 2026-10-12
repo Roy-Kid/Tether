@@ -68,6 +68,7 @@ struct InputMethodTests {
     window.contentView!.addSubview(view)
     view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
                        replacementRange: NSRange(location: NSNotFound, length: 0))
+    #expect(view.composing == "ni", "the composing string is kept to be drawn")
 
     view.cursorRect = NSRect(x: 88, y: 40, width: 8, height: 16)
     let first = view.firstRect(forCharacterRange: NSRange(location: 0, length: 2), actualRange: nil)
@@ -82,6 +83,9 @@ struct InputMethodTests {
     view.setFrameSize(NSSize(width: 640, height: 500))
     let resized = view.firstRect(forCharacterRange: NSRange(location: 0, length: 2), actualRange: nil)
     #expect(resized.origin.y == next.origin.y + 100)
+
+    view.insertText("你", replacementRange: NSRange(location: NSNotFound, length: 0))
+    #expect(view.composing.isEmpty, "a chosen candidate leaves nothing to draw")
   }
 }
 #endif

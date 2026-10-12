@@ -5,6 +5,7 @@ import SwiftUI
   import UIKit
 #endif
 import Tether
+import TetherPluginHost
 import TetherPluginKit
 import TetherUI
 
@@ -63,6 +64,15 @@ enum LastTabPreference {
   }
 }
 
+/// The Settings pane on a Mac, chosen before the window opens.
+enum SettingsSectionPreference {
+  static let key = "settings.section"
+
+  static func show(_ section: AppSettings.Section, in defaults: UserDefaults = .standard) {
+    defaults.set(section.rawValue, forKey: key)
+  }
+}
+
 /// Settings, as a sidebar and a titled page.
 ///
 /// The sidebar names each section beside its tinted mark. The page title
@@ -75,16 +85,18 @@ struct AppSettings: View {
   let store: HostStore
   let secrets: any SecretStore
   var connections: TabSet? = nil
+  var installedPlugins: InstalledPlugins? = nil
 
   #if os(macOS)
-    /// Which pane the split view is showing. A phone pushes instead.
-    @State private var section: Section? = Section.available.first
+    /// Which pane the split view is showing. A phone pushes instead. Kept
+    /// in defaults so Help ▸ Keyboard Shortcuts can choose it from outside.
+    @AppStorage(SettingsSectionPreference.key) private var section: Section?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
   #endif
   @AppStorage("appearance") private var appearance = "system"
   @State private var fallbackKeyBindings = KeyBindingStore()
 
-  private enum Section: String, Identifiable, CaseIterable {
+  enum Section: String, Identifiable, CaseIterable {
     case general
     case appearance
     case history
@@ -143,11 +155,13 @@ struct AppSettings: View {
       }
     }
 
-    /// Sections a platform has nothing to put in are not shown empty.
+    /// Sections a platform has nothing to put in are not shown empty. A
+    /// phone has no keyboard to bind; an iPad usually has one.
+    @MainActor
     static var available: [Self] {
       allCases.filter {
-        #if !os(macOS)
-          if $0 == .keyBindings { return false }
+        #if os(iOS)
+          if $0 == .keyBindings, UIDevice.current.userInterfaceIdiom != .pad { return false }
         #endif
         return $0 != .general || TerminalSession.isLocalAvailable
       }
@@ -176,10 +190,16 @@ struct AppSettings: View {
           settingsFooter
         }
       } detail: {
-        pane(section ?? Section.available[0])
+        pane(section.flatMap { Section.available.contains($0) ? $0 : nil } ?? Section.available[0])
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
       .navigationSplitViewStyle(.balanced)
+      // The first pane on a first open, and never one this Mac does not show.
+      .onAppear {
+        var choice = PickerSelection(id: section)
+        choice.reconcile(Section.available)
+        section = choice.id
+      }
       .toolbar(removing: .sidebarToggle)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
       .frame(minWidth: section == .keyBindings ? 820 : Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
@@ -257,17 +277,13 @@ struct AppSettings: View {
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
     SettingsPage(title: section.title, subtitle: section.subtitle) {
-      #if os(macOS)
-        if section == .keyBindings {
-          KeyBindingSettings(
-            store: connections?.keyBindings ?? fallbackKeyBindings,
-            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
-        } else {
-          form(section)
-        }
-      #else
+      if section == .keyBindings {
+        KeyBindingSettings(
+          store: connections?.keyBindings ?? fallbackKeyBindings,
+          commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
+      } else {
         form(section)
-      #endif
+      }
     }
     #if os(iOS)
       // The page already shows the section title, the same as the Mac pane
@@ -291,7 +307,9 @@ struct AppSettings: View {
         // This pane owns its scroll area so its search field can stay fixed.
         EmptyView()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
-      case .extensions: ExtensionSettings(registry: registry)
+      case .extensions:
+        ExtensionSettings(registry: registry, installedIDs: installedPlugins?.pluginIDs ?? [])
+        if let installedPlugins { InstalledPluginSettings(library: installedPlugins, registry: registry) }
       }
     }
     .formStyle(.grouped)
@@ -436,6 +454,7 @@ private struct AppearanceSettings: View {
 /// care about the plumbing every time they pick a machine.
 private struct ExtensionSettings: View {
   let registry: PluginRegistry
+  var installedIDs: Set<String> = []
 
   var body: some View {
     if registry.plugins.isEmpty {
@@ -446,7 +465,7 @@ private struct ExtensionSettings: View {
       }
     }
 
-    ForEach(registry.plugins, id: \.metadata.id) { plugin in
+    ForEach(registry.plugins.filter { !installedIDs.contains($0.metadata.id) }, id: \.metadata.id) { plugin in
       let enabled = registry.isEnabled(plugin.metadata.id)
 
       SwiftUI.Section {
@@ -510,7 +529,7 @@ private struct SecuritySettings: View {
               .textSelection(.enabled)
           }
           Spacer()
-          Button("Forget") { forgetting = entry }
+          SettingsAction("Forget", systemImage: "trash") { forgetting = entry }
             .buttonStyle(.borderless)
         }
       }
@@ -532,7 +551,7 @@ private struct SecuritySettings: View {
           // deleted is not hidden: it is the one most worth removing.
           Text(store.hosts.first { $0.id == secret.id }.map(\.address) ?? secret.label)
           Spacer()
-          Button("Delete", role: .destructive) { delete(secret) }
+          SettingsAction("Delete", systemImage: "trash", role: .destructive) { delete(secret) }
             .buttonStyle(.borderless)
         }
       }
@@ -573,6 +592,7 @@ private struct SecuritySettings: View {
   private func delete(_ secret: SavedSecret) {
     do {
       try secrets.forget(secret.id)
+      store.passwordForgotten(secret.id)
       if var host = store.hosts.first(where: { $0.id == secret.id }) {
         host.remembersPassword = false
         store.save(host)

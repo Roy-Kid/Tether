@@ -38,44 +38,31 @@ extension KeyBinding {
     }
   }
 
-  var keyboardShortcut: KeyboardShortcut? {
-    let special: [String: KeyEquivalent] = [
-      "left": .leftArrow, "right": .rightArrow, "up": .upArrow, "down": .downArrow,
-      "return": .return, "tab": .tab, "space": .space, "escape": .escape,
-      "backspace": .delete, "delete": .deleteForward, "home": .home, "end": .end,
-      "pageup": .pageUp, "pagedown": .pageDown,
-    ]
-    let equivalent: KeyEquivalent
-    if let value = special[key] { equivalent = value }
-    else if isFunctionKey, let number = Int(key.dropFirst()),
-      let scalar = UnicodeScalar(NSF1FunctionKey + number - 1) {
-      equivalent = KeyEquivalent(Character(scalar))
-    } else if key.count == 1, let character = key.first { equivalent = KeyEquivalent(character) }
+  /// The chord with Shift read as a modifier of the key rather than part of
+  /// it: ⇧⌘[ as "[" with Shift, not the "{" those keys type. Defaults are
+  /// written this way; a chord someone recorded is the typed character, so
+  /// that one is tried first. `nil` when the two are the same.
+  static func unshifted(_ event: NSEvent) -> KeyBinding? {
+    guard let typed = KeyBinding(event: event), typed.modifiers.contains(.shift),
+      let base = event.characters(byApplyingModifiers: []), base.count == 1
     else { return nil }
-    var flags: EventModifiers = []
-    if modifiers.contains(.control) { flags.insert(.control) }
-    if modifiers.contains(.option) { flags.insert(.option) }
-    if modifiers.contains(.shift) { flags.insert(.shift) }
-    if modifiers.contains(.command) { flags.insert(.command) }
-    return KeyboardShortcut(equivalent, modifiers: flags)
+    let unshifted = KeyBinding(base, typed.modifiers)
+    return unshifted == typed || KeyBinding.namedKeys[typed.key] != nil || typed.isFunctionKey ? nil : unshifted
   }
-}
 
-private struct WorkspaceShortcutsKey: FocusedValueKey { typealias Value = Bool }
-extension FocusedValues {
-  var workspaceShortcutsEnabled: Bool? {
-    get { self[WorkspaceShortcutsKey.self] }
-    set { self[WorkspaceShortcutsKey.self] = newValue }
-  }
 }
 
 /// Runs before the terminal responder, including for Ctrl and Option combinations.
 /// Workspace commands stay in the owning window. Native editing aliases can
 /// also be enabled for Settings and the owning window's sheets/popovers.
+///
+/// `handle` is given the chord, whether it is a repeat, and whether a text
+/// field is being edited — when most chords belong to the field (spec §4:
+/// ⌘⇧Z there is Redo), and declining hands the key on to it and the menus.
 struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
   let enabled: Bool
   var textEditingEnabled = false
-  let handle: (KeyBinding, Bool) -> Bool
+  let handle: (_ binding: KeyBinding, _ repeated: Bool, _ editingText: Bool) -> Bool
 
   func makeNSView(context: Context) -> MonitorView { MonitorView() }
   func updateNSView(_ view: MonitorView, context: Context) {
@@ -88,7 +75,7 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
   final class MonitorView: NSView {
     var enabled = false
     var textEditingEnabled = false
-    var handle: ((KeyBinding, Bool) -> Bool)?
+    var handle: ((KeyBinding, Bool, Bool) -> Bool)?
     private var monitor: Any?
 
     override func viewDidMoveToWindow() {
@@ -108,8 +95,19 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
       if let input = target.firstResponder as? NSTextInputClient, input.hasMarkedText() { return event }
       if PickerShortcuts.handle(event) { return nil }
       if enabled, target === window, window.attachedSheet == nil, NSApp.modalWindow == nil,
-        let binding = KeyBinding(event: event), handle?(binding, event.isARepeat) == true { return nil }
+        let binding = KeyBinding(event: event) {
+        let editing = Self.isEditingText(target.firstResponder)
+        for chord in [binding, KeyBinding.unshifted(event)].compactMap({ $0 })
+        where handle?(chord, event.isARepeat, editing) == true { return nil }
+      }
       return textEditingEnabled ? UnixTextEditing.route(event) : event
+    }
+
+    /// A field or text view taking typing. The terminal takes keys too, but
+    /// it is not text being edited, and it is not a text view.
+    static func isEditingText(_ responder: NSResponder?) -> Bool {
+      guard let text = responder as? NSTextView else { return false }
+      return text.isEditable || text.isFieldEditor
     }
 
     private func owns(_ target: NSWindow, root: NSWindow) -> Bool {

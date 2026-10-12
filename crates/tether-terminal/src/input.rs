@@ -124,6 +124,15 @@ impl Input {
     pub fn character(c: char) -> Self {
         Self::key(Key::Char(c))
     }
+
+    /// The bytes this input is under `modes`.
+    ///
+    /// For a caller that keeps its own copy of the modes rather than asking
+    /// the terminal each time — a session encoding a keystroke while the
+    /// engine is busy parsing must not wait for the parse to finish.
+    pub fn encode(&self, modes: Modes) -> Vec<u8> {
+        encode(self, modes)
+    }
 }
 
 /// The marker a program watches for to know a paste ended.

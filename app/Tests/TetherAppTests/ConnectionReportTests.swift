@@ -57,6 +57,52 @@ struct ConnectionReportTests {
     #expect(tabs.problem == nil)
   }
 
+  @Test("a lost connection is a state: kept in the tab, asked about only when acted on")
+  func lostIsQuiet() throws {
+    let tabs = TabSet()
+    let tab = tab(in: tabs)
+    tab.finish(.lost(cause: "reset by peer"))
+    if case .lost = tab.stage {} else { Issue.record("a dropped connection is lost, not ended") }
+    #expect(tab.stateName == "Disconnected")
+    #expect(tab.isDisconnected && tab.canReconnect)
+    #expect(tabs.problem == nil, "no dialog of its own accord")
+    #expect(tabs.isDisconnected(try #require(tabs.currentWorkspace)), "marked on its tab instead")
+    #expect(tabs.canPerform(.reconnect))
+
+    tab.raiseProblem()
+    let report = try #require(tabs.problem)
+    let dialog = ConnectionDialog.problem(report, close: { Issue.record("Escape must not close") }, again: {})
+    #expect(dialog.actions.map(\.title) == ["Not Now", "Reconnect"])
+    #expect(dialog.cancelAction == 0)
+
+    tab.setProblemAside()
+    #expect(tabs.problem == nil, "not now leaves the tab as it is")
+    #expect(tabs.tabs.count == 1)
+    #expect(tabs.reconnectReport(for: tab.id)?.problem.kind == .lost, "and it can still be reconnected")
+  }
+
+  @Test("a failure in a terminal not being looked at waits for it")
+  func backgroundFailureWaits() throws {
+    let tabs = TabSet()
+    let behind = tab(in: tabs)
+    let front = tab(in: tabs)
+    #expect(tabs.current?.id == front.id)
+    behind.fail(TetherError.unreachable(endpoint: "login.example.org:22", cause: "Connection refused"))
+    #expect(tabs.problem == nil)
+    tabs.select(behind.id)
+    #expect(tabs.problem?.tab == behind.id, "told once it is the one on screen")
+  }
+
+  @Test("a reconnect that fails keeps what was on screen")
+  func failedReconnectKeepsScreen() {
+    let kept = TabProblem(
+      tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"), keepsScreen: true)
+    #expect(ConnectionDialog.problem(kept, close: {}, again: {}).actions.first?.title == "Not Now")
+    let empty = TabProblem(tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"))
+    #expect(ConnectionDialog.problem(empty, close: {}, again: {}).actions.first?.title == "Close",
+      "a tab that never showed anything has nothing to keep")
+  }
+
   @Test("a lost connection offers to reconnect; this machine restarts")
   func lostWording() {
     let lost = TabProblem(tab: UUID(), host: host, problem: SessionProblem(kind: .lost, reason: "reset by peer"))

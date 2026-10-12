@@ -21,31 +21,37 @@ struct InputLayoutTests {
     return view.subviews.flatMap { fields(in: $0) }
   }
 
-  @Test("search and form inputs remain usable when empty and after resizing",
-    arguments: ["sidebar", "hostPicker", "palette", "hostEditor", "managedHostEditor", "identity", "keyBindings", "authorization"])
-  func inputs(surface: String) async throws {
+  // Only shipped surfaces belong here. Authorization fields are covered inside
+  // the identity sheet, where the app actually presents them.
+  enum Surface: String, CaseIterable {
+    case sidebar, hostPicker, palette, hostEditor, managedHostEditor, identity, keyBindings
+  }
+
+  @Test("current search and form inputs remain usable after resizing",
+    arguments: Surface.allCases)
+  func inputs(surface: Surface) async throws {
     _ = NSApplication.shared
     let file = temporaryFile("hosts")
     defer { removeDirectory(of: file) }
     let secrets = MemorySecrets()
-    let store = HostStore(location: file, secrets: secrets)
+    let store = HostStore(location: file, secrets: secrets, credentials: HostStoreTests.credentials())
     let tabs = TabSet()
     let view: AnyView
     let width: CGFloat
     switch surface {
-    case "sidebar":
+    case .sidebar:
       view = AnyView(Sidebar(store: store, onOpen: { _ in }, onEdit: { _ in }, onNew: {}, onSettings: {}))
       width = 210
-    case "hostPicker":
+    case .hostPicker:
       view = AnyView(HostPicker(tabs: tabs, store: store))
       width = UIStyle.pickerWidth + 20
-    case "palette":
+    case .palette:
       view = AnyView(PalettePanel(kind: .command, query: .constant(""), items: [], listHeight: 200, onCancel: {}))
       width = UIStyle.panelWidth
-    case "hostEditor":
+    case .hostEditor:
       view = AnyView(HostEditor(host: .blank()) { _, _ in true })
       width = Chrome.editorWidth
-    case "managedHostEditor", "identity":
+    case .managedHostEditor, .identity:
       let identity = AccountIdentity(name: "Test identity")
       let profile = HostProfile(id: UUID(), label: "Test", hostname: "example.invalid", port: 22, username: "test",
         authentication: AuthenticationProfile(identity: identity,
@@ -53,21 +59,19 @@ struct InputLayoutTests {
           otp: CredentialDescriptor(identityID: identity.id, purpose: .totp)))
       let host = Host(id: profile.id, label: profile.label, hostname: profile.hostname, port: profile.port,
         username: profile.username, profile: profile)
-      if surface == "managedHostEditor" {
+      if surface == .managedHostEditor {
         view = AnyView(HostEditor(host: host) { _, _ in true })
         width = Chrome.editorWidth
       } else {
         try #require(store.save(host))
-        view = AnyView(HostIdentitySettings(store: store, id: host.id))
+        view = AnyView(NavigationStack {
+          HostIdentitySettings(store: store, id: host.id)
+        }.frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight))
         width = UIStyle.sheetWidth
       }
-    case "keyBindings":
+    case .keyBindings:
       view = AnyView(KeyBindingSettings(store: tabs.keyBindings, commands: WorkspaceAction.available.map(\.command)))
       width = 560
-    default:
-      view = AnyView(Form { AuthorizationSettings(store: store, host: .blank(), connections: nil) }
-        .formStyle(.grouped))
-      width = UIStyle.sheetWidth
     }
     let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: width, height: 600),
       styleMask: [.titled], backing: .buffered, defer: false)
@@ -81,6 +85,9 @@ struct InputLayoutTests {
       content.layoutSubtreeIfNeeded()
       let inputs = fields(in: content)
       try #require(!inputs.isEmpty)
+      if surface == .identity {
+        #expect(inputs.contains { $0 is NSSecureTextField }, "The production identity sheet includes MFA input")
+      }
       for field in inputs {
         #expect(field.bounds.width >= 40, "\(surface): \(field.placeholderString ?? "input") width")
         #expect(field.bounds.height >= 14, "\(surface): input height")

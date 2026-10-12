@@ -21,6 +21,9 @@ struct Sidebar: View {
 
   @State private var selection: Host.ID?
   @State private var identityHost: Host?
+  /// A host waiting on its delete confirmation. Deleting reaches every
+  /// device through sync and takes the host's keys with it — never one tap.
+  @State private var deleting: Host.ID?
 
   var body: some View {
     List(selection: $selection) {
@@ -34,7 +37,7 @@ struct Sidebar: View {
           .textSelection(.enabled)
           .padding(.vertical, UIStyle.Space.inline)
       }
-      Section("Hosts") {
+      Section {
         ForEach(store.filtered) { host in
           Button {
             selection = host.id
@@ -43,7 +46,7 @@ struct Sidebar: View {
             HStack(spacing: UIStyle.panelRadius) {
               Image(systemName: "server.rack")
                 .font(.body.weight(.medium))
-                .foregroundStyle(Theme.tile(for: host.label))
+                .foregroundStyle(Theme.tile(for: host))
                 .frame(width: UIStyle.Mark.tileWidth, height: UIStyle.Mark.tileHeight)
               VStack(alignment: .leading, spacing: UIStyle.rowPadding) {
                 Text(host.label.isEmpty ? host.hostname : host.label).font(.body.weight(.medium))
@@ -74,7 +77,7 @@ struct Sidebar: View {
               if !host.isLocal {
                 Button("Identity and Authentication…") { identityHost = host }
                 Button("Edit…") { onEdit(host) }
-                Button("Delete host", role: .destructive) { store.delete(host) }
+                Button("Delete Host…", role: .destructive) { deleting = host.id }
               }
             }
         }
@@ -82,6 +85,20 @@ struct Sidebar: View {
           Text("No matching hosts.")
             .font(.callout).foregroundStyle(.secondary).padding(.vertical, UIStyle.Space.group)
         }
+      } header: {
+        // An empty list is the quiet mark alone; a header over nothing
+        // would be the same word a third time under the title.
+        if !store.listed.isEmpty { Text("Hosts") }
+      }
+    }
+    .dialog(for: deleting) { id in
+      // Same question, same words, as deleting from the host's own settings.
+      Dialog.confirm(
+        "Delete \(store.hosts.first { $0.id == id }?.label ?? "Host")?", verb: "Delete", role: .destructive,
+        cancel: { deleting = nil }
+      ) {
+        if let host = store.hosts.first(where: { $0.id == id }) { store.delete(host) }
+        deleting = nil
       }
     }
     .sheet(item: $identityHost) { host in
@@ -260,7 +277,7 @@ struct SyncButton: View {
     .help(store.syncing ? "Syncing" : "Sync")
     .accessibilityValue(store.syncing ? "Syncing" : "Idle")
     .dialog(for: failure) { shown in
-      Dialog.notice("Could not sync", message: shown.message) { failure = nil }
+      Dialog.notice("Could Not Sync", message: shown.message) { failure = nil }
     }
   }
 }

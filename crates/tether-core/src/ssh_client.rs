@@ -127,6 +127,22 @@ impl SshClient {
         self.options(false).arg("-s").arg("--").arg(&self.target).arg(name)
     }
 
+    /// `ssh -W host:port`: one TCP connection to the far side's loopback,
+    /// carried on this process's standard streams. A ControlMaster serves
+    /// it without another authentication, the same way `ssh -s` is served.
+    pub(crate) fn forward_stdio(&self, port: u16) -> Command {
+        self.options(false).arg("-W").arg(format!("127.0.0.1:{port}")).arg("--").arg(&self.target)
+    }
+
+    /// Same target, same master: cloned clients are one lease.
+    pub(crate) fn lease_id(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        self.target.hash(&mut hasher);
+        hasher.finish()
+    }
+
     fn ssh_command(&self, tty: bool) -> Command {
         self.options(tty).arg("--").arg(&self.target)
     }

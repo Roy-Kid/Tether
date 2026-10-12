@@ -83,14 +83,14 @@ jobs:
       # seam should have carried (Decisions/0012).
       - name: the app names no plugin
         run: |
-          leaks=$(grep -rniE 'tmux|FilesPlugin|FilesTab' app/Sources \
-            | grep -vE 'import (Tmux|Files)Plugin$|registry\.register\((Tmux|Files)Plugin\(\)\)' || true)
+          leaks=$(grep -rniE 'tmux|FilesPlugin|FilesTab|PortsPlugin|PortsTab' app/Sources \
+            | grep -vE 'import (Tmux|Files|Ports)Plugin$|registry\.register\((Tmux|Files|Ports)Plugin\(\)\)' || true)
           if [ -n "$leaks" ]; then
             echo "::error::the app reaches past the plugin seam (Decisions/0012)"
             echo "$leaks"
             exit 1
           fi
-          echo "clean: tmux and files are only registered, never named"
+          echo "clean: tmux, files and ports are only registered, never named"
 
       # One presentation path for every dialog (CLAUDE.md, "One dialog path"):
       # a second one is how a question ends up behind a sheet, unanswered.
@@ -147,6 +147,7 @@ jobs:
           swift test --package-path app/Packages/TetherPluginHost
           swift test --package-path app/Plugins/Tmux
           swift test --package-path app/Plugins/Files
+          swift test --package-path app/Plugins/Ports
           swift test --package-path app
 
   fuzz:

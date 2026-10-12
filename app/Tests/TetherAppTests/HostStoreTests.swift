@@ -279,4 +279,65 @@ struct HostStoreTests {
     #expect(store.hosts.first?.otpSecretID != nil, "the seed followed the new name")
     #expect(try credentials.saved().count == 1)
   }
+
+  /// The SSH file and the keychain are read by `refresh`, off the main
+  /// actor, not by opening the store. A password kept or let go of here is
+  /// known at once, without listing the keychain again.
+  @Test func refreshReadsWhatOpeningDoesNot() async throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    try "Host lab\n  HostName login.example.org\n".write(to: location, atomically: true, encoding: .utf8)
+    let secrets = MemorySecrets()
+    let first = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(first.save(Self.host(), password: "saved"))
+    #expect(first.hosts.first?.remembersPassword == true)
+
+    let store = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(store.config.entries.isEmpty, "opening reads neither the file nor the keychain")
+    #expect(store.hosts.first?.remembersPassword == true, "the library's word, until the keychain is listed")
+    try secrets.forget(#require(store.hosts.first).passwordID)
+    await store.refresh()
+    #expect(store.config.entries.map(\.alias) == ["lab"])
+    #expect(store.hosts.first?.remembersPassword == false, "the listing found no password")
+
+    #expect(try store.save(#require(store.hosts.first), password: "again"))
+    #expect(store.hosts.first?.remembersPassword == true)
+    let id = try #require(store.hosts.first).passwordID
+    try secrets.forget(id)
+    store.passwordForgotten(id)
+    #expect(store.hosts.first?.remembersPassword == false)
+  }
+
+  /// A password kept while the keychain is still being listed is not lost
+  /// when the older listing lands.
+  @Test func aListingInFlightDoesNotUndoAChange() async throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    let secrets = GatedSecrets()
+    let store = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    async let refreshed: Void = store.refresh()
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try store.save(#require(store.hosts.first), password: "kept"))
+    secrets.open()
+    await refreshed
+    #expect(store.hosts.first?.remembersPassword == true)
+  }
+}
+
+/// A keychain whose listing waits until the test lets it answer — with what
+/// it held when it was asked.
+final class GatedSecrets: SecretStore, @unchecked Sendable {
+  private let gate = DispatchSemaphore(value: 0)
+  private let inner = MemorySecrets()
+  func open() { gate.signal() }
+  func password(for host: UUID) throws -> String? { try inner.password(for: host) }
+  func remember(_ password: String, for host: Host) throws { try inner.remember(password, for: host) }
+  func forget(_ host: UUID) throws { try inner.forget(host) }
+  func saved() throws -> [SavedSecret] {
+    let listed = try inner.saved()
+    gate.wait()
+    gate.signal()
+    return listed
+  }
 }

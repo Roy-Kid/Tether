@@ -127,6 +127,17 @@ impl Stream {
         stdin.write_all(bytes).await.map_err(|error| LocalError::Write { cause: error.to_string() })
     }
 
+    /// The pipes, and the child that owns them, taken apart so the two
+    /// directions can be copied at the same time.
+    ///
+    /// Standard error stays with the caller. A pipe nobody reads fills,
+    /// and a program blocked writing a warning never finishes the bytes
+    /// on standard output.
+    pub fn into_stdio(self) -> (Child, Option<ChildStdin>, ChildStdout, Option<ChildStderr>) {
+        let Self { child, stdin, stdout, stderr } = self;
+        (child, stdin, stdout, stderr)
+    }
+
     /// Closes the program's input and stops waiting for it.
     ///
     /// Input first: a program that ends when its input does — which is most

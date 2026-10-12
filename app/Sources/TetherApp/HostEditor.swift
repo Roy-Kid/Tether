@@ -84,7 +84,7 @@ struct HostEditor: View {
             #endif
           authenticationChoice
 
-          if let importProblem { Text(importProblem).foregroundStyle(.red) }
+          if let importProblem { Text(importProblem).foregroundStyle(Theme.danger) }
           if authentication == .password {
             // A row of its own. Nesting `SecureField` in an `HStack` inside a
             // `Form` is how iOS ends up with a password row that will not

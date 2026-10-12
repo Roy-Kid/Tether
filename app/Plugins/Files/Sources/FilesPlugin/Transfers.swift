@@ -99,13 +99,19 @@ final class Transfers {
     case .success:
       items.removeAll { $0.id == id }
     case .failure(let error):
-      if error is CancellationError || (error as? FileError) == .cancelled {
+      // A taken name is a question the caller asks, not a failed copy.
+      if error is CancellationError || (error as? FileError) == .cancelled || Self.isTaken(error) {
         items.removeAll { $0.id == id }
       } else if let index = items.firstIndex(where: { $0.id == id }) {
         items[index].failure = describe(error)
       }
       throw error
     }
+  }
+
+  private static func isTaken(_ error: Error) -> Bool {
+    if case .exists = error as? FileError { return true }
+    return false
   }
 
   private func advance(_ id: UUID, to bytes: UInt64) {

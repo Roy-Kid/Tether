@@ -1,5 +1,6 @@
 import SwiftUI
 import Tether
+import TetherUI
 
 /// A plugin that works inside a terminal tab rather than beside it.
 ///
@@ -120,6 +121,10 @@ public struct TabContext {
   /// while it learns which pane is under the pointer, and gives the lines
   /// back when that program asked to hear them. Positive goes back.
   public let reportWheel: (Int32, UInt16, UInt16) -> Void
+  /// Whether the program in this terminal asked to hear the pointer.
+  /// A wheel held while a client is being identified is reported when this
+  /// is on, and returned to the terminal's history when it is off.
+  public let mouseTracking: () -> MouseTracking
 
   public init(
     id: UUID, plugin: PluginContext, terminalName: @escaping () -> String? = { nil },
@@ -134,7 +139,8 @@ public struct TabContext {
     openShell: @escaping (UUID) -> Void = { _ in },
     newShell: @escaping () -> Void = {},
     scrollBy: @escaping (Int32) -> Void = { _ in },
-    reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in }
+    reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in },
+    mouseTracking: (() -> MouseTracking)? = nil
   ) {
     self.id = id
     self.plugin = plugin
@@ -153,6 +159,7 @@ public struct TabContext {
     self.newShell = newShell
     self.scrollBy = scrollBy
     self.reportWheel = reportWheel
+    self.mouseTracking = mouseTracking ?? { .off }
   }
 }
 
@@ -238,19 +245,13 @@ public protocol TabAttachment: AnyObject {
   /// for nothing. Asked when a person points, and answered at once: anything
   /// slow — checking the path exists — happens inside the actions.
   func actions(for pointed: PointedLink) -> LinkActions?
-  /// A wheel over the shell, in lines. Positive goes back.
+  /// A wheel at the cell under the pointer, in lines. Positive goes back.
   ///
-  /// `true` takes the lines, and the shell's own history is left where it
-  /// is. A full-screen program can be keeping that history on its side,
-  /// where this terminal has none to move. `fullScreen` is that case.
-  func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool
-  /// A wheel the program asked to hear, in lines. Positive goes back.
-  /// `column` and `row` are the cell under the pointer, on the live grid.
-  ///
-  /// `true` takes the lines, and the caller does not also report them as
-  /// pointer events. A pane that is keeping its own history is left to
-  /// hear the wheel.
-  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool
+  /// `column` and `row` are that cell on the live grid. `.pass` leaves the
+  /// wheel with the terminal. `.report` belongs to a program that asked for
+  /// the mouse. `.taken` means this attachment scrolled, or the wheel stops
+  /// on the thing under the pointer.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim
   /// The shell is showing another program's history, so a key has to wait
   /// until that program is back at its prompt. Otherwise the key lands in
   /// the history and reads as if it was ignored.
@@ -265,8 +266,7 @@ extension TabAttachment {
   public func restore(from state: Data) {}
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
-  public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool { false }
-  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool { false }
+  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim { .pass }
   public var shellInputWaits: Bool { false }
   public func restoreShellForInput() async {}
 }

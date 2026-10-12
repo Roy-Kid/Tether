@@ -42,7 +42,6 @@ struct WorkspaceTabBar: View {
   private var titlebar: some View {
     HStack(spacing: 0) {
       Color.clear.frame(width: Chrome.trafficLights)
-      TabBarToggle(tabs: tabs)
       tabList
       Spacer(minLength: 12)
         .background { WindowDragArea() }
@@ -57,7 +56,7 @@ struct WorkspaceTabBar: View {
   /// A terminal tab shares the grid's colour. An extension does not: its
   /// page is the window, and the accent rule is what marks it open.
   private func joinsTerminal(_ id: UUID) -> Bool {
-    tabs.tabs.contains { $0.id == id && $0.shown == nil }
+    tabs.workspaces.first { $0.id == id }.flatMap { page in tabs.tabs.first { $0.id == page.focused } }?.shown == nil
   }
 
   private var tabList: some View {
@@ -65,10 +64,12 @@ struct WorkspaceTabBar: View {
       ScrollView(layout == .vertical ? .vertical : .horizontal) {
         let stack = layout == .vertical
           ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
-          : AnyLayout(HStackLayout(spacing: 0))
+          : AnyLayout(HStackLayout(spacing: UIStyle.Space.small))
         stack {
-          ForEach(tabs.visibleTabs) { tab in
-            tabChip(id: tab.id, title: tab.title, subtitle: tab.subtitle, symbol: nil)
+          ForEach(tabs.visibleWorkspaces) { tab in
+            tabChip(
+              id: tab.id, title: tab.name, subtitle: tabs.caption(for: tab), symbol: nil,
+              disconnected: tabs.isDisconnected(tab))
               .id(tab.id)
           }
           ForEach(tabs.visibleExtensions) { entry in
@@ -80,16 +81,57 @@ struct WorkspaceTabBar: View {
         }
       }
       .scrollIndicators(.hidden)
-      .onChange(of: tabs.selected, initial: true) { _, id in
+      .overlayPreferenceValue(TabFrameKey.self) { anchors in
+        GeometryReader { proxy in
+          #if os(macOS)
+            TabStripCatcher(
+              frames: anchors.reduce(into: [:]) { $0[$1.key] = proxy[$1.value] },
+              closeable: Set([tabs.selectedWorkspaceID, hovering].compactMap { $0 }),
+              closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
+              onPrimary: { tabs.handleTabClick($0) },
+              onClose: { onClose($0) },
+              makeMenu: { tabMenu($0) })
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+          #else
+            Color.clear.allowsHitTesting(false)
+          #endif
+        }
+      }
+      .onChange(of: tabs.selectedWorkspaceID, initial: true) { _, id in
         if let id { proxy.scrollTo(id, anchor: .center) }
       }
     }
   }
 
-  private func tabChip(id: UUID, title: String, subtitle: String, symbol: String?) -> some View {
-    let selected = tabs.selected == id
+  /// The strip is one titlebar row. A sidebar tab keeps a taller row so a
+  /// subtitle under the title is not clipped.
+  private var rowHeight: CGFloat {
+    layout == .vertical ? Chrome.tabSidebarRow : Chrome.tab
+  }
+
+  /// A plugin's own symbol, or — on a terminal page that is down — the mark
+  /// that says so where it is, rather than over what the person is doing.
+  @ViewBuilder
+  private func chipMark(symbol: String?, disconnected: Bool, color: Color) -> some View {
+    if let symbol {
+      Image(systemName: symbol)
+        .font(UIStyle.symbol)
+        .foregroundStyle(color)
+    } else if disconnected {
+      Image(systemName: "bolt.slash.fill")
+        .font(UIStyle.symbol)
+        .foregroundStyle(Theme.warning)
+        .accessibilityHidden(true)
+    }
+  }
+
+  private func tabChip(
+    id: UUID, title: String, subtitle: String, symbol: String?, disconnected: Bool = false
+  ) -> some View {
+    let selected = tabs.selectedWorkspaceID == id
     let joined = selected && joinsTerminal(id)
-    let tab = tabs.tabs.first { $0.id == id }
+    let focused = tabs.workspaces.first { $0.id == id }?.focused ?? id
+    let tab = tabs.tabs.first { $0.id == focused }
     let titleColor = joined ? palette.foreground : (selected ? Theme.text : Theme.subtle)
     let secondary = joined ? palette.foreground.opacity(0.62) : Theme.subtle
     return HStack(spacing: UIStyle.Space.inline) {
@@ -97,19 +139,17 @@ struct WorkspaceTabBar: View {
         tabs.handleTabClick(id)
       } label: {
         HStack(spacing: UIStyle.Space.inline) {
-          if let symbol {
-            Image(systemName: symbol)
-              .font(UIStyle.symbol)
-              .foregroundStyle(titleColor)
-          }
+          chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
           let labels = layout == .vertical
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
             : AnyLayout(HStackLayout(spacing: UIStyle.Space.inline))
           labels {
             Text(title)
-              .font(UIStyle.title)
+              .font(layout == .horizontal ? UIStyle.title.weight(.medium) : UIStyle.title)
               .foregroundStyle(titleColor)
               .lineLimit(1)
+              // The name is the tab's handle; the caption gives way first.
+              .layoutPriority(1)
             if !subtitle.isEmpty {
               Text(subtitle)
                 .font(UIStyle.header)
@@ -120,34 +160,43 @@ struct WorkspaceTabBar: View {
         }
         .frame(maxWidth: layout == .vertical ? .infinity : Chrome.tabTitleWidth,
                alignment: layout == .vertical ? .leading : .center)
-        .frame(height: Chrome.tab)
+        .frame(height: rowHeight)
         .contentShape(Rectangle())
       }
-      .buttonStyle(ChromeButtonStyle())
+      .buttonStyle(ChromeButtonStyle(hoverOpacity: 0))
+      #if !os(macOS)
+        .contextMenu { tabContextMenu(id) }
+      #endif
       .help(subtitle.isEmpty ? title : "\(title) · \(subtitle)")
       .accessibilityAddTraits(selected ? .isSelected : [])
+      .accessibilityValue(disconnected ? "Disconnected" : "")
       // The space is held whether or not the cross is drawn: a tab that
       // grew by 18pt under the pointer would push the strip along.
       Button {
         onClose(id)
       } label: {
         Image(systemName: "xmark")
-          .font(UIStyle.accessory)
+          .font(layout == .horizontal
+            ? .system(size: Chrome.tabClose, weight: .semibold)
+            : UIStyle.accessory)
           .foregroundStyle(secondary)
-          .frame(width: UIStyle.Mark.icon, height: Chrome.tab)
+          .frame(width: UIStyle.Mark.icon, height: rowHeight)
           .contentShape(Rectangle())
       }
-      .buttonStyle(ChromeButtonStyle())
+      .buttonStyle(ChromeButtonStyle(hoverOpacity: 0))
+      #if !os(macOS)
+        .contextMenu { tabContextMenu(id) }
+      #endif
       .opacity(selected || hovering == id ? 1 : 0)
       .allowsHitTesting(selected || hovering == id)
       .accessibilityHidden(!(selected || hovering == id))
       .help("Close tab")
       .accessibilityLabel("Close \(title)")
     }
-    .padding(.leading, UIStyle.panelRadius)
-    .padding(.trailing, UIStyle.Space.small)
-    .frame(height: Chrome.tab)
-    .background(joined ? palette.background : (selected ? Theme.raised.opacity(0.85) : Color.clear))
+    .padding(.leading, layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.group)
+    .padding(.trailing, layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small)
+    .frame(height: rowHeight)
+    .background { tabFace(joined: joined, selected: selected) }
     .onHover { inside in
       if inside {
         hovering = id
@@ -165,100 +214,210 @@ struct WorkspaceTabBar: View {
       }
     }
     .accessibilityAddTraits(selected ? .isSelected : [])
-    .contextMenu {
-      if let tab = tabs.tabs.first(where: { $0.id == id }) {
-        // A picker has no icon of its own. The tab's menu is how it opens.
-        let pickers = tabs.accessories.filter { $0.accessory.placement == .popover }
-        if !pickers.isEmpty {
-          ForEach(pickers) { plugin in
-            Button(plugin.accessory.name) {
-              tabs.toggleAccessory(plugin.id, on: id)
-            }
-            .disabled(!tab.canOpen(plugin.id))
-          }
-          Divider()
-        }
-        Button("Rename…") { tabs.renaming = id }
-      }
-      Button("Close Tab") { onClose(id) }
-    }
-    .popover(
-      isPresented: Binding(
-        get: { tabs.accessory?.tab == id },
-        set: { if !$0 && tabs.accessory?.tab == id { tabs.accessory = nil } }
-      ), arrowEdge: layout == .vertical ? .trailing : .bottom
+    .anchorPreference(key: TabFrameKey.self, value: .bounds) { [id: $0] }
+    // One popover anchor for the open tab. An anchor on every chip in the
+    // strip steals hits from the others once more than one tab is open.
+    .modifier(TabAccessoryPopover(
+      presented: selected && tabs.accessory?.tab == focused,
+      edge: layout == .vertical ? .trailing : .bottom,
+      dismiss: { if tabs.accessory?.tab == focused { tabs.accessory = nil } }
     ) {
       if let tab, let open = tabs.accessory, let attachment = tab.attachment(for: open.plugin) {
         attachment.accessoryContent()
       }
-    }
-    #if os(macOS)
-      .overlay {
-        MiddleClickMonitor { onClose(id) }
-          .allowsHitTesting(false)
+    })
+  }
+
+  #if os(macOS)
+    private func tabMenu(_ id: UUID) -> NSMenu {
+      let menu = NSMenu()
+      menu.autoenablesItems = false
+      if let page = tabs.workspaces.first(where: { $0.id == id }) {
+        menu.addItem(ActionMenuItem("New Terminal") { tabs.select(id); tabs.perform(.newTerminal) })
+        menu.addItem(.separator())
+        for terminalID in page.terminalIDs {
+          guard let terminal = tabs.tabs.first(where: { $0.id == terminalID }) else { continue }
+          menu.addItem(ActionMenuItem(
+            tabs.terminalMenuTitle(terminal), checked: page.focused == terminalID
+          ) { tabs.select(terminalID) })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem("Rename Tab…") { tabs.renamingWorkspace = id })
       }
-    #endif
+      menu.addItem(ActionMenuItem("Close Tab") { onClose(id) })
+      return menu
+    }
+  #endif
+
+  /// A titlebar tab is a tongue: round at the top, square where it meets the
+  /// terminal. A sidebar row stays a rectangle.
+  @ViewBuilder
+  private func tabFace(joined: Bool, selected: Bool) -> some View {
+    let fill = joined ? palette.background : Theme.raised.opacity(0.85)
+    if !selected {
+      Color.clear
+    } else if layout == .horizontal {
+      UnevenRoundedRectangle(
+        topLeadingRadius: Chrome.tabRadius,
+        bottomLeadingRadius: 0,
+        bottomTrailingRadius: 0,
+        topTrailingRadius: Chrome.tabRadius,
+        style: .continuous
+      )
+      .fill(fill)
+    } else {
+      fill
+    }
+  }
+
+  #if !os(macOS)
+  @ViewBuilder
+  private func tabContextMenu(_ id: UUID) -> some View {
+    if let page = tabs.workspaces.first(where: { $0.id == id }) {
+      Button("New Terminal") { tabs.select(id); tabs.perform(.newTerminal) }
+      Section {
+        ForEach(page.terminalIDs, id: \.self) { terminalID in
+          if let terminal = tabs.tabs.first(where: { $0.id == terminalID }) {
+            Button {
+              tabs.select(terminalID)
+            } label: {
+              if page.focused == terminalID { Label(tabs.terminalMenuTitle(terminal), systemImage: "checkmark") }
+              else { Text(tabs.terminalMenuTitle(terminal)) }
+            }
+          }
+        }
+      }
+      Section {
+        Button("Rename Tab…") { tabs.renamingWorkspace = id }
+        Button("Close Tab") { onClose(id) }
+      }
+    } else {
+      Button("Close Tab") { onClose(id) }
+    }
+  }
+  #endif
+}
+
+/// The accessory popover is attached only while this chip is the open tab.
+private struct TabAccessoryPopover<Popover: View>: ViewModifier {
+  var presented: Bool
+  var edge: Edge
+  var dismiss: () -> Void
+  @ViewBuilder var content: () -> Popover
+
+  func body(content chip: Content) -> some View {
+    if presented {
+      chip.popover(
+        isPresented: Binding(get: { true }, set: { if !$0 { dismiss() } }),
+        arrowEdge: edge,
+        content: content)
+    } else {
+      chip
+    }
   }
 }
 
-struct TabBarToggle: View {
-  @Bindable var tabs: TabSet
-
-  var body: some View {
-    let title = tabs.title(for: .toggleTabBar)
-    let shortcut = tabs.keyBindings.summary(for: WorkspaceAction.toggleTabBar.command)
-    Button { tabs.perform(.toggleTabBar) } label: {
-      Image(systemName: "sidebar.left")
-        .font(UIStyle.symbol)
-        .foregroundStyle(tabs.showsTabBar ? Color.accentColor : Theme.subtle)
-        .frame(width: Chrome.tab, height: Chrome.tab)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(ChromeButtonStyle())
-    .help(shortcut.isEmpty ? title : "\(title) (\(shortcut))")
-    .accessibilityLabel(title)
-    .accessibilityValue(tabs.showsTabBar ? "Shown" : "Hidden")
+private struct TabFrameKey: PreferenceKey {
+  static var defaultValue: [UUID: Anchor<CGRect>] { [:] }
+  static func reduce(value: inout [UUID: Anchor<CGRect>], nextValue: () -> [UUID: Anchor<CGRect>]) {
+    value.merge(nextValue(), uniquingKeysWith: { $1 })
   }
 }
 
 #if os(macOS)
-/// Watches only the tab's bounds for a middle-button press; ordinary clicks
-/// continue to reach the SwiftUI tab button underneath.
-private struct MiddleClickMonitor: NSViewRepresentable {
-  let action: () -> Void
 
-  func makeNSView(context: Context) -> MiddleClickRegion {
-    let view = MiddleClickRegion()
-    view.action = action
-    return view
+/// One hit target for the whole strip. The scroll view under it takes the
+/// width the tabs leave, so a press that misses every tab is a press on the
+/// titlebar, and is answered as one: it drags the window.
+private struct TabStripCatcher: NSViewRepresentable {
+  var frames: [UUID: CGRect]
+  var closeable: Set<UUID>
+  var closeWidth: CGFloat
+  var onPrimary: (UUID) -> Void
+  var onClose: (UUID) -> Void
+  var makeMenu: (UUID) -> NSMenu
+
+  func makeNSView(context: Context) -> Catcher { Catcher() }
+
+  func updateNSView(_ view: Catcher, context: Context) {
+    view.frames = frames
+    view.closeable = closeable
+    view.closeWidth = closeWidth
+    view.onPrimary = onPrimary
+    view.onClose = onClose
+    view.makeMenu = makeMenu
   }
 
-  func updateNSView(_ view: MiddleClickRegion, context: Context) {
-    view.action = action
-  }
+  final class Catcher: NSView {
+    var frames: [UUID: CGRect] = [:]
+    var closeable: Set<UUID> = []
+    var closeWidth: CGFloat = 18
+    var onPrimary: ((UUID) -> Void)?
+    var onClose: ((UUID) -> Void)?
+    var makeMenu: ((UUID) -> NSMenu)?
 
-  final class MiddleClickRegion: NSView {
-    var action: (() -> Void)?
-    private var monitor: Any?
+    // The strip lies in the titlebar, where a clear view otherwise lets the
+    // window take the press as a drag and the tab never hears it.
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      if let monitor {
-        NSEvent.removeMonitor(monitor)
-        self.monitor = nil
-      }
-      guard window != nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] event in
-        guard event.buttonNumber == 2, let self, event.window === self.window else { return event }
-        let point = self.convert(event.locationInWindow, from: nil)
-        guard self.bounds.contains(point) else { return event }
-        self.action?()
-        return nil
-      }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+      let local = convert(point, from: superview)
+      return bounds.contains(local) ? self : nil
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func mouseDown(with event: NSEvent) {
+      guard let (id, frame, point) = tab(at: event) else {
+        TitlebarPress.handle(event, in: window)
+        return
+      }
+      if closeable.contains(id), point.x >= frame.maxX - closeWidth { onClose?(id) }
+      else { onPrimary?(id) }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+      guard let (id, _, _) = tab(at: event), let menu = makeMenu?(id), !menu.items.isEmpty else { return }
+      NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+      guard event.buttonNumber == 2, let (id, _, _) = tab(at: event) else { return }
+      onClose?(id)
+    }
+
+    /// SwiftUI frames are top-left. This view may be either way up, so a
+    /// point matches a tab in whichever of the two systems contains it.
+    private func tab(at point: NSPoint) -> (UUID, CGRect)? {
+      if let hit = frames.first(where: { $0.value.contains(point) }) { return (hit.key, hit.value) }
+      let flipped = NSPoint(x: point.x, y: bounds.height - point.y)
+      guard let hit = frames.first(where: { $0.value.contains(flipped) }) else { return nil }
+      return (hit.key, hit.value)
+    }
+
+    private func tab(at event: NSEvent) -> (UUID, CGRect, NSPoint)? {
+      let local = convert(event.locationInWindow, from: nil)
+      guard let (id, frame) = tab(at: local) else { return nil }
+      let point = frame.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
+      return (id, frame, point)
+    }
   }
+}
+
+/// `NSMenuItem.target` does not keep the item alive; the menu does.
+private final class ActionMenuItem: NSMenuItem {
+  private let run: () -> Void
+
+  init(_ title: String, checked: Bool = false, handler: @escaping () -> Void) {
+    run = handler
+    super.init(title: title, action: #selector(fire), keyEquivalent: "")
+    target = self
+    state = checked ? .on : .off
+  }
+
+  @available(*, unavailable)
+  required init(coder: NSCoder) { fatalError("not from a nib") }
+
+  @objc private func fire() { run() }
 }
 #endif
 
@@ -362,23 +521,19 @@ struct HostStatusBar: View {
     // What stands in for the shell speaks for the tab: the shell behind it
     // may have ended while what it shows, on another lease, is live.
     if let shown = tab.shown { return shown.isDisconnected ? "Disconnected" : "Connected" }
-    switch tab.stage {
-    case .connecting: return "Connecting"
-    case .asking: return "Needs authentication"
-    case .failed: return "Disconnected"
-    case .ended: return "Ended"
-    case .connected: return "Connected"
-    }
+    return tab.stateName
   }
 
   private var statusColor: Color {
     if let shown = tabs.current?.shown {
-      return shown.isDisconnected ? Theme.subtle : Theme.success
+      return shown.isDisconnected ? Theme.warning : Theme.success
     }
     if tabs.current?.isLive == true || tabs.currentExtension != nil {
       return Theme.success
     }
-    return Theme.subtle
+    // Down is not idle: a connection that went away reads differently from
+    // one that is still coming up or a shell that ended.
+    return tabs.current?.isDisconnected == true ? Theme.warning : Theme.subtle
   }
 
   @ViewBuilder
@@ -397,8 +552,8 @@ struct HostStatusBar: View {
             .accessibilityLabel("Connecting")
         case .asking:
           mark("key.fill", "Needs authentication")
-        case .failed:
-          mark("bolt.slash", "Disconnected")
+        case .failed, .lost:
+          reconnectButton(tab)
         case .ended:
           mark("stop.circle", "Ended")
         default:
@@ -406,6 +561,24 @@ struct HostStatusBar: View {
         }
       }
     }
+  }
+
+  /// The state and its verb in one place: a down terminal is a button.
+  private func reconnectButton(_ tab: SessionTab) -> some View {
+    let verb = tab.host.isLocal ? "Restart" : "Reconnect"
+    return Button {
+      tabs.intent = .reconnect(tab.id)
+    } label: {
+      Image(systemName: "arrow.clockwise")
+        .font(UIStyle.symbol)
+        .foregroundStyle(Theme.warning)
+        .frame(width: UIStyle.Mark.icon, height: Chrome.status)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .help(verb)
+    .accessibilityLabel(verb)
+    .accessibilityValue("Disconnected")
   }
 
   private func mark(_ symbol: String, _ name: String) -> some View {
@@ -471,7 +644,7 @@ struct HostPicker: View {
       }
       if matches.count > 8 {
         ScrollViewReader { proxy in
-          ScrollView { list(ordered, connectedCount: connected.count) }
+          ScrollView { list(ordered, connectedCount: connected.count, lazy: true) }
             .frame(maxHeight: UIStyle.listHeight)
             .scrollIndicators(.visible)
             .onChange(of: selection.id) { _, id in
@@ -563,12 +736,19 @@ struct HostPicker: View {
     return live
   }
 
-  private func list(_ matches: [Host], connectedCount: Int) -> some View {
-    VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-      ForEach(Array(matches.enumerated()), id: \.element.id) { index, host in
-        if index == connectedCount && connectedCount > 0 { Divider() }
-        row(host, index: index)
-      }
+  /// Lazy once it scrolls: a long library then builds only the rows in
+  /// view. Scrolling to the keyboard's selection still finds the rest,
+  /// because a row's scroll id is its identity in the `ForEach`.
+  @ViewBuilder
+  private func list(_ matches: [Host], connectedCount: Int, lazy: Bool = false) -> some View {
+    let rows = ForEach(Array(matches.enumerated()), id: \.element.id) { index, host in
+      if index == connectedCount && connectedCount > 0 { Divider() }
+      row(host, index: index)
+    }
+    if lazy {
+      LazyVStack(alignment: .leading, spacing: UIStyle.Space.tight) { rows }
+    } else {
+      VStack(alignment: .leading, spacing: UIStyle.Space.tight) { rows }
     }
   }
 
@@ -660,11 +840,17 @@ private struct PluginStatusRibbon: View {
     }
     .accessibilityLabel(item.label)
     .help(item.label)
+    #if os(macOS)
+    .background {
+      PluginPanelPopover(isPresented: $isPresented, workspace: presentation?.workspace)
+    }
+    #else
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
       if let presentation {
         presentation.workspace.content()
       }
     }
+    #endif
     .onChange(of: isPresented) { _, shown in
       if !shown {
         presentation?.workspace.close()
@@ -681,15 +867,53 @@ struct EmptyWorkspace: View {
 }
 
 #if os(macOS)
-  /// Content draws under the traffic lights so the tab strip can be 36pt, not a second titlebar.
+  /// Content draws under the traffic lights. The tab strip is that titlebar row.
+  ///
+  /// It also closes the window when asked: `closeRequests` is
+  /// `TabSet.windowCloseRequests`, and each new one is a ⌘W with nothing left
+  /// in the window to close.
   struct CompactTitlebar: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Hook() }
-    func updateNSView(_ view: NSView, context: Context) { (view as? Hook)?.apply() }
+    var closeRequests = 0
+
+    func makeNSView(context: Context) -> NSView { Hook(closeRequests: closeRequests) }
+    func updateNSView(_ view: NSView, context: Context) {
+      guard let hook = view as? Hook else { return }
+      hook.apply()
+      hook.close(ifNew: closeRequests)
+    }
 
     private final class Hook: NSView {
+      /// Held here: `NSWindow.delegate` is weak, and SwiftUI's own delegate
+      /// has to stay reachable so the proxy can forward everything else.
+      private var closeGuard: HideInsteadOfClose?
+      /// The last request answered. Ones from before this view existed are
+      /// not this window's to act on.
+      private var closeRequests: Int
+
+      init(closeRequests: Int) {
+        self.closeRequests = closeRequests
+        super.init(frame: .zero)
+      }
+
+      @available(*, unavailable)
+      required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+      /// The way the red button closes — through the delegate, so it hides.
+      func close(ifNew requests: Int) {
+        guard requests != closeRequests else { return }
+        closeRequests = requests
+        window?.performClose(nil)
+      }
+
       override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         apply()
+        // SwiftUI installs its delegate after the content view arrives.
+        // Wrapping too early is overwritten, and the red button quits again.
+        DispatchQueue.main.async { [weak self] in
+          guard let window = self?.window else { return }
+          self?.installCloseGuard(on: window)
+        }
       }
 
       func apply() {
@@ -701,20 +925,35 @@ struct EmptyWorkspace: View {
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = false
+        installCloseGuard(on: window)
+      }
+
+      /// The red button asks the window to close, and a `Window` scene that
+      /// closes takes its views with it. This one is hidden instead, and the
+      /// Dock brings it back (`HideInsteadOfClose`). Quit is still the menu.
+      private func installCloseGuard(on window: NSWindow) {
+        guard !(window.delegate is HideInsteadOfClose) else { return }
+        let proxy = HideInsteadOfClose(forwarding: window.delegate)
+        closeGuard = proxy
+        window.delegate = proxy
       }
     }
   }
 
-  /// Empty titlebar space that drags the window, including next to the tabs.
+  /// Empty titlebar space that drags the window, including next to the
+  /// tabs, and zooms or minimizes it on a double-click as the system would.
   struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DragView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     private final class DragView: NSView {
       override var mouseDownCanMoveWindow: Bool { true }
-      override func hitTest(_ point: NSPoint) -> NSView? { self }
+      override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return bounds.contains(local) ? self : nil
+      }
       override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
+        TitlebarPress.handle(event, in: window)
       }
     }
   }

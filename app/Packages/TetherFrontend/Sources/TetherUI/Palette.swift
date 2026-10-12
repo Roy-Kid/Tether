@@ -20,43 +20,74 @@ public struct Palette: Equatable, Sendable {
   let normal: [Color]
   let bright: [Color]
 
-  /// A dark theme with the usual sixteen.
+  /// A dark theme. The six chromatic hues are the status colours, so a
+  /// program that asks for red and the lamp that means the same thing agree.
+  /// Every slot but the two blacks reads as text here (4.5:1); black is
+  /// mostly painted as a background, and bright black is the dim grey
+  /// programs use for what should recede, so it only has to be seen (3:1).
   public static let dark = Palette(
-    background: Color(red: 0.07, green: 0.08, blue: 0.10),
-    foreground: Color(red: 0.87, green: 0.88, blue: 0.90),
-    cursor: Color(red: 0.55, green: 0.78, blue: 0.96),
+    background: srgb(0x12141A),
+    foreground: srgb(0xDEE0E6),
+    cursor: srgb(0x0A84FF),
     normal: [
-      Color(red: 0.16, green: 0.17, blue: 0.20),  // black
-      Color(red: 0.90, green: 0.38, blue: 0.40),  // red
-      Color(red: 0.47, green: 0.76, blue: 0.45),  // green
-      Color(red: 0.90, green: 0.72, blue: 0.36),  // yellow
-      Color(red: 0.40, green: 0.62, blue: 0.90),  // blue
-      Color(red: 0.76, green: 0.51, blue: 0.85),  // magenta
-      Color(red: 0.36, green: 0.75, blue: 0.77),  // cyan
-      Color(red: 0.78, green: 0.79, blue: 0.81),  // white
+      srgb(0x292B33),  // black
+      srgb(0xFF3B30),  // red
+      srgb(0x30D158),  // green
+      srgb(0xFF9F0A),  // yellow
+      srgb(0x0A84FF),  // blue
+      srgb(0xBF5AF2),  // magenta
+      srgb(0x64D2FF),  // cyan
+      srgb(0xEBEBF5),  // white
     ],
     bright: [
-      Color(red: 0.34, green: 0.36, blue: 0.40),
-      Color(red: 0.96, green: 0.50, blue: 0.51),
-      Color(red: 0.60, green: 0.86, blue: 0.57),
-      Color(red: 0.96, green: 0.82, blue: 0.48),
-      Color(red: 0.53, green: 0.72, blue: 0.96),
-      Color(red: 0.85, green: 0.63, blue: 0.93),
-      Color(red: 0.48, green: 0.85, blue: 0.87),
-      Color(red: 0.94, green: 0.95, blue: 0.96),
+      srgb(0x636366),
+      srgb(0xFF6961),
+      srgb(0x4ADE80),
+      srgb(0xFFD60A),
+      srgb(0x409CFF),
+      srgb(0xDA8FFF),
+      srgb(0x8BDEFF),
+      srgb(0xFFFFFF),
     ])
 
+  /// A light theme: the dark theme's hues, taken down in lightness until
+  /// each one reads as text on this background (4.5:1), not just as colour.
+  ///
+  /// The vivid system hues are drawn for a dark ground; on near-white the
+  /// bright green and yellow fall under 2:1 and a build log printed in them
+  /// cannot be read. Both rows sit in the band that still passes, so `bright`
+  /// is the lighter, more saturated end (about 4.6:1) and `normal` the deeper
+  /// one (about 6:1). Yellow becomes amber, then gold: a yellow dark enough
+  /// to read is olive, and amber kept next to red would be the same colour.
+  ///
+  /// White and bright white cannot be white here and still be seen. They
+  /// stay greys that keep the order black, bright black, white, bright
+  /// white getting lighter, so a program that paints a bright-white bar
+  /// under black text still gets a light bar with dark text on it. Bright
+  /// white is the one slot below 4.5:1 — 3.1:1, readable but quiet.
   public static let light = Palette(
-    background: Color(red: 0.985, green: 0.985, blue: 0.99),
-    foreground: Color(red: 0.12, green: 0.13, blue: 0.16),
-    cursor: .blue,
+    background: srgb(0xFBFBFC),
+    foreground: srgb(0x1F2129),
+    cursor: srgb(0x0A84FF),
     normal: [
-      .black, Color(red: 0.7, green: 0.12, blue: 0.17), Color(red: 0.1, green: 0.4, blue: 0.2),
-      Color(red: 0.55, green: 0.35, blue: 0.05), .blue, .purple,
-      Color(red: 0, green: 0.4, blue: 0.5), .gray,
+      srgb(0x1C1C1E),  // black
+      srgb(0xC50006),  // red
+      srgb(0x037027),  // green
+      srgb(0x8B5402),  // yellow
+      srgb(0x015FBD),  // blue
+      srgb(0x9429C4),  // magenta
+      srgb(0x03688F),  // cyan
+      srgb(0x6E6E73),  // white
     ],
     bright: [
-      .gray, .red, Color(red: 0.1, green: 0.5, blue: 0.25), .orange, .blue, .purple, .cyan, .white,
+      srgb(0x48484A),
+      srgb(0xE41212),
+      srgb(0x06852F),
+      srgb(0x9A6903),
+      srgb(0x0471DD),
+      srgb(0xA740D9),
+      srgb(0x087BA8),
+      srgb(0x8E8E93),
     ])
 
   func color(_ color: CellColor) -> Color {
@@ -64,8 +95,7 @@ public struct Palette: Equatable, Sendable {
     case .named(let name): named(name)
     case .indexed(let index): indexed(index)
     case .rgb(let red, let green, let blue):
-      Color(
-        red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255)
+      Color(.sRGB, red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255)
     }
   }
 
@@ -107,15 +137,25 @@ public struct Palette: Equatable, Sendable {
       let value = Int(index) - 16
       let level = { (step: Int) in step == 0 ? 0.0 : Double(55 + step * 40) / 255 }
       return Color(
-        red: level(value / 36), green: level((value / 6) % 6), blue: level(value % 6))
+        .sRGB, red: level(value / 36), green: level((value / 6) % 6), blue: level(value % 6))
     default:
       let grey = Double(8 + (Int(index) - 232) * 10) / 255
-      return Color(red: grey, green: grey, blue: grey)
+      return Color(.sRGB, red: grey, green: grey, blue: grey)
     }
   }
 }
 
 extension Palette {
+  /// `#RRGGBB` in sRGB. `Color(red:green:blue:)` is not that space on every
+  /// OS, and a hue that drifts is a different colour than the one named.
+  fileprivate static func srgb(_ hex: UInt32) -> Color {
+    Color(
+      .sRGB,
+      red: Double((hex >> 16) & 0xFF) / 255,
+      green: Double((hex >> 8) & 0xFF) / 255,
+      blue: Double(hex & 0xFF) / 255)
+  }
+
   /// Which palette a setting and an environment add up to.
   ///
   /// One place, because two would drift: the surface draws with this and the

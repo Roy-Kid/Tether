@@ -68,6 +68,7 @@
             switch $0 {
             case .enter: "Enter"
             case .command(let key): "⌘" + key.uppercased()
+            case .commandOption(let key): "⌥⌘" + key.uppercased()
             }
           }.joined(separator: " / ")
         }
@@ -153,6 +154,8 @@
           case .enter: modifiers.isEmpty && (event.keyCode == 36 || event.keyCode == 76)
           case .command(let key):
             modifiers == .command && event.charactersIgnoringModifiers?.lowercased() == key.lowercased()
+          case .commandOption(let key):
+            modifiers == [.command, .option] && event.charactersIgnoringModifiers?.lowercased() == key.lowercased()
           }
         }?.1
       }
@@ -255,6 +258,11 @@
       box.cell?.usesSingleLineMode = true
       box.cell?.isScrollable = true
       box.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+      switch field.kind {
+      case .text: break
+      case .password: box.contentType = .password
+      case .code: box.contentType = .oneTimeCode
+      }
       return box
     }
 

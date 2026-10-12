@@ -31,6 +31,7 @@
 
 mod connection;
 mod dial;
+mod forward;
 pub mod history;
 mod local;
 mod producer;
@@ -39,6 +40,7 @@ mod ssh_client;
 
 pub use connection::{Capture, Channel, Connection, ConnectionError};
 pub use dial::{Credential, Dial, DialError, SkippedKey};
+pub use forward::Listener;
 pub use local::Local;
 pub use producer::{Output, Producer, ProducerError};
 pub use session::{Ending, SessionError, TerminalSession};

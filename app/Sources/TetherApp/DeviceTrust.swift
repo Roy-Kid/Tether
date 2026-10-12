@@ -26,12 +26,12 @@ struct DeviceKeyMaterial: Codable {
   var signing: Data
   var agreement: Data
 }
-struct TrustedPeer: Codable, Identifiable {
+struct TrustedPeer: Codable, Equatable, Identifiable {
   var card: DeviceCard
   var revoked = false
   var id: UUID { card.id }
 }
-struct DeviceTrustState: Codable {
+struct DeviceTrustState: Codable, Equatable {
   var local: DeviceCard?
   var secretID: UUID?
   var peers: [UUID: TrustedPeer] = [:]
@@ -112,7 +112,7 @@ struct DeviceRevocation: Codable, Sendable {
   var revokedDevice: UUID
   var issuedAt = Date()
 }
-struct SignedDeviceRevocation: Codable, Sendable {
+struct SignedDeviceRevocation: Codable, Equatable, Sendable {
   var payload: Data
   var signature: Data
   func verify(using card: DeviceCard) throws -> DeviceRevocation {

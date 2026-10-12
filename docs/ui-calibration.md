@@ -4,7 +4,7 @@
 
 - App controls use `UIStyle` in `Design.swift`: platform-specific typography,
   row/control sizes, shared spacing, selection feedback and floating surfaces.
-- macOS keeps the 36 pt tab strip, 24 pt host bar and 12 pt terminal gutter.
+- macOS keeps the 32 pt tab strip (the system titlebar), 24 pt host bar and 12 pt terminal gutter.
   iOS custom rows use Dynamic Type and a minimum 44 pt target; accessibility
   text sizes allow names to wrap. Terminal font preferences remain independent.
 - Native forms, navigation, settings and authentication alerts retain their

@@ -34,9 +34,9 @@ public struct Dialog: Identifiable {
     public enum Kind: Equatable, Sendable {
       /// Shown as typed.
       case text
-      /// Hidden as typed, and filled from the person's saved passwords.
+      /// Hidden as typed, and offered to the system as a saved password.
       case password
-      /// Hidden as typed, and filled from a code the system just received.
+      /// Hidden as typed, and offered to the system as a verification code.
       case code
     }
 
@@ -66,6 +66,8 @@ public struct Dialog: Identifiable {
     public enum Shortcut: Equatable, Sendable {
       case enter
       case command(String)
+      /// ⌥⌘ and a key: a command that asked on that chord confirms on it.
+      case commandOption(String)
     }
 
     public var title: String

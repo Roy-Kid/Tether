@@ -73,15 +73,12 @@ struct FilesSettings: View {
         Text(directory.isEmpty ? "Ask" : FilesPreferences.shorten(directory))
           .lineLimit(1)
           .truncationMode(.middle)
-      }
-      .help(directory.isEmpty ? "Ask for a folder each download" : directory)
-      HStack(spacing: UIStyle.Space.inline) {
-        Button(directory.isEmpty ? "Choose Folder" : "Change Folder") { picking = true }
+        SettingsAction(directory.isEmpty ? "Choose Folder" : "Change Folder", systemImage: "folder") { picking = true }
         if !directory.isEmpty {
-          Button("Ask Each Time") { directory = "" }
+          SettingsAction("Ask Each Time", systemImage: "arrow.uturn.backward") { directory = "" }
         }
       }
-      .buttonStyle(.borderless)
+      .help(directory.isEmpty ? "Ask for a folder each download" : directory)
     }
     .fileImporter(
       isPresented: $picking, allowedContentTypes: [.folder], allowsMultipleSelection: false

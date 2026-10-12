@@ -1561,12 +1561,32 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
     func execute(command: String, cancellation: CancellationToken) async throws  -> CommandOutput
     
     /**
+     * Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+     * where this lease's shell is running.
+     *
+     * Asking again for a port that is already forwarded returns the existing
+     * listener. A local shell reports the port and does not bind.
+     */
+    func forwardPort(port: UInt16) async throws  -> ForwardedPort
+    
+    /**
+     * Which authenticated session this lease is. Equal across wrappers of
+     * one session, and different after a redial.
+     */
+    func leaseId()  -> UInt64
+    
+    /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
     func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?, cancellation: CancellationToken) async throws  -> Session
     
     func renameTmux(sessionId: String, name: String) async throws 
+    
+    /**
+     * Closes the local listener for `port`, and the connections it accepted.
+     */
+    func stopForward(port: UInt16) 
     
     /**
      * Where tmux says a pane's program is — `#{pane_current_path}`, which
@@ -1747,6 +1767,42 @@ open func execute(command: String, cancellation: CancellationToken)async throws 
 }
     
     /**
+     * Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+     * where this lease's shell is running.
+     *
+     * Asking again for a port that is already forwarded returns the existing
+     * listener. A local shell reports the port and does not bind.
+     */
+open func forwardPort(port: UInt16)async throws  -> ForwardedPort  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_forward_port(
+                        self.uniffiCloneHandle(),FfiConverterUInt16.lower(port)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeForwardedPort_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+    
+    /**
+     * Which authenticated session this lease is. Equal across wrappers of
+     * one session, and different after a redial.
+     */
+open func leaseId() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_remoteconnection_lease_id(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
@@ -1780,6 +1836,18 @@ open func renameTmux(sessionId: String, name: String)async throws   {
             liftFunc: { $0 },
             errorHandler: FfiConverterTypeTetherError_lift
         )
+}
+    
+    /**
+     * Closes the local listener for `port`, and the connections it accepted.
+     */
+open func stopForward(port: UInt16)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tether_ffi_fn_method_remoteconnection_stop_forward(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt16.lower(port),uniffiCallStatus
+    )
+}
 }
     
     /**
@@ -3819,6 +3887,71 @@ public func FfiConverterTypeFileEntry_lift(_ buf: RustBuffer) throws -> FileEntr
 #endif
 public func FfiConverterTypeFileEntry_lower(_ value: FileEntry) -> RustBuffer {
     return FfiConverterTypeFileEntry.lower(value)
+}
+
+
+/**
+ * A port forwarded to `127.0.0.1` on this machine.
+ */
+public struct ForwardedPort: Equatable, Hashable {
+    public let localPort: UInt16
+    /**
+     * The shell is already on this machine, so `local_port` is the
+     * program's own port and nothing was bound over it.
+     */
+    public let alreadyLocal: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(localPort: UInt16, 
+        /**
+         * The shell is already on this machine, so `local_port` is the
+         * program's own port and nothing was bound over it.
+         */alreadyLocal: Bool) {
+        self.localPort = localPort
+        self.alreadyLocal = alreadyLocal
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ForwardedPort: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeForwardedPort: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ForwardedPort {
+        return
+            try ForwardedPort(
+                localPort: FfiConverterUInt16.read(from: &buf), 
+                alreadyLocal: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ForwardedPort, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.localPort, into: &buf)
+        FfiConverterBool.write(value.alreadyLocal, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeForwardedPort_lift(_ buf: RustBuffer) throws -> ForwardedPort {
+    return try FfiConverterTypeForwardedPort.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeForwardedPort_lower(_ value: ForwardedPort) -> RustBuffer {
+    return FfiConverterTypeForwardedPort.lower(value)
 }
 
 
@@ -8418,10 +8551,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remoteconnection_execute() != 7135) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_forward_port() != 2798) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_lease_id() != 44230) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 576) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 30515) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_stop_forward() != 59417) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 5827) {

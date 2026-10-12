@@ -53,21 +53,18 @@ struct Browser: View {
         TransferList(transfers: model.transfers)
       }
     #else
-      NavigationStack {
-        listing
-          .navigationTitle(model.directory.map(Paths.name).map(Names.display) ?? "")
-          .navigationBarTitleDisplayMode(.inline)
-          .toolbarTitleMenu { PathMenu(model: model) }
-          .toolbar { PhoneToolbar(model: model, importing: $importing) }
-          .searchable(
-            text: $model.query, isPresented: $model.finding,
-            placement: .navigationBarDrawer(displayMode: .automatic), prompt: ""
-          )
-          .onSubmit(of: .search) { model.commitFind() }
-          .refreshable { if let directory = model.directory { await model.go(to: directory, remember: false) } }
-          .safeAreaInset(edge: .bottom) { TransferList(transfers: model.transfers) }
-      }
-      .presentationDetents([.medium, .large])
+      listing
+        .navigationTitle(model.directory.map(Paths.name).map(Names.display) ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu { PathMenu(model: model) }
+        .toolbar { PhoneToolbar(model: model, importing: $importing) }
+        .searchable(
+          text: $model.query, isPresented: $model.finding,
+          placement: .navigationBarDrawer(displayMode: .automatic), prompt: ""
+        )
+        .onSubmit(of: .search) { model.commitFind() }
+        .refreshable { if let directory = model.directory { await model.go(to: directory, remember: false) } }
+        .safeAreaInset(edge: .bottom) { TransferList(transfers: model.transfers) }
     #endif
   }
 
@@ -126,7 +123,12 @@ private struct FileList: View {
       .listStyle(.inset)
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
       .focused($listFocused)
-      .background { ListKeyboardClaim() }
+      .background {
+        ListKeyboardClaim { urls in
+          guard model.renaming == nil else { return false }
+          return model.pasteLocalFiles(urls)
+        }
+      }
       .onAppear { listFocused = true }
       .onChange(of: model.listTicket) { _, _ in listFocused = true }
       .environment(\.defaultMinListRowHeight, UIStyle.rowHeight)
@@ -216,6 +218,11 @@ private struct FileList: View {
       .onCopyCommand {
         model.selected.map { NSItemProvider(object: $0.path as NSString) }
       }
+      // Finder's copy is file URLs. The Paste menu only reaches a view that
+      // asks for them; a string pasted into the terminal is not an upload.
+      .onPasteCommand(of: [.fileURL]) { _ in
+        _ = model.pasteLocalFiles(CopiedFiles.urls())
+      }
     #else
       .listStyle(.plain)
     #endif
@@ -232,26 +239,74 @@ private struct FileList: View {
   /// A click in the list selects a row and leaves the keyboard where it was,
   /// which is the terminal. This view does not take the click; it moves the
   /// first responder onto the list the click landed in.
+  ///
+  /// ⌘V is delivered to whatever answers Paste. The table does not, and the
+  /// terminal's paste reads only a string, so a file copied in Finder never
+  /// arrives. The list takes that chord itself.
   private struct ListKeyboardClaim: NSViewRepresentable {
-    func makeNSView(context: Context) -> ListKeyboardClaimView { ListKeyboardClaimView() }
-    func updateNSView(_ view: ListKeyboardClaimView, context: Context) {}
+    var pasteFiles: ([URL]) -> Bool
+
+    func makeNSView(context: Context) -> ListKeyboardClaimView {
+      let view = ListKeyboardClaimView()
+      view.pasteFiles = pasteFiles
+      return view
+    }
+
+    func updateNSView(_ view: ListKeyboardClaimView, context: Context) {
+      view.pasteFiles = pasteFiles
+    }
+
+    static func dismantleNSView(_ view: ListKeyboardClaimView, coordinator: ()) { view.stop() }
   }
 
   private final class ListKeyboardClaimView: NSView {
+    var pasteFiles: (([URL]) -> Bool)?
     private var monitor: Any?
+    private let pasteSink = FilePasteSink()
+    private weak var attached: NSTableView?
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
+      stop()
       guard window != nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
+      monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) {
         [weak self] event in
-        self?.takeKeyboard(event)
+        guard let self else { return event }
+        if event.type == .keyDown { return self.pasteKey(event) }
+        self.takeKeyboard(event)
         return event
       }
+      // The table is built on the layout pass that is still running.
+      DispatchQueue.main.async { [weak self] in self?.attach() }
+    }
+
+    func stop() {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+      detach()
+    }
+
+    /// ⌘V pastes. ⌃V does too when Finder left files on the pasteboard;
+    /// otherwise it stays page down.
+    private func pasteKey(_ event: NSEvent) -> NSEvent? {
+      guard event.window === window else { return event }
+      attach()
+      guard isPaste(event), ownsFirstResponder() else { return event }
+      let files = CopiedFiles.urls()
+      let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+      // ⌃V with nothing copied is page down, not a failed paste.
+      if flags == .control, files.isEmpty { return event }
+      if pasteFiles?(files) == true { return nil }
+      return event
+    }
+
+    private func isPaste(_ event: NSEvent) -> Bool {
+      guard !event.isARepeat else { return false }
+      let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+      guard flags == .command || flags == .control else { return false }
+      return event.charactersIgnoringModifiers?.lowercased() == "v"
     }
 
     private func takeKeyboard(_ event: NSEvent) {
@@ -273,9 +328,95 @@ private struct FileList: View {
       }
       if let table {
         window.makeFirstResponder(table)
+        attach(table)
       } else if let fallback {
         window.makeFirstResponder(fallback)
       }
+    }
+
+    private func ownsFirstResponder() -> Bool {
+      guard let responder = window?.firstResponder as? NSView else { return false }
+      if responder is NSTextView || responder is NSTextField { return false }
+      guard let table = nearestTable() else { return false }
+      var view: NSView? = responder
+      while let current = view {
+        if current === table { return true }
+        view = current.superview
+      }
+      return false
+    }
+
+    private func attach() {
+      guard let table = nearestTable() else { return }
+      attach(table)
+    }
+
+    private func attach(_ table: NSTableView) {
+      pasteSink.accept = { [weak self] in self?.pasteFiles?(CopiedFiles.urls()) ?? false }
+      if attached === table, table.nextResponder === pasteSink { return }
+      detach()
+      pasteSink.nextResponder = table.nextResponder
+      table.nextResponder = pasteSink
+      attached = table
+    }
+
+    private func detach() {
+      if let attached, attached.nextResponder === pasteSink {
+        attached.nextResponder = pasteSink.nextResponder
+      }
+      attached = nil
+      pasteSink.nextResponder = nil
+    }
+
+    /// The table this claim sits behind. The first ancestor that contains
+    /// one is the list; a sidebar table lives further up and is not it.
+    private func nearestTable() -> NSTableView? {
+      var ancestor: NSView? = self
+      while let current = ancestor {
+        if let table = findTable(in: current) { return table }
+        ancestor = current.superview
+      }
+      return nil
+    }
+
+    private func findTable(in view: NSView) -> NSTableView? {
+      if let table = view as? NSTableView { return table }
+      for child in view.subviews {
+        if let table = findTable(in: child) { return table }
+      }
+      return nil
+    }
+  }
+
+  /// Behind the list in the responder chain, so Edit ▸ Paste uploads the
+  /// files Finder copied. The table does not implement paste.
+  private final class FilePasteSink: NSResponder, NSMenuItemValidation {
+    var accept: (() -> Bool)?
+
+    @objc func paste(_ sender: Any?) {
+      if accept?() == true { return }
+      nextResponder?.tryToPerform(#selector(paste(_:)), with: sender)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+      guard menuItem.action == #selector(paste(_:)) else { return true }
+      return !CopiedFiles.urls().isEmpty
+    }
+  }
+
+  /// File URLs copied in Finder. A string beside them is the path, not a
+  /// second thing to upload.
+  private enum CopiedFiles {
+    static func urls() -> [URL] {
+      let board = NSPasteboard.general
+      let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+      if let found = board.readObjects(forClasses: [NSURL.self], options: options) as? [URL] {
+        let files = found.filter(\.isFileURL)
+        if !files.isEmpty { return files }
+      }
+      let legacy = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+      guard let names = board.propertyList(forType: legacy) as? [String] else { return [] }
+      return names.map { URL(fileURLWithPath: $0) }
     }
   }
 #endif
@@ -426,7 +567,7 @@ private struct EntryDrag: ViewModifier {
   func body(content: Content) -> some View {
     let text = model.draggedPathText(entry)
     if entry.kind == .file {
-      content.draggable(DraggedFile(text: text, file: RemoteFile(model: model, entry: entry))) {
+      content.draggable(DraggedFile(text: text, file: model.fetch(entry))) {
         preview
       }
     } else {
@@ -440,15 +581,19 @@ private struct EntryDrag: ViewModifier {
 }
 
 /// A file row's drag: the absolute path, and the bytes when something asks.
+///
+/// A drop asks for the bytes on the main thread and waits, whatever it was
+/// dropped on — SwiftUI resolves a dragged file URL before a drop handler
+/// sees anything. So the fetch never needs the main actor, and a drop on
+/// this app's own windows gets the path alone.
 struct DraggedFile: Transferable {
   let text: String
-  let file: RemoteFile
+  let file: FileFetch
 
   static var transferRepresentation: some TransferRepresentation {
     ProxyRepresentation { DroppedPath(text: $0.text) }
     FileRepresentation(exportedContentType: .data) { item in
-      SentTransferredFile(
-        try await item.file.model.local(item.file.entry), allowAccessingOriginalFile: false)
+      SentTransferredFile(try await item.file.forDrop(), allowAccessingOriginalFile: false)
     }
     .suggestedFileName { Names.local($0.file.entry.name) }
   }
@@ -500,7 +645,7 @@ private struct EntryMenu: View {
     #if !os(macOS)
       if files.count == 1, let file = files.first {
         ShareLink(
-          item: RemoteFile(model: model, entry: file),
+          item: RemoteFile(file: model.fetch(file)),
           preview: SharePreview(Names.display(file.name)))
       }
     #endif
@@ -941,51 +1086,65 @@ private struct Confirmations: ViewModifier {
   }
 
   func body(content: Content) -> some View {
-    content.dialog(for: question) { _ in dialog }
+    content.task(id: question) { await ask(question) }
   }
 
-  private var dialog: Dialog {
-    if !model.pendingDeletion.isEmpty {
+  /// Settling a question changes `question`, and SwiftUI then cancels the
+  /// task that asked it. The answer's work is the person's, not the view's:
+  /// it runs on its own, so a Replace is not cancelled by its own dialog
+  /// closing.
+  private func settle(_ work: @escaping @MainActor () async -> Void) {
+    Task { await work() }
+  }
+
+  private func ask(_ question: Question?) async {
+    switch question {
+    case .delete:
       let doomed = model.pendingDeletion
-      return .confirm(
-        deletionTitle(doomed), verb: "Delete", role: .destructive, cancel: { model.pendingDeletion = [] }
-      ) {
-        model.pendingDeletion = []
-        Task { await model.confirmDelete(doomed) }
-      }
-    }
-    if let conflict = model.conflicts.first {
-      let settle: (Conflict.Choice) -> Void = { choice in
-        Task { await model.resolve(conflict, choice) }
-      }
-      return Dialog(
-        title: "Replace “\(Names.display(conflict.name))”?",
+      guard !doomed.isEmpty else { return }
+      let answer = await model.tab.plugin.services.ask(
+        .confirm(deletionTitle(doomed), verb: "Delete", destructive: true))
+      guard !Task.isCancelled, model.pendingDeletion.map(\.path) == doomed.map(\.path) else { return }
+      model.pendingDeletion = []
+      guard answer.confirmed else { return }
+      settle { await model.confirmDelete(doomed) }
+    case .conflict:
+      guard let conflict = model.conflicts.first else { return }
+      let answer = await model.tab.plugin.services.ask(.choose(
+        "Replace “\(Names.display(conflict.name))”?",
         actions: [
-          Dialog.Action("Replace", role: .destructive) { _ in settle(.replace) },
-          Dialog.Action("Keep Both") { _ in settle(.keepBoth) },
-          .cancel("Skip") { settle(.skip) },
-        ])
-    }
-    let fetch = model.pendingFetch
-    let large = model.pendingLarge
-    let size = ByteCountFormatter.string(fromByteCount: Int64(large?.size ?? 0), countStyle: .file)
-    return .confirm(
-      "Download \(size)?", verb: "Download",
-      cancel: {
-        model.pendingLarge = nil
-        model.pendingFetch = nil
+          PluginAction(id: "replace", title: "Replace", destructive: true),
+          PluginAction(id: "keep", title: "Keep Both"),
+        ],
+        cancel: "Skip"))
+      guard !Task.isCancelled, model.conflicts.first?.id == conflict.id else { return }
+      let choice: Conflict.Choice = switch answer.action {
+      case "replace": .replace
+      case "keep": .keepBoth
+      default: .skip
       }
-    ) {
+      settle { await model.resolve(conflict, choice) }
+    case .download:
+      let fetch = model.pendingFetch
+      let large = model.pendingLarge
+      let size = ByteCountFormatter.string(fromByteCount: Int64(large?.size ?? 0), countStyle: .file)
+      let answer = await model.tab.plugin.services.ask(.confirm("Download \(size)?", verb: "Download"))
+      guard !Task.isCancelled, model.pendingLarge?.path == large?.path else { return }
       model.pendingLarge = nil
       model.pendingFetch = nil
-      switch fetch {
-      case .preview(let files):
-        Task { await model.preview(files, confirmed: true) }
-      case .open(let files):
-        Task { await model.openFetched(files, confirmed: true) }
-      case nil:
-        if let large { Task { await model.preview([large], confirmed: true) } }
+      guard answer.confirmed else { return }
+      settle {
+        switch fetch {
+        case .preview(let files):
+          await model.preview(files, confirmed: true)
+        case .open(let files):
+          await model.openFetched(files, confirmed: true)
+        case nil:
+          if let large { await model.preview([large], confirmed: true) }
+        }
       }
+    case nil:
+      break
     }
   }
 
@@ -1000,13 +1159,12 @@ private struct Confirmations: ViewModifier {
 /// A remote file as something that can be dragged out or shared. The bytes
 /// are fetched only when the other side asks for them.
 struct RemoteFile: Transferable {
-  let model: FilesTab
-  let entry: FileEntry
+  let file: FileFetch
 
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .data) { item in
-      SentTransferredFile(try await item.model.local(item.entry), allowAccessingOriginalFile: false)
+      SentTransferredFile(try await item.file.local(), allowAccessingOriginalFile: false)
     }
-    .suggestedFileName { Names.local($0.entry.name) }
+    .suggestedFileName { Names.local($0.file.entry.name) }
   }
 }

@@ -6,10 +6,13 @@
 //! against the wider world. Interop with OpenSSH is a separate, opt-in test —
 //! claiming otherwise from this file would be claiming more than it shows.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use russh::server::{Auth, Handler, Msg, Response, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, Pty};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::OwnedWriteHalf;
 
 pub const USER: &str = "scientist";
 pub const PASSWORD: &str = "correct horse";
@@ -78,6 +81,8 @@ pub struct Policy {
     /// reaches a client. It is a message, not a question, and RFC 4256 still
     /// wants a reply to it: one with no fields.
     pub announces_before_accepting: bool,
+    /// Refuse `127.0.0.1`. A listener that exists only on `::1` looks like this.
+    pub v4_loopback_refused: bool,
 }
 
 /// What the server observed, for tests to assert against.
@@ -94,17 +99,37 @@ pub struct Observed {
     pub received: Vec<u8>,
 }
 
-#[derive(Clone)]
 pub struct FakeHost {
     pub observed: Arc<Mutex<Observed>>,
     /// Which round of the interactive exchange we are in.
     round: u32,
     policy: Policy,
+    /// Write halves of direct-tcpip channels this connection accepted.
+    ///
+    /// Not cloned with the host. Each accepted SSH connection gets its own
+    /// handler, and channel ids start over per connection.
+    tcp_out: HashMap<ChannelId, OwnedWriteHalf>,
+}
+
+impl Clone for FakeHost {
+    fn clone(&self) -> Self {
+        Self {
+            observed: Arc::clone(&self.observed),
+            round: self.round,
+            policy: self.policy.clone(),
+            tcp_out: HashMap::new(),
+        }
+    }
 }
 
 impl FakeHost {
     pub fn new(policy: Policy) -> Self {
-        Self { observed: Arc::new(Mutex::new(Observed::default())), round: 0, policy }
+        Self {
+            observed: Arc::new(Mutex::new(Observed::default())),
+            round: 0,
+            policy,
+            tcp_out: HashMap::new(),
+        }
     }
 
     fn authorizes(&self, offered: &russh::keys::ssh_key::PublicKey) -> bool {
@@ -322,12 +347,82 @@ impl Handler for FakeHost {
         Ok(())
     }
 
+    /// Connects the channel to loopback (`127.0.0.1` or `::1`) and copies both ways.
+    ///
+    /// Anything else is refused. A test server that dialled whatever host
+    /// the client named would be an open proxy sitting inside the suite.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _: &str,
+        _: u32,
+        reply: russh::server::ChannelOpenHandle,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let port = u16::try_from(port_to_connect).unwrap_or(0);
+        if self.policy.v4_loopback_refused && host_to_connect == "127.0.0.1" {
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        }
+        let address = match host_to_connect {
+            "127.0.0.1" | "localhost" => {
+                Some(std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST))
+            }
+            "::1" => Some(std::net::IpAddr::from(std::net::Ipv6Addr::LOCALHOST)),
+            _ => None,
+        };
+        let Some(address) = address else {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        };
+        if port == 0 {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        }
+        let stream = match tokio::net::TcpStream::connect((address, port)).await {
+            Ok(stream) => stream,
+            Err(_) => {
+                reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+                return Ok(());
+            }
+        };
+        let id = channel.id();
+        let handle = session.handle();
+        let (mut reader, writer) = stream.into_split();
+        self.tcp_out.insert(id, writer);
+        reply.accept().await;
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 8 * 1024];
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) | Err(_) => {
+                        let _ = handle.eof(id).await;
+                        break;
+                    }
+                    Ok(n) => {
+                        if handle.data(id, bytes::Bytes::copy_from_slice(&buf[..n])).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
     async fn data(
         &mut self,
         channel: ChannelId,
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if let Some(out) = self.tcp_out.get_mut(&channel) {
+            let _ = out.write_all(data).await;
+            return Ok(());
+        }
         self.observed.lock().unwrap().received.extend_from_slice(data);
         // Echo, the way a line-disciplined shell would.
         session.data(channel, bytes::Bytes::copy_from_slice(data))?;

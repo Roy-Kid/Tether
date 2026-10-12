@@ -182,6 +182,16 @@ cat > "$APP/Info.plist" <<PLIST
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <!-- A path dragged out of a plugin (TetherPluginKit's DroppedPath). Undeclared,
+         SwiftUI drops it from a drop's item providers and the terminal never sees it. -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>dev.tether.app.dropped-path</string>
+            <key>UTTypeDescription</key><string>Dragged Path</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        </dict>
+    </array>
     $cloud
 </dict>
 </plist>

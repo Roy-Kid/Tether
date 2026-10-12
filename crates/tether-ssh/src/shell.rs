@@ -1,5 +1,8 @@
 //! A live shell on the far side.
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
 use crate::error::SshError;
 
 /// How big the remote terminal believes it is.
@@ -98,5 +101,55 @@ impl Shell {
     pub async fn close(self) -> Result<(), SshError> {
         self.channel.eof().await?;
         self.channel.close().await.map_err(Into::into)
+    }
+
+    /// Copies bytes both ways between `socket` and this channel.
+    ///
+    /// The two directions run together. A tunnel that reads only one way
+    /// until it finishes fills the window on the other and then waits for
+    /// a window that never opens. `stop` ends both copies; dropping the
+    /// channel is what tells the server the TCP connection is over.
+    pub async fn tunnel(self, socket: TcpStream, mut stop: tokio::sync::watch::Receiver<bool>) {
+        let (mut remote_read, remote_write) = self.channel.split();
+        let (mut local_read, mut local_write) = socket.into_split();
+
+        let outbound = async move {
+            let mut buf = vec![0u8; 16 * 1024];
+            loop {
+                match local_read.read(&mut buf).await {
+                    Ok(0) | Err(_) => {
+                        let _ = remote_write.eof().await;
+                        break;
+                    }
+                    Ok(n) => {
+                        if remote_write.data_bytes(buf[..n].to_vec()).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        };
+
+        let inbound = async move {
+            loop {
+                match remote_read.wait().await {
+                    Some(russh::ChannelMsg::Data { data }) => {
+                        if local_write.write_all(&data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) | None => break,
+                    Some(_) => continue,
+                }
+            }
+        };
+
+        tokio::pin!(outbound);
+        tokio::pin!(inbound);
+        tokio::select! {
+            _ = stop.wait_for(|stopped| *stopped) => {}
+            _ = &mut outbound => {}
+            _ = &mut inbound => {}
+        }
     }
 }

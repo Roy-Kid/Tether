@@ -26,7 +26,7 @@ struct PaletteNavigationTests {
     window.contentView!.addSubview(monitor)
     monitor.enabled = true
     var workspaceActions = 0
-    monitor.handle = { _, _ in workspaceActions += 1; return true }
+    monitor.handle = { _, _, _ in workspaceActions += 1; return true }
     window.orderFrontRegardless()
     defer { monitor.stop(); window.orderOut(nil) }
     try await Task.sleep(for: .milliseconds(300))

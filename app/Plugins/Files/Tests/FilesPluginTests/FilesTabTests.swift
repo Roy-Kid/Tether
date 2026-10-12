@@ -193,6 +193,25 @@ struct FilesTabTests {
     #expect(!model.visible.isEmpty)
   }
 
+  @Test("a pasted local file uploads where a new file would go")
+  func pasteUploadsIntoTheTarget() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    await model.go(to: "/home/ada")
+    let local = FileManager.default.temporaryDirectory
+      .appendingPathComponent("paste-\(UUID().uuidString).txt")
+    try Data("x".utf8).write(to: local)
+    defer { try? FileManager.default.removeItem(at: local) }
+
+    #expect(!model.pasteLocalFiles([]))
+    model.selection = ["/home/ada/runs"]
+    #expect(model.pasteLocalFiles([local]))
+    let uploaded = "/home/ada/runs/\(local.lastPathComponent)"
+    try await settle(model) { source.has(uploaded) }
+    #expect(source.uploads.map(\.1) == [uploaded])
+    #expect(model.expanded.contains("/home/ada/runs"))
+  }
+
   @Test("an upload never overwrites: a taken name is asked about")
   func uploadConflictIsAsked() async throws {
     let source = StubSource(tree)
@@ -282,7 +301,7 @@ struct FilesTabTests {
     #expect(model.draggedPathText(folder) == "/home/ada/runs", "a row outside the selection is only itself")
 
     let dragged = DraggedFile(
-      text: model.draggedPathText(image), file: RemoteFile(model: model, entry: image))
+      text: model.draggedPathText(image), file: model.fetch(image))
     let provider = NSItemProvider()
     provider.register(dragged)
     #expect(provider.registeredTypeIdentifiers.contains(DroppedPath.contentType.identifier))

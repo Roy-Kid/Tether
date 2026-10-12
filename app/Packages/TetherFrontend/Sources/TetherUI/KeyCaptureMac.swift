@@ -19,7 +19,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var active = true
   var onFocus: () -> Void = {}
   var onScroll: (Int32) -> Void = { _ in }
-  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
+  var claimsWheel: (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass }
   var lineHeight: CGFloat = 17
   var links: TerminalLinks = .none
   var geometry: CellGeometry = .empty
@@ -28,6 +28,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var onSelection: (SelectionUpdate) -> Void = { _ in }
   var selection: GridSelection?
   var mouse: MouseTracking = .off
+  var menuItems: [TerminalMenuItem] = []
 
   func makeNSView(context: Context) -> KeyCaptureView {
     let view = KeyCaptureView()
@@ -55,18 +56,26 @@ struct MacKeyCapture: NSViewRepresentable {
     view.onSelection = onSelection
     view.selection = selection
     view.mouse = mouse
+    view.menuItems = menuItems
   }
 }
 
 final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var wantsFocus = false
   var onFocus: (() -> Void)?
-  private var marked = NSAttributedString()
+  private var marked = NSAttributedString() {
+    didSet {
+      needsDisplay = true
+      if marked.length != oldValue.length { inputContext?.invalidateCharacterCoordinates() }
+    }
+  }
+  /// The composing string, drawn at the caret until a candidate replaces it.
+  var composing: String { marked.string }
   var onInput: ((TerminalInput) -> Void)?
   /// Positive goes back into history, matching a wheel pushed away.
   var onScroll: ((Int32) -> Void)?
-  /// `true` takes a wheel that would otherwise be reported to the program.
-  var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
+  /// The attachment under the pointer.
+  var claimsWheel: (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass }
   /// How tall a row is, so a trackpad's point deltas become lines.
   var lineHeight: CGFloat = 17
   /// Fractional lines left over from the last wheel event.
@@ -76,7 +85,9 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// The terminal caret in top-left-origin surface coordinates.
   var cursorRect: CGRect = .zero {
     didSet {
-      if cursorRect != oldValue { inputContext?.invalidateCharacterCoordinates() }
+      guard cursorRect != oldValue else { return }
+      inputContext?.invalidateCharacterCoordinates()
+      if marked.length > 0 { needsDisplay = true }
     }
   }
   var onHover: ((TerminalLink?) -> Void)?
@@ -84,6 +95,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   /// The selection on screen. Shift-click extends its anchor; ⌘C copies it.
   var selection: GridSelection?
   /// What the far side asked to hear. `off` keeps selection and local history.
+  var menuItems: [TerminalMenuItem] = []
   var mouse: MouseTracking = .off {
     didSet {
       if mouse != oldValue { window?.invalidateCursorRects(for: self) }
@@ -157,16 +169,31 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
-    guard let link = link(at: event.locationInWindow), let menu = links.menu(link),
-      !menu.items.isEmpty
-    else { return nil }
-    let built = NSMenu()
-    for item in menu.items {
-      let entry = ClosureMenuItem(title: item.title, action: item.action)
-      entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
-      built.addItem(entry)
+    guard mouse == .off || event.modifierFlags.contains(.shift) else { return nil }
+    let built = Self.buildMenu(menuItems)
+    if let link = link(at: event.locationInWindow), let menu = links.menu(link), !menu.items.isEmpty {
+      if !built.items.isEmpty { built.addItem(.separator()) }
+      for item in menu.items {
+        let entry = ClosureMenuItem(title: item.title, action: item.action)
+        entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
+        built.addItem(entry)
+      }
     }
-    return built
+    return built.items.isEmpty ? nil : built
+  }
+
+  static func buildMenu(_ items: [TerminalMenuItem]) -> NSMenu {
+    let menu = NSMenu()
+    menu.autoenablesItems = false
+    for item in items {
+      if item.title.isEmpty { menu.addItem(.separator()); continue }
+      let entry = ClosureMenuItem(title: item.title) { item.action?() }
+      entry.state = item.checked ? .on : .off
+      entry.isEnabled = item.enabled
+      if !item.children.isEmpty { entry.submenu = buildMenu(item.children) }
+      menu.addItem(entry)
+    }
+    return menu
   }
 
   private func hover(_ link: TerminalLink?) {
@@ -277,24 +304,19 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     let lines = carried.rounded(.towardZero)
     guard lines != 0 else { return }
     carried -= lines
-    // Shift keeps the wheel for this terminal's own history, which is how
-    // text is still readable inside a program that took the mouse.
-    // Something standing on the shell can take the lines first: reporting
-    // every notch makes a program that scrolls five rows per notch jump,
-    // and a notch on its status row changes window.
-    if mouse != .off, !event.modifierFlags.contains(.shift) {
-      let button: PointerButton = lines > 0 ? .wheelUp : .wheelDown
-      if let cell = clampedCell(at: event.locationInWindow),
-        claimsWheel(Int32(lines), cell.column, cell.row)
-      {
-        return
-      }
-      for _ in 0..<Int(abs(lines)) {
-        report(.press, button: button, at: event.locationInWindow, event: event, clamp: true)
-      }
-      return
-    }
-    onScroll(Int32(lines))
+    // Shift reads this terminal's history and is decided before any
+    // attachment is asked. Otherwise the cell under the pointer owns the
+    // wheel: one layer scrolls.
+    let shift = event.modifierFlags.contains(.shift)
+    let cell = shift ? nil : clampedCell(at: event.locationInWindow)
+    let claim: WheelClaim =
+      shift ? .pass : (cell.map { claimsWheel(Int32(lines), $0.column, $0.row) } ?? .pass)
+    WheelDispatch.route(
+      lines: Int32(lines), shift: shift, mouse: mouse, hasCell: cell != nil, claim: claim,
+      report: { button in
+        self.report(.press, button: button, at: event.locationInWindow, event: event, clamp: true)
+      },
+      scroll: { onScroll($0) })
   }
 
   override func mouseDown(with event: NSEvent) {
@@ -381,7 +403,7 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     window?.makeFirstResponder(self)
     // A link's menu stays a menu. Everywhere else, a program that asked for
     // the mouse hears the right button.
-    if link(at: event.locationInWindow) == nil, reportPress(.right, event: event) { return }
+    if !event.modifierFlags.contains(.shift), reportPress(.right, event: event) { return }
     super.rightMouseDown(with: event)
   }
 
@@ -529,6 +551,36 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     return window.convertToScreen(convert(rect, to: nil))
   }
   override func doCommand(by selector: Selector) {}
+
+  /// The input method's composing text. It is not on the wire yet — a
+  /// candidate has not been chosen — so the grid has nothing to draw, and
+  /// leaving it undrawn is a caret that stays blank until the word is picked.
+  override func draw(_ dirtyRect: NSRect) {
+    guard marked.length > 0 else { return }
+    let text = marked.string as NSString
+    let font = preeditFont()
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: NSColor.labelColor,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+    ]
+    let measured = text.size(withAttributes: attributes)
+    let height = cursorRect.height > 0 ? cursorRect.height : lineHeight
+    var chip = NSRect(
+      x: cursorRect.minX,
+      y: isFlipped ? cursorRect.minY : bounds.height - cursorRect.maxY,
+      width: measured.width + 6,
+      height: height)
+    if chip.maxX > bounds.width { chip.origin.x = max(0, bounds.width - chip.width) }
+    NSColor.textBackgroundColor.setFill()
+    NSBezierPath(roundedRect: chip, xRadius: 2, yRadius: 2).fill()
+    let baseline = chip.minY + max(0, (height - measured.height) / 2)
+    text.draw(at: NSPoint(x: chip.minX + 3, y: baseline), withAttributes: attributes)
+  }
+
+  private func preeditFont() -> NSFont {
+    NSFont.monospacedSystemFont(ofSize: max(8, lineHeight * 0.8), weight: .regular)
+  }
 
   static func input(for event: NSEvent) -> TerminalInput? {
     let flags = event.modifierFlags

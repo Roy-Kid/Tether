@@ -18,9 +18,6 @@ struct TmuxPicker: View {
   @State private var keyboardSelection: String?
   @FocusState private var keyboardFocused: Bool
   @Environment(\.dynamicTypeSize) private var typeSize
-  #if os(macOS)
-    @State private var levelHeight = UIStyle.listHeight
-  #endif
 
   var body: some View {
     layout
@@ -70,73 +67,56 @@ struct TmuxPicker: View {
           return .handled
         }
       #endif
-      .dialog(for: model.sessionToEnd) { session in
-        Dialog.confirm(
-          "End this session?", verb: "End", role: .destructive, cancel: { model.sessionToEnd = nil }
-        ) {
-          model.sessionToEnd = nil
-          if opened == session.id { opened = nil }
-          model.endSession(session)
-        }
+      .task(id: model.sessionToEnd) {
+        guard let session = model.sessionToEnd else { return }
+        let answer = await model.tab.plugin.services.ask(
+          .confirm("End this session?", verb: "End", destructive: true))
+        guard !Task.isCancelled, model.sessionToEnd == session else { return }
+        model.sessionToEnd = nil
+        guard answer.confirmed else { return }
+        if opened == session.id { opened = nil }
+        model.endSession(session)
       }
-      .dialog(for: model.windowToEnd) { window in
-        Dialog.confirm(
-          "End this window?", verb: "End", role: .destructive, cancel: { model.windowToEnd = nil }
-        ) {
-          model.windowToEnd = nil
-          model.endWindow(window)
-        }
+      .task(id: model.windowToEnd) {
+        guard let window = model.windowToEnd else { return }
+        let answer = await model.tab.plugin.services.ask(
+          .confirm("End this window?", verb: "End", destructive: true))
+        guard !Task.isCancelled, model.windowToEnd == window else { return }
+        model.windowToEnd = nil
+        guard answer.confirmed else { return }
+        model.endWindow(window)
       }
-      .dialog(for: model.renaming) { renaming in
-        Dialog.input(
-          "Rename", field: Dialog.Field("Name", initial: renaming.name), verb: "Save",
-          cancel: { model.renaming = nil }
-        ) { name in
-          model.renaming = nil
-          model.rename(renaming, to: name)
-        }
+      .task(id: model.renaming) {
+        guard let renaming = model.renaming else { return }
+        let answer = await model.tab.plugin.services.ask(
+          .input("Rename", field: "Name", initial: renaming.name, verb: "Save"))
+        guard !Task.isCancelled, model.renaming == renaming else { return }
+        model.renaming = nil
+        guard answer.confirmed else { return }
+        model.rename(renaming, to: answer.value)
       }
   }
 
-  /// A Mac gets a popover-sized column; a phone gets the sheet it is in.
+  /// Fills the inspector column on a Mac. A phone gets the sheet it is in.
   @ViewBuilder
   private var layout: some View {
     #if os(macOS)
       ScrollViewReader { proxy in
         ScrollView {
           level.padding(UIStyle.Space.group)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-              levelHeight = $0
-            }
         }
         .onChange(of: keyboardSelection) { _, id in
           if let id { proxy.scrollTo(id) }
         }
       }
       .scrollBounceBehavior(.basedOnSize)
-      .frame(width: UIStyle.treeWidth, alignment: .leading)
-      .frame(height: min(levelHeight, UIStyle.listHeight))
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     #else
-      NavigationStack {
-        ScrollView {
-          level.padding(UIStyle.Space.inset)
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button {
-              model.tab.dismissAccessory()
-            } label: {
-              Label("Close", systemImage: "xmark")
-            }
-            .buttonStyle(.iconOnly)
-            .help("Close")
-            .keyboardShortcut(.cancelAction)
-          }
-        }
+      ScrollView {
+        level.padding(UIStyle.Space.inset)
       }
-      .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
-      .presentationDragIndicator(.visible)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .navigationBarTitleDisplayMode(.inline)
     #endif
   }
 
@@ -553,24 +533,3 @@ struct CreateTmuxSheet: View {
   }
 }
 
-/// The same menu the tab carries, beside the terminal when the inspector is open.
-struct TmuxInspector: View {
-  @Bindable var model: TmuxTab
-  var body: some View {
-    Form {
-      Section {
-        LabeledContent("Host", value: model.tab.plugin.hostLabel)
-        LabeledContent("Session", value: model.subtitle.isEmpty ? model.tab.plugin.shellLabel : model.subtitle)
-      }
-      if !model.commands.isEmpty {
-        Section {
-          ForEach(model.commands) { command in
-            Button(command.title, systemImage: command.symbol, action: command.action)
-          }
-        }
-        .disabled(model.busy)
-      }
-    }
-    .formStyle(.grouped)
-  }
-}

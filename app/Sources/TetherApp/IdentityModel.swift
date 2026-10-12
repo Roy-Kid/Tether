@@ -120,7 +120,7 @@ struct FieldConflict: Codable, Hashable, Sendable {
 
 /// Each top-level field has a three-way merge. Authentication is deliberately one
 /// atomic field: merging half of two policies could authorize an unintended login.
-struct SharedHostRecord: Codable, Sendable {
+struct SharedHostRecord: Codable, Equatable, Sendable {
   var profile: HostProfile
   var base: HostProfile?
   var deleted = false

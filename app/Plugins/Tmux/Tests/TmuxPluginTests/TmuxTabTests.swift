@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import Tether
 import TetherPluginKit
+import TetherUI
 
 @testable import TmuxPlugin
 
@@ -34,6 +35,15 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @MainActor
 @Suite("tmux on a tab")
 struct TmuxTabTests {
+  @Test("a Mac lists tmux beside Files; a phone keeps it on the shell button")
+  func placementMatchesTheHost() {
+    #if os(macOS)
+      #expect(TmuxPlugin().accessory.placement == .inspector)
+    #else
+      #expect(TmuxPlugin().accessory.placement == .popover)
+    #endif
+  }
+
   @Test("restore metadata keeps the session identity without retaining a client")
   func restorationMetadata() async throws {
     let host = HostProbe()
@@ -116,7 +126,8 @@ struct TmuxTabTests {
     tab.sessions = [info("$1", "dev")]
     #expect(tab.subtitle == "dev")
     #expect(!tab.isShowing)
-    #expect(tab.commands.map(\.id) == ["detach", "newWindow", "splitHorizontal", "splitVertical", "zoom"])
+    #expect(tab.commands.map(\.id) == ["detach", "newWindow", "previousWindow", "nextWindow", "splitHorizontal", "splitVertical", "zoom",
+      "focusLeft", "focusDown", "focusUp", "focusRight"])
     #expect(tab.closeNote == "tmux stays on the host.")
   }
 
@@ -163,7 +174,11 @@ struct TmuxTabTests {
 
     #expect(tab.shellSessionID == "$1")
     #expect(!tab.isShowing)
-    #expect(host.dismissed.count == 1)
+    #if os(macOS)
+      #expect(host.dismissed.isEmpty, "the inspector stays open")
+    #else
+      #expect(host.dismissed.count == 1)
+    #endif
     #expect(!tab.busy, "already there, so nothing is run")
   }
 
@@ -178,9 +193,7 @@ struct TmuxTabTests {
   @Test("a wheel is left with the shell until this one is known to be the client")
   func wheelWaitsForAKnownClient() throws {
     let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    #expect(!tab.scrollShell(3, fullScreen: true))
-    #expect(!tab.scrollShell(3, fullScreen: false))
-    #expect(!tab.claimWheel(3, column: 1, row: 2))
+    #expect(tab.claimWheel(3, column: 1, row: 2) == .pass)
     #expect(!tab.shellInputWaits)
     #expect(tab.error == nil)
   }
@@ -223,39 +236,70 @@ struct TmuxCommandTests {
     #expect(TmuxCommands.renameWindow(2, to: "edit") == "tmux rename-window -t @2 'edit'")
     #expect(TmuxCommands.renameWindow(2, to: "bad\nname") == nil)
   }
+
+  @Test("focus moves between panes and windows of the session on this terminal")
+  func paneAndWindowFocus() {
+    #expect(TmuxCommands.selectPane("$1", .left) == "tmux select-pane -L -t '$1'")
+    #expect(TmuxCommands.selectPane("$1", .down) == "tmux select-pane -D -t '$1'")
+    #expect(TmuxCommands.selectPane("$1", .up) == "tmux select-pane -U -t '$1'")
+    #expect(TmuxCommands.selectPane("$1", .right) == "tmux select-pane -R -t '$1'")
+    #expect(TmuxCommands.selectPane("$(id)", .left) == nil)
+    #expect(TmuxCommands.cycleWindow("$1", forward: true) == "tmux next-window -t '$1'")
+    #expect(TmuxCommands.cycleWindow("$1", forward: false) == "tmux previous-window -t '$1'")
+    #expect(TmuxCommands.cycleWindow("dev", forward: true) == nil)
+  }
+
+  @Test("every command a client offers is catalogued, with the chords spec §4 gives tmux")
+  func catalogue() throws {
+    let plugin = TmuxPlugin()
+    let tab = try #require(plugin.attach(to: HostProbe().context()) as? TmuxTab)
+    defer { tab.close() }
+    #expect(tab.commands.isEmpty, "a shell that is not a tmux client offers nothing")
+    tab.shellSessionID = "$1"
+    let descriptors = plugin.commandDescriptors
+    #expect(tab.commands.map(\.id) == descriptors.map(\.id))
+    let chords = Dictionary(uniqueKeysWithValues: descriptors.compactMap { d in d.shortcut.map { (d.id, $0) } })
+    #expect(chords["splitHorizontal"] == PluginKeyChord("\\"))
+    #expect(chords["splitVertical"] == PluginKeyChord("\\", [.command, .shift]))
+    #expect(chords["zoom"] == PluginKeyChord("return", [.command, .shift]))
+    #expect(chords["newWindow"] == PluginKeyChord("n", [.command, .shift]))
+    #expect(["focusLeft", "focusDown", "focusUp", "focusRight"].map { chords[$0]?.key } == ["h", "j", "k", "l"])
+    #expect(Set(chords.values).count == chords.count, "no two tmux commands share a chord")
+    #expect(chords["detach"] == nil)
+  }
 }
 
 @MainActor
 @Suite("scrolling the shell's own client")
 struct ShellScrollTests {
-  @Test("the wheel asks that client to scroll, and only a real session id is quoted")
+  @Test("the wheel asks that pane to scroll, and only a pane id is quoted")
   func command() {
-    #expect(
-      TmuxShellScroll.command(session: "$1", lines: 4)
-        == TmuxShellCommand(
-          text: "tmux copy-mode -e -t '$1' \\; send-keys -X -N 4 -t '$1' scroll-up",
-          applied: 4))
-    #expect(
-      TmuxShellScroll.command(session: "$12", lines: -2)
-        == TmuxShellCommand(
-          text: "tmux send-keys -X -N 2 -t '$12' scroll-down", applied: -2))
-    #expect(TmuxShellScroll.command(session: "$1", lines: 0) == nil)
-    #expect(TmuxShellScroll.command(session: "dev", lines: 3) == nil)
-    #expect(TmuxShellScroll.command(session: "$", lines: 3) == nil)
-    #expect(TmuxShellScroll.command(session: "$(id)", lines: 3) == nil)
-    #expect(TmuxShellScroll.command(session: "$1;id", lines: 3) == nil)
-    #expect(TmuxShellScroll.command(session: "$1", lines: 900)?.applied == 500)
-    #expect(TmuxShellScroll.command(session: "$1", lines: 900)?.text.contains("-N 500") == true)
-    #expect(TmuxShellScroll.cancel(session: "$0") == "tmux send-keys -X -t '$0' cancel")
-    #expect(TmuxShellScroll.cancel(session: "dev") == nil)
     #expect(
       TmuxShellScroll.command(target: "%2", lines: 4)
         == TmuxShellCommand(
           text: "tmux copy-mode -e -t '%2' \\; send-keys -X -N 4 -t '%2' scroll-up",
           applied: 4))
+    #expect(
+      TmuxShellScroll.command(target: "%12", lines: -2)
+        == TmuxShellCommand(
+          text: "tmux send-keys -X -N 2 -t '%12' scroll-down", applied: -2))
+    #expect(TmuxShellScroll.command(target: "%2", lines: 0) == nil)
+    #expect(TmuxShellScroll.command(target: "$1", lines: 4) == nil)
+    #expect(TmuxShellScroll.command(target: "dev", lines: 3) == nil)
     #expect(TmuxShellScroll.command(target: "%", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(target: "$(id)", lines: 3) == nil)
     #expect(TmuxShellScroll.command(target: "%1;id", lines: 3) == nil)
-    #expect(TmuxShellScroll.command(session: "%2", lines: 3) == nil)
+    #expect(TmuxShellScroll.command(target: "%2", lines: 900)?.applied == 500)
+    #expect(TmuxShellScroll.command(target: "%2", lines: 900)?.text.contains("-N 500") == true)
+    #expect(TmuxShellScroll.cancel(pane: "%2") == "tmux send-keys -X -t '%2' cancel")
+    #expect(TmuxShellScroll.cancel(pane: "$0") == nil)
+    #expect(TmuxShellScroll.cancel(pane: "dev") == nil)
+  }
+
+  @Test("a tty that is not a client returns the wheel to history only while the mouse is free")
+  func release() {
+    #expect(TmuxShellScroll.returnsToHistory(.off))
+    #expect(!TmuxShellScroll.returnsToHistory(.clicks))
   }
 
   @Test("the wheel is claimed only for the shell that is already that client")
@@ -338,11 +382,20 @@ struct PaneWheelTests {
     #expect(TmuxPaneLayout.decide(layout, column: 4, row: 19) == .ignore)
   }
 
-  @Test("a pane that asked for the mouse keeps the wheel, unless it is already copying")
+  @Test("a pane that asked for the mouse keeps the wheel, and one already copying keeps scrolling")
   func programsKeepTheWheel() {
-    #expect(TmuxPaneLayout.decide(panes(alternate: true), column: 1, row: 1) == .report)
     #expect(TmuxPaneLayout.decide(panes(wantsMouse: true), column: 1, row: 1) == .report)
+    #expect(TmuxPaneLayout.decide(panes(alternate: true, wantsMouse: true), column: 1, row: 1) == .report)
+    #expect(TmuxPaneLayout.decide(panes(alternate: true), column: 1, row: 1) == .stop)
     #expect(TmuxPaneLayout.decide(panes(alternate: true, inMode: true), column: 1, row: 1) == .scroll("%0"))
+  }
+
+  @Test("the cell under the pointer is the only layer that moves")
+  func oneLayer() {
+    #expect(TmuxPaneLayout.claim(panes(), column: 4, row: 5) == .taken)
+    #expect(TmuxPaneLayout.claim(panes(), column: 4, row: 19) == .taken)
+    #expect(TmuxPaneLayout.claim(panes(wantsMouse: true), column: 1, row: 1) == .report)
+    #expect(TmuxPaneLayout.claim(panes(alternate: true), column: 1, row: 1) == .taken)
   }
 
   @Test("a zoomed window scrolls only the pane that is showing")
