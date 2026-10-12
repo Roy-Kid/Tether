@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 import Tether
 
 /// Copies in flight between this machine and the far side, and the ones that
@@ -94,22 +95,63 @@ final class Transfers {
     } onCancel: {
       work.cancel()
     }
-    cancellers[id] = nil
     switch result {
     case .success:
-      items.removeAll { $0.id == id }
+      settle(id, failure: nil)
     case .failure(let error):
       // A taken name is a question the caller asks, not a failed copy.
-      if error is CancellationError || (error as? FileError) == .cancelled || Self.isTaken(error) {
-        items.removeAll { $0.id == id }
-      } else if let index = items.firstIndex(where: { $0.id == id }) {
-        items[index].failure = describe(error)
-      }
+      settle(id, failure: Self.isTaken(error) ? nil : Self.failure(of: error))
       throw error
     }
   }
 
-  private static func isTaken(_ error: Error) -> Bool {
+  /// A copy the main actor neither runs nor waits for: a file promise,
+  /// written on its own queue while Finder waits. The row appears, moves and
+  /// settles in the order the copy reports, whenever the main actor gets to
+  /// it; its Stop reaches the copy through the report.
+  nonisolated func track(_ entry: FileEntry) -> TransferReport {
+    let (events, feed) = AsyncStream.makeStream(of: TransferReport.Event.self)
+    let report = TransferReport(feed: feed)
+    let name = Names.display(entry.name)
+    Task { @MainActor [weak self] in
+      let item = Item(name: name, path: entry.path, direction: .down, total: entry.size)
+      self?.items.append(item)
+      self?.cancellers[item.id] = { report.stop() }
+      for await event in events {
+        switch event {
+        case .advanced(let bytes): self?.advance(item.id, to: bytes)
+        case .finished(let failure): self?.settle(item.id, failure: failure)
+        }
+      }
+    }
+    return report
+  }
+
+  /// A finished copy leaves; a stopped one too. A failure stays, saying why.
+  private func settle(_ id: UUID, failure: String?) {
+    cancellers[id] = nil
+    guard let failure else {
+      items.removeAll { $0.id == id }
+      return
+    }
+    if let index = items.firstIndex(where: { $0.id == id }) {
+      items[index].failure = failure
+    }
+  }
+
+  /// What a row says about how a copy ended: nothing when it finished or
+  /// was stopped.
+  nonisolated static func failure(of error: Error?) -> String? {
+    guard let error, !isCancellation(error) else { return nil }
+    return describe(error)
+  }
+
+  nonisolated static func isCancellation(_ error: Error) -> Bool {
+    error is CancellationError || (error as? FileError) == .cancelled
+      || (error as? CocoaError)?.code == .userCancelled
+  }
+
+  private nonisolated static func isTaken(_ error: Error) -> Bool {
     if case .exists = error as? FileError { return true }
     return false
   }
@@ -117,5 +159,45 @@ final class Transfers {
   private func advance(_ id: UUID, to bytes: UInt64) {
     guard let index = items.firstIndex(where: { $0.id == id }) else { return }
     items[index].done = max(items[index].done, bytes)
+  }
+}
+
+/// What a copy running off the main actor tells its row, in order, and how
+/// the row's Stop reaches it.
+final class TransferReport: Sendable {
+  enum Event: Sendable {
+    case advanced(UInt64)
+    /// Why it failed; nil when it finished or was stopped.
+    case finished(String?)
+  }
+
+  private let feed: AsyncStream<Event>.Continuation
+  /// How to stop the copy, once it has said; whether Stop came first.
+  private let stopping = Mutex<(stop: (@Sendable () -> Void)?, stopped: Bool)>((nil, false))
+
+  fileprivate init(feed: AsyncStream<Event>.Continuation) { self.feed = feed }
+
+  func advance(to bytes: UInt64) { feed.yield(.advanced(bytes)) }
+
+  func finish(_ error: Error?) {
+    feed.yield(.finished(Transfers.failure(of: error)))
+    feed.finish()
+  }
+
+  /// What Stop does. A Stop that arrived before this is honoured now.
+  func whenStopped(_ stop: @escaping @Sendable () -> Void) {
+    let early = stopping.withLock { state in
+      state.stop = stop
+      return state.stopped
+    }
+    if early { stop() }
+  }
+
+  func stop() {
+    let stop = stopping.withLock { state in
+      state.stopped = true
+      return state.stop
+    }
+    stop?()
   }
 }

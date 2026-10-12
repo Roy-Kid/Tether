@@ -1,79 +1,83 @@
 import Foundation
 import Tether
 
-#if os(macOS)
-  import CoreGraphics
-#endif
-
 /// One remote file's bytes, fetched for a drag or a share without the main
 /// actor.
 ///
-/// A drop asks for a dragged file's URL on the main thread and waits there
-/// until it has one. A fetch that needed the main actor — `FilesTab` is
-/// one — waited for the thread that was waiting for it, and the app hung
-/// until it was force quit. Everything here is the file session, the cache
-/// and the entry, all of which can be used from any thread.
+/// A drag out of the list is a file promise, written on its own queue, and a
+/// share asks from wherever the share sheet is. Neither may need the main
+/// actor: a fetch that did — `FilesTab` is one — once waited for a main
+/// thread that was waiting for it, and the app hung until it was force
+/// quit. Everything here is the file session, the cache and the entry, all
+/// of which can be used from any thread.
 struct FileFetch: Sendable {
-  enum Refusal: Error {
-    /// The drop is on this app, where a file row means its path.
-    case insideThisApp
-  }
-
   let entry: FileEntry
   let session: Task<any FileSource, Error>?
   let cache: FileCache
-  /// Whether a drop is landing on one of this app's own windows.
-  var insideThisApp: @Sendable () -> Bool = DropSite.isThisApp
-
-  /// The copy a drop takes. Inside this app there is none: the drop has the
-  /// path, and fetching the file would stall the window for a download that
-  /// nothing there wants.
-  func forDrop() async throws -> URL {
-    if insideThisApp() { throw Refusal.insideThisApp }
-    return try await local()
-  }
+  /// Where a promised file shows while it is written. A share has its own
+  /// sheet and reports nowhere.
+  var transfers: Transfers?
 
   /// A copy of the file on this machine: the file itself when the session is
   /// local, the cached copy when it is still the same file, or fetched now.
   func local() async throws -> URL {
-    guard let session else { throw FileError.disconnected(cause: "No file session.") }
-    let source = try await session.value
+    let source = try await open()
     if source.isLocal { return URL(fileURLWithPath: entry.path) }
+    let url = try await cachedCopy(from: source, progress: nil)
+    cache.trim(to: FilesTab.cacheLimit)
+    return url
+  }
+
+  /// Writes the file at `destination`, which must not exist: what a file
+  /// promise is asked to do once something has accepted the drop.
+  ///
+  /// Refused before anything is fetched when the name is taken or the folder
+  /// cannot be written. Whoever asked owns the conflict; nothing is
+  /// replaced. The copy lands whole — a fetch goes to the cache first — and
+  /// the cached copy stays for the next look.
+  func write(to destination: URL, progress: (@Sendable (UInt64) -> Void)?) async throws {
+    try Self.refuseUnwritable(destination)
+    let source = try await open()
+    let copy: URL
+    if source.isLocal {
+      copy = URL(fileURLWithPath: entry.path)
+    } else {
+      copy = try await cachedCopy(from: source, progress: progress)
+    }
+    try Task.checkCancellation()
+    try FileManager.default.copyItem(at: copy, to: destination)
+    if !source.isLocal { cache.trim(to: FilesTab.cacheLimit) }
+  }
+
+  /// The session this fetch was made with. None means the tab has no files
+  /// to give: that fails now, rather than waiting for a reconnect.
+  private func open() async throws -> any FileSource {
+    guard let session else { throw FileError.disconnected(cause: "No file session.") }
+    return try await session.value
+  }
+
+  /// The cached copy when it is still the same file, or fetched into the
+  /// cache now. The far side is asked first, so a listing from before a write
+  /// does not name a stale copy.
+  private func cachedCopy(
+    from source: any FileSource, progress: (@Sendable (UInt64) -> Void)?
+  ) async throws -> URL {
     var current = entry
     if let found = try? await source.stat(entry.path), found.kind == .file { current = found }
     if let cached = cache.cached(current) { return cached }
     let destination = cache.location(for: current)
-    _ = try await source.download(current.path, to: destination.path, progress: nil)
-    cache.trim(to: FilesTab.cacheLimit)
+    _ = try await source.download(current.path, to: destination.path, progress: progress)
     return destination
   }
-}
 
-/// Where a drop is landing, asked from whichever thread is resolving it.
-enum DropSite {
-  /// Whether the frontmost window under the pointer is this process's own.
-  ///
-  /// A drop happens where the pointer is, onto the window there. Windows at
-  /// or above the dragging level — the dragged image — are not targets.
-  /// Window server queries are thread-safe; AppKit's window list is not.
-  static func isThisApp() -> Bool {
-    #if os(macOS)
-      guard let pointer = CGEvent(source: nil)?.location,
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
-          as? [[String: Any]]
-      else { return false }
-      let dragging = Int(CGWindowLevelForKey(.draggingWindow))
-      for window in windows {
-        guard let layer = window[kCGWindowLayer as String] as? Int, layer < dragging,
-          let alpha = window[kCGWindowAlpha as String] as? Double, alpha > 0,
-          let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-          let frame = CGRect(dictionaryRepresentation: bounds), frame.contains(pointer)
-        else { continue }
-        return (window[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) } == getpid()
-      }
-      return false
-    #else
-      return false
-    #endif
+  private static func refuseUnwritable(_ destination: URL) throws {
+    let manager = FileManager.default
+    if manager.fileExists(atPath: destination.path) {
+      throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: destination.path])
+    }
+    let folder = destination.deletingLastPathComponent().path
+    if !manager.isWritableFile(atPath: folder) {
+      throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: destination.path])
+    }
   }
 }

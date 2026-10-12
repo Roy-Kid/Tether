@@ -31,6 +31,11 @@ final class StubSource: FileSource, @unchecked Sendable {
   var lstatFailure: FileError?
   /// What every upload fails with, when set.
   var uploadFailure: FileError?
+  /// What every download fails with, when set, after its delay.
+  var downloadFailure: FileError?
+  /// Whether each download ran on the main thread, in order.
+  private var recordedDownloadThreads: [Bool] = []
+  var downloadsOnMain: [Bool] { lock.withLock { recordedDownloadThreads } }
   /// Destinations a download finished writing. A move out of the cache does
   /// not add to this.
   private var recordedDownloads: [String] = []
@@ -74,10 +79,13 @@ final class StubSource: FileSource, @unchecked Sendable {
   func download(_ path: String, to destination: String, progress: (@Sendable (UInt64) -> Void)?)
     async throws -> UInt64
   {
+    let onMain = pthread_main_np() != 0
+    lock.withLock { recordedDownloadThreads.append(onMain) }
     if let delay = downloadDelay {
       progress?(1)
       try await Task.sleep(for: delay)
     }
+    if let downloadFailure { throw downloadFailure }
     try Data(path.utf8).write(to: URL(fileURLWithPath: destination))
     progress?(UInt64(path.utf8.count))
     lock.withLock { recordedDownloads.append(destination) }

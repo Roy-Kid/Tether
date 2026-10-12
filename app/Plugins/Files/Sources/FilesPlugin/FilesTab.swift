@@ -937,22 +937,27 @@ extension FilesTab {
     if !saved.isEmpty { revealSaved(saved) }
   }
 
-  /// What a drag of `entry` carries. The selection, when `entry` is part of
-  /// it; otherwise that entry alone. The same text Copy Path would copy.
-  func draggedPathText(_ entry: FileEntry) -> String {
+  /// What a drag of `entry` takes: the selection, when `entry` is part of
+  /// it, as Finder does; otherwise that entry alone.
+  func draggedEntries(_ entry: FileEntry) -> [FileEntry] {
     if selection.contains(entry.path) {
-      let paths = selected.map(\.path)
-      if !paths.isEmpty { return Names.copiedPaths(paths) }
+      let chosen = selected
+      if !chosen.isEmpty { return chosen }
     }
-    return entry.path
+    return [entry]
+  }
+
+  /// The paths a drag of `entry` carries. The same text Copy Path would copy.
+  func draggedPathText(_ entry: FileEntry) -> String {
+    Names.copiedPaths(draggedEntries(entry).map(\.path))
   }
 
   /// What a drag or a share of `entry` fetches, when something asks for the
   /// bytes. Made here, on the main actor; used from wherever the asking is.
-  func fetch(_ entry: FileEntry, insideThisApp: (@Sendable () -> Bool)? = nil) -> FileFetch {
-    var fetch = FileFetch(entry: entry, session: session, cache: cache)
-    if let insideThisApp { fetch.insideThisApp = insideThisApp }
-    return fetch
+  /// The session is the one open now: a drag that outlives it fails rather
+  /// than waiting for the next.
+  func fetch(_ entry: FileEntry) -> FileFetch {
+    FileFetch(entry: entry, session: session, cache: cache, transfers: transfers)
   }
 
   /// Types the entries' paths at the tab's prompt.

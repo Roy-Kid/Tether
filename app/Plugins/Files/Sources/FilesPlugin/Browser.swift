@@ -559,20 +559,28 @@ private struct FileRow: View {
 }
 
 /// Dragging a row carries the absolute path Copy Path would copy. A file
-/// also offers its bytes, so a drop outside this app can still take the file.
+/// also offers itself, so a drop outside this app can still take the file.
+///
+/// On a Mac that offer is a file promise (`RowDragSource`), kept by AppKit
+/// until the drop is over. A phone keeps SwiftUI's drag, whose receiver
+/// loads the file without holding the main thread.
 private struct EntryDrag: ViewModifier {
   let model: FilesTab
   let entry: FileEntry
 
   func body(content: Content) -> some View {
-    let text = model.draggedPathText(entry)
-    if entry.kind == .file {
-      content.draggable(DraggedFile(text: text, file: model.fetch(entry))) {
-        preview
+    #if os(macOS)
+      content.background { RowDragSource(model: model, entry: entry) }
+    #else
+      let text = model.draggedPathText(entry)
+      if entry.kind == .file {
+        content.draggable(DraggedFile(text: text, file: model.fetch(entry))) {
+          preview
+        }
+      } else {
+        content.draggable(DroppedPath(text: text)) { preview }
       }
-    } else {
-      content.draggable(DroppedPath(text: text)) { preview }
-    }
+    #endif
   }
 
   private var preview: some View {
@@ -580,12 +588,8 @@ private struct EntryDrag: ViewModifier {
   }
 }
 
-/// A file row's drag: the absolute path, and the bytes when something asks.
-///
-/// A drop asks for the bytes on the main thread and waits, whatever it was
-/// dropped on — SwiftUI resolves a dragged file URL before a drop handler
-/// sees anything. So the fetch never needs the main actor, and a drop on
-/// this app's own windows gets the path alone.
+/// A file row's drag on a phone: the absolute path, and the bytes when
+/// something asks. The fetch never needs the main actor.
 struct DraggedFile: Transferable {
   let text: String
   let file: FileFetch
@@ -593,7 +597,7 @@ struct DraggedFile: Transferable {
   static var transferRepresentation: some TransferRepresentation {
     ProxyRepresentation { DroppedPath(text: $0.text) }
     FileRepresentation(exportedContentType: .data) { item in
-      SentTransferredFile(try await item.file.forDrop(), allowAccessingOriginalFile: false)
+      SentTransferredFile(try await item.file.local(), allowAccessingOriginalFile: false)
     }
     .suggestedFileName { Names.local($0.file.entry.name) }
   }
