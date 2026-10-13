@@ -48,9 +48,14 @@ struct MetalRenderTests {
     return found
   }
 
-  private func render(_ screen: ScreenFrame, dirty: Set<Int>?) throws -> MetalSnapshot? {
-    guard let device = MTLCreateSystemDefaultDevice() else { return nil }
-    let view = TerminalMetalView(device: device)
+  /// No device is a failure, not a pass: a build machine without one would
+  /// otherwise go green having drawn nothing.
+  private func device() throws -> any MTLDevice {
+    try #require(MTLCreateSystemDefaultDevice(), "no Metal device to draw with")
+  }
+
+  private func render(_ screen: ScreenFrame, dirty: Set<Int>?) throws -> MetalSnapshot {
+    let view = TerminalMetalView(device: try device())
     view.present(frame: screen, dirtyRows: dirty, metrics: metrics, palette: .dark)
     return try #require(
       view.snapshot(
@@ -63,7 +68,7 @@ struct MetalRenderTests {
   @Test("a new view draws every row, even when nothing changed last")
   func newViewDrawsEverything() throws {
     let screen = frame([row("hello", style()), row("world", style())])
-    guard let image = try render(screen, dirty: []) else { return }
+    let image = try render(screen, dirty: [])
     let width = metrics.cellWidth * 5
     #expect(inked(image, CGRect(x: 0, y: 0, width: width, height: metrics.lineHeight)) > 20)
     #expect(inked(image, CGRect(x: 0, y: metrics.lineHeight, width: width, height: metrics.lineHeight)) > 20)
@@ -74,7 +79,7 @@ struct MetalRenderTests {
   /// again, not to stop drawing new characters.
   @Test("a full atlas starts again rather than dropping characters")
   func fullAtlas() throws {
-    guard let device = MTLCreateSystemDefaultDevice() else { return }
+    let device = try self.device()
     let atlas = GlyphAtlas(device: device, side: 64)
     let cell = CGSize(width: 8, height: 16)
     var generations: Set<Int> = []
@@ -93,7 +98,7 @@ struct MetalRenderTests {
   /// from corner to corner.
   @Test("a solid quad is one colour, edge to edge")
   func solidQuads() throws {
-    guard let image = try render(frame([row("    ", style())], cursor: .block), dirty: nil) else { return }
+    let image = try render(frame([row("    ", style())], cursor: .block), dirty: nil)
     // Inset by a pixel: the edges of a quad fall between pixels.
     let cell = CGRect(x: 0.5, y: 0.5, width: metrics.cellWidth - 1, height: metrics.lineHeight - 1)
     #expect(Set(colours(image, cell)).count == 1)
@@ -105,15 +110,14 @@ struct MetalRenderTests {
     let blank = row("    ", style())
     let plainRow = row("abcd", style())
     let lined = row("abcd", style(underline: .single, strikethrough: true))
-    guard let plain = try render(frame([plainRow, blank]), dirty: nil),
-      let decorated = try render(frame([lined, blank]), dirty: nil)
-    else { return }
+    let plain = try render(frame([plainRow, blank]), dirty: nil)
+    let decorated = try render(frame([lined, blank]), dirty: nil)
     let band = CGRect(x: 0, y: 0, width: metrics.cellWidth * 4, height: metrics.lineHeight)
     #expect(inked(decorated, band) > inked(plain, band) + Int(metrics.cellWidth) * 4)
   }
   @Test("cached rows survive cursor updates and rebuild when text changes")
   func cachedRowsAndCursor() throws {
-    guard let device = MTLCreateSystemDefaultDevice() else { return }
+    let device = try self.device()
     let view = TerminalMetalView(device: device)
     let lines = [row("hello", style()), row("    ", style())]
     func snapshot() throws -> MetalSnapshot {

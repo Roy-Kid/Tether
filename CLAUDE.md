@@ -101,6 +101,8 @@ swift test --package-path app/Plugins/Tmux             # the built-in plugins, n
 swift test --package-path app/Plugins/Files
 swift test --package-path app/Plugins/Ports
 swift test --package-path app                          # the app's own state
+(cd app/Packages/TetherFrontend && xcodebuild test -scheme TetherFrontend-Package \
+  -destination "platform=iOS Simulator,id=<udid>")     # the phone's frontend tests
 ```
 
 CI runs everything above. The app links nothing from outside this repository;
