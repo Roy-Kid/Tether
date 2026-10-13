@@ -368,7 +368,8 @@ struct FilesTabTests {
   @Test("Quick Look opens before an uncached remote file finishes downloading")
   func previewOpensWhileDownloading() async throws {
     let source = StubSource(tree)
-    source.downloadDelay = .seconds(1)
+    let gate = Gate()
+    source.downloadGate = gate
     var shown: [[URL]] = []
     let host = HostProbe()
     let model = FilesTab(
@@ -383,6 +384,7 @@ struct FilesTabTests {
     let placeholder = try #require(shown[0].first)
     #expect(placeholder.deletingLastPathComponent().deletingLastPathComponent() == LocalCopies.loading())
 
+    gate.open()
     await fetching.value
     #expect(shown.count == 2)
     #expect(shown[1].first?.lastPathComponent == "A.png")

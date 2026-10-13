@@ -75,7 +75,8 @@
     @Test("a promise writes the file off the main thread while the main actor stays free")
     func promiseWritesOffMain() async throws {
       let source = StubSource(tree)
-      source.downloadDelay = .milliseconds(600)
+      let gate = Gate()
+      source.downloadGate = gate
       let model = try await browser(source)
       defer { model.close() }
       let promise = try promise(model)
@@ -92,6 +93,7 @@
       #expect(Date().timeIntervalSince(asked) < 0.2)
       #expect(calls.all.isEmpty, "the download is still held")
       #expect(model.transfers.items.map(\.name) == ["b.txt"], "the write shows as a transfer")
+      gate.open()
       try await eventually { !calls.all.isEmpty }
       try await settle()
       #expect(calls.all.count == 1)

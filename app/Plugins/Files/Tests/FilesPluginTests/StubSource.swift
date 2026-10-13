@@ -3,6 +3,33 @@ import Tether
 
 @testable import FilesPlugin
 
+/// Shut until opened; whoever waits before then waits until then.
+final class Gate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isOpen = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      let now = lock.withLock {
+        if isOpen { return true }
+        waiting.append(continuation)
+        return false
+      }
+      if now { continuation.resume() }
+    }
+  }
+
+  func open() {
+    let woken = lock.withLock {
+      isOpen = true
+      defer { waiting = [] }
+      return waiting
+    }
+    woken.forEach { $0.resume() }
+  }
+}
+
 /// A far side made of a dictionary: every path it knows, and whether each is
 /// a directory. Records what it was asked to do.
 final class StubSource: FileSource, @unchecked Sendable {
@@ -29,6 +56,9 @@ final class StubSource: FileSource, @unchecked Sendable {
   var listDelay: [String: Duration] = [:]
   /// Held for the length of every download; cancelling the task ends it.
   var downloadDelay: Duration?
+  /// Every download waits here until the test opens it: a hold that does
+  /// not depend on how fast the machine running the test is.
+  var downloadGate: Gate?
   /// What `lstat` answers instead, as a server that will not say whether a
   /// name is free does.
   var lstatFailure: FileError?
@@ -84,6 +114,7 @@ final class StubSource: FileSource, @unchecked Sendable {
   {
     let onMain = pthread_main_np() != 0
     lock.withLock { recordedDownloadThreads.append(onMain) }
+    if let downloadGate { await downloadGate.wait() }
     if let delay = downloadDelay {
       progress?(1)
       try await Task.sleep(for: delay)
