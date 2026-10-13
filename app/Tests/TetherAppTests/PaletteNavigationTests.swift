@@ -5,6 +5,12 @@ import Testing
 import TetherUI
 @testable import TetherApp
 
+// SwiftUI windows share AppKit focus and keyboard shortcuts. Tests that host
+// real windows run one at a time, so none takes focus from another.
+@MainActor
+@Suite("macOS UI", .serialized)
+struct MacUITests {}
+
 extension MacUITests {
 @MainActor
 @Suite("Unix picker navigation", .serialized)
