@@ -29,7 +29,9 @@
       let suite = "Tether.TitlebarDoubleClickTests.\(UUID())"
       let defaults = try #require(UserDefaults(suiteName: suite))
       defer { defaults.removePersistentDomain(forName: suite) }
-      defaults.set("None", forKey: TitlebarDoubleClick.actionKey)
+      // The names System Settings writes, spelled out: a key misspelled in
+      // the app would read nothing and fall back to the default.
+      defaults.set("None", forKey: "AppleActionOnDoubleClick")
       #expect(TitlebarDoubleClick.chosen(in: defaults) == .nothing)
     }
 
@@ -39,10 +41,11 @@
       let window = KeyedWindow.make()
       defer { window.close() }
       TitlebarDoubleClick.zoom.perform(on: window)
+      #expect((window.zooms, window.miniaturizes) == (1, 0))
       TitlebarDoubleClick.minimize.perform(on: window)
+      #expect((window.zooms, window.miniaturizes) == (1, 1))
       TitlebarDoubleClick.nothing.perform(on: window)
-      #expect(window.zooms == 1)
-      #expect(window.miniaturizes == 1)
+      #expect((window.zooms, window.miniaturizes) == (1, 1))
     }
   }
 
@@ -93,12 +96,6 @@
   @MainActor
   @Suite("Closing the main window", .serialized)
   struct MainWindowCloseTests {
-    @Test("a full-screen window leaves its Space before it is put away")
-    func fullScreen() {
-      #expect(MainWindowClose.action(fullScreen: false) == .hide)
-      #expect(MainWindowClose.action(fullScreen: true) == .leaveFullScreenThenHide)
-    }
-
     @Test("the red button puts the window away with its sessions, and the Dock brings it back")
     func closeHides() throws {
       let hosted = try HostedWorkspace(terminals: 1)

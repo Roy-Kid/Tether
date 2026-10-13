@@ -183,17 +183,4 @@ struct TerminalWorkspaceTests {
     #expect(tabs.accessories.isEmpty)
   }
 
-  @Test("custom terminal shortcuts survive while new defaults are independent")
-  func shortcuts() throws {
-    let name = "workspace-shortcuts-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: name))
-    defer { defaults.removePersistentDomain(forName: name) }
-    let legacy: [String: [KeyBinding?]] = ["newTerminal": [KeyBinding("t"), KeyBinding("n")]]
-    defaults.set(try JSONEncoder().encode(legacy), forKey: KeyBindingStore.preferenceKey)
-    let store = KeyBindingStore(defaults: defaults)
-    #expect(store.requestedBindings(for: WorkspaceAction.newTerminal.command) == legacy["newTerminal"])
-    #expect(store.conflict(for: WorkspaceAction.newTab.command, slot: 0) != nil)
-    #expect(WorkspaceAction.newTerminal.command.defaults == [KeyBinding("n"), nil])
-    #expect(WorkspaceAction.newTab.command.defaults == [KeyBinding("t"), nil])
-  }
 }

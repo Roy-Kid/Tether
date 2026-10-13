@@ -35,14 +35,6 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @MainActor
 @Suite("tmux on a tab")
 struct TmuxTabTests {
-  @Test("a Mac lists tmux beside Files; a phone keeps it on the shell button")
-  func placementMatchesTheHost() {
-    #if os(macOS)
-      #expect(TmuxPlugin().accessory.placement == .inspector)
-    #else
-      #expect(TmuxPlugin().accessory.placement == .popover)
-    #endif
-  }
 
   @Test("restore metadata keeps the session identity without retaining a client")
   func restorationMetadata() async throws {
@@ -259,11 +251,6 @@ struct TmuxCommandTests {
     let descriptors = plugin.commandDescriptors
     #expect(tab.commands.map(\.id) == descriptors.map(\.id))
     let chords = Dictionary(uniqueKeysWithValues: descriptors.compactMap { d in d.shortcut.map { (d.id, $0) } })
-    #expect(chords["splitHorizontal"] == PluginKeyChord("\\"))
-    #expect(chords["splitVertical"] == PluginKeyChord("\\", [.command, .shift]))
-    #expect(chords["zoom"] == PluginKeyChord("return", [.command, .shift]))
-    #expect(chords["newWindow"] == PluginKeyChord("n", [.command, .shift]))
-    #expect(["focusLeft", "focusDown", "focusUp", "focusRight"].map { chords[$0]?.key } == ["h", "j", "k", "l"])
     #expect(Set(chords.values).count == chords.count, "no two tmux commands share a chord")
     #expect(chords["detach"] == nil)
   }

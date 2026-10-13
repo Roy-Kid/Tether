@@ -259,7 +259,7 @@ struct WorkspaceOwnershipTests {
   }
 
   @Test("what a plugin shows stands in for the shell, and names itself")
-  func attachmentStandsInForShell() {
+  func attachmentStandsInForShell() throws {
     let tabs = makeTabs()
     let first = tab(.local, name: "Terminal 1")
     tabs.adopt(first)
@@ -271,6 +271,7 @@ struct WorkspaceOwnershipTests {
     attached.isShowing = true
     #expect(first.shown === attached)
     #expect(first.subtitle == "dev / editor")
+    #expect(tabs.caption(for: try #require(tabs.currentWorkspace)) == "dev / editor", "the tab's caption")
     #expect(tabs.workspaceCaption(for: .local) == "Local machine · Terminal 1 / dev / editor")
     #expect(tabs.statusLine().isEmpty)
 

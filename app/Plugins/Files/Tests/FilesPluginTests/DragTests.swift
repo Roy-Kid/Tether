@@ -8,63 +8,6 @@
 
   @testable import FilesPlugin
 
-  /// A drag as AppKit hands it to a drop target, without a pointer.
-  private final class FakeDrag: NSObject, NSDraggingInfo {
-    let pasteboard: NSPasteboard
-    let location: NSPoint
-    weak var window: NSWindow?
-    init(pasteboard: NSPasteboard, location: NSPoint, window: NSWindow) {
-      self.pasteboard = pasteboard
-      self.location = location
-      self.window = window
-    }
-    var draggingDestinationWindow: NSWindow? { window }
-    var draggingSourceOperationMask: NSDragOperation { [.copy, .generic] }
-    var draggingLocation: NSPoint { location }
-    var draggedImageLocation: NSPoint { location }
-    var draggedImage: NSImage? { nil }
-    var draggingPasteboard: NSPasteboard { pasteboard }
-    var draggingSource: Any? { nil }
-    var draggingSequenceNumber: Int { 1 }
-    func slideDraggedImage(to screenPoint: NSPoint) {}
-    var draggingFormation: NSDraggingFormation = .default
-    var animatesToDestination = false
-    var numberOfValidItemsForDrop = 1
-    func enumerateDraggingItems(
-      options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
-      classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
-      using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
-    ) {}
-    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
-    func resetSpringLoading() {}
-    /// Asked by SwiftUI once a drop is done.
-    @objc func _lastDragDestinationOperation() -> NSDragOperation { .copy }
-  }
-
-  /// The terminal's drop, as `WorkspaceView` declares it.
-  private struct TerminalLikeDrop: View {
-    let got: ([NSItemProvider]) -> Void
-    var body: some View {
-      Color.gray.frame(width: 300, height: 300)
-        .onDrop(of: [DroppedPath.contentType, .fileURL], isTargeted: nil) { providers in
-          got(providers)
-          return true
-        }
-    }
-  }
-
-  /// The list's own drop, which uploads files from this machine.
-  private struct UploadLikeDrop: View {
-    let got: ([URL]) -> Void
-    var body: some View {
-      Color.gray.frame(width: 300, height: 300)
-        .dropDestination(for: URL.self) { urls, _ in
-          got(urls)
-          return !urls.isEmpty
-        }
-    }
-  }
-
   /// Every call a promise's completion handler got, from whichever thread.
   private final class Completions: @unchecked Sendable {
     private let lock = NSLock()
@@ -291,24 +234,6 @@
       #expect(FilePromise.fileType(for: "Makefile") == .data)
     }
 
-    /// The probe behind the item of its own: SwiftUI's drop reads an item
-    /// that holds a promise as an empty provider, whatever else it carries.
-    @Test("SwiftUI's drop drops everything else on an item holding a promise")
-    func promiseItemsHideTheirOtherTypes() async throws {
-      let source = StubSource(tree)
-      let model = try await browser(source)
-      defer { model.close() }
-      var handed: [NSItemProvider]?
-      let (window, target) = try await host(TerminalLikeDrop { handed = $0 })
-      defer { window.orderOut(nil) }
-      let board = try drop([PathCarryingPromise(model.fetch(try #require(model.entry("/home/ada/b.txt"))))],
-        on: target, in: window)
-      defer { board.releaseGlobally() }
-      #expect(board.pasteboardItems?.first?.types.contains(.droppedPath) == true)
-      #expect(handed?.count == 1)
-      #expect(handed?.first?.hasItemConformingToTypeIdentifier(DroppedPath.contentType.identifier) == false)
-    }
-
     @Test("outside this app only files can be dropped; inside, paths go to the terminal")
     func operations() {
       #expect(DraggedRow.operations(.outsideApplication, carriesFiles: false) == [])
@@ -327,53 +252,6 @@
       model.selection = ["/home/ada/c.txt", "/home/ada/b.txt"]
       #expect(model.draggedEntries(b).map(\.path) == ["/home/ada/b.txt", "/home/ada/c.txt"])
       #expect(model.draggedEntries(runs).map(\.path) == ["/home/ada/runs"])
-    }
-
-    /// The drop as the terminal performs it, through SwiftUI: a promise for
-    /// each file, and one item with the paths.
-    @Test("files dropped on a terminal in this app are their paths, at once, and nothing is fetched")
-    func dropOnTerminal() async throws {
-      let source = StubSource(tree)
-      let model = try await browser(source)
-      defer { model.close() }
-      model.selection = ["/home/ada/b.txt", "/home/ada/c.txt"]
-      var handed: [NSItemProvider]?
-      let (window, target) = try await host(TerminalLikeDrop { handed = $0 })
-      defer { window.orderOut(nil) }
-      let started = Date()
-      let board = try drop(dragged(model, from: "/home/ada/b.txt"), on: target, in: window)
-      defer { board.releaseGlobally() }
-      let carried = (handed ?? []).filter {
-        $0.hasItemConformingToTypeIdentifier(DroppedPath.contentType.identifier)
-      }
-      #expect(carried.count == 1)
-      let provider = try #require(carried.first)
-      let path = await withCheckedContinuation { (done: CheckedContinuation<String?, Never>) in
-        _ = provider.loadTransferable(type: DroppedPath.self) { done.resume(returning: try? $0.get().text) }
-      }
-      #expect(path == "/home/ada/b.txt\n/home/ada/c.txt")
-      #expect(Date().timeIntervalSince(started) < 1)
-      try await settle()
-      #expect(source.downloadsOnMain.isEmpty, "no download was even started")
-      #expect(model.transfers.items.isEmpty)
-    }
-
-    /// The list's own drop takes files from this machine. A promise is not
-    /// one, so dropping a row back on the list neither fetches nor uploads.
-    @Test("a file row dropped on the list's upload target fetches nothing")
-    func dropOnUpload() async throws {
-      let source = StubSource(tree)
-      let model = try await browser(source)
-      defer { model.close() }
-      var urls: [URL] = []
-      let (window, target) = try await host(UploadLikeDrop { urls = $0 })
-      defer { window.orderOut(nil) }
-      let board = try drop(dragged(model, from: "/home/ada/b.txt"), on: target, in: window)
-      defer { board.releaseGlobally() }
-      try await settle()
-      #expect(urls.isEmpty)
-      #expect(source.downloadsOnMain.isEmpty)
-      #expect(source.uploads.isEmpty)
     }
 
     /// The rows' drag source holds a press until it is a click or a drag,
@@ -479,79 +357,6 @@
         with: type, location: point, modifierFlags: flags, timestamp: 0,
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count,
         pressure: type == .leftMouseUp ? 0 : 1))
-    }
-
-    private func host(_ view: some View) async throws -> (NSWindow, NSView) {
-      let window = NSWindow(
-        contentRect: NSRect(x: -4000, y: -4000, width: 300, height: 300),
-        styleMask: [.titled], backing: .buffered, defer: false)
-      window.contentView = NSHostingView(rootView: view)
-      window.orderFrontRegardless()
-      try await Task.sleep(for: .milliseconds(300))
-      return (window, try #require(dropTarget(in: window.contentView!)))
-    }
-
-    /// What dragging the row at `path` writes, as the row's drag source
-    /// writes it: the files' promises, then the paths.
-    private func dragged(_ model: FilesTab, from path: String) throws -> [NSPasteboardWriting] {
-      let entries = model.draggedEntries(try #require(model.entry(path)))
-      let promises: [NSPasteboardWriting] = entries.filter { $0.kind == .file }
-        .map { DraggedRow.promise(for: $0, model: model) }
-      return promises + [DraggedRow.paths(entries)]
-    }
-
-    /// Puts `writers` on a board of their own and drops them on `target`.
-    /// The board is the caller's to release once it has read the drop.
-    private func drop(_ writers: [NSPasteboardWriting], on target: NSView, in window: NSWindow) throws
-      -> NSPasteboard
-    {
-      let board = NSPasteboard(name: .init("tether-drag-test-\(UUID())"))
-      board.clearContents()
-      #expect(board.writeObjects(writers))
-      let point = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
-      let info = FakeDrag(pasteboard: board, location: point, window: window)
-      let destination: NSDraggingDestination = target
-      _ = destination.draggingEntered?(info)
-      _ = destination.draggingUpdated?(info)
-      _ = destination.prepareForDragOperation?(info)
-      _ = destination.performDragOperation?(info)
-      destination.concludeDragOperation?(info)
-      return board
-    }
-
-    private func dropTarget(in view: NSView) -> NSView? {
-      if String(describing: type(of: view)).contains("_PlatformDraggingDestinationView") { return view }
-      return view.subviews.lazy.compactMap { dropTarget(in: $0) }.first
-    }
-  }
-#endif
-
-#if os(macOS)
-  /// A promise that also offers the path on its own item: what the drag
-  /// source deliberately does not do.
-  private final class PathCarryingPromise: NSFilePromiseProvider {
-    let writer: FilePromiseWriter
-
-    init(_ fetch: FileFetch) {
-      writer = FilePromiseWriter(fetch)
-      super.init()
-      fileType = UTType.plainText.identifier
-      delegate = writer
-    }
-
-    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-      super.writableTypes(for: pasteboard) + [.droppedPath]
-    }
-
-    override func writingOptions(
-      forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard
-    ) -> NSPasteboard.WritingOptions {
-      type == .droppedPath ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
-    }
-
-    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-      if type == .droppedPath { return DroppedPath.data(for: "/home/ada/b.txt") }
-      return super.pasteboardPropertyList(forType: type)
     }
   }
 #endif

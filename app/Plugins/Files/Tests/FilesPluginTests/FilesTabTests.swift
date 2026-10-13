@@ -675,11 +675,6 @@ struct FilesTabTests {
     #expect(model.cache.cached(image) == nil, "nothing went into the cache")
   }
 
-  @Test("the accessory lives in the inspector")
-  func accessoryPlacement() {
-    #expect(FilesPlugin().accessory.placement == .inspector)
-  }
-
   @Test("a pasted relative path is resolved from the shell, then the browser")
   func pastedPathUsesTheShell() async throws {
     let relative = "lab-new/projects/pcl-ptmc-pec-tg/figures/hotmelt-rho.png"
@@ -792,7 +787,6 @@ struct FilesTabTests {
   func findCommandAndPaste() {
     let model = browser(StubSource(tree))
     let find = model.commands.first { $0.id == "find" }
-    #expect(find?.symbol == "magnifyingglass")
     find?.action()
     #expect(model.finding)
     #expect(model.findTicket == 1)

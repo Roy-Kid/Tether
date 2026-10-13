@@ -42,9 +42,12 @@ struct HostTileTests {
 
   @Test("a labelled host keeps the colour its label always gave it")
   func labelled() {
+    // The colours these labels have always had, written down rather than
+    // worked out again: a change to the rule would recolour a library.
     let host = Host(label: "Arrhenius", hostname: "login.example.org", port: 22, username: "ada")
-    let sum = "Arrhenius".unicodeScalars.reduce(UInt(0)) { $0 &+ UInt($1.value) }
-    #expect(Theme.tileIndex(for: host) == Int(sum % UInt(Theme.tileTints.count)))
+    #expect(Theme.tileTints[Theme.tileIndex(for: host)].dark == 0x30A46C, "green")
+    let other = Host(label: "dardel", hostname: "dardel.example.org", port: 22, username: "ada")
+    #expect(Theme.tileTints[Theme.tileIndex(for: other)].dark == 0xB273EE, "violet")
     var moved = host
     moved.hostname = "other.example.org"
     #expect(Theme.tileIndex(for: moved) == Theme.tileIndex(for: host))
