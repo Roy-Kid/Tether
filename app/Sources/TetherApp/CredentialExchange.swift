@@ -48,15 +48,16 @@ enum CredentialExchange {
   /// leave it to the person.
   static func choices(for items: [Item], hosts: [Host]) -> [Choice] {
     var claimed: [UUID: Int] = [:]
-    let matches = items.map { item -> UUID? in
-      let found = hosts.filter { matches(item, $0) }
+    let named: [UUID?] = items.map { item in
+      let found = hosts.filter { Self.matches(item, $0) }
       guard found.count == 1, let host = found.first else { return nil }
       claimed[host.id, default: 0] += 1
       return host.id
     }
-    return zip(items, matches).map { item, match in
-      let host = match.flatMap { claimed[$0] == 1 ? $0 : nil }
-      return choice(item, for: host.flatMap { id in hosts.first { $0.id == id } })
+    return zip(items, named).map { item, match in
+      let id = match.flatMap { claimed[$0] == 1 ? $0 : nil }
+      let host = id.flatMap { id in hosts.first { $0.id == id } }
+      return choice(item, for: host)
     }
   }
 
