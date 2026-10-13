@@ -17,8 +17,6 @@ public final class FilesTab: TabAttachment {
   /// Files larger than this ask before they are fetched. The settings value
   /// wins; this is what a person gets until they change it.
   static let previewLimit: UInt64 = UInt64(FilesPreferences.defaultMegabytes) * 1_000_000
-  /// How much the preview cache keeps for one host.
-  nonisolated static let cacheLimit: Int64 = 1024 * 1024 * 1024
 
   public let tab: TabContext
   let cache: FileCache
@@ -92,6 +90,21 @@ public final class FilesTab: TabAttachment {
       NSWorkspace.shared.open(url)
     #endif
   }
+  /// The same for a copy opened to be edited, reporting which app took it:
+  /// that app quitting is how the copy is known to be closed.
+  var openToEdit: @MainActor (URL, @escaping @MainActor (String?) -> Void) -> Void = { url, opened in
+    #if os(macOS)
+      NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { app, _ in
+        let bundleID = app?.bundleIdentifier
+        Task { @MainActor in opened(bundleID) }
+      }
+    #endif
+  }
+  /// Files opened to be edited on this host, shared with its other tabs.
+  let editing: EditingCopies
+  /// How this tab puts a question: through its plugin services. A test
+  /// answers instead.
+  var ask: @MainActor (PluginPrompt) async -> PluginAnswer
   private var session: Task<any FileSource, Error>?
   private var restorationTask: Task<Void, Never>?
   /// Printed paths recently looked for, and what was found.
@@ -104,7 +117,7 @@ public final class FilesTab: TabAttachment {
   private(set) var generation = 0
 
   init(
-    tab: TabContext, cache: FileCache? = nil,
+    tab: TabContext, cache: FileCache? = nil, editing: EditingCopies? = nil,
     open: @escaping (RemoteConnection?) async throws -> any FileSource = FilesTab.openRemote,
     present: @escaping ([URL]) -> Void = { QuickLook.show($0) },
     defaults: UserDefaults = .standard
@@ -112,9 +125,21 @@ public final class FilesTab: TabAttachment {
     self.tab = tab
     self.connection = tab.plugin.connection
     self.cache = cache ?? FileCache(host: tab.plugin.hostID)
+    // A test hands in a cache of its own and never sweeps the real ones.
+    if cache == nil { LocalCopies.sweepOnce() }
     self.opener = open
     self.presenter = present
     self.defaults = defaults
+    self.editing = editing ?? EditingCopies.shared(host: tab.plugin.hostID, label: tab.plugin.hostLabel)
+    let services = tab.plugin.services
+    self.ask = { await services.ask($0) }
+    self.editing.attach(
+      tab: tab.id,
+      source: { [weak self] in
+        guard let self else { throw FileError.disconnected(cause: "The tab closed.") }
+        return try await self.source()
+      },
+      transfers: transfers, ask: { [weak self] prompt in await self?.ask(prompt) ?? .cancelled })
   }
 
   /// Where a download panel opens. The configured folder, or Downloads.
@@ -209,6 +234,7 @@ public final class FilesTab: TabAttachment {
     openingRequests.removeAll()
     opening.removeAll()
     transfers.cancelAll()
+    editing.detach(tab: tab.id)
     let old = session
     session = nil
     Task { await (try? await old?.value)?.close() }
@@ -512,14 +538,14 @@ extension FilesTab {
           if target.kind == .directory {
             await go(to: entry.path)
           } else {
-            await preview([target])
+            await openFile(target)
           }
         } catch {
           problem = describe(error)
         }
       }
     case .file:
-      Task { await preview([entry]) }
+      Task { await openFile(entry) }
     case .other:
       break
     }
@@ -586,11 +612,8 @@ extension FilesTab {
 
   #if os(macOS)
     private func loadingPreview(for file: FileEntry) -> URL? {
-      let directory = FileCache.previewRoot
-        .appendingPathComponent("Tether Preview Loading", isDirectory: true)
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
       do {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let directory = try LocalCopies.scratch(in: LocalCopies.loading())
         let url = directory.appendingPathComponent(Names.local(file.name))
         try Data("Loading preview…".utf8).write(to: url)
         return url
@@ -631,8 +654,7 @@ extension FilesTab {
     let current = await identity(entry, from: filesSource)
     if let cached = cache.cached(current) { return cached }
     let url = try await transfers.download(current, to: cache.location(for: current), from: filesSource)
-    cache.trim(to: FilesTab.cacheLimit)
-    return url
+    return cache.keep(url)
   }
 
   /// What Quick Look should open for `file`, whose size and modification
@@ -643,8 +665,7 @@ extension FilesTab {
     }
     if let cached = cache.cached(file) { return cached }
     let url = try await transfers.download(file, to: cache.location(for: file), from: source)
-    cache.trim(to: FilesTab.cacheLimit)
-    return url
+    return cache.keep(url)
   }
 
   /// A cache copy of a file on this machine, keyed by its modification time,
@@ -661,8 +682,7 @@ extension FilesTab {
     } catch {
       return nil
     }
-    cache.trim(to: FilesTab.cacheLimit)
-    return destination
+    return cache.keep(destination)
   }
 
   /// The same files, with the size and modification time they have now.
@@ -874,25 +894,66 @@ extension FilesTab {
     await relist(touched, keeping: failure)
   }
 
-  /// Opens with whatever this Mac opens the type with. Never something that
-  /// would run: those are previewed or saved instead. A large remote file is
-  /// asked about first, the same gate a preview uses.
-  func openExternally(_ files: [FileEntry]) {
-    Task { await openFetched(files) }
+  /// What opening a file does: on a Mac, it is edited in whatever this Mac
+  /// opens its type with and written back when saved; a phone has no other
+  /// app to write it back from, so it is previewed.
+  private func openFile(_ entry: FileEntry) async {
+    #if os(macOS)
+      await edit([entry])
+    #else
+      await preview([entry])
+    #endif
   }
 
-  func openFetched(_ files: [FileEntry], confirmed: Bool = false) async {
-    let chosen = files.filter { $0.kind == .file && !Names.isRisky($0.name) }
-    guard !chosen.isEmpty else { return }
-    guard let filesSource = try? await source() else { return }
-    let current = await identities(chosen, from: filesSource)
-    if holdForSize(current, confirmed: confirmed, action: .open(current), source: filesSource) {
+  func openExternally(_ files: [FileEntry]) {
+    Task { await edit(files) }
+  }
+
+  /// Opens files to be edited, each in whatever this Mac opens its type with,
+  /// and writes each back whenever it is saved (`EditingCopies`). Never a
+  /// file that would run: that is previewed instead. On this machine the
+  /// file itself is opened. A large remote file is asked about first, as a
+  /// preview is; a copy already here — being edited, or previewed — is not
+  /// fetched again.
+  func edit(_ files: [FileEntry], confirmed: Bool = false) async {
+    let chosen = files.filter { $0.kind == .file }
+    let risky = chosen.filter { Names.isRisky($0.name) }
+    if !risky.isEmpty { await preview(risky) }
+    let editable = chosen.filter { !Names.isRisky($0.name) }
+    guard !editable.isEmpty, let filesSource = try? await source() else { return }
+    let current = await identities(editable, from: filesSource)
+    if filesSource.isLocal {
+      current.forEach { openLocal(URL(fileURLWithPath: $0.path)) }
+      return
+    }
+    let unfetched = current.filter { editing.reusable($0) == nil }
+    if holdForSize(unfetched, confirmed: confirmed, action: .open(current), source: filesSource) {
       return
     }
     for file in current {
-      guard let url = try? await local(file) else { continue }
-      openLocal(url)
+      do {
+        let url = try await editingCopy(of: file, from: filesSource)
+        let editing = self.editing
+        openToEdit(url) { editor in editing.opened(file.path, in: editor) }
+      } catch {
+        if (error as? FileError) != .cancelled { problem = describe(error) }
+      }
     }
+  }
+
+  /// The copy `file` is edited in: the one already being edited, the preview
+  /// moved over, or fetched now.
+  private func editingCopy(of file: FileEntry, from source: any FileSource) async throws -> URL {
+    if let reused = editing.reusable(file) { return reused }
+    let location = try editing.location(for: file)
+    try await editing.writingCopy(file.path) {
+      try? FileManager.default.removeItem(at: location)
+      if !cache.move(file, to: location) {
+        _ = try await transfers.download(file, to: location, from: source)
+      }
+    }
+    editing.adopt(file, at: location)
+    return location
   }
 
   /// Saves the files where the person asked, or into the folder they set.

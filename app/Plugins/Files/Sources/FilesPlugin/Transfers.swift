@@ -58,6 +58,21 @@ final class Transfers {
     }
   }
 
+  /// Writes an edited copy back over `expected.path`, while that is still
+  /// the file it was; returns what the far side has now.
+  func writeBack(_ local: URL, expected: FileEntry, from source: any FileSource) async throws -> FileEntry {
+    let size = (try? local.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    let written = Mutex<FileEntry?>(nil)
+    try await run(
+      Item(name: Names.display(expected.name), path: expected.path, direction: .up, total: UInt64(size))
+    ) { progress in
+      let entry = try await source.writeBack(local.path, to: expected.path, expected: expected, progress: progress)
+      written.withLock { $0 = entry }
+    }
+    guard let entry = written.withLock({ $0 }) else { throw FileError.cancelled }
+    return entry
+  }
+
   /// Stops a running copy, or forgets a failed one.
   func cancel(_ id: UUID) {
     cancellers[id]?()

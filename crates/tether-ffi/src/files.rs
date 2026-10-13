@@ -95,6 +95,9 @@ pub enum FileError {
     PermissionDenied { path: String },
     #[error("{path} is not empty")]
     NotEmpty { path: String },
+    /// The far side's file is not the one a change was made to any more.
+    #[error("{path} changed on the server")]
+    Changed { path: String },
     #[error("cancelled")]
     Cancelled,
     #[error("the connection was lost: {cause}")]
@@ -111,6 +114,7 @@ impl From<tether_files::Error> for FileError {
             Error::Exists { path } => Self::Exists { path },
             Error::PermissionDenied { path } => Self::PermissionDenied { path },
             Error::NotEmpty { path } => Self::NotEmpty { path },
+            Error::Changed { path } => Self::Changed { path },
             Error::Cancelled => Self::Cancelled,
             Error::Disconnected { cause } => Self::Disconnected { cause },
             Error::Failed { cause } => Self::Failed { cause },
@@ -250,6 +254,39 @@ impl RemoteFiles {
             }
         };
         Ok(self.inner.upload(source, &path, replace, &cancellation.inner, report).await?)
+    }
+
+    /// Puts `source` here in place of `path`, only while `path` is still
+    /// `expected_size` bytes last modified at `expected_modified`; otherwise
+    /// `Changed`. Keeps the file's permissions and writes through a link.
+    /// Returns what `path` is afterwards.
+    pub async fn write_back(
+        &self,
+        source: String,
+        path: String,
+        expected_size: u64,
+        expected_modified: Option<u64>,
+        progress: Option<Arc<dyn TransferProgress>>,
+        cancellation: Arc<CancellationToken>,
+    ) -> Result<FileEntry, FileError> {
+        let source = local_path(&source)?;
+        let report = move |bytes| {
+            if let Some(progress) = &progress {
+                progress.advanced(bytes);
+            }
+        };
+        let entry = self
+            .inner
+            .write_back(
+                source,
+                &path,
+                expected_size,
+                expected_modified,
+                &cancellation.inner,
+                report,
+            )
+            .await?;
+        Ok(entry.into())
     }
 
     pub async fn make_directory(&self, path: String) -> Result<(), FileError> {

@@ -187,6 +187,16 @@ path printed in the terminal opens with ⌘-click, a force click or a
 long-press: the terminal finds the shape, the plugin
 checks it exists.
 
+Space previews; Download keeps a copy that is nobody's business after; on a
+Mac, opening a file edits it. The copy opens in whatever the Mac opens it
+with, and every save is written back — only while the far side's file is
+still the one that was opened. Otherwise the person chooses Replace, Save as
+Copy or Discard My Changes; nothing is overwritten unasked. An edit copy
+lives under Application Support and goes once it is written back and its
+editor has quit; one with an edit not yet written back stays across launches.
+Previews and other copies that can be fetched again live in this account's
+own temporary directory, never the shared `/tmp`, closed to other accounts.
+
 A session can forward the user's own loopback ports on that machine to this
 device. The listener is on this side of the lease — a direct-tcpip channel,
 `ssh -W` through a ControlMaster, or the port itself when the shell is

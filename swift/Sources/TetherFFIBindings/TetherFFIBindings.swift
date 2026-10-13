@@ -2033,6 +2033,14 @@ public protocol RemoteFilesProtocol: AnyObject, Sendable {
      */
     func upload(source: String, path: String, replace: Bool, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
     
+    /**
+     * Puts `source` here in place of `path`, only while `path` is still
+     * `expected_size` bytes last modified at `expected_modified`; otherwise
+     * `Changed`. Keeps the file's permissions and writes through a link.
+     * Returns what `path` is afterwards.
+     */
+    func writeBack(source: String, path: String, expectedSize: UInt64, expectedModified: UInt64?, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> FileEntry
+    
 }
 /**
  * Files on the machine a session's shell is running on.
@@ -2334,6 +2342,28 @@ open func upload(source: String, path: String, replace: Bool, progress: Transfer
             completeFunc: ffi_tether_ffi_rust_future_complete_u64,
             freeFunc: ffi_tether_ffi_rust_future_free_u64,
             liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+    
+    /**
+     * Puts `source` here in place of `path`, only while `path` is still
+     * `expected_size` bytes last modified at `expected_modified`; otherwise
+     * `Changed`. Keeps the file's permissions and writes through a link.
+     * Returns what `path` is afterwards.
+     */
+open func writeBack(source: String, path: String, expectedSize: UInt64, expectedModified: UInt64?, progress: TransferProgress?, cancellation: CancellationToken)async throws  -> FileEntry  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_write_back(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(source),FfiConverterString.lower(path),FfiConverterUInt64.lower(expectedSize),FfiConverterOptionUInt64.lower(expectedModified),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFileEntry_lift,
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
@@ -5567,6 +5597,11 @@ enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     )
     case NotEmpty(path: String
     )
+    /**
+     * The far side's file is not the one a change was made to any more.
+     */
+    case Changed(path: String
+    )
     case Cancelled
     case Disconnected(cause: String
     )
@@ -5613,11 +5648,14 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
         case 4: return .NotEmpty(
             path: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .Cancelled
-        case 6: return .Disconnected(
+        case 5: return .Changed(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 6: return .Cancelled
+        case 7: return .Disconnected(
             cause: try FfiConverterString.read(from: &buf)
             )
-        case 7: return .Failed(
+        case 8: return .Failed(
             cause: try FfiConverterString.read(from: &buf)
             )
 
@@ -5652,17 +5690,22 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
             FfiConverterString.write(path, into: &buf)
             
         
-        case .Cancelled:
+        case let .Changed(path):
             writeInt(&buf, Int32(5))
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case .Cancelled:
+            writeInt(&buf, Int32(6))
         
         
         case let .Disconnected(cause):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(cause, into: &buf)
             
         
         case let .Failed(cause):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(cause, into: &buf)
             
         }
@@ -8459,6 +8502,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remotefiles_upload() != 59853) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_write_back() != 6471) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55719) {

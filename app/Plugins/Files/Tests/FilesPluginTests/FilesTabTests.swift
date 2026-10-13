@@ -28,6 +28,15 @@ private final class HostProbe {
   }
 }
 
+/// Editing copies of a host nobody else has, in a folder of the test's own:
+/// never the real Application Support.
+@MainActor
+func scratchEditing() -> EditingCopies {
+  EditingCopies(
+    host: UUID(), label: "lab",
+    base: FileManager.default.temporaryDirectory.appendingPathComponent("files-editing-\(UUID())"))
+}
+
 private func scratchCache() -> FileCache {
   FileCache(
     host: UUID(),
@@ -48,10 +57,11 @@ private func browser(
   _ source: StubSource, host: HostProbe = HostProbe(), defaults: UserDefaults = cleanDefaults()
 ) -> FilesTab {
   let model = FilesTab(
-    tab: host.context(), cache: scratchCache(), open: { _ in source }, present: { _ in },
-    defaults: defaults)
+    tab: host.context(), cache: scratchCache(), editing: scratchEditing(), open: { _ in source },
+    present: { _ in }, defaults: defaults)
   model.revealSaved = { _ in }
   model.openLocal = { _ in }
+  model.openToEdit = { _, opened in opened("com.example.editor") }
   return model
 }
 
@@ -370,9 +380,8 @@ struct FilesTabTests {
     let fetching = Task { await model.preview([file]) }
     try await settle(model) { !shown.isEmpty }
     #expect(shown.count == 1)
-    let placeholderFolder = shown[0].first?.deletingLastPathComponent()
-      .deletingLastPathComponent().lastPathComponent
-    #expect(placeholderFolder == "Tether Preview Loading")
+    let placeholder = try #require(shown[0].first)
+    #expect(placeholder.deletingLastPathComponent().deletingLastPathComponent() == LocalCopies.loading())
 
     await fetching.value
     #expect(shown.count == 2)
@@ -402,7 +411,7 @@ struct FilesTabTests {
     await model.preview([huge])
     #expect(model.pendingLarge == nil)
     #expect(source.downloads.isEmpty)
-    await model.openFetched([huge])
+    await model.edit([huge])
     #expect(model.pendingLarge == nil)
     #expect(source.downloads.isEmpty)
   }
@@ -455,7 +464,7 @@ struct FilesTabTests {
     let huge = FileEntry(
       name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
       size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
-    await model.openFetched([huge])
+    await model.edit([huge])
     #expect(model.pendingLarge == huge)
     #expect(model.pendingFetch == .open([huge]))
     #expect(source.downloads.isEmpty)
@@ -807,13 +816,57 @@ struct FileCacheTests {
       modified: modified, permissions: 0o644)
   }
 
-  #if os(macOS)
-    @Test("previews are kept in /tmp")
-    func previewsLiveInTemporary() {
-      let cache = FileCache(host: UUID())
-      #expect(cache.root.path.hasPrefix("/tmp/"))
-    }
-  #endif
+  /// Not `/tmp`, which every account on the Mac can read.
+  @Test("previews are kept where only this account can read them")
+  func previewsArePrivate() throws {
+    let cache = FileCache(host: UUID())
+    #expect(cache.root.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+    #expect(!cache.root.path.hasPrefix("/tmp/"))
+    let scratch = scratchCache()
+    let folder = scratch.location(for: entry("/a/plot.png")).deletingLastPathComponent()
+    let mode = try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? Int
+    #expect(mode == 0o700)
+    let copy = folder.appendingPathComponent("plot.png")
+    try Data("png".utf8).write(to: copy)
+    scratch.keep(copy)
+    #expect(try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? Int == 0o600)
+  }
+
+  /// A day unlooked-at is long enough; the limit is every host's together.
+  @Test("old previews go, and every host's share one limit")
+  func previewsAgeAndShareALimit() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-age-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let lab = FileCache(host: UUID(), base: base), other = FileCache(host: UUID(), base: base)
+    let stale = entry("/stale.bin"), fresh = entry("/fresh.bin"), elsewhere = entry("/elsewhere.bin")
+    try Data(count: 10).write(to: lab.location(for: stale))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.previewAge)],
+      ofItemAtPath: lab.location(for: stale).deletingLastPathComponent().path)
+    try Data(count: 1000).write(to: lab.location(for: fresh))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-60)],
+      ofItemAtPath: lab.location(for: fresh).deletingLastPathComponent().path)
+    try Data(count: 1000).write(to: other.location(for: elsewhere))
+    other.trim(to: 1500)
+    #expect(lab.cached(stale) == nil, "older than a day")
+    #expect(lab.cached(fresh) == nil, "the other host's newer copy took the room")
+    #expect(other.cached(elsewhere) != nil)
+  }
+
+  /// A placeholder or a received file outlives its run only by accident.
+  @Test("leftovers from an earlier run are swept")
+  func leftoversAreSwept() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-sweep-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let old = try LocalCopies.scratch(in: LocalCopies.staging(in: base))
+    let new = try LocalCopies.scratch(in: LocalCopies.loading(in: base))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.leftoverAge)], ofItemAtPath: old.path)
+    LocalCopies.sweep(base: base)
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(FileManager.default.fileExists(atPath: new.path))
+  }
 
   @Test("moving a copy takes it out of the cache")
   func moveTakesTheCopy() throws {

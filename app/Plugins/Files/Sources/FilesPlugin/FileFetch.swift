@@ -23,9 +23,7 @@ struct FileFetch: Sendable {
   func local() async throws -> URL {
     let source = try await open()
     if source.isLocal { return URL(fileURLWithPath: entry.path) }
-    let url = try await cachedCopy(from: source, progress: nil)
-    cache.trim(to: FilesTab.cacheLimit)
-    return url
+    return try await cachedCopy(from: source, progress: nil)
   }
 
   /// Writes the file at `destination`, which must not exist: what a file
@@ -46,7 +44,7 @@ struct FileFetch: Sendable {
     }
     try Task.checkCancellation()
     try FileManager.default.copyItem(at: copy, to: destination)
-    if !source.isLocal { cache.trim(to: FilesTab.cacheLimit) }
+
   }
 
   /// The session this fetch was made with. None means the tab has no files
@@ -67,7 +65,7 @@ struct FileFetch: Sendable {
     if let cached = cache.cached(current) { return cached }
     let destination = cache.location(for: current)
     _ = try await source.download(current.path, to: destination.path, progress: progress)
-    return destination
+    return cache.keep(destination)
   }
 
   private static func refuseUnwritable(_ destination: URL) throws {

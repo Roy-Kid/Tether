@@ -459,6 +459,8 @@ private struct FileRow: View {
         ProgressView(value: transfer.fraction)
           .progressViewStyle(.circular)
           .controlSize(.mini)
+      } else if let state = model.editing.states[entry.path] {
+        EditingMark(state: state)
       }
     }
   }
@@ -519,6 +521,38 @@ private struct FileRow: View {
 /// On a Mac that offer is a file promise (`RowDragSource`), kept by AppKit
 /// until the drop is over. A phone keeps SwiftUI's drag, whose receiver
 /// loads the file without holding the main thread.
+/// A file open in an editor here: written back, waiting to be, or changed
+/// on the far side as well. The name is the tooltip.
+private struct EditingMark: View {
+  let state: EditingCopies.State
+
+  var body: some View {
+    Image(systemName: symbol)
+      .font(UIStyle.symbol)
+      .foregroundStyle(state == .conflict ? Theme.warning : Theme.subtle)
+      .help(name)
+      .accessibilityLabel(name)
+  }
+
+  private var symbol: String {
+    switch state {
+    case .synced: "pencil"
+    case .writing: "arrow.up"
+    case .pending: "arrow.up.circle"
+    case .conflict: "exclamationmark.triangle"
+    }
+  }
+
+  private var name: String {
+    switch state {
+    case .synced: "Editing"
+    case .writing: "Saving to Server"
+    case .pending(let reason): reason.map { "Not Saved to Server: \($0)" } ?? "Not Saved to Server"
+    case .conflict: "Changed on Server"
+    }
+  }
+}
+
 private struct EntryDrag: ViewModifier {
   let model: FilesTab
   let entry: FileEntry
@@ -893,8 +927,9 @@ private func findChord(_ press: KeyPress) -> Bool {
       .help(name)
     }
 
-    /// Photos are handed over as copies in this app's temporary directory,
-    /// with the names the library gives them.
+    /// Photos are handed over as copies in a folder of their own each, with
+    /// the names the library gives them; the folders go once the upload has
+    /// read them.
     private func upload(_ items: [PhotosPickerItem], into directory: String) async {
       var files: [URL] = []
       for item in items {
@@ -903,7 +938,7 @@ private func findChord(_ press: KeyPress) -> Bool {
         }
       }
       await model.upload(files, into: directory)
-      files.forEach { try? FileManager.default.removeItem(at: $0) }
+      files.forEach { try? FileManager.default.removeItem(at: $0.deletingLastPathComponent()) }
     }
   }
 
@@ -939,9 +974,7 @@ private func findChord(_ press: KeyPress) -> Bool {
     let url: URL
     static var transferRepresentation: some TransferRepresentation {
       FileRepresentation(importedContentType: .item) { received in
-        let folder = FileManager.default.temporaryDirectory
-          .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = try LocalCopies.scratch(in: LocalCopies.staging())
         let target = folder.appendingPathComponent(received.file.lastPathComponent)
         try FileManager.default.copyItem(at: received.file, to: target)
         return PickedFile(url: target)
@@ -1097,7 +1130,7 @@ private struct Confirmations: ViewModifier {
         case .preview(let files):
           await model.preview(files, confirmed: true)
         case .open(let files):
-          await model.openFetched(files, confirmed: true)
+          await model.edit(files, confirmed: true)
         case nil:
           if let large { await model.preview([large], confirmed: true) }
         }
