@@ -119,17 +119,19 @@ impl Connection {
             Self::OpenSsh(client) => {
                 let client = client.clone().with_resolved_path().await;
                 Stream::start(&client.forward_stdio(port))
-                    .map(Pipe::Process)
+                    .map(|stream| Pipe::Process(Box::new(stream)))
                     .map_err(ConnectionError::new)
             }
         }
     }
 }
 
+/// One forwarded connection's far end. The process is boxed: on Linux it
+/// is several times the size of the others, and every pipe would pay for it.
 enum Pipe {
     Remote(Shell),
     Socket(TcpStream),
-    Process(Stream),
+    Process(Box<Stream>),
 }
 
 impl Pipe {
@@ -137,7 +139,7 @@ impl Pipe {
         match self {
             Self::Remote(shell) => shell.tunnel(socket, stop).await,
             Self::Socket(remote) => copy_sockets(socket, remote, stop).await,
-            Self::Process(stream) => copy_process(stream, socket, stop).await,
+            Self::Process(stream) => copy_process(*stream, socket, stop).await,
         }
     }
 }
