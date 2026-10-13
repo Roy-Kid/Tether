@@ -151,7 +151,6 @@ extension HostStore {
     let secretID = UUID()
     try credentials.write(otp.stored, id: secretID, label: host.label + " OTP")
     profile.authentication.otp = descriptor
-    profile.authentication.confirmation = .confirmAuthentication
     let selected = profile
     try update { state in
       guard var record = state.records[host.id], !record.deleted, record.conflicts.isEmpty else { throw IdentityError.needsReview }

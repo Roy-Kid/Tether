@@ -280,6 +280,20 @@ struct HostStoreTests {
     #expect(try credentials.saved().count == 1)
   }
 
+  /// A seed is a credential like a key or a password, not a policy: keeping
+  /// one does not start asking for approval before every login.
+  @Test func aCodeSeedLeavesConfirmationAlone() throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    let store = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    #expect(store.hosts.first?.profile?.authentication.confirmation == .automatic)
+
+    store.setOTP("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", for: try #require(store.hosts.first))
+    #expect(store.hosts.first?.otpSecretID != nil)
+    #expect(store.hosts.first?.profile?.authentication.confirmation == .automatic)
+  }
+
   /// The SSH file and the keychain are read by `refresh`, off the main
   /// actor, not by opening the store. A password kept or let go of here is
   /// known at once, without listing the keychain again.
