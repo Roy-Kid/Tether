@@ -27,7 +27,8 @@ struct RootView: View {
   let secrets: any SecretStore
   let plugins: PluginAPI
   @Binding var installedPlugins: InstalledPlugins?
-  @State private var editing: Host?
+  /// Where hosts are managed: Settings, opened at that page.
+  @State private var route = SettingsRoute.shared
   /// Passwords to ask for before dialling, one at a time, in the order
   /// they were needed. A queue rather than a slot: two tabs can need one at
   /// once, and a question overwritten is a tab left waiting for nothing.
@@ -43,6 +44,9 @@ struct RootView: View {
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
   @Environment(\.openURL) private var openURL
+  #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+  #endif
   @Environment(\.scenePhase) private var phase
   #if os(iOS)
     /// Whether there is room for two columns. A phone in portrait is compact;
@@ -63,7 +67,7 @@ struct RootView: View {
   private var terminalInputAllowed: Bool {
     tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
       && tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && !tabs.manageHosts && editing == nil && connectRequests.isEmpty && !showingSettings
+      && connectRequests.isEmpty && !showingSettings
       && notice == nil
   }
   var body: some View {
@@ -243,7 +247,7 @@ struct RootView: View {
   private var sidebar: some View {
     Sidebar(
       store: store,
-      onOpen: { open($0) }, onEdit: { editing = $0 }, onNew: { editing = .blank() },
+      onOpen: { open($0) }, onEdit: { route.show(.edit($0.id)) }, onNew: { route.show(.newHost) },
       onSettings: { showingSettings = true }
     )
     .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
@@ -846,7 +850,7 @@ extension RootView {
         if let report = tabs.reconnectReport(for: id) { retry(report) }
       case .edit(let host):
         tabs.hostPicker = false
-        editing = host
+        route.show(store.hosts.contains { $0.id == host.id } ? .edit(host.id) : .newHost)
       case .launchPlugin(let id):
         if let plugin = registry.plugins.first(where: { $0.metadata.id == id }),
           registry.isEnabled(id)
@@ -855,32 +859,11 @@ extension RootView {
         }
       }
     }
-    .sheet(item: $editing) { host in
-      HostEditor(host: host, password: (try? secrets.password(for: host.passwordID)) ?? "") {
-        store.save($0, password: $1)
-      }
-    }
-    .sheet(isPresented: $tabs.manageHosts) {
-      Group {
-        Sidebar(
-          store: store,
-          onOpen: { host in
-            tabs.manageHosts = false
-            open(host)
-          },
-          onEdit: { host in
-            tabs.manageHosts = false
-            editing = host
-          },
-          onNew: { editing = .blank() },
-          onSettings: { showingSettings = true },
-          onDone: { tabs.manageHosts = false }
-        )
-      }
+    .onChange(of: route.requests) { _, _ in
       #if os(macOS)
-        .frame(minWidth: UIStyle.panelWidth, minHeight: Chrome.editorHeight)
+        openSettings()
       #else
-        .modifier(HostManagementNavigation())
+        showingSettings = true
       #endif
     }
     .dialog(for: tabs.pendingClose) { _ in
@@ -903,7 +886,7 @@ extension RootView {
     }
     #if !os(macOS)
       .sheet(isPresented: $showingSettings) {
-        NavigationStack {
+        NavigationStack(path: $route.phonePath) {
           AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs, installedPlugins: installedPlugins)
             .toolbar {
               ToolbarItem(placement: .confirmationAction) {
@@ -912,6 +895,8 @@ extension RootView {
             }
         }
       }
+      // Closed, it opens next time on its list, not the page left open.
+      .onChange(of: showingSettings) { _, shown in if !shown { route.phonePath = [] } }
     #endif
     .modifier(
       ConnectionDialogs(
@@ -1007,7 +992,7 @@ extension RootView {
       if tabs.accessory != nil || tabs.palette != nil || tabs.hostPicker { return false }
     #endif
     return tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && !tabs.manageHosts && editing == nil && connectRequests.isEmpty
+      && connectRequests.isEmpty
       && !showingSettings && notice == nil
       && tabs.problem == nil && tabs.passwordOffer == nil
   }
@@ -1435,14 +1420,6 @@ private struct PluginSheetPresentation: ViewModifier {
     #endif
   }
 }
-
-#if os(iOS)
-private struct HostManagementNavigation: ViewModifier {
-  func body(content: Content) -> some View {
-    NavigationStack { content }
-  }
-}
-#endif
 
 private extension View {
   @ViewBuilder

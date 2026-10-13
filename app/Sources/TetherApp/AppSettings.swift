@@ -95,6 +95,7 @@ struct AppSettings: View {
   #endif
   @AppStorage("appearance") private var appearance = "system"
   @State private var fallbackKeyBindings = KeyBindingStore()
+  @State private var route = SettingsRoute.shared
 
   enum Section: String, Identifiable, CaseIterable {
     case general
@@ -202,6 +203,8 @@ struct AppSettings: View {
       }
       .toolbar(removing: .sidebarToggle)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+      // Closed, it opens next time on the host list, not the page left open.
+      .onDisappear { route.pages = [] }
       .frame(minWidth: section == .keyBindings ? 820 : Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
       .background { SettingsWindowChrome() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
@@ -209,10 +212,14 @@ struct AppSettings: View {
       // The caller already supplies the stack and its Done button, so this
       // is the list and nothing around it.
       List(Section.available) { section in
-        NavigationLink {
-          pane(section)
-        } label: {
+        NavigationLink(value: SettingsRoute.Destination.section(section)) {
           SettingsSidebarLabel(title: section.title, systemImage: section.symbol, tint: section.tint)
+        }
+      }
+      .navigationDestination(for: SettingsRoute.Destination.self) { destination in
+        switch destination {
+        case .section(let section): pane(section)
+        case .page(let page): self.page(page)
         }
       }
       .navigationTitle("Settings")
@@ -274,8 +281,56 @@ struct AppSettings: View {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
   }
 
+  /// The host list is the one pane that pushes pages: a host, its editor, a
+  /// new host, an import. A phone pushes them on the stack it already has.
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
+    #if os(macOS)
+      if section == .identities {
+        NavigationStack(path: $route.pages) {
+          sectionPage(section)
+            .navigationDestination(for: SettingsRoute.Page.self) { page($0) }
+        }
+      } else {
+        sectionPage(section)
+      }
+    #else
+      sectionPage(section)
+    #endif
+  }
+
+  @ViewBuilder
+  private func page(_ page: SettingsRoute.Page) -> some View {
+    switch page {
+    case .host(let id):
+      SettingsPage(title: store.hosts.first { $0.id == id }?.label ?? "Host", subtitle: "Identity and authentication") {
+        HostIdentitySettings(store: store, id: id, connections: connections)
+      }
+    case .edit(let id):
+      if let host = store.hosts.first(where: { $0.id == id }) {
+        SettingsPage(title: "Edit Host", subtitle: host.address) {
+          HostEditor(host: host, password: (try? secrets.password(for: host.passwordID)) ?? "",
+            onDone: { route.pop() }) { store.save($0, password: $1) }
+        }
+      }
+    case .newHost:
+      SettingsPage(title: "New Host", subtitle: "Address, account, and secret") {
+        HostEditor(host: .blank(), onDone: { route.pop() }) { store.save($0, password: $1) }
+      }
+    case .importing:
+      if let pending = CredentialImport.shared.pending {
+        SettingsPage(title: "Import from \(pending.exporter)", subtitle: "What each host keeps") {
+          CredentialImportPage(store: store, pending: pending) {
+            CredentialImport.shared.pending = nil
+            route.pop()
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func sectionPage(_ section: Section) -> some View {
     SettingsPage(title: section.title, subtitle: section.subtitle) {
       if section == .keyBindings {
         KeyBindingSettings(

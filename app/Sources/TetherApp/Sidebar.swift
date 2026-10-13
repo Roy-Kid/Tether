@@ -17,10 +17,8 @@ struct Sidebar: View {
   let onNew: () -> Void
   /// Only used where there is no preferences window to link to.
   let onSettings: () -> Void
-  var onDone: (() -> Void)? = nil
 
   @State private var selection: Host.ID?
-  @State private var identityHost: Host?
   /// A host waiting on its delete confirmation. Deleting reaches every
   /// device through sync and takes the host's keys with it — never one tap.
   @State private var deleting: Host.ID?
@@ -62,7 +60,7 @@ struct Sidebar: View {
             #if os(iOS)
               .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !host.isLocal {
-                  Button("Identity…", systemImage: "person.badge.key") { identityHost = host }
+                  Button("Identity…", systemImage: "person.badge.key") { SettingsRoute.shared.show(.host(host.id)) }
                     .tint(Theme.accent)
                 }
               }
@@ -75,7 +73,7 @@ struct Sidebar: View {
               // computer out of a list they are reading on it. Not a second
               // kind of host — a host with nothing left to decide.
               if !host.isLocal {
-                Button("Identity and Authentication…") { identityHost = host }
+                Button("Identity and Authentication…") { SettingsRoute.shared.show(.host(host.id)) }
                 Button("Edit…") { onEdit(host) }
                 Button("Delete Host…", role: .destructive) { deleting = host.id }
               }
@@ -101,10 +99,6 @@ struct Sidebar: View {
         deleting = nil
       }
     }
-    .sheet(item: $identityHost) { host in
-      NavigationStack { HostIdentitySettings(store: store, id: host.id) }
-        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
-    }
     .modifier(HostListStyle())
     // This list is also used in a sheet, where `.sidebar` search placement
     // promotes the field into an unrelated window toolbar. Keep Mac search
@@ -119,7 +113,7 @@ struct Sidebar: View {
         if let host = store.filtered.first(where: { $0.id == selection }) { onOpen(host) }
       }
       .onPickerCancel {
-        if !store.search.isEmpty { store.search = "" } else { onDone?() }
+        if !store.search.isEmpty { store.search = "" }
       }
       .safeAreaInset(edge: .top, spacing: 0) {
         HostSearchField(text: $store.search)
@@ -137,7 +131,7 @@ struct Sidebar: View {
         QuietMark("Hosts", systemImage: "server.rack")
       }
     }
-    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings, onDone: onDone))
+    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings))
     .navigationTitle("Hosts")
   }
 }
@@ -202,7 +196,6 @@ private struct SidebarActions: ViewModifier {
   let store: HostStore
   let onNew: () -> Void
   let onSettings: () -> Void
-  let onDone: (() -> Void)?
 
   func body(content: Content) -> some View {
     #if os(macOS)
@@ -215,11 +208,6 @@ private struct SidebarActions: ViewModifier {
           .help("Add host")
           SyncButton(store: store)
           Spacer()
-          if let onDone {
-            Button("Done", action: onDone)
-              .buttonStyle(.borderedProminent)
-              .keyboardShortcut(.cancelAction)
-          }
         }
         .padding(UIStyle.Space.inset)
         .background(.bar)
@@ -242,11 +230,6 @@ private struct SidebarActions: ViewModifier {
           }
           .buttonStyle(.iconOnly)
           .help("Add host")
-        }
-        if let onDone {
-          ToolbarItem(placement: .confirmationAction) {
-            Button("Done", action: onDone)
-          }
         }
       }
     #endif

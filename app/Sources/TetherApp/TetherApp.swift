@@ -3,6 +3,7 @@
 #elseif os(macOS)
   import AppKit
 #endif
+import AuthenticationServices
 import FilesPlugin
 import PortsPlugin
 import SwiftUI
@@ -35,6 +36,18 @@ import TmuxPlugin
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
       guard let window = HideInsteadOfClose.mainWindow(in: sender) else { return true }
       return !HideInsteadOfClose.reveal(window)
+    }
+
+    /// A password manager's export, chosen in the password manager. Taken
+    /// here rather than by the window: a Mac hands a user activity to the
+    /// application, and the window may be put away. It is read in Settings.
+    func application(_ application: NSApplication, willContinueUserActivityWithType type: String) -> Bool {
+      type == ASCredentialExchangeActivity
+    }
+
+    func application(_ application: NSApplication, continue activity: NSUserActivity,
+      restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+      MainActor.assumeIsolated { CredentialImport.shared.receive(activity) }
     }
   }
 #endif
@@ -76,6 +89,7 @@ struct TetherApp: App {
   }()
 
   @State private var plugins = PluginAPI(consent: DialogConsent())
+  @State private var imports = CredentialImport.shared
   @State private var installedPlugins: InstalledPlugins?
 
   var body: some Scene {
@@ -172,6 +186,9 @@ struct TetherApp: App {
         }
       }
       .onChange(of: store.accountGeneration) { _, _ in tabs.closeAccountSessions() }
+      .dialog(for: imports.notice) { notice in
+        Dialog.notice(notice.title, message: notice.message) { imports.notice = nil }
+      }
       // Coming forward reads the library through iCloud again. The SSH
       // file is imported only from the question at open, or from Settings.
       .onChange(of: phase) { _, phase in
@@ -186,6 +203,7 @@ struct TetherApp: App {
         }
       }
       #if os(iOS)
+        .onContinueUserActivity(ASCredentialExchangeActivity) { imports.receive($0) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
           for tab in tabs.tabs { tab.releaseHistory() }
         }

@@ -137,6 +137,12 @@ struct SharedHostRecord: Codable, Equatable, Sendable {
   var syncedKeyDigest: String?
   /// The next sync withdraws the shared private key.
   var forgetSharedKey: Bool?
+  /// The same, for the password and the one-time-code seed: each travels
+  /// with the host as its key does (`HostStore+SharedSecrets`).
+  var syncedPasswordDigest: String?
+  var forgetSharedPassword: Bool?
+  var syncedCodeDigest: String?
+  var forgetSharedCode: Bool?
 
   mutating func merge(_ remote: HostProfile, deleted remoteDeleted: Bool, systemFields: Data?) throws {
     guard remote.id == profile.id else { throw IdentityError.invalidConfiguration }

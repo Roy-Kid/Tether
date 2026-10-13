@@ -133,7 +133,6 @@ enum Chrome {
   static let settingsSidebarIdeal: CGFloat = 184
   static let settingsSidebarMax: CGFloat = 210
   static let editorWidth: CGFloat = 440
-  static let editorHeight: CGFloat = 480
   static let swatchWidth: CGFloat = 76
   static let swatchHeight: CGFloat = 18
   static let ribbonThickness: CGFloat = 9

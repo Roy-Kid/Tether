@@ -671,7 +671,7 @@ struct HostPicker: View {
 
         Button {
           tabs.hostPicker = false
-          tabs.manageHosts = true
+          SettingsRoute.shared.show()
         } label: {
           Image(systemName: "list.bullet")
             .font(UIStyle.symbol)

@@ -71,6 +71,12 @@ together. Read it before touching architecture.
   `UIAlertController` or `NSAlert`; grepping for `.alert(` is the test.
   A failure a person has to act on is one of these, naming the host and the
   reason — not a page left in a tab. Their own *no* ends quietly.
+- **Every window exists once.** A thing is managed on one page, and every
+  way to it opens that page rather than a sheet or window of its own. Hosts
+  are Settings ▸ Identities: the host picker's list and add buttons, Edit…,
+  Identity…, Manage Hosts and a password manager's import all open Settings
+  there, with the host, its editor or the import pushed over the list
+  (`SettingsRoute`).
 
 ## Working here
 
@@ -104,11 +110,13 @@ keychain.
 iOS targets are not installed by default:
 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
 
-iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs.
-The app is `Roy-Kid.Tether` with container `iCloud.Roy-Kid.Tether`, both
-registered to the team that ships it (`dev.tether.app` belongs to someone
-else). Profiles come from Xcode's own store, asked for once per machine and
-again when they expire:
+iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs,
+and carries no credential provider, so it cannot import from a password
+manager either. The app is `Roy-Kid.Tether` with container
+`iCloud.Roy-Kid.Tether` and extension `Roy-Kid.Tether.CredentialProvider`
+(AutoFill capability on both), all registered to the team that ships it
+(`dev.tether.app` belongs to someone else). Profiles come from Xcode's own
+store, asked for once per machine and again when they expire:
 
 ```bash
 ./scripts/tether.sh --provision --team <TEAMID>          # needs xcodegen + Xcode signed in
@@ -145,8 +153,8 @@ pixels back, since nothing else in CI would notice it drawing nothing.
 
 A login asks through dialogs, and reads a question that comes back as the
 answer before it refused. A refused saved password is never sent again, and a
-password is only offered to be kept once it has worked. The password asked
-before dialling is a dialog too, not a sheet.
+password typed at a login is only offered to be kept once it has worked. The
+password asked before dialling is a dialog too, not a sheet.
 
 A session reads from a `Producer` rather than from SSH, so
 `tether-local` gives the same `TerminalSession` over a shell on this machine.
@@ -159,10 +167,23 @@ this machine with a second process, so tmux works on both and is written once.
 
 There is one kind of host, and one source of truth: the host library,
 synchronized through iCloud. A host that arrives from another device on the
-same Apple ID is trusted — no review. Private keys travel with that library,
-so the other device logs in with the same key; a host with none gets one
-from Create SSH Key, and that key syncs too. Passwords stay on the device
-that saved them. A deleted host takes its keys out of the keychain. On a Mac
+same Apple ID is trusted — no review. A host's private key, password and
+one-time-code seed are equals, and all three travel with that library: what
+one device keeps, the others log in with, and letting go of one here lets go
+of it everywhere. A host with no key gets one from Create SSH Key, and that
+key syncs too. Each secret stays in its device's keychain; the host's record
+carries it — the password and seed as encrypted fields — and nothing logs
+it. A deleted host takes its secrets out of the keychain.
+
+A password manager can export into the library (Credential Exchange). The
+export is started there; Tether is offered as a destination because it
+carries a credential provider extension that provides nothing, and the
+export arrives at the app as a one-time token. Only the host library
+filters it: an item that names an existing host — by its name or address,
+for that host's user — is offered for that host, keys, passwords and codes
+alike, with what the host already has left unchosen; the rest is folded
+away to be given a host by hand or left behind. An import never creates a
+host, and nothing the person did not choose is stored. On a Mac
 `~/.ssh/config` is read, never written. On launch, when the file would
 change a host, a dialog asks whether to import it; agreeing copies the file
 over the hosts it names. Declining leaves the library until the next open,

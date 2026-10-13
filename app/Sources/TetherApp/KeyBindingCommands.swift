@@ -205,7 +205,7 @@ extension TabSet {
     case .previousTab: cycleTab(forward: false)
     case .nextTab: cycleTab(forward: true)
     case .renameTerminal: renaming = current?.id
-    case .manageHosts: manageHosts = true
+    case .manageHosts: SettingsRoute.shared.show()
     case .splitRight:
       if let id = current?.id { intent = .splitTerminal(id, .right) }
     case .splitDown:

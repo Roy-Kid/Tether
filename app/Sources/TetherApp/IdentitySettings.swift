@@ -1,17 +1,25 @@
 import SwiftUI
 import TetherUI
 
-/// Security details live in settings and sheets, not in the terminal chrome.
+/// The host list Settings ▸ Identities opens on. Each host, a new one and a
+/// waiting import are pages pushed over it (`SettingsRoute`), in this window.
 struct IdentitySettings: View {
   @Bindable var store: HostStore
   var connections: TabSet? = nil
-  @State private var selected: Host?
+  @State private var imports = CredentialImport.shared
 
   var body: some View {
+    if let pending = imports.pending {
+      Section {
+        NavigationLink(value: SettingsRoute.Page.importing) {
+          Label("Import from \(pending.exporter)", systemImage: "square.and.arrow.down")
+        }
+      }
+    }
     Section {
       ForEach(store.hosts) { host in
         let problem = host.connectionProblem ?? host.routeProblem
-        Button { selected = host } label: {
+        NavigationLink(value: SettingsRoute.Page.host(host.id)) {
           HStack(spacing: UIStyle.Space.group) {
             Text(host.label)
               .foregroundStyle(Theme.text)
@@ -22,16 +30,14 @@ struct IdentitySettings: View {
               .foregroundStyle(problem == nil ? Theme.success : Theme.warning)
           }
         }
-        .buttonStyle(.borderless)
         .help(problem ?? "Ready")
         .accessibilityLabel(host.label)
         .accessibilityValue(problem ?? "Ready")
       }
+      NavigationLink(value: SettingsRoute.Page.newHost) {
+        Label("Add Host", systemImage: "plus")
+      }
       if let problem = store.problem { Text(problem).foregroundStyle(Theme.danger).textSelection(.enabled) }
-    }
-    .sheet(item: $selected) { host in
-      NavigationStack { HostIdentitySettings(store: store, id: host.id, connections: connections) }
-        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
     }
   }
 }
@@ -42,7 +48,6 @@ struct HostIdentitySettings: View {
   var connections: TabSet? = nil
   @State private var seed = ""
   @State private var confirmingDelete = false
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     Form {
@@ -52,6 +57,9 @@ struct HostIdentitySettings: View {
           LabeledContent("User", value: host.username)
           LabeledContent("Port", value: String(host.port))
           if let issue = host.connectionProblem { Text(issue).foregroundStyle(Theme.warning) }
+          if host.isManaged {
+            NavigationLink(value: SettingsRoute.Page.edit(host.id)) { Text("Edit Host") }
+          }
         }
         if let profile = host.profile {
           Section("Authentication") {
@@ -115,17 +123,14 @@ struct HostIdentitySettings: View {
           }
         }
         if let problem = store.problem { Text(problem).foregroundStyle(Theme.danger) }
+        if host.isManaged {
+          Section {
+            Button("Delete Host…", role: .destructive) { confirmingDelete = true }
+          }
+        }
       }
     }
     .formStyle(.grouped)
-    .navigationTitle("Identity and Authentication")
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        SettingsAction("Delete", systemImage: "trash", role: .destructive) { confirmingDelete = true }
-          .disabled(store.hosts.first { $0.id == id }?.isManaged != true)
-      }
-      ToolbarItem(placement: .confirmationAction) { SettingsAction("Done", systemImage: "checkmark") { dismiss() } }
-    }
     .dialog(for: confirmingDelete ? id : nil) { id in
       let name = store.hosts.first { $0.id == id }?.label ?? "Host"
       return Dialog.confirm(
@@ -134,7 +139,7 @@ struct HostIdentitySettings: View {
       ) {
         if let host = store.hosts.first(where: { $0.id == id }) { store.delete(host) }
         confirmingDelete = false
-        dismiss()
+        SettingsRoute.shared.pop()
       }
     }
   }

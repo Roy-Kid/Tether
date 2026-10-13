@@ -11,6 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/signing.sh
+source scripts/credential-provider.sh
 
 usage() {
   cat <<'EOF'
@@ -94,6 +95,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- A password manager's export arrives as this activity (CredentialImport).
+         The documentation names it ASCredentialExchangeActivityType; the
+         constant's value is ASCredentialExchangeActivity. Both are declared. -->
+    <key>NSUserActivityTypes</key>
+    <array>
+        <string>ASCredentialExchangeActivity</string>
+        <string>ASCredentialExchangeActivityType</string>
+    </array>
     <!-- A path dragged out of a plugin (TetherPluginKit's DroppedPath). Undeclared,
          SwiftUI drops it from a drop's item providers and the terminal never sees it. -->
     <key>UTExportedTypeDeclarations</key>
@@ -112,10 +121,18 @@ PLIST
 # build without a team is signed ad-hoc: runnable here, nothing more. With a
 # team it carries the profile and entitlements CloudKit checks for.
 if [[ -n "$TEAM" ]]; then
-  profile=$(signing_profile macos "$TEAM")
+  # The extension first: the app's signature seals what is inside it.
+  autofill=
+  if profile=$(embed_credential_provider macos "$APP" "$TEAM"); then
+    autofill=autofill
+  else
+    profile=$(signing_profile macos "$TEAM")
+    echo "no credential provider profile for $TEAM: this build cannot import from a password manager" >&2
+    echo "(./scripts/provision.sh --team $TEAM asks for one)" >&2
+  fi
   identity=$(signing_identity "$profile")
   entitlements=$(mktemp)
-  signing_entitlements macos "$TEAM" "$entitlements"
+  signing_entitlements macos "$TEAM" "$entitlements" $autofill
   cp "$profile" "$APP/Contents/embedded.provisionprofile"
   codesign --force --sign "$identity" --entitlements "$entitlements" "$APP"
   rm -f "$entitlements"

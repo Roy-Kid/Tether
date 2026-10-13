@@ -31,12 +31,38 @@ struct DeviceCredentialStore: Sendable {
 
 /// RFC 6238. CryptoKit supplies HMAC; only URI/base32 parsing and truncation
 /// live here. The encoded seed is kept solely in Credential Store.
-struct TOTP: Codable, Sendable {
+struct TOTP: Codable, Equatable, Sendable {
   enum Algorithm: String, Codable { case sha1 = "SHA1", sha256 = "SHA256", sha512 = "SHA512" }
   var secret: Data
   var algorithm: Algorithm = .sha1
   var digits = 6
   var period = 30
+
+  /// A seed handed over whole — by a password manager, or another device —
+  /// held to the same limits as one typed in.
+  init(secret: Data, algorithm: Algorithm = .sha1, digits: Int = 6, period: Int = 30) throws {
+    guard secret.count >= 10, [6, 8].contains(digits), (15...120).contains(period) else {
+      throw IdentityError.invalidConfiguration
+    }
+    self.secret = secret
+    self.algorithm = algorithm
+    self.digits = digits
+    self.period = period
+  }
+
+  /// What the keychain and a synchronized record hold: the seed as JSON,
+  /// with its keys in order, so the same seed reads the same on every device.
+  var stored: String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return String(decoding: (try? encoder.encode(self)) ?? Data(), as: UTF8.self)
+  }
+
+  /// A stored seed, checked again: what arrives from elsewhere is not trusted.
+  init(stored text: String) throws {
+    let decoded = try JSONDecoder().decode(TOTP.self, from: Data(text.utf8))
+    try self.init(secret: decoded.secret, algorithm: decoded.algorithm, digits: decoded.digits, period: decoded.period)
+  }
 
   init(importing text: String) throws {
     var seed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -116,22 +142,23 @@ extension HostStore {
   }
 
   func setOTP(_ text: String, for host: Host) {
-    do {
-      guard var profile = host.profile else { throw IdentityError.invalidConfiguration }
-      let otp = try TOTP(importing: text)
-      let descriptor = profile.authentication.otp ?? .oneTimeCode(for: profile)
-      let secretID = UUID()
-      try credentials.write(String(decoding: JSONEncoder().encode(otp), as: UTF8.self), id: secretID, label: host.label + " OTP")
-      profile.authentication.otp = descriptor
-      profile.authentication.confirmation = .confirmAuthentication
-      let selected = profile
-      try update { state in
-        guard var record = state.records[host.id], !record.deleted, record.conflicts.isEmpty else { throw IdentityError.needsReview }
-        record.profile = selected; record.dirty = true; state.records[host.id] = record
-        state.bindings[descriptor.id] = LocalCredentialBinding(credentialID: descriptor.id, secretID: secretID)
-        state.approvals[host.id] = selected.securityDigest
-      }
-      scheduleSync()
-    } catch { recordProblem(error) }
+    do { try setOTP(TOTP(importing: text), for: host) } catch { recordProblem(error) }
+  }
+
+  func setOTP(_ otp: TOTP, for host: Host) throws {
+    guard var profile = host.profile else { throw IdentityError.invalidConfiguration }
+    let descriptor = profile.authentication.otp ?? .oneTimeCode(for: profile)
+    let secretID = UUID()
+    try credentials.write(otp.stored, id: secretID, label: host.label + " OTP")
+    profile.authentication.otp = descriptor
+    profile.authentication.confirmation = .confirmAuthentication
+    let selected = profile
+    try update { state in
+      guard var record = state.records[host.id], !record.deleted, record.conflicts.isEmpty else { throw IdentityError.needsReview }
+      record.profile = selected; record.dirty = true; record.forgetSharedCode = nil; state.records[host.id] = record
+      state.bindings[descriptor.id] = LocalCredentialBinding(credentialID: descriptor.id, secretID: secretID)
+      state.approvals[host.id] = selected.securityDigest
+    }
+    scheduleSync()
   }
 }

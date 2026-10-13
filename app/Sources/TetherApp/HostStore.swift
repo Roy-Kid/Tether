@@ -174,8 +174,8 @@ extension Host {
 /// iCloud, and on a Mac fed by `~/.ssh/config` (`HostStore+Import`). The file
 /// is written back only when a person agrees (`HostStore+Align`). There is one
 /// kind of host. A host that arrives from
-/// another device on the same Apple ID is already trusted. Private keys
-/// travel with the library; passwords stay on the device that saved them.
+/// another device on the same Apple ID is already trusted. Its private key,
+/// password and one-time-code seed travel with it (`HostStore+SharedSecrets`).
 @MainActor
 @Observable
 final class HostStore {
@@ -194,7 +194,7 @@ final class HostStore {
   private var database: IdentityDatabase?
   /// This Mac's `~/.ssh/config`, or the file a test gave instead.
   let location: URL
-  private let secrets: any SecretStore
+  let secrets: any SecretStore
   let credentials: DeviceCredentialStore
   private(set) var config = SSHConfig("")
   private(set) var unreadable = false
@@ -486,7 +486,7 @@ final class HostStore {
 
   /// A password was kept or let go of here. Recorded rather than listed
   /// again, and remembered for a listing still in flight.
-  private func notePassword(_ id: UUID, kept: Bool) {
+  func notePassword(_ id: UUID, kept: Bool) {
     if kept { keptPasswords?.insert(id) } else { keptPasswords?.remove(id) }
     passwordEdits?[id] = kept
   }
@@ -495,6 +495,7 @@ final class HostStore {
   /// Settings.
   func passwordForgotten(_ id: UUID) {
     notePassword(id, kept: false)
+    withdrawPassword(boundTo: id)
     rebuildHosts()
   }
 
@@ -570,8 +571,17 @@ final class HostStore {
       }
       let profile = p
       try update { state in
-        if let password { state.passwordBindings[profile.id] = password.isEmpty ? nil : passwordID }
         var record = state.records[profile.id] ?? SharedHostRecord(profile: profile)
+        if let password {
+          // Letting go of a kept password lets go of it everywhere it went.
+          if password.isEmpty, state.passwordBindings[profile.id] != nil {
+            record.forgetSharedPassword = true
+            record.dirty = true
+          } else if !password.isEmpty {
+            record.forgetSharedPassword = nil
+          }
+          state.passwordBindings[profile.id] = password.isEmpty ? nil : passwordID
+        }
         guard !record.deleted else { throw IdentityError.storage("This host was deleted. Create a new host to restore it.") }
         guard record.conflicts.isEmpty else { throw IdentityError.needsReview }
         if record.profile != profile || state.records[profile.id] == nil {
@@ -676,7 +686,21 @@ final class HostStore {
     } catch { problem = error.localizedDescription }
   }
 
-  func receive(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String? = nil) throws {
+  func receive(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String? = nil,
+    password: String? = nil, code: String? = nil) throws {
+    do { try receiving(profile, deleted: deleted, systemFields: systemFields, privateKey: privateKey,
+      password: password, code: code) } catch {
+      // A password or seed written for a record that could not be taken is
+      // nobody's: let go of it unless the library already points at it.
+      let passwordItem = Self.syncedPasswordID(for: profile.id), codeItem = Self.syncedCodeID(for: profile.id)
+      if !snapshot.passwordSecrets.contains(passwordItem) { try? secrets.forget(passwordItem) }
+      if !snapshot.credentialSecrets.contains(codeItem) { try? credentials.forget(codeItem) }
+      throw error
+    }
+  }
+
+  private func receiving(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String?,
+    password: String?, code: String?) throws {
     try update { state in
       if var existing = state.records[profile.id] {
         let before = existing.profile
@@ -691,7 +715,11 @@ final class HostStore {
       // The private database is this Apple ID. A host that arrived through
       // it is this person's host; nothing further is asked before connecting.
       Self.trust(profile.id, in: &state)
-      if !deleted { try self.take(privateKey, for: profile.id, in: &state) }
+      if !deleted {
+        try self.take(privateKey, for: profile.id, in: &state)
+        try self.takePassword(password, for: profile.id, in: &state)
+        try self.takeCode(code, for: profile.id, in: &state)
+      }
     }
   }
 
@@ -760,6 +788,8 @@ final class HostStore {
         record.dirty = true
         // The zone these keys were sent to is gone.
         record.syncedKeyDigest = nil
+        record.syncedPasswordDigest = nil
+        record.syncedCodeDigest = nil
         state.records[id] = record
       }
     }
@@ -802,25 +832,26 @@ final class HostStore {
   func recordProblem(_ error: Error) { problem = error.localizedDescription }
 
   /// The private key this device would log in with, when it is one the
-  /// other devices on this Apple ID should have too. A password is not.
-  /// Nothing here is logged.
+  /// other devices on this Apple ID should have too. Nothing here is logged.
   func sharedPrivateKey(for profile: HostProfile) -> String? {
     privateKeyMaterial(profile: profile, bindings: snapshot.bindings)
   }
 
-  /// A key this device has and has not yet sent. Marks the host so the next
-  /// sync carries the key. A file that has not changed marks nothing.
+  /// A key, password or code seed this device has and has not yet sent.
+  /// Marks the host so the next sync carries it. A file that has not
+  /// changed marks nothing.
   func noteKeysAwaitingSync() {
     do {
       try update(skippingUnchanged: true) { state in
         for id in state.records.keys {
-          guard var record = state.records[id], !record.deleted, record.conflicts.isEmpty,
-            record.forgetSharedKey != true else { continue }
-          guard let pem = self.privateKeyMaterial(profile: record.profile, bindings: state.bindings) else { continue }
-          if record.syncedKeyDigest != Self.keyDigest(pem) {
+          guard var record = state.records[id], !record.deleted, record.conflicts.isEmpty else { continue }
+          if record.forgetSharedKey != true,
+            let pem = self.privateKeyMaterial(profile: record.profile, bindings: state.bindings),
+            record.syncedKeyDigest != Self.keyDigest(pem) {
             record.dirty = true
-            state.records[id] = record
           }
+          if self.secretsAwaitSync(record, in: state) { record.dirty = true }
+          state.records[id] = record
         }
       }
     } catch { recordProblem(error) }
@@ -838,7 +869,7 @@ final class HostStore {
 
   static let clearedKey = "cleared"
 
-  static func looksLikePrivateKey(_ text: String) -> Bool {
+  nonisolated static func looksLikePrivateKey(_ text: String) -> Bool {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.utf8.count <= 64 * 1024
       && trimmed.contains("-----BEGIN ")

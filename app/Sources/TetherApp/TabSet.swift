@@ -95,7 +95,6 @@ final class TabSet {
   /// classes, and a phone, even turned sideways, never has it.
   var wide = true
   var hostPicker = false
-  var manageHosts = false
   var tabMenu: SessionTab.ID?
   var accessory: AccessoryRef?
   /// The tab plugin whose attachment the inspector shows, on whichever tab
