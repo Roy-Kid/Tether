@@ -1,12 +1,20 @@
 //! A live shell on this machine.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::command::Command;
 use crate::error::LocalError;
+
+/// Held while a pseudo-terminal is opened. macOS's `openpty` is not safe to
+/// call from two threads at once: measured, seventeen sessions opened
+/// together in one process failed up to six times a run with "Unknown error:
+/// -6", and never from separate processes. Tabs restored at launch open
+/// together; so does a test suite. The lock covers the one call, so a shell
+/// that is slow to start holds up nobody.
+static OPENING: Mutex<()> = Mutex::new(());
 
 /// How big the shell believes its terminal is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,9 +177,11 @@ impl Shell {
 
         let (program, arguments, directory, term) = command.parts();
 
-        let pair = native_pty_system()
-            .openpty(pty_size(size))
-            .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
+        let pair = {
+            let _alone = OPENING.lock().unwrap_or_else(PoisonError::into_inner);
+            native_pty_system().openpty(pty_size(size))
+        }
+        .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
         let tty_name = pair.master.tty_name().map(|path| path.to_string_lossy().into_owned());
 
         let mut builder = CommandBuilder::new(program);

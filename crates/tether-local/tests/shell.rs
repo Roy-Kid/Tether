@@ -399,3 +399,27 @@ async fn a_large_paste_does_not_deadlock() {
     assert!(written.is_ok(), "a large write never finished");
     assert!(written.unwrap().is_ok(), "a large write failed");
 }
+
+/// Shells opened at once from one process all open. macOS's `openpty` is not
+/// safe to call from two threads at the same moment: measured, seventeen
+/// sessions opened together failed up to six times a run with "Unknown
+/// error: -6" — tabs restored at launch, or a test suite run in parallel.
+#[test]
+fn shells_opened_at_the_same_moment_all_open() {
+    const AT_ONCE: usize = 32;
+    let start = std::sync::Arc::new(std::sync::Barrier::new(AT_ONCE));
+    let openers: Vec<_> = (0..AT_ONCE)
+        .map(|_| {
+            let start = std::sync::Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                Shell::open(Command::new("/bin/sh").arg("-c").arg("exit 0"), WindowSize::default())
+                    .map(drop)
+            })
+        })
+        .collect();
+    for opener in openers {
+        let opened = opener.join().expect("the opening thread");
+        assert!(opened.is_ok(), "a shell opened alongside others failed: {opened:?}");
+    }
+}
