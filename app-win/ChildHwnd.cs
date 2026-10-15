@@ -2,9 +2,7 @@
 //
 // wgpu draws to a window handle. The host window's handle is the whole
 // window — chrome included — so the surface has to be a child that sits in
-// the terminal's place. A `SwapChainPanel` would be the other way in, and is
-// the next refinement; this is the one that works with the Vulkan/GLES
-// backends Decisions/0017 ships while `dx12` is out.
+// the terminal's place. DX12 is the hardware path; Vulkan and GL remain.
 //
 // The child paints and receives keys and the pointer. XAML's
 // `CharacterReceived` never fires for a control sitting under an HWND, and
@@ -107,9 +105,8 @@ public sealed class ChildHwnd : IDisposable
         RegisterClass();
         var child = new ChildHwnd(onText, onKey, onPointer);
         child._hwnd = CreateWindowEx(
-            // Not WS_EX_NOREDIRECTIONBITMAP. This host draws with Vulkan or
-            // GL, and that style makes those presents go nowhere — a live
-            // shell with a blank window.
+            // Not WS_EX_NOREDIRECTIONBITMAP. Vulkan and GL present to
+            // nowhere under that style.
             0,
             "TetherTerminal",
             "",

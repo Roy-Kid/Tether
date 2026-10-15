@@ -974,6 +974,14 @@ static class _UniFFILib {
 
 
 
+
+
+
+
+
+
+
+
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
         _UniFFILib.uniffiCheckApiChecksums();
@@ -1246,6 +1254,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ulong uniffi_tether_ffi_fn_method_remotefiles_upload(ulong @ptr,RustBuffer @source,RustBuffer @path,sbyte @replace,RustBuffer @progress,ulong @cancellation
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_remotefiles_write_back(ulong @ptr,RustBuffer @source,RustBuffer @path,ulong @expectedSize,RustBuffer @expectedModified,RustBuffer @progress,ulong @cancellation
     );
 
     #if NET8_0_OR_GREATER
@@ -1861,6 +1880,28 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_forward_port(ulong @ptr,ushort @port
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ulong uniffi_tether_ffi_fn_method_remoteconnection_lease_id(ulong @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ulong uniffi_tether_ffi_fn_method_remoteconnection_open_shell(ulong @ptr,RustBuffer @term,ushort @columns,ushort @rows,uint @scrollbackLines,RustBuffer @history,ulong @cancellation
     );
 
@@ -1873,6 +1914,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ulong uniffi_tether_ffi_fn_method_remoteconnection_rename_tmux(ulong @ptr,RustBuffer @sessionId,RustBuffer @name
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_remoteconnection_stop_forward(ulong @ptr,ushort @port,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -3038,6 +3090,17 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_remotefiles_write_back(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_transferprogress_advanced(
     );
 
@@ -3434,6 +3497,28 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_remoteconnection_forward_port(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_remoteconnection_lease_id(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_remoteconnection_open_shell(
     );
 
@@ -3446,6 +3531,17 @@ static class _UniFFILib {
     public static extern
 #endif
      ushort uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_remoteconnection_stop_forward(
     );
 
     #if NET8_0_OR_GREATER
@@ -3791,6 +3887,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remotefiles_write_back();
+            if (checksum != 10542) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remotefiles_write_back` checksum `10542`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_transferprogress_advanced();
             if (checksum != 55166) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_transferprogress_advanced` checksum `55166`, library returned `{checksum}`");
@@ -4007,6 +4109,18 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_forward_port();
+            if (checksum != 58149) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_forward_port` checksum `58149`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_lease_id();
+            if (checksum != 24448) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_lease_id` checksum `24448`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_open_shell();
             if (checksum != 49043) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_open_shell` checksum `49043`, library returned `{checksum}`");
@@ -4016,6 +4130,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux();
             if (checksum != 61319) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux` checksum `61319`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_remoteconnection_stop_forward();
+            if (checksum != 37992) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_remoteconnection_stop_forward` checksum `37992`, library returned `{checksum}`");
             }
         }
         {
@@ -5469,6 +5589,20 @@ internal interface IRemoteConnection {
     /// <exception cref="TetherException"></exception>
     Task<CommandOutput> Execute(string @command, CancellationToken @cancellation);
     /// <summary>
+    /// Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+    /// where this lease's shell is running.
+    ///
+    /// Asking again for a port that is already forwarded returns the existing
+    /// listener. A local shell reports the port and does not bind.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    Task<ForwardedPort> ForwardPort(ushort @port);
+    /// <summary>
+    /// Which authenticated session this lease is. Equal across wrappers of
+    /// one session, and different after a redial.
+    /// </summary>
+    ulong LeaseId();
+    /// <summary>
     /// Opens an interactive shell on this lease. No handshake: the connection
     /// is already authenticated, and a second terminal is another channel.
     /// </summary>
@@ -5476,6 +5610,10 @@ internal interface IRemoteConnection {
     Task<Session> OpenShell(string @term, ushort @columns, ushort @rows, uint @scrollbackLines, SessionHistory? @history, CancellationToken @cancellation);
     /// <exception cref="TetherException"></exception>
     Task RenameTmux(string @sessionId, string @name);
+    /// <summary>
+    /// Closes the local listener for `port`, and the connections it accepted.
+    /// </summary>
+    void StopForward(ushort @port);
     /// <summary>
     /// Where tmux says a pane's program is — `#{pane_current_path}`, which
     /// tmux reads from the process itself, so it is known even when the
@@ -5719,6 +5857,47 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
     }
 
     /// <summary>
+    /// Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+    /// where this lease's shell is running.
+    ///
+    /// Asking again for a port that is already forwarded returns the existing
+    /// listener. A local shell reports the port and does not bind.
+    /// </summary>
+    /// <exception cref="TetherException"></exception>
+    public async Task<ForwardedPort> ForwardPort(ushort @port) {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_forward_port(thisPtr, FfiConverterUInt16.INSTANCE.Lower(@port));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_rust_buffer(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_rust_buffer(future),
+        // Lift
+        (result) => FfiConverterTypeForwardedPort.INSTANCE.Lift(result),
+        // Error
+        FfiConverterTypeTetherError.INSTANCE
+    );
+    }
+
+    /// <summary>
+    /// Which authenticated session this lease is. Equal across wrappers of
+    /// one session, and different after a redial.
+    /// </summary>
+    public ulong LeaseId() {
+        return CallWithPointer(thisPtr => FfiConverterUInt64.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_lease_id(thisPtr,  ref _status)
+)));
+    }
+
+
+    /// <summary>
     /// Opens an interactive shell on this lease. No handshake: the connection
     /// is already authenticated, and a second terminal is another channel.
     /// </summary>
@@ -5761,6 +5940,18 @@ internal class RemoteConnection : IRemoteConnection, IDisposable {
         FfiConverterTypeTetherError.INSTANCE
     );
     }
+
+    /// <summary>
+    /// Closes the local listener for `port`, and the connections it accepted.
+    /// </summary>
+    public void StopForward(ushort @port) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_remoteconnection_stop_forward(thisPtr, FfiConverterUInt16.INSTANCE.Lower(@port), ref _status)
+));
+    }
+
+
 
     /// <summary>
     /// Where tmux says a pane's program is — `#{pane_current_path}`, which
@@ -5940,6 +6131,14 @@ internal interface IRemoteFiles {
     /// </summary>
     /// <exception cref="FileException"></exception>
     Task<ulong> Upload(string @source, string @path, bool @replace, TransferProgress? @progress, CancellationToken @cancellation);
+    /// <summary>
+    /// Puts `source` here in place of `path`, only while `path` is still
+    /// `expected_size` bytes last modified at `expected_modified`; otherwise
+    /// `Changed`. Keeps the file's permissions and writes through a link.
+    /// Returns what `path` is afterwards.
+    /// </summary>
+    /// <exception cref="FileException"></exception>
+    Task<FileEntry> WriteBack(string @source, string @path, ulong @expectedSize, ulong? @expectedModified, TransferProgress? @progress, CancellationToken @cancellation);
 }
 /// <summary>
 /// Files on the machine a session's shell is running on.
@@ -6330,6 +6529,34 @@ internal class RemoteFiles : IRemoteFiles, IDisposable {
         (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_u64(future),
         // Lift
         (result) => FfiConverterUInt64.INSTANCE.Lift(result),
+        // Error
+        FfiConverterTypeFileError.INSTANCE
+    );
+    }
+
+    /// <summary>
+    /// Puts `source` here in place of `path`, only while `path` is still
+    /// `expected_size` bytes last modified at `expected_modified`; otherwise
+    /// `Changed`. Keeps the file's permissions and writes through a link.
+    /// Returns what `path` is afterwards.
+    /// </summary>
+    /// <exception cref="FileException"></exception>
+    public async Task<FileEntry> WriteBack(string @source, string @path, ulong @expectedSize, ulong? @expectedModified, TransferProgress? @progress, CancellationToken @cancellation) {
+    return await _UniFFIAsync.UniffiRustCallAsync(
+        // Get rust future
+        CallWithPointer(thisPtr => {
+            return _UniFFILib.uniffi_tether_ffi_fn_method_remotefiles_write_back(thisPtr, FfiConverterString.INSTANCE.Lower(@source), FfiConverterString.INSTANCE.Lower(@path), FfiConverterUInt64.INSTANCE.Lower(@expectedSize), FfiConverterOptionalUInt64.INSTANCE.Lower(@expectedModified), FfiConverterOptionalTypeTransferProgress.INSTANCE.Lower(@progress), FfiConverterTypeCancellationToken.INSTANCE.Lower(@cancellation));
+        }),
+        // Poll
+        (ulong future, IntPtr continuation, ulong data) => _UniFFILib.ffi_tether_ffi_rust_future_poll_rust_buffer(future, continuation, data),
+        // Complete
+        (ulong future, ref UniffiRustCallStatus status) => {
+            return _UniFFILib.ffi_tether_ffi_rust_future_complete_rust_buffer(future, ref status);
+        },
+        // Free
+        (ulong future) => _UniFFILib.ffi_tether_ffi_rust_future_free_rust_buffer(future),
+        // Lift
+        (result) => FfiConverterTypeFileEntry.INSTANCE.Lift(result),
         // Error
         FfiConverterTypeFileError.INSTANCE
     );
@@ -8065,6 +8292,47 @@ class FfiConverterTypeFontMetricsDto: FfiConverterRustBuffer<FontMetricsDto> {
 
 
 /// <summary>
+/// A port forwarded to `127.0.0.1` on this machine.
+/// </summary>
+/// <param name="AlreadyLocal">
+/// The shell is already on this machine, so `local_port` is the
+/// program's own port and nothing was bound over it.
+/// </param>
+internal record ForwardedPort (
+    ushort LocalPort,
+    /// <summary>
+    /// The shell is already on this machine, so `local_port` is the
+    /// program's own port and nothing was bound over it.
+    /// </summary>
+    bool AlreadyLocal
+) {
+}
+
+class FfiConverterTypeForwardedPort: FfiConverterRustBuffer<ForwardedPort> {
+    public static FfiConverterTypeForwardedPort INSTANCE = new FfiConverterTypeForwardedPort();
+
+    public override ForwardedPort Read(BigEndianStream stream) {
+        return new ForwardedPort(
+            LocalPort: FfiConverterUInt16.INSTANCE.Read(stream),
+            AlreadyLocal: FfiConverterBoolean.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ForwardedPort value) {
+        return 0
+            + FfiConverterUInt16.INSTANCE.AllocationSize(value.LocalPort)
+            + FfiConverterBoolean.INSTANCE.AllocationSize(value.AlreadyLocal);
+    }
+
+    public override void Write(ForwardedPort value, BigEndianStream stream) {
+            FfiConverterUInt16.INSTANCE.Write(value.LocalPort, stream);
+            FfiConverterBoolean.INSTANCE.Write(value.AlreadyLocal, stream);
+    }
+}
+
+
+
+/// <summary>
 /// What a host key looks like to an application being asked to trust it.
 /// </summary>
 /// <param name="Fingerprint">
@@ -9529,6 +9797,23 @@ internal class FileException: UniffiException {
         }
     }
 
+    /// <summary>
+    /// The far side's file is not the one a change was made to any more.
+    /// </summary>
+
+    public class Changed : FileException {
+        // Members
+        public string @path;
+
+        // Constructor
+        public Changed(
+                string @path) : base(
+                "@path" + "=" + @path) {
+
+            this.@path = @path;
+        }
+    }
+
     public class Cancelled : FileException {
         public Cancelled() : base() {}
     }
@@ -9585,11 +9870,14 @@ class FfiConverterTypeFileError : FfiConverterRustBuffer<FileException>, CallSta
                 return new FileException.NotEmpty(
                     FfiConverterString.INSTANCE.Read(stream));
             case 5:
-                return new FileException.Cancelled();
+                return new FileException.Changed(
+                    FfiConverterString.INSTANCE.Read(stream));
             case 6:
+                return new FileException.Cancelled();
+            case 7:
                 return new FileException.Disconnected(
                     FfiConverterString.INSTANCE.Read(stream));
-            case 7:
+            case 8:
                 return new FileException.Failed(
                     FfiConverterString.INSTANCE.Read(stream));
             default:
@@ -9613,6 +9901,10 @@ class FfiConverterTypeFileError : FfiConverterRustBuffer<FileException>, CallSta
                     + FfiConverterString.INSTANCE.AllocationSize(variant_value.@path);
 
             case FileException.NotEmpty variant_value:
+                return 4
+                    + FfiConverterString.INSTANCE.AllocationSize(variant_value.@path);
+
+            case FileException.Changed variant_value:
                 return 4
                     + FfiConverterString.INSTANCE.AllocationSize(variant_value.@path);
 
@@ -9649,15 +9941,19 @@ class FfiConverterTypeFileError : FfiConverterRustBuffer<FileException>, CallSta
                 stream.WriteInt(4);
                 FfiConverterString.INSTANCE.Write(variant_value.@path, stream);
                 break;
-            case FileException.Cancelled variant_value:
+            case FileException.Changed variant_value:
                 stream.WriteInt(5);
+                FfiConverterString.INSTANCE.Write(variant_value.@path, stream);
+                break;
+            case FileException.Cancelled variant_value:
+                stream.WriteInt(6);
                 break;
             case FileException.Disconnected variant_value:
-                stream.WriteInt(6);
+                stream.WriteInt(7);
                 FfiConverterString.INSTANCE.Write(variant_value.@cause, stream);
                 break;
             case FileException.Failed variant_value:
-                stream.WriteInt(7);
+                stream.WriteInt(8);
                 FfiConverterString.INSTANCE.Write(variant_value.@cause, stream);
                 break;
             default:

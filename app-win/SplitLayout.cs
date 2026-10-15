@@ -23,6 +23,7 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
         ? (Math.Max(First!.MinimumSize.Width, Second!.MinimumSize.Width), First.MinimumSize.Height + 5 + Second.MinimumSize.Height)
         : (First!.MinimumSize.Width + 5 + Second!.MinimumSize.Width, Math.Max(First.MinimumSize.Height, Second.MinimumSize.Height));
     public bool IsValid(IReadOnlySet<Guid> panes) => Validate(panes, new HashSet<Guid>()) && Leaves.Count() == panes.Count;
+    public bool IsValidSubset(IReadOnlySet<Guid> panes) => Validate(panes, new HashSet<Guid>());
     private bool Validate(IReadOnlySet<Guid> panes, HashSet<Guid> seen) => Pane is { } id
         ? First is null && Second is null && panes.Contains(id) && seen.Add(id)
         : First is not null && Second is not null && double.IsFinite(Ratio) && Ratio > 0 && Ratio < 1 &&

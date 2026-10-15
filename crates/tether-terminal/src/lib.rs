@@ -16,9 +16,11 @@ mod link;
 mod palette;
 mod screen;
 mod scroll;
+mod shadow;
 mod size;
 mod style;
 mod terminal;
+mod wide;
 
 pub use damage::{Changes, RowSpan, ScreenDamage};
 pub use history::{HistoryEvent, HistoryRow};

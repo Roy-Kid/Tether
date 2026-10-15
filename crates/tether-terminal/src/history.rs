@@ -3,6 +3,7 @@
 use crate::{
     Cell,
     terminal::{Sink, style_of},
+    wide,
 };
 use alacritty_terminal::vte::ansi::*;
 use alacritty_terminal::{
@@ -42,10 +43,7 @@ pub(crate) fn row(term: &Term<Sink>, line: i32) -> HistoryRow {
     let cells = (0..columns)
         .filter_map(|column| {
             let cell = &grid[Line(line)][Column(column)];
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                && column > 0
-                && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
-            {
+            if wide::is_right_half(&grid[Line(line)], column) {
                 return None;
             }
             let spacer =
@@ -58,10 +56,11 @@ pub(crate) fn row(term: &Term<Sink>, line: i32) -> HistoryRow {
             if !spacer && let Some(extra) = cell.zerowidth() {
                 text.extend(extra);
             }
-            let wide = cell.flags.contains(Flags::WIDE_CHAR)
-                && column + 1 < columns
-                && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
-            Some(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) })
+            Some(Cell {
+                text,
+                width: wide::width(&grid[Line(line)], column),
+                style: style_of(cell),
+            })
         })
         .collect();
     HistoryRow {

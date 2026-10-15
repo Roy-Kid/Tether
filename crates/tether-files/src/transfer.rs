@@ -131,7 +131,7 @@ impl Files {
 }
 
 /// Which side of a copy failed, so each is reported against its own path.
-enum Failure {
+pub(crate) enum Failure {
     Cancelled,
     Read(std::io::Error),
     Write(std::io::Error),
@@ -148,7 +148,11 @@ impl Failure {
     }
 
     /// An upload: this machine is read, the far side is written.
-    fn about_remote(self, remote: impl FnOnce(std::io::Error) -> Error, local: &Path) -> Error {
+    pub(crate) fn about_remote(
+        self,
+        remote: impl FnOnce(std::io::Error) -> Error,
+        local: &Path,
+    ) -> Error {
         match self {
             Self::Cancelled => Error::Cancelled,
             Self::Read(error) => Error::local(error, local),
@@ -157,7 +161,7 @@ impl Failure {
     }
 }
 
-async fn copy<R, W>(
+pub(crate) async fn copy<R, W>(
     reader: &mut R,
     writer: &mut W,
     cancellation: &CancellationToken,
@@ -196,7 +200,7 @@ fn local_working_name(destination: &Path) -> PathBuf {
 
 /// The same, on the far side. Hidden, so a directory listing that happens
 /// mid-transfer does not show a file that is not finished.
-fn remote_working_name(path: &str) -> String {
+pub(crate) fn remote_working_name(path: &str) -> String {
     join(parent_of(path), &format!(".{}.tether-{}", name_of(path), stamp()))
 }
 

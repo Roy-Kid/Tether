@@ -33,6 +33,11 @@ public sealed class TabContext
     public required Func<nint> WindowHandle { get; init; }
     public required Func<XamlRoot?> DialogRoot { get; init; }
     public required Action<bool> Overlay { get; init; }
+    /// <summary>
+    /// Opens a matching web viewer for a file suffix. Returns true when a
+    /// viewer took the bytes; false falls through to the system opener.
+    /// </summary>
+    public Func<string, byte[], string, CancellationToken, Task<bool>>? OpenWebViewer { get; init; }
 }
 
 public sealed record PluginCommand(string Id, string Title, Func<Task> Run);

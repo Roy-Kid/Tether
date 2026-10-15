@@ -219,18 +219,27 @@ Settings → Extensions has an icon-only **Install web plugin** action. Choose
 a directory containing `manifest.json` and its web assets. The installer
 shows the plugin name and declared network origins, validates the package,
 and copies it into `%LOCALAPPDATA%\Tether\Plugins\<id>`. The manifest is
-discovered at startup without running the page. The inspector opens it on
-demand, and the existing extension toggle unloads every attachment when disabled.
-No project reference or product registration line is needed.
+discovered at startup without running the page. Each installed web plugin
+also offers **Update…** (same id, replace package) and **Uninstall** (delete
+package, unregister, close its workspace tabs). The inspector opens a panel
+beside a terminal; **Open … Tab** / Command Palette open the same panel as a
+full workspace tab (the Windows shape of macOS `PluginWorkspace`). Disabling
+an extension unloads attachments and closes its tabs. No project reference or
+product registration line is needed.
 
-This Windows preview supports API 1, runtime `web`, a `panel` contribution,
-optional `command` contributions, and the `network` permission. The optional
-`networkOrigins` field is a list of exact origins, including ports; HTTP is
-accepted only for literal loopback IPs, otherwise HTTPS is required. Optional
-`glyph`, `summary` and contribution `title` fields supply Windows chrome and
-command metadata. Other capabilities, viewer routing, package updates and
-uninstall UI are not implemented in this preview. The Apple manifest reader
-ignores these extra fields but has no network gateway yet.
+This Windows preview supports API 1, runtime `web`, a `panel` and/or `viewer`
+contribution, optional `command` contributions, and the permissions
+`network`, `service.local`, `document.read` and `storage.plugin`. A `viewer`
+contribution lists file suffixes (no leading dot); Files open/preview routes
+matching files to that plugin after a one-shot Allow consent, grants the
+bytes to the session, and posts `{api:1,type:"document",handle}`. The page
+reads them with `document.read`. `storage.plugin.get` / `set` ask once per
+activation. `host.notify` shows a dialog titled with the plugin name. The
+optional `networkOrigins` field is a list of exact origins, including ports;
+HTTP is accepted only for literal loopback IPs, otherwise HTTPS is required.
+Optional `glyph`, `summary` and contribution `title` fields supply Windows
+chrome and command metadata. Apple's WebPluginHost still has no application
+window integration.
 
 Each activation uses an isolated InPrivate WebView2 profile and a private
 virtual asset origin. The page has no native host objects, direct network,
@@ -249,6 +258,10 @@ requests to that view. Supported methods:
 | `network.get` | `{url}` | `{text}` |
 | `network.subscribe` | `{url}` | `{subscription}` |
 | `network.unsubscribe` | `{subscription}` | null |
+| `document.read` | `{handle}` | `{bytes}` (base64) |
+| `storage.plugin.get` | `{key}` | `{value}` or null |
+| `storage.plugin.set` | `{key,value}` | null |
+| `host.notify` | `{title}` | null |
 
 All network operations are GET-only, with no cookies, credentials, proxies
 or redirects, and only declared origins. SSE `data:` frames arrive as

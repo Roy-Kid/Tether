@@ -30,39 +30,74 @@ fn fake_ssh(check_exit: i32) -> PathBuf {
     std::fs::write(
         &path,
         format!(
-            r#"#!/usr/bin/env python3
-import os, sys
-args = sys.argv[1:]
-subsystem = "-s" in args
-if "-O" in args:
-    sys.stderr.write("Master running (pid=1)\n")
-    sys.exit({check_exit})
-if "--" in args:
-    args = args[args.index("--") + 1:]
-else:
-    stripped = []
-    i = 0
-    while i < len(args):
-        if args[i] in ("-T", "-tt", "-t"):
-            i += 1
-        elif args[i] == "-o":
-            i += 2
-        else:
-            stripped.append(args[i])
-            i += 1
-    args = stripped
-if not args:
-    sys.exit(2)
-args = args[1:]
-if subsystem:
-    sys.stdout.write("subsystem " + " ".join(args))
-    sys.stdout.flush()
-    sys.exit(0)
-if not args:
-    sys.stdout.write("attached\n")
-    sys.stdout.flush()
-    sys.exit(0)
-os.execv("/bin/sh", ["sh", "-c", args[0]])
+            r#"#!/bin/bash
+# Stand-in for OpenSSH. Same answers the suite used to get from Python,
+# with no interpreter beyond the shell every machine here already has.
+subsystem=0
+for arg in "$@"; do
+  if [ "$arg" = "-s" ]; then
+    subsystem=1
+  fi
+done
+for arg in "$@"; do
+  if [ "$arg" = "-O" ]; then
+    printf '%s\n' 'Master running (pid=1)' >&2
+    exit {check_exit}
+  fi
+done
+
+saw_dd=0
+for arg in "$@"; do
+  if [ "$arg" = "--" ]; then
+    saw_dd=1
+  fi
+done
+
+rest=()
+if [ "$saw_dd" -eq 1 ]; then
+  after=0
+  for arg in "$@"; do
+    if [ "$after" -eq 1 ]; then
+      rest+=("$arg")
+    elif [ "$arg" = "--" ]; then
+      after=1
+    fi
+  done
+else
+  skip_next=0
+  for arg in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then
+      skip_next=0
+      continue
+    fi
+    if [ "$arg" = "-T" ] || [ "$arg" = "-tt" ] || [ "$arg" = "-t" ]; then
+      continue
+    fi
+    if [ "$arg" = "-o" ]; then
+      skip_next=1
+      continue
+    fi
+    rest+=("$arg")
+  done
+fi
+
+if [ "${{#rest[@]}}" -eq 0 ]; then
+  exit 2
+fi
+rest=("${{rest[@]:1}}")
+
+if [ "$subsystem" -eq 1 ]; then
+  printf 'subsystem'
+  for arg in "${{rest[@]}}"; do
+    printf ' %s' "$arg"
+  done
+  exit 0
+fi
+if [ "${{#rest[@]}}" -eq 0 ]; then
+  printf 'attached\n'
+  exit 0
+fi
+exec /bin/sh -c "${{rest[0]}}"
 "#
         ),
     )

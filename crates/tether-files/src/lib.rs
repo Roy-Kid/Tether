@@ -22,6 +22,7 @@ mod files;
 mod path;
 mod transfer;
 mod transport;
+mod write_back;
 
 pub use entry::{Entry, Kind};
 pub use error::{Error, Result};

@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using Tether;
+using TetherApp;
 
 namespace TetherApp.Plugins;
 
@@ -12,11 +13,15 @@ namespace TetherApp.Plugins;
 public sealed class WebPlugin(WebPluginPackage package) : ITabPlugin
 {
     private readonly HashSet<WebAttachment> _attachments = [];
+    public WebPluginPackage Package => package;
     public PluginMetadata Metadata { get; } = new(package.Manifest.Id, package.Manifest.Name,
         package.Manifest.Glyph is { Length: 1 } glyph ? glyph : "\uE774", package.Manifest.Summary ?? package.Manifest.Publisher);
     public TabAccessory Accessory => new(Metadata.Glyph, Metadata.Name, AccessoryPlacement.Inspector);
     public IReadOnlyList<PluginCommandDescriptor> CommandDescriptors => package.Manifest.Contributions
         .Where(c => c.Kind == "command").Select(c => new PluginCommandDescriptor(c.Id, c.Title ?? c.Id)).ToArray();
+    public IEnumerable<WebViewerMatch> Viewers => package.Manifest.Contributions
+        .Where(c => c.Kind == "viewer")
+        .Select(c => new WebViewerMatch(package.Manifest.Id, c.Id, c.Suffixes ?? []));
     public void Activate() { }
     public void Deactivate() { foreach (var attachment in _attachments.ToArray()) _ = attachment.DisposeAsync(); }
     public ITabAttachment Attach(TabContext tab)
@@ -29,6 +34,7 @@ public sealed class WebPlugin(WebPluginPackage package) : ITabPlugin
 
 internal sealed class WebAttachment : ITabAttachment
 {
+    public const int DocumentByteLimit = 8 * 1024 * 1024;
     private readonly WebPluginPackage _package;
     private readonly TabContext _tab;
     private readonly Action _closed;
@@ -37,11 +43,13 @@ internal sealed class WebAttachment : ITabAttachment
     private readonly TextBlock _problem = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12), Visibility = Visibility.Collapsed };
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Dictionary<string, CancellationTokenSource> _streams = new();
+    private readonly Dictionary<string, byte[]> _documents = new(StringComparer.Ordinal);
     private readonly WebPluginNetwork _network;
     private readonly string _session = Guid.NewGuid().ToString("N");
     private readonly string _origin;
     private Task? _starting;
-    private bool _disposed, _ready;
+    private bool _disposed, _ready, _storageAsked, _storageAllowed;
+    private string? _pendingDocument;
     private int _requests;
 
     public WebAttachment(WebPluginPackage package, TabContext tab, Action closed)
@@ -101,7 +109,11 @@ internal sealed class WebAttachment : ITabAttachment
             {
                 if (_disposed) return;
                 _ready = e.IsSuccess;
-                if (_ready) Post(new { api = 1, type = "ready", session = _session, context = Context() });
+                if (_ready)
+                {
+                    Post(new { api = 1, type = "ready", session = _session, context = Context() });
+                    if (_pendingDocument is { } handle) Post(new { api = 1, type = "document", handle });
+                }
                 else _problem.Text = "Plugin page could not load: " + e.WebErrorStatus;
                 _problem.Visibility = _ready ? Visibility.Collapsed : Visibility.Visible;
             };
@@ -109,6 +121,18 @@ internal sealed class WebAttachment : ITabAttachment
         }
         catch (Exception ex)
         { if (!_disposed) { _problem.Text = "Plugin could not start: " + ex.Message; _problem.Visibility = Visibility.Visible; } }
+    }
+
+    /// <summary>Gives this session the bytes of one file. The page reads them through <c>document.read</c>.</summary>
+    public string GrantDocument(byte[] bytes, string? name = null)
+    {
+        if (!_package.Manifest.Permissions.Contains("document.read")) throw new IOException("This plugin cannot read documents.");
+        if (bytes.Length > DocumentByteLimit) throw new IOException("Document exceeds the 8 MiB viewer limit.");
+        var handle = Guid.NewGuid().ToString("N");
+        _documents[handle] = bytes;
+        _pendingDocument = handle;
+        if (_ready) Post(new { api = 1, type = "document", handle, name });
+        return handle;
     }
 
     private bool IsAsset(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
@@ -167,6 +191,26 @@ internal sealed class WebAttachment : ITabAttachment
                         if (_streams.Remove(payload.GetProperty("subscription").GetString()!, out var pending)) pending.Cancel();
                         result = null;
                         break;
+                    case "document.read":
+                        if (!_package.Manifest.Permissions.Contains("document.read")) throw new IOException("permissionDenied");
+                        var handle = payload.TryGetProperty("handle", out var handleEl) ? handleEl.GetString() : null;
+                        if (string.IsNullOrWhiteSpace(handle) || !_documents.TryGetValue(handle, out var bytes))
+                            throw new IOException(string.IsNullOrWhiteSpace(handle) ? "noGrant" : "invalidHandle");
+                        result = new { bytes = Convert.ToBase64String(bytes) };
+                        break;
+                    case "storage.plugin.get":
+                        result = new { value = await StorageAsync(payload, write: false) };
+                        break;
+                    case "storage.plugin.set":
+                        await StorageAsync(payload, write: true);
+                        result = null;
+                        break;
+                    case "host.notify":
+                        var title = payload.GetProperty("title").GetString();
+                        if (string.IsNullOrWhiteSpace(title)) throw new IOException("malformed");
+                        await Alerts.ContentAsync(_package.Manifest.Name, title, "Close", null, _view.ActualTheme, _ => { });
+                        result = null;
+                        break;
                     default: throw new IOException("Unknown plugin capability.");
                 }
                 Post(new { api = 1, type = "response", id, result });
@@ -174,6 +218,27 @@ internal sealed class WebAttachment : ITabAttachment
             finally { _requests--; }
         }
         catch (Exception ex) { if (!_disposed) Post(new { api = 1, type = "response", id, error = ex.Message }); }
+    }
+
+    private async Task<string?> StorageAsync(JsonElement payload, bool write)
+    {
+        if (!_package.Manifest.Permissions.Contains("storage.plugin")) throw new IOException("permissionDenied");
+        if (!_storageAsked)
+        {
+            _storageAsked = true;
+            _storageAllowed = await Alerts.ContentAsync(_package.Manifest.Name, "storage.plugin", "Allow", null,
+                _view.ActualTheme, _ => { }) == ContentDialogResult.Primary;
+        }
+        if (!_storageAllowed) throw new IOException("consentDenied");
+        var key = payload.GetProperty("key").GetString();
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 256) throw new IOException("malformed");
+        var bucket = WebPluginStorage.Load(_package.Manifest.Id);
+        if (!write) return bucket.GetValueOrDefault(key);
+        var value = payload.GetProperty("value").GetString() ?? throw new IOException("malformed");
+        if (Encoding.UTF8.GetByteCount(value) > 64 * 1024) throw new IOException("malformed");
+        bucket[key] = value;
+        WebPluginStorage.Save(_package.Manifest.Id, bucket);
+        return null;
     }
 
     private async Task StreamAsync(string id, string url, CancellationTokenSource cancellation)
@@ -198,9 +263,44 @@ internal sealed class WebAttachment : ITabAttachment
     {
         if (_disposed) return ValueTask.CompletedTask;
         _disposed = true; _lifetime.Cancel(); StopStreams();
+        _documents.Clear(); _pendingDocument = null;
         _tab.Model.SessionChanged -= ContextChanged;
         _web.Close(); _network.Dispose(); _lifetime.Dispose(); _closed();
         return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>Per-plugin string storage under the Windows account. No secrets, no paths.</summary>
+internal static class WebPluginStorage
+{
+    private static string PathFor(string id) =>
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Tether", "PluginStorage", id + ".json");
+
+    public static Dictionary<string, string> Load(string id)
+    {
+        var path = PathFor(id);
+        if (!File.Exists(path)) return new(StringComparer.Ordinal);
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
+                ?.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal)
+                ?? new(StringComparer.Ordinal);
+        }
+        catch { return new(StringComparer.Ordinal); }
+    }
+
+    public static void Save(string id, Dictionary<string, string> values)
+    {
+        var path = PathFor(id);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(values));
+    }
+
+    public static void Wipe(string id)
+    {
+        var path = PathFor(id);
+        if (File.Exists(path)) File.Delete(path);
     }
 }
 
@@ -208,6 +308,12 @@ public static class WebPluginCatalog
 {
     public static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tether", "Plugins");
     public static List<string> Problems { get; } = [];
+    public static bool IsInstalled(string id) => Directory.Exists(Path.Combine(Root, id));
+    public static WebPluginPackage? Installed(string id)
+    {
+        try { return IsInstalled(id) ? WebPluginPackage.Read(Path.Combine(Root, id)) : null; }
+        catch { return null; }
+    }
     public static void Discover(PluginRegistry registry)
     {
         Problems.Clear();
@@ -216,10 +322,40 @@ public static class WebPluginCatalog
             try { registry.Register(new WebPlugin(WebPluginPackage.Read(directory))); }
             catch (Exception ex) { Problems.Add(Path.GetFileName(directory) + ": " + ex.Message); }
     }
-    public static void Install(string source, PluginRegistry registry)
+    public static void Install(string source, PluginRegistry registry, bool replace = false)
     {
         var package = WebPluginPackage.Read(source);
-        if (registry.Plugins.Any(p => p.Metadata.Id == package.Manifest.Id)) throw new IOException("This plugin is already registered.");
-        registry.Register(new WebPlugin(WebPluginPackage.Install(source, Root)));
+        var existing = registry.Plugins.FirstOrDefault(p => p.Metadata.Id == package.Manifest.Id);
+        if (existing is not null && !replace) throw new IOException("This plugin is already registered.");
+        if (existing is not null) registry.Unregister(package.Manifest.Id);
+        registry.Register(new WebPlugin(WebPluginPackage.Install(source, Root, replace)));
+    }
+    public static void Update(string source, PluginRegistry registry)
+    {
+        var package = WebPluginPackage.Read(source);
+        if (!registry.Plugins.Any(p => p.Metadata.Id == package.Manifest.Id) && !IsInstalled(package.Manifest.Id))
+            throw new IOException("This plugin is not installed. Install it instead of updating.");
+        Install(source, registry, replace: true);
+    }
+    public static void Uninstall(string id, PluginRegistry registry)
+    {
+        if (!IsInstalled(id) && !registry.Plugins.Any(p => p.Metadata.Id == id))
+            throw new IOException("This plugin is not installed.");
+        registry.Unregister(id);
+        WebPluginPackage.RemoveInstalled(Root, id);
+        WebPluginStorage.Wipe(id);
+    }
+
+    /// <summary>Enabled web viewers that claim this file suffix (no leading dot).</summary>
+    public static IReadOnlyList<(WebPlugin Plugin, WebViewerMatch Match)> ViewersFor(PluginRegistry registry, string suffix)
+    {
+        var key = WebPluginPackage.NormalizeSuffix(suffix);
+        if (key.Length == 0) return [];
+        return registry.Plugins.OfType<WebPlugin>()
+            .Where(plugin => registry.IsEnabled(plugin.Metadata.Id))
+            .SelectMany(plugin => plugin.Viewers
+                .Where(viewer => viewer.Suffixes.Contains(key, StringComparer.Ordinal))
+                .Select(viewer => (plugin, viewer)))
+            .ToArray();
     }
 }

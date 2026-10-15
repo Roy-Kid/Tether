@@ -193,3 +193,28 @@ fn a_zero_width_joiner_damages_the_cell_it_joined() {
         "the joined cell starts at column 2; damage was {damaged:?}"
     );
 }
+
+/// Text that wraps on the bottom row, when a scroll region stops above it,
+/// starts that row over in place — and the cell it wrapped from was written
+/// without the engine reporting it. Found by `fuzz/terminal_damage`: a
+/// frontend that redrew only what it was told left the last column blank.
+#[test]
+fn a_wrap_on_a_bottom_row_outside_the_scroll_region_damages_the_last_column() {
+    let mut term = terminal();
+    // Region rows 1..22, then the cursor at column 79 of row 24 — where the
+    // engine remembers it, so only the column after it can go unreported.
+    term.feed(b"\x1b[1;22r\x1b[24;78Ha");
+    let _ = term.take_changes();
+
+    // `b` and `c` fill columns 79 and 80, and `d` wraps — back to column 1
+    // of the same row.
+    term.feed(b"bcd");
+
+    let changes = term.take_changes();
+    assert!(term.screen().text().lines().nth(23).is_some_and(|row| row.ends_with("abc")));
+    let damaged = spans(&changes);
+    assert!(
+        damaged.iter().any(|(row, _, last)| *row == 23 && *last == 79),
+        "column 80 of the bottom row was written; damage was {damaged:?}"
+    );
+}

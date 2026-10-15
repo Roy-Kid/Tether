@@ -3,13 +3,19 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Settings">
  <NavigationView x:Name="SettingsRoot" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed"
   IsSettingsVisible="False" IsPaneToggleButtonVisible="False" OpenPaneLength="220"
-  Background="{ThemeResource ChromeWindowBrush}" SelectionChanged="Section_Changed">
+  Background="Transparent" SelectionChanged="Section_Changed">
+  <NavigationView.Resources>
+   <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+   <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+   <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+  </NavigationView.Resources>
   <NavigationView.MenuItems>
    <NavigationViewItem Content="Startup" Tag="startup" Icon="Play" IsSelected="True" />
    <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
    <NavigationViewItem Content="Terminal" Tag="terminal" Icon="Keyboard" />
    <NavigationViewItem Content="Key Bindings" Tag="keys" Icon="Keyboard" />
    <NavigationViewItem Content="History" Tag="history" Icon="Clock" />
+   <NavigationViewItem Content="Security" Tag="security" Icon="ProtectedDocument" />
    <NavigationViewItem Content="Files" Tag="files" Icon="Folder" />
    <NavigationViewItem Content="Identities" Tag="identities" Icon="Contact" />
    <NavigationViewItem Content="Extensions" Tag="extensions" Icon="AllApps" />
@@ -17,8 +23,7 @@
   <ScrollViewer Padding="{StaticResource SettingsPageInset}">
    <StackPanel Spacing="{StaticResource SpaceSection}" MaxWidth="640" HorizontalAlignment="Stretch">
     <TextBlock x:Name="PageHeading" Text="Startup" Style="{StaticResource SubtitleTextBlockStyle}" />
-    <Border x:Name="StartupPane" Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
-     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+    <Border x:Name="StartupPane" Style="{StaticResource SettingsCardStyle}">
      <StackPanel Spacing="{StaticResource SpaceGroup}">
       <TextBlock Text="Default profile" Style="{StaticResource BodyStrongTextBlockStyle}" />
       <TextBlock Text="Choose the shell to open when Tether starts or you open a new tab."
@@ -28,10 +33,17 @@
       <ComboBox x:Name="WslPicker" Header="WSL distribution" HorizontalAlignment="Stretch" />
       <TextBlock Text="PowerShell uses PowerShell 7 when available."
        Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <TextBlock Text="When the last tab closes" Style="{StaticResource BodyStrongTextBlockStyle}" />
+      <TextBlock Text="Keep an empty window, or quit Tether when nothing remains open."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
+      <ComboBox x:Name="LastTabPicker" HorizontalAlignment="Stretch"
+       AutomationProperties.Name="When the last tab closes" SelectionChanged="LastTab_Changed">
+       <ComboBoxItem Content="No open terminals" Tag="stay" />
+       <ComboBoxItem Content="Quit" Tag="quit" />
+      </ComboBox>
      </StackPanel>
     </Border>
-    <Border Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
-     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+    <Border x:Name="SshPane" Style="{StaticResource SettingsCardStyle}">
      <StackPanel Spacing="{StaticResource SpaceGroup}">
       <TextBlock Text="SSH client" Style="{StaticResource BodyStrongTextBlockStyle}" />
       <TextBlock Text="ssh.exe used when a connection can be reused. Windows OpenSSH is the default."
@@ -52,9 +64,7 @@
        TextWrapping="Wrap" Visibility="Collapsed" />
      </StackPanel>
     </Border>
-    <Border x:Name="AppearancePane" Visibility="Collapsed"
-     Background="{ThemeResource ChromeRaisedBrush}" CornerRadius="{StaticResource RowRadius}"
-     Padding="{StaticResource SettingsCardInset}" BorderThickness="1" BorderBrush="{ThemeResource ChromeStrokeBrush}">
+    <Border x:Name="AppearancePane" Visibility="Collapsed" Style="{StaticResource SettingsCardStyle}">
      <StackPanel Spacing="{StaticResource SpaceGroup}">
       <TextBlock Text="Application theme" Style="{StaticResource BodyStrongTextBlockStyle}" />
       <TextBlock Text="Apply a theme to the window and terminal. Changes take effect immediately."
@@ -70,6 +80,7 @@
     <StackPanel x:Name="TerminalPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="KeysPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="HistoryPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="SecurityPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="FilesPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="IdentitiesPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="ExtensionsPane" Visibility="Collapsed" Spacing="{StaticResource SpaceGroup}" />

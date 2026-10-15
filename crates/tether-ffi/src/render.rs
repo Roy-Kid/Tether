@@ -205,8 +205,11 @@ pub struct RgbaDto {
 
 fn wgpu_instance() -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends =
-        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::VULKAN | wgpu::Backends::GL);
+    // DX12 is the Win11 GPU. Vulkan and Metal cover the other desktops.
+    // GL is last: it is the software fallback.
+    descriptor.backends = wgpu::Backends::from_env().unwrap_or(
+        wgpu::Backends::DX12 | wgpu::Backends::METAL | wgpu::Backends::VULKAN | wgpu::Backends::GL,
+    );
     wgpu::Instance::new(descriptor)
 }
 

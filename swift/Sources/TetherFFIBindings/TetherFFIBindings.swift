@@ -1515,12 +1515,32 @@ public protocol RemoteConnectionProtocol: AnyObject, Sendable {
     func execute(command: String, cancellation: CancellationToken) async throws  -> CommandOutput
 
     /**
+     * Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+     * where this lease's shell is running.
+     *
+     * Asking again for a port that is already forwarded returns the existing
+     * listener. A local shell reports the port and does not bind.
+     */
+    func forwardPort(port: UInt16) async throws  -> ForwardedPort
+
+    /**
+     * Which authenticated session this lease is. Equal across wrappers of
+     * one session, and different after a redial.
+     */
+    func leaseId()  -> UInt64
+
+    /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
     func openShell(term: String, columns: UInt16, rows: UInt16, scrollbackLines: UInt32, history: SessionHistory?, cancellation: CancellationToken) async throws  -> Session
 
     func renameTmux(sessionId: String, name: String) async throws
+
+    /**
+     * Closes the local listener for `port`, and the connections it accepted.
+     */
+    func stopForward(port: UInt16)
 
     /**
      * Where tmux says a pane's program is — `#{pane_current_path}`, which
@@ -1707,6 +1727,42 @@ open func execute(command: String, cancellation: CancellationToken)async throws 
 }
 
     /**
+     * Listens on `127.0.0.1` and connects accepted sockets to `127.0.0.1:port`
+     * where this lease's shell is running.
+     *
+     * Asking again for a port that is already forwarded returns the existing
+     * listener. A local shell reports the port and does not bind.
+     */
+open func forwardPort(port: UInt16)async throws  -> ForwardedPort  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remoteconnection_forward_port(
+                    self.uniffiCloneHandle(),
+                    FfiConverterUInt16.lower(port)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeForwardedPort_lift,
+            errorHandler: FfiConverterTypeTetherError_lift
+        )
+}
+
+    /**
+     * Which authenticated session this lease is. Equal across wrappers of
+     * one session, and different after a redial.
+     */
+open func leaseId() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_tether_ffi_fn_method_remoteconnection_lease_id(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+    /**
      * Opens an interactive shell on this lease. No handshake: the connection
      * is already authenticated, and a second terminal is another channel.
      */
@@ -1742,6 +1798,17 @@ open func renameTmux(sessionId: String, name: String)async throws   {
             liftFunc: { $0 },
             errorHandler: FfiConverterTypeTetherError_lift
         )
+}
+
+    /**
+     * Closes the local listener for `port`, and the connections it accepted.
+     */
+open func stopForward(port: UInt16)  {try! rustCall() {
+    uniffi_tether_ffi_fn_method_remoteconnection_stop_forward(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt16.lower(port),$0
+    )
+}
 }
 
     /**
@@ -1929,6 +1996,14 @@ public protocol RemoteFilesProtocol: AnyObject, Sendable {
      * and never replaces a directory.
      */
     func upload(source: String, path: String, replace: Bool, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> UInt64
+
+    /**
+     * Puts `source` here in place of `path`, only while `path` is still
+     * `expected_size` bytes last modified at `expected_modified`; otherwise
+     * `Changed`. Keeps the file's permissions and writes through a link.
+     * Returns what `path` is afterwards.
+     */
+    func writeBack(source: String, path: String, expectedSize: UInt64, expectedModified: UInt64?, progress: TransferProgress?, cancellation: CancellationToken) async throws  -> FileEntry
 
 }
 /**
@@ -2242,6 +2317,29 @@ open func upload(source: String, path: String, replace: Bool, progress: Transfer
             completeFunc: ffi_tether_ffi_rust_future_complete_u64,
             freeFunc: ffi_tether_ffi_rust_future_free_u64,
             liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeFileError_lift
+        )
+}
+
+    /**
+     * Puts `source` here in place of `path`, only while `path` is still
+     * `expected_size` bytes last modified at `expected_modified`; otherwise
+     * `Changed`. Keeps the file's permissions and writes through a link.
+     * Returns what `path` is afterwards.
+     */
+open func writeBack(source: String, path: String, expectedSize: UInt64, expectedModified: UInt64?, progress: TransferProgress?, cancellation: CancellationToken)async throws  -> FileEntry  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_tether_ffi_fn_method_remotefiles_write_back(
+                    self.uniffiCloneHandle(),
+                    FfiConverterString.lower(source),FfiConverterString.lower(path),FfiConverterUInt64.lower(expectedSize),FfiConverterOptionUInt64.lower(expectedModified),FfiConverterOptionTypeTransferProgress.lower(progress),FfiConverterTypeCancellationToken_lower(cancellation)
+                )
+            },
+            pollFunc: ffi_tether_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_tether_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_tether_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFileEntry_lift,
             errorHandler: FfiConverterTypeFileError_lift
         )
 }
@@ -3803,6 +3901,71 @@ public func FfiConverterTypeFileEntry_lift(_ buf: RustBuffer) throws -> FileEntr
 #endif
 public func FfiConverterTypeFileEntry_lower(_ value: FileEntry) -> RustBuffer {
     return FfiConverterTypeFileEntry.lower(value)
+}
+
+
+/**
+ * A port forwarded to `127.0.0.1` on this machine.
+ */
+public struct ForwardedPort: Equatable, Hashable {
+    public let localPort: UInt16
+    /**
+     * The shell is already on this machine, so `local_port` is the
+     * program's own port and nothing was bound over it.
+     */
+    public let alreadyLocal: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(localPort: UInt16,
+        /**
+         * The shell is already on this machine, so `local_port` is the
+         * program's own port and nothing was bound over it.
+         */alreadyLocal: Bool) {
+        self.localPort = localPort
+        self.alreadyLocal = alreadyLocal
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ForwardedPort: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeForwardedPort: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ForwardedPort {
+        return
+            try ForwardedPort(
+                localPort: FfiConverterUInt16.read(from: &buf),
+                alreadyLocal: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ForwardedPort, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.localPort, into: &buf)
+        FfiConverterBool.write(value.alreadyLocal, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeForwardedPort_lift(_ buf: RustBuffer) throws -> ForwardedPort {
+    return try FfiConverterTypeForwardedPort.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeForwardedPort_lower(_ value: ForwardedPort) -> RustBuffer {
+    return FfiConverterTypeForwardedPort.lower(value)
 }
 
 
@@ -5525,6 +5688,11 @@ public enum FileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErr
     )
     case NotEmpty(path: String
     )
+    /**
+     * The far side's file is not the one a change was made to any more.
+     */
+    case Changed(path: String
+    )
     case Cancelled
     case Disconnected(cause: String
     )
@@ -5571,11 +5739,14 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
         case 4: return .NotEmpty(
             path: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .Cancelled
-        case 6: return .Disconnected(
+        case 5: return .Changed(
+            path: try FfiConverterString.read(from: &buf)
+            )
+        case 6: return .Cancelled
+        case 7: return .Disconnected(
             cause: try FfiConverterString.read(from: &buf)
             )
-        case 7: return .Failed(
+        case 8: return .Failed(
             cause: try FfiConverterString.read(from: &buf)
             )
 
@@ -5610,17 +5781,22 @@ public struct FfiConverterTypeFileError: FfiConverterRustBuffer {
             FfiConverterString.write(path, into: &buf)
 
 
-        case .Cancelled:
+        case let .Changed(path):
             writeInt(&buf, Int32(5))
+            FfiConverterString.write(path, into: &buf)
+
+
+        case .Cancelled:
+            writeInt(&buf, Int32(6))
 
 
         case let .Disconnected(cause):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(cause, into: &buf)
 
 
         case let .Failed(cause):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(cause, into: &buf)
 
         }
@@ -8475,6 +8651,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remotefiles_upload() != 31262) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_remotefiles_write_back() != 10542) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_transferprogress_advanced() != 55166) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8571,10 +8750,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_remoteconnection_execute() != 50320) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_forward_port() != 58149) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_lease_id() != 24448) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_open_shell() != 49043) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_rename_tmux() != 61319) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_remoteconnection_stop_forward() != 37992) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_remoteconnection_tmux_pane_directory() != 23722) {

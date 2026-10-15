@@ -7,6 +7,7 @@ public typealias TmuxWindowInfo = TetherFFIBindings.TmuxWindowInfo
 public typealias TmuxPaneFrame = TetherFFIBindings.TmuxPaneFrame
 public typealias TmuxSnapshot = TetherFFIBindings.TmuxSnapshot
 public typealias TmuxAction = TetherFFIBindings.TmuxAction
+public typealias ForwardedPort = TetherFFIBindings.ForwardedPort
 
 public struct CommandOutput: Sendable {
   public let status: Int32?
@@ -48,6 +49,19 @@ public final class RemoteConnection: Sendable {
     let result = try await cancellable { try await self.inner.execute(command: command, cancellation: $0) }
     return CommandOutput(status: result.status, stdout: result.stdout, stderr: result.stderr)
   }
+
+  /// Which authenticated session this lease is. Equal for every wrapper of
+  /// one session, and different after a redial.
+  public func leaseID() -> UInt64 { inner.leaseId() }
+
+  /// Listens on `127.0.0.1` and connects each accepted socket to
+  /// `127.0.0.1:port` where this lease's shell is running.
+  public func forwardPort(_ port: UInt16) async throws -> ForwardedPort {
+    try await inner.forwardPort(port: port)
+  }
+
+  /// Closes the local listener for `port`.
+  public func stopForward(_ port: UInt16) { inner.stopForward(port: port) }
 
   public func tmuxSessions() async throws -> [TmuxSessionInfo] {
     try await cancellable { try await self.inner.tmuxSessions(cancellation: $0) }

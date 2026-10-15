@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         AppBranding.Apply(this);
+        SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBarDragArea);
         WorkspaceRoot.Loaded += (_, _) =>
@@ -144,9 +145,14 @@ public sealed partial class MainWindow : Window
         {
             // Retain native tab containers and keyboard focus when selection changes.
             foreach (var removed in TabStrip.TabItems.OfType<TabViewItem>()
-                .Where(item => item.Tag is Tab tab && !_workspace.Tabs.Contains(tab)).ToList())
+                .Where(item => item.Tag switch
+                {
+                    Tab tab => !_workspace.VisibleTabs.Contains(tab),
+                    ExtensionTab extension => !_workspace.VisibleExtensions.Contains(extension),
+                    _ => true,
+                }).ToList())
                 TabStrip.TabItems.Remove(removed);
-            foreach (var tab in _workspace.Tabs)
+            foreach (var tab in _workspace.VisibleTabs)
             {
                 var item = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(item => item.Tag == tab);
                 if (item is null)
@@ -155,18 +161,41 @@ public sealed partial class MainWindow : Window
                     item.Tag = tab;
                     TabStrip.TabItems.Add(item);
                 }
-                ((TextBlock)item.Header).Text = tab.Title;
+                ((WorkspaceTabHeader)item.Header).Update(tab);
                 AutomationProperties.SetName(item, tab.Title);
                 ToolTipService.SetToolTip(item, tab.Title);
             }
-            TabStrip.SelectedIndex = _workspace.ActiveIndex;
+            foreach (var extension in _workspace.VisibleExtensions)
+            {
+                var item = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(item => item.Tag == extension);
+                if (item is null)
+                {
+                    item = CreateExtensionTab(extension);
+                    TabStrip.TabItems.Add(item);
+                }
+                else if (item.Header is WorkspaceTabHeader header) header.UpdateExtension(extension);
+                AutomationProperties.SetName(item, extension.Title);
+                ToolTipService.SetToolTip(item, extension.Title);
+            }
+            if (_workspace.ActiveExtension is { } activeExtension)
+                TabStrip.SelectedItem = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(i => i.Tag == activeExtension);
+            else TabStrip.SelectedIndex = _workspace.ActiveIndex;
             RefreshVerticalTabs();
         }
         finally { _refreshingTabs = false; }
         var current = _workspace.Active;
         // A status/title refresh must not unload the active terminal and
         // hide its native child window. Reparent only when switching tabs.
-        if (_workspace.ActiveGroup is { } group)
+        if (_workspace.ActiveExtension is { } openExtension)
+        {
+            if (TerminalHostPlaceholder.Children.FirstOrDefault() != openExtension.View)
+            {
+                TerminalHostPlaceholder.Children.Clear();
+                TerminalHostPlaceholder.Children.Add(openExtension.View);
+            }
+            _ = RunPluginCommandAsync(openExtension.Attachment.ShownAsync);
+        }
+        else if (_workspace.ActiveGroup is { } group)
         {
             if (!_splitViews.TryGetValue(group, out var view)) _splitViews[group] = view = new SplitTerminalView(group, _workspace);
             view.Update();
@@ -178,6 +207,7 @@ public sealed partial class MainWindow : Window
             foreach (var pane in group.Panes) Wire(pane);
         }
         else TerminalHostPlaceholder.Children.Clear();
+        EmptyWorkspace.Visibility = current is null && _workspace.ActiveExtension is null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var removed in _splitViews.Keys.Where(t => !_workspace.Tabs.Contains(t)).ToArray()) _splitViews.Remove(removed);
         _wiredPanes.RemoveWhere(pane => !_workspace.Contains(pane));
         _workspace.Persist();
@@ -215,7 +245,15 @@ public sealed partial class MainWindow : Window
         }
         BuildPluginButtons();
         _ = DetachDisabledAsync();
+        _ = CloseMissingExtensionsAsync();
         UpdateInspector();
+    }
+
+    private async Task CloseMissingExtensionsAsync()
+    {
+        var known = App.Plugins.Plugins.Select(p => p.Metadata.Id).ToHashSet();
+        foreach (var extension in _workspace.Extensions.Where(e => !known.Contains(e.PluginId)).ToArray())
+            await CloseExtensionAsync(extension);
     }
 
     private async Task DetachDisabledAsync()
@@ -224,6 +262,51 @@ public sealed partial class MainWindow : Window
         {
             foreach (var plugin in App.Plugins.Plugins.Where(plugin => !App.Plugins.IsEnabled(plugin.Metadata.Id)))
                 await tab.DetachAsync(plugin.Metadata.Id);
+        }
+        foreach (var plugin in App.Plugins.Plugins.Where(plugin => !App.Plugins.IsEnabled(plugin.Metadata.Id)))
+            await _workspace.CloseExtensionsForPluginAsync(plugin.Metadata.Id);
+    }
+
+    /// <summary>
+    /// Opens a plugin as a full workspace tab (macOS <c>PluginWorkspace</c>).
+    /// Web panels and other inspector plugins can stand in for a terminal tab.
+    /// </summary>
+    private void OpenExtensionTab(string id)
+    {
+        if (App.Plugins.Plugins.OfType<ITabPlugin>().FirstOrDefault(p => p.Metadata.Id == id && App.Plugins.IsEnabled(id))
+            is not { } plugin) return;
+        if (_workspace.VisibleExtensions.FirstOrDefault(e => e.PluginId == id) is { } existing)
+        {
+            _workspace.Activate(existing);
+            return;
+        }
+        var model = new SessionModel();
+        if (_workspace.CurrentHost is { } host) model.Keep(host);
+        var attachment = plugin.Attach(new TabContext
+        {
+            Model = model,
+            InsertText = _ => { },
+            WorkingDirectory = () => model.WorkingDirectory,
+            Show = () => { },
+            Dismiss = () =>
+            {
+                if (_workspace.Extensions.FirstOrDefault(e => e.PluginId == id) is { } open)
+                    _ = CloseExtensionAsync(open);
+            },
+            WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
+            DialogRoot = () => WorkspaceRoot.XamlRoot,
+            Overlay = _ => { },
+        });
+        _workspace.OpenExtension(plugin, attachment, _workspace.CurrentHost);
+    }
+
+    private async Task CloseExtensionAsync(ExtensionTab extension)
+    {
+        await _workspace.CloseExtensionAsync(extension);
+        if (_workspace.Tabs.Count == 0 && _workspace.Extensions.Count == 0 && AppSettings.Current.CloseLastTab == "quit")
+        {
+            _windowCloseApproved = true;
+            Close();
         }
     }
 
@@ -236,7 +319,12 @@ public sealed partial class MainWindow : Window
             return;
         }
 #endif
-        if (_workspace.Active is not { } tab) return;
+        // Without a live terminal, open the plugin as a workspace tab instead.
+        if (_workspace.Active is not { } tab)
+        {
+            OpenExtensionTab(id);
+            return;
+        }
         tab.OpenInspector = tab.OpenInspector == id ? null : id;
         BuildPluginButtons();
         UpdateInspector();
@@ -245,15 +333,15 @@ public sealed partial class MainWindow : Window
     private void UpdateInspector()
     {
         if (_zen) { InspectorHost.Visibility = Visibility.Collapsed; return; }
-        InspectorHost.Child = null;
         var plugin = InspectorPlugin();
         var tab = _workspace.Active;
         var visible = plugin is not null && tab is not null;
         InspectorHost.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        if (!visible || tab is null || plugin is null) return;
+        if (!visible || tab is null || plugin is null) { InspectorHost.Child = null; return; }
         var attachment = tab.Attach(plugin, Context(tab, plugin));
+        if (InspectorHost.Child == attachment.View) return;
         InspectorHost.Child = attachment.View;
-        _ = attachment.ShownAsync();
+        _ = RunPluginCommandAsync(attachment.ShownAsync);
     }
 
     private ITabPlugin? InspectorPlugin() =>
@@ -290,7 +378,52 @@ public sealed partial class MainWindow : Window
         WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
         DialogRoot = () => WorkspaceRoot.XamlRoot,
         Overlay = visible => { foreach (var pane in _workspace.AllPanes) pane.Surface.SetOverlayVisible(visible); },
+        OpenWebViewer = OpenWebViewerAsync,
     };
+
+    private async Task<bool> OpenWebViewerAsync(string suffix, byte[] bytes, string fileName, CancellationToken token)
+    {
+        var matches = WebPluginCatalog.ViewersFor(App.Plugins, suffix);
+        if (matches.Count == 0) return false;
+        var plugin = matches[0].Plugin;
+        token.ThrowIfCancellationRequested();
+        if (await Alerts.ContentAsync(plugin.Metadata.Name, "document.read\n" + fileName, "Allow", null,
+            WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return false;
+        token.ThrowIfCancellationRequested();
+        // Prefer an already-open extension tab for this plugin on this host.
+        ExtensionTab extension;
+        if (_workspace.VisibleExtensions.FirstOrDefault(e => e.PluginId == plugin.Metadata.Id) is { } existing)
+        {
+            extension = existing;
+            _workspace.Activate(extension);
+        }
+        else
+        {
+            var model = new SessionModel();
+            if (_workspace.CurrentHost is { } host) model.Keep(host);
+            var attachment = plugin.Attach(new TabContext
+            {
+                Model = model,
+                InsertText = _ => { },
+                WorkingDirectory = () => model.WorkingDirectory,
+                Show = () => { },
+                Dismiss = () =>
+                {
+                    if (_workspace.Extensions.FirstOrDefault(e => e.PluginId == plugin.Metadata.Id) is { } open)
+                        _ = CloseExtensionAsync(open);
+                },
+                WindowHandle = () => WinRT.Interop.WindowNative.GetWindowHandle(this),
+                DialogRoot = () => WorkspaceRoot.XamlRoot,
+                Overlay = _ => { },
+            });
+            extension = _workspace.OpenExtension(plugin, attachment, _workspace.CurrentHost);
+            extension.Title = plugin.Metadata.Name + " · " + fileName;
+        }
+        if (extension.Attachment is not WebAttachment web) return false;
+        web.GrantDocument(bytes, fileName);
+        _ = RunPluginCommandAsync(web.ShownAsync);
+        return true;
+    }
 
     private void Wire(TerminalPane tab)
     {
@@ -367,28 +500,79 @@ public sealed partial class MainWindow : Window
 
     private TabViewItem CreateTab(string title)
     {
-        var item = new TabViewItem
-        {
-            Header = new TextBlock
-            {
-                Text = title,
-                FontSize = (double)Application.Current.Resources["TitleSize"],
-                MaxWidth = (double)Application.Current.Resources["TabTitleWidth"],
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            },
-        };
+        var header = new WorkspaceTabHeader(title);
+        var item = new TabViewItem { Header = header };
         AutomationProperties.SetName(item, title);
         ToolTipService.SetToolTip(item, title);
+        header.More.Click += (_, e) =>
+        {
+            if (item.Tag is Tab group) ShowTabMenu(header, group);
+        };
+        var selectedBeforePress = false;
+        item.PointerPressed += (_, e) =>
+        {
+            selectedBeforePress = ReferenceEquals(TabStrip.SelectedItem, item);
+            if (e.GetCurrentPoint(item).Properties.IsMiddleButtonPressed && item.Tag is Tab group)
+            {
+                e.Handled = true;
+                _ = CloseTabAsync(group);
+            }
+        };
+        item.Tapped += (_, e) =>
+        {
+            if (!selectedBeforePress || item.Tag is not Tab group) return;
+            for (var parent = e.OriginalSource as DependencyObject; parent is not null; parent = VisualTreeHelper.GetParent(parent))
+                if (parent is Button) return;
+            ShowTabMenu(header, group);
+        };
+        item.RightTapped += (_, e) =>
+        {
+            if (item.Tag is Tab group) { e.Handled = true; ShowTabMenu(header, group); }
+        };
+        return item;
+    }
+
+    private TabViewItem CreateExtensionTab(ExtensionTab extension)
+    {
+        var header = new WorkspaceTabHeader(extension.Title);
+        header.UpdateExtension(extension);
+        var item = new TabViewItem { Header = header, Tag = extension };
+        AutomationProperties.SetName(item, extension.Title);
+        ToolTipService.SetToolTip(item, extension.Title);
+        header.More.Visibility = Visibility.Collapsed;
+        item.PointerPressed += (_, e) =>
+        {
+            if (e.GetCurrentPoint(item).Properties.IsMiddleButtonPressed && item.Tag is ExtensionTab open)
+            {
+                e.Handled = true;
+                _ = CloseExtensionAsync(open);
+            }
+        };
+        item.RightTapped += (_, e) =>
+        {
+            if (item.Tag is not ExtensionTab open) return;
+            e.Handled = true;
+            ShowMenu(header, [
+                new("Close", () => _ = CloseExtensionAsync(open)),
+            ]);
+        };
         return item;
     }
 
     private void Tab_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         QueueSelectedTabReveal();
-        if (!_refreshingTabs && TabStrip.SelectedItem is TabViewItem { Tag: Tab tab })
+        if (_refreshingTabs || TabStrip.SelectedItem is not TabViewItem selected) return;
+        if (selected.Tag is ExtensionTab extension)
         {
-            var index = _workspace.Tabs.ToList().IndexOf(tab);
-            if (index >= 0 && index != _workspace.ActiveIndex) _workspace.Select(index);
+            if (!ReferenceEquals(_workspace.ActiveExtension, extension)) _workspace.Activate(extension);
+            return;
+        }
+        if (selected.Tag is Tab tab)
+        {
+            var index = _workspace.VisibleTabs.ToList().IndexOf(tab);
+            if (index >= 0 && (index != _workspace.ActiveIndex || _workspace.ActiveExtension is not null))
+                _workspace.Select(index);
         }
     }
 
@@ -426,8 +610,8 @@ public sealed partial class MainWindow : Window
 #if DEBUG
         if (_preview) { TabStrip.TabItems.Remove(e.Tab); return; }
 #endif
-        if (e.Tab.Tag is not Tab tab) return;
-        await CloseTabAsync(tab);
+        if (e.Tab.Tag is ExtensionTab extension) await CloseExtensionAsync(extension);
+        else if (e.Tab.Tag is Tab tab) await CloseTabAsync(tab);
     }
 
     private async void Tab_AddRequested(TabView sender, object args)
@@ -435,13 +619,13 @@ public sealed partial class MainWindow : Window
 #if DEBUG
         if (_preview) { TabStrip.TabItems.Add(CreateTab("PowerShell")); return; }
 #endif
-        await _workspace.AddAsync();
+        await RunCommandAsync("newTab");
     }
 
     private void RefreshStatusBar()
     {
         var model = _workspace.Active?.Model;
-        HostName.Text = _workspace.Active?.Title ?? "Choose host";
+        HostName.Text = _workspace.CurrentHostLabel;
         var bar = model?.Bar ?? RemoteBar.Idle();
         var live = bar.Phase == RemotePhase.Connected;
         StatusDot.Fill = (Brush)Application.Current.Resources[live ? "SuccessBrush" : "ChromeSubtleBrush"];
@@ -454,6 +638,7 @@ public sealed partial class MainWindow : Window
         AuthMark.Visibility = bar.ShowsAuth ? Visibility.Visible : Visibility.Collapsed;
         CancelConnectButton.Visibility = bar.ShowsCancel ? Visibility.Visible : Visibility.Collapsed;
         ReconnectButton.Visibility = model?.CanReconnect == true ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(ReconnectButton, model?.RemoteHost is null ? "Restart" : "Reconnect");
         AutomationProperties.SetName(HostButton, "Host, " + HostName.Text);
         AutomationProperties.SetHelpText(HostButton, HostName.Text);
         var historyProblem = _workspace.HistoryProblem ?? model?.History?.Error;
@@ -509,9 +694,22 @@ public sealed partial class MainWindow : Window
             }
             problem.Text = "No matching hosts.";
             list.Items.Clear();
-            foreach (var host in SshConfig.Filter(all, query.Text))
-                list.Items.Add(new HostRow(host));
-            var any = list.Items.Count > 0;
+            var matches = SshConfig.Filter(all, query.Text).ToList();
+            var connected = matches.Where(IsConnectedHost).ToList();
+            if (_workspace.CurrentHost is { } current && matches.Any(h => h.Alias == current.Alias))
+                connected = [current, .. connected.Where(h => h.Alias != current.Alias)];
+            var connectedAliases = connected.Select(h => h.Alias).ToHashSet();
+            var idle = matches.Where(h => !connectedAliases.Contains(h.Alias)).ToList();
+            var localMatch = "localhost".Contains(query.Text.Trim(), StringComparison.OrdinalIgnoreCase);
+            if (localMatch && _workspace.CurrentHost is null)
+                list.Items.Add(new HostRow(null, connected: _workspace.AllPanes.Any(p => p.Model.IsLive && p.Model.RemoteHost is null)));
+            foreach (var host in connected) list.Items.Add(new HostRow(host, connected: true));
+            if (connected.Count > 0 && (idle.Count > 0 || (localMatch && _workspace.CurrentHost is not null)))
+                list.Items.Add(new HostRow(null, separator: true));
+            if (localMatch && _workspace.CurrentHost is not null)
+                list.Items.Add(new HostRow(null));
+            foreach (var host in idle) list.Items.Add(new HostRow(host));
+            var any = list.Items.OfType<HostRow>().Any(r => !r.Separator);
             list.SelectedIndex = any ? 0 : -1;
             problem.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
             list.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
@@ -526,7 +724,7 @@ public sealed partial class MainWindow : Window
             if (control && e.Key >= Windows.System.VirtualKey.Number1 && e.Key <= Windows.System.VirtualKey.Number9)
             {
                 var index = (int)e.Key - (int)Windows.System.VirtualKey.Number1;
-                if (index < list.Items.Count && RowHost(list.Items[index]) is { } numbered) { e.Handled = true; await ChooseHostAsync(numbered); }
+                if (index < list.Items.Count && RowHost(list.Items[index]) is { } numbered) { e.Handled = true; await ChooseHostAsync(numbered.Host); }
                 return;
             }
             if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up)
@@ -534,27 +732,29 @@ public sealed partial class MainWindow : Window
                 if (list.Items.Count > 0)
                 {
                     var step = e.Key == Windows.System.VirtualKey.Down ? 1 : -1;
-                    list.SelectedIndex = Math.Clamp(list.SelectedIndex + step, 0, list.Items.Count - 1);
-                    list.ScrollIntoView(list.SelectedItem);
+                    var next = list.SelectedIndex + step;
+                    while (next >= 0 && next < list.Items.Count && list.Items[next] is HostRow { Separator: true }) next += step;
+                    if (next >= 0 && next < list.Items.Count)
+                    {
+                        list.SelectedIndex = next;
+                        list.ScrollIntoView(list.SelectedItem);
+                    }
                 }
                 e.Handled = true;
             }
             else if (e.Key == Windows.System.VirtualKey.Enter && RowHost(list.SelectedItem) is { } selected)
             {
                 e.Handled = true;
-                await ChooseHostAsync(selected);
+                await ChooseHostAsync(selected.Host);
             }
         };
         list.ItemClick += async (_, e) =>
         {
-            if (RowHost(e.ClickedItem) is { } host) await ChooseHostAsync(host);
-        };
-        list.Tapped += async (_, _) =>
-        {
-            if (RowHost(list.SelectedItem) is { } host) await ChooseHostAsync(host);
+            if (RowHost(e.ClickedItem) is { } host) await ChooseHostAsync(host.Host);
         };
 
-        var panel = new StackPanel { Spacing = 8, Padding = new Thickness(12) };
+
+        var panel = new StackPanel { Spacing = 8, Padding = new Thickness(12), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
         var searchRow = new Grid { ColumnSpacing = 8 };
         searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -566,6 +766,7 @@ public sealed partial class MainWindow : Window
 
         var window = new Window { Title = "Hosts", Content = panel };
         AppBranding.Apply(window);
+        window.SystemBackdrop = new MicaBackdrop();
         var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForDialog();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;
@@ -584,35 +785,65 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>The row a click lands on. A <see cref="ListView"/> wraps whatever was added, so the host is not the clicked object itself.</summary>
-    private static HostEntry? RowHost(object? item) => item switch
+    private static HostRow? RowHost(object? item) => item switch
     {
-        HostRow row => row.Host,
-        ListViewItem { Content: HostRow row } => row.Host,
+        HostRow { Separator: true } => null,
+        HostRow row => row,
+        ListViewItem { Content: HostRow { Separator: true } } => null,
+        ListViewItem { Content: HostRow row } => row,
         _ => null,
     };
 
-    private sealed class HostRow(HostEntry host)
+    private static void RememberRecentHost(HostEntry? host)
     {
-        public HostEntry Host { get; } = host;
-        public override string ToString() => Host.Label;
+        var alias = host?.Alias ?? "local";
+        var recent = AppSettings.Current.RecentHosts.Where(a => a != alias).Prepend(alias).Take(8).ToArray();
+        (AppSettings.Current with { RecentHosts = recent }).Save();
     }
 
-    private async Task ChooseHostAsync(HostEntry host)
+    private bool IsConnectedHost(HostEntry host) =>
+        _workspace.AllPanes.Any(pane => pane.Model.IsLive && pane.Model.RemoteHost is { } current &&
+            IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host));
+
+    private sealed class HostRow(HostEntry? host, bool connected = false, bool separator = false)
+    {
+        public HostEntry? Host { get; } = host;
+        public bool Separator { get; } = separator;
+        public override string ToString() => Separator ? "────────" : (Host?.Label ?? "localhost") + (connected ? "  · connected" : "");
+    }
+
+    private readonly Dictionary<string, Task> _hostRequests = new();
+
+    private Task ChooseHostAsync(HostEntry? host)
     {
         _hostPicker?.Close();
 #if DEBUG
-        if (_preview) { HostName.Text = host.Label; return; }
+        if (_preview) { HostName.Text = host?.Label ?? "localhost"; return Task.CompletedTask; }
 #endif
-        if (_workspace.Active is not { } source) return;
-        var note = await CloseNotesAsync(source);
-        if (note is not null && await Alerts.ContentAsync("Change Host?", note, "Connect", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
-        var replacement = new TerminalPane();
-        replacement.Model.SetPalette(_workspace.CurrentPalette);
-        await replacement.BindAsync(startShell: false);
-        await OpenHostAsync(host, replacement);
-        if (!replacement.Model.IsLive) { await replacement.DisposeAsync(); return; }
-        await _workspace.ReplacePaneAsync(source, replacement);
-        replacement.Surface.FocusTerminal();
+        var key = host is null ? "local" : host.Alias + IdentityStore.EndpointDigest(host);
+        if (_hostRequests.TryGetValue(key, out var pending)) return pending;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _hostRequests[key] = completion.Task;
+        _ = ChooseHostCoreAsync(host, key, completion);
+        return completion.Task;
+    }
+
+    private async Task ChooseHostCoreAsync(HostEntry? host, string key, TaskCompletionSource completion)
+    {
+        try
+        {
+            RememberRecentHost(host);
+            _workspace.SelectHost(host);
+            if (_workspace.VisibleTabs.Count == 0) await _workspace.AddAsync(ConnectPaneAsync);
+            if (_workspace.CurrentHost == host) _workspace.Active?.Surface.FocusTerminal();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            await Alerts.ContentAsync(host?.Label ?? "localhost", ex.Message, "Close", null,
+                WorkspaceRoot.ActualTheme, _ => { });
+        }
+        finally { _hostRequests.Remove(key); completion.TrySetResult(); }
     }
 
     private async Task OpenHostAsync(HostEntry host, TerminalPane? target = null)
@@ -683,11 +914,15 @@ public sealed partial class MainWindow : Window
     private void CancelConnect_Click(object sender, RoutedEventArgs e) =>
         _workspace.Active?.Model.CancelDial();
 
-    private async void Reconnect_Click(object sender, RoutedEventArgs e)
+    private async void Reconnect_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("reconnect");
+
+    private async Task ReconnectSelectedAsync()
     {
-        var model = _workspace.Active?.Model;
-        if (model?.RemoteHost is not { } host || !model.CanReconnect) return;
-        await OpenHostAsync(host);
+        if (_workspace.Active is not { } pane || !pane.Model.CanReconnect) return;
+        if (pane.Model.RemoteHost is { } host) await OpenHostAsync(host, pane);
+        else if (!await pane.Model.OpenLocalAsync(pane.Model.LocalProfile,
+            directory: pane.Model.WorkingDirectory, wslDistribution: pane.Model.WslDistribution))
+            throw new IOException(pane.Model.LastError ?? pane.Model.Status);
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
@@ -697,22 +932,37 @@ public sealed partial class MainWindow : Window
 #endif
         // The same control as on macOS: it opens preferences. A window with
         // a sidebar is the Windows shape of `NavigationSplitView`.
-        _ = new SettingsWindow(App.Plugins);
+        SettingsWindow.ShowFor(App.Plugins);
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
         bool Down(Windows.System.VirtualKey key) => InputKeyboardSource.GetKeyStateForCurrentThread(key)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (e.OriginalSource is TextBox or PasswordBox or RichEditBox) return;
         e.Handled = HandleWorkspaceShortcut(new Shortcut(e.Key, Down(Windows.System.VirtualKey.Shift),
             Down(Windows.System.VirtualKey.Control), Down(Windows.System.VirtualKey.Menu)));
     }
 
     private void UpdateSplitButtons()
     {
-        SplitRightButton.IsEnabled = !_splitting && _workspace.Active?.Surface.ActualWidth >= 325;
-        SplitDownButton.IsEnabled = !_splitting && _workspace.Active?.Surface.ActualHeight >= 205;
+        var state = CommandState;
+        SplitRightButton.IsEnabled = WorkspaceCommands.IsEnabled("splitRight", state);
+        SplitDownButton.IsEnabled = WorkspaceCommands.IsEnabled("splitDown", state);
+        MaximizePaneButton.IsEnabled = WorkspaceCommands.IsEnabled("maximizePane", state);
+        UpdateWorkspaceMenu();
+        UpdateTabBarToggle();
     }
+
+    private void UpdateTabBarToggle()
+    {
+        var shows = AppSettings.Current.ShowsTabBar;
+        ToolTipService.SetToolTip(TabBarToggleButton, shows ? "Hide Tab Bar" : "Show Tab Bar");
+        AutomationProperties.SetName(TabBarToggleButton, shows ? "Hide Tab Bar" : "Show Tab Bar");
+        TabBarToggleButton.Opacity = shows ? 1 : 0.55;
+    }
+
+    private void TabBarToggle_Click(object sender, RoutedEventArgs e) => _ = RunCommandAsync("toggleTabBar");
 
     private async Task SplitSelectedAsync(bool vertical)
     {
@@ -738,7 +988,7 @@ public sealed partial class MainWindow : Window
         Windows.Foundation.Point Center(TerminalPane pane) => pane.Surface.TransformToVisual(TerminalHostPlaceholder)
             .TransformPoint(new Windows.Foundation.Point(pane.Surface.ActualWidth / 2, pane.Surface.ActualHeight / 2));
         var origin = Center(source);
-        var target = group.Panes.Where(p => p != source).Select(p => (Pane: p, Point: Center(p)))
+        var target = group.Panes.Where(p => p != source && group.Layout.Leaves.Contains(p.Id)).Select(p => (Pane: p, Point: Center(p)))
             .Where(p => dx != 0 ? (p.Point.X - origin.X) * dx > 1 : (p.Point.Y - origin.Y) * dy > 1)
             .OrderBy(p => Math.Pow(p.Point.X - origin.X, 2) + Math.Pow(p.Point.Y - origin.Y, 2)).FirstOrDefault().Pane;
         if (target is not null) { _workspace.Focus(target); target.Surface.FocusTerminal(); }
@@ -753,8 +1003,9 @@ public sealed partial class MainWindow : Window
 
     private async Task CloseSelectedAsync()
     {
+        if (_workspace.ActiveExtension is { } extension) { await CloseExtensionAsync(extension); return; }
         if (_workspace.Active is not { } pane) return;
-        if (_workspace.ActiveGroup?.Layout.Leaves.Count() == 1) { await CloseTabAsync(_workspace.ActiveGroup); return; }
+        if (_workspace.ActiveGroup?.Panes.Count == 1) { await CloseTabAsync(_workspace.ActiveGroup); return; }
         var note = await CloseNotesAsync(pane);
         if (note is not null && await Alerts.ContentAsync("Close Pane?", note, "Close", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
         await _workspace.ClosePaneAsync(pane);
@@ -763,7 +1014,7 @@ public sealed partial class MainWindow : Window
 
     private async Task CloseTabAsync(Tab tab)
     {
-        var index = _workspace.Tabs.ToList().IndexOf(tab);
+        var index = _workspace.VisibleTabs.ToList().IndexOf(tab);
         if (index < 0) return;
         if (!_closingTabs.Add(tab)) return;
         try
@@ -785,8 +1036,12 @@ public sealed partial class MainWindow : Window
                 }
                 finally { _connecting = false; }
             }
-        await _workspace.CloseAsync(_workspace.Tabs.ToList().IndexOf(tab));
-        if (_workspace.Tabs.Count == 0) await _workspace.AddAsync();
+        await _workspace.CloseAsync(_workspace.VisibleTabs.ToList().IndexOf(tab));
+            if (_workspace.Tabs.Count == 0 && _workspace.Extensions.Count == 0 && AppSettings.Current.CloseLastTab == "quit")
+            {
+                _windowCloseApproved = true;
+                Close();
+            }
         }
         finally { _closingTabs.Remove(tab); }
     }

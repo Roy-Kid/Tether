@@ -184,3 +184,22 @@ fn a_working_directory_report_that_is_not_one_is_ignored() {
     terminal.feed(&endless);
     assert_eq!(terminal.working_directory(), Some("/home/ada"));
 }
+
+/// Inserting before a wide character can push its right half off the edge
+/// of the row, leaving the left half in the last column. It is one column
+/// there, as the screen draws it, and a link over it stays on the screen.
+/// Found by `fuzz/terminal_links`: the span ended a column past the row.
+#[test]
+fn a_wide_character_pushed_to_the_edge_stays_on_the_screen() {
+    let terminal = terminal(
+        4,
+        2,
+        "\x1b]8;;https://example.org\x1b\\ab👧\x1b]8;;\x1b\\\x1b[4h\x1b[1;1Hx\x1b[4l",
+    );
+    let link = terminal.link_at(Position::new(0, 3)).expect("a link");
+    assert_eq!(link.text, "ab👧");
+    assert_eq!((link.spans[0].start, link.spans[0].end), (1, 4));
+    let widths: u16 =
+        terminal.screen().rows().next().unwrap().iter().map(|cell| u16::from(cell.width)).sum();
+    assert_eq!(widths, 4);
+}

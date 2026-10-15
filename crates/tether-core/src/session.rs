@@ -11,11 +11,11 @@
 //! any of that: it asks for a screen and gets one (spec §16).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use tether_terminal::{
-    Changes, FrameDelta, Input, Link, Options, Palette, Position, Screen, ScreenSize, Scroll,
-    Terminal, Viewport,
+    Changes, FrameDelta, Input, Link, Modes, Options, Palette, Position, Screen, ScreenSize,
+    Scroll, Terminal, Viewport,
 };
 
 use crate::connection::Connection;
@@ -66,13 +66,60 @@ struct Shared {
     /// exited is still delivering that shell's last output, and treating the
     /// status as the ending would stop a consumer repainting one frame early.
     exit_status: Mutex<Option<u32>>,
+    /// The modes as of the last bytes fed, kept apart from the terminal so a
+    /// keystroke is encoded without waiting for a parse in progress. A `cat`
+    /// flood holds the terminal for a chunk at a time, and the thread that
+    /// types is usually the one that draws.
+    modes: Mutex<Modes>,
+    /// A keystroke asked for the live screen while the terminal was busy.
+    /// Whoever takes the terminal next moves there first.
+    scroll_live: AtomicBool,
+    /// What a program last asked to copy (`OSC 52`), moved out of the engine
+    /// as it is fed. A consumer polls for it on every repaint, hidden tabs
+    /// included, and that poll should not queue behind the parser.
+    clipboard: Mutex<Option<String>>,
 }
 
 impl Shared {
+    /// The terminal, with any pending return to the live screen applied, so
+    /// what the caller reads or changes comes after the keystroke that asked
+    /// for it.
+    fn lock(&self) -> MutexGuard<'_, Terminal> {
+        self.settle(self.terminal.lock().expect("terminal lock poisoned"))
+    }
+
+    fn settle<'a>(&self, mut terminal: MutexGuard<'a, Terminal>) -> MutexGuard<'a, Terminal> {
+        if self.scroll_live.swap(false, Ordering::AcqRel) {
+            terminal.scroll(Scroll::Live);
+        }
+        terminal
+    }
+
+    /// Returns the viewport to the live screen now if the terminal is free,
+    /// or leaves it to whoever holds it.
+    fn request_live(&self) {
+        self.scroll_live.store(true, Ordering::Release);
+        match self.terminal.try_lock() {
+            Ok(terminal) => drop(self.settle(terminal)),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Poisoned(_)) => panic!("terminal lock poisoned"),
+        }
+    }
+
+    /// What the pump does under the lock after every feed: publish the
+    /// modes the next keystroke is encoded against, and move out a copy
+    /// request.
+    fn absorb(&self, terminal: &mut Terminal) {
+        *self.modes.lock().expect("modes lock poisoned") = terminal.modes();
+        if let Some(text) = terminal.take_clipboard() {
+            *self.clipboard.lock().expect("clipboard lock poisoned") = Some(text);
+        }
+    }
+
     fn checkpoint_history(&self) {
         if let Some(history) = &self.history {
             // Keep capture and commit ordered with synchronous resize/close.
-            let mut terminal = self.terminal.lock().expect("terminal lock poisoned");
+            let mut terminal = self.lock();
             if self.history_stopped.load(Ordering::Relaxed) {
                 return;
             }
@@ -173,6 +220,7 @@ impl TerminalSession {
             }
             terminal.record_history();
         }
+        let modes = terminal.modes();
         let shared = Arc::new(Shared {
             terminal: Mutex::new(terminal),
             history,
@@ -182,6 +230,9 @@ impl TerminalSession {
             changed,
             ending: Mutex::new(None),
             exit_status: Mutex::new(None),
+            modes: Mutex::new(modes),
+            scroll_live: AtomicBool::new(false),
+            clipboard: Mutex::new(None),
         });
 
         let pump = tokio::spawn(pump(Arc::clone(&shared), producer, inbox));
@@ -250,29 +301,31 @@ impl TerminalSession {
     /// Settable at any time, because appearance is: a person switching their
     /// window to light is the same question asked again.
     pub fn set_palette(&self, palette: Option<Palette>) {
-        self.shared.terminal.lock().expect("terminal lock poisoned").set_palette(palette);
+        self.shared.lock().set_palette(palette);
     }
 
     /// A snapshot of what the screen looks like now.
     pub fn screen(&self) -> Screen {
-        self.shared.terminal.lock().expect("terminal lock poisoned").screen()
+        self.shared.lock().screen()
     }
 
     /// Damage since the last call, and only the rows that damage names.
     pub fn take_frame_delta(&self) -> FrameDelta {
-        self.shared.terminal.lock().expect("terminal lock poisoned").take_frame_delta()
+        self.shared.lock().take_frame_delta()
     }
 
     /// Text a program asked to copy onto the local clipboard since the last
     /// call. The consumer writes it; this session has no clipboard of its own.
+    ///
+    /// Does not touch the terminal: the pump moves a copy out as it feeds.
     pub fn take_clipboard(&self) -> Option<String> {
-        self.shared.terminal.lock().expect("terminal lock poisoned").take_clipboard()
+        self.shared.clipboard.lock().expect("clipboard lock poisoned").take()
     }
 
     /// Drops scrollback above `keep` lines for the rest of the session.
     pub fn release_history(&self, keep: usize) {
         {
-            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            let mut terminal = self.shared.lock();
             terminal.release_history(keep);
         }
         self.shared.announce();
@@ -293,7 +346,7 @@ impl TerminalSession {
     /// A consumer that repaints whole screens can ignore this; one that draws
     /// incrementally reads it instead of diffing (spec §12).
     pub fn take_changes(&self) -> Changes {
-        self.shared.terminal.lock().expect("terminal lock poisoned").take_changes()
+        self.shared.lock().take_changes()
     }
 
     /// Moves the viewport over the scrollback.
@@ -302,32 +355,27 @@ impl TerminalSession {
     /// scrolls and then repaints must not be handed the screen it had before
     /// it scrolled.
     pub fn scroll(&self, scroll: Scroll) {
-        self.shared.terminal.lock().expect("terminal lock poisoned").scroll(scroll);
+        self.shared.lock().scroll(scroll);
         self.shared.announce();
     }
 
     /// Where the viewport is, and how much history is behind it.
     pub fn viewport(&self) -> Viewport {
-        self.shared.terminal.lock().expect("terminal lock poisoned").viewport()
+        self.shared.lock().viewport()
     }
 
     pub fn size(&self) -> ScreenSize {
-        self.shared.terminal.lock().expect("terminal lock poisoned").size()
+        self.shared.lock().size()
     }
 
     /// What the far side set the window title to.
     pub fn title(&self) -> String {
-        self.shared.terminal.lock().expect("terminal lock poisoned").title().to_owned()
+        self.shared.lock().title().to_owned()
     }
 
     /// The directory the far side's shell last reported, if it reports one.
     pub fn working_directory(&self) -> Option<String> {
-        self.shared
-            .terminal
-            .lock()
-            .expect("terminal lock poisoned")
-            .working_directory()
-            .map(str::to_owned)
+        self.shared.lock().working_directory().map(str::to_owned)
     }
 
     /// What the text at `position` names — a hyperlink, a web address, or
@@ -336,7 +384,7 @@ impl TerminalSession {
     ///
     /// [`Connection`]: crate::Connection
     pub fn link_at(&self, position: Position) -> Option<Link> {
-        self.shared.terminal.lock().expect("terminal lock poisoned").link_at(position)
+        self.shared.lock().link_at(position)
     }
 
     /// `Some` once the session has stopped, and why.
@@ -369,20 +417,19 @@ impl TerminalSession {
 
     /// Turns something the person did into bytes and sends them.
     ///
-    /// Encoding happens here, under the same lock that holds the modes it
-    /// depends on: the far side can switch application cursor mode between a
-    /// key press and its encoding, and reading the mode separately would
-    /// encode an arrow key against a mode that had already changed.
+    /// Never waits for the parser. The modes are the ones published after
+    /// the last bytes fed — a single point in the stream, so an arrow key is
+    /// never encoded against half of a mode change — and the key goes on the
+    /// same queue as every other write, so keys keep their order.
     pub fn send(&self, input: &Input) -> Result<(), SessionError> {
+        // Typing returns to the live screen, the way every terminal does.
+        // A keystroke whose echo lands somewhere off-screen reads as a
+        // terminal that ignored it — so this belongs here, above the
+        // engine, rather than being left for each frontend to remember.
+        self.shared.request_live();
         let bytes = {
-            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
-
-            // Typing returns to the live screen, the way every terminal does.
-            // A keystroke whose echo lands somewhere off-screen reads as a
-            // terminal that ignored it — so this belongs here, above the
-            // engine, rather than being left for each frontend to remember.
-            terminal.scroll(Scroll::Live);
-            terminal.encode(input)
+            let modes = *self.shared.modes.lock().expect("modes lock poisoned");
+            input.encode(modes)
         };
         if bytes.is_empty() {
             // A key with no encoding is not an error — F21 exists on keyboards
@@ -430,7 +477,7 @@ impl TerminalSession {
         // ran, so a consumer that resized and then laid out its view laid it
         // out against a screen that no longer existed.
         {
-            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            let mut terminal = self.shared.lock();
             terminal.resize(size);
         }
         self.shared.announce();
@@ -456,7 +503,7 @@ impl TerminalSession {
 
     pub fn close_in_place(&self) {
         {
-            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            let mut terminal = self.shared.lock();
             if !self.shared.history_stopped.swap(true, Ordering::Relaxed)
                 && let Some(history) = &self.shared.history
             {
@@ -572,8 +619,9 @@ async fn pump<P: Producer>(
                             match tokio::task::spawn_blocking(move || {
                                 let mut replies = Vec::new();
                                 for chunk in bytes.chunks(8192) {
-                                    let mut terminal = worker.terminal.lock().expect("terminal lock poisoned");
+                                    let mut terminal = worker.lock();
                                     terminal.feed(chunk);
+                                    worker.absorb(&mut terminal);
                                     if !worker.history_stopped.load(Ordering::Relaxed) {
                                         if terminal.pending_history_events() >= 256 {
                                             let events = terminal.take_history_events();
@@ -588,8 +636,9 @@ async fn pump<P: Producer>(
                                 Err(error) => { shared.finish(Ending::Lost(error.to_string())); return; }
                             }
                         } else {
-                            let mut terminal = shared.terminal.lock().expect("terminal lock poisoned");
+                            let mut terminal = shared.lock();
                             terminal.feed(&bytes);
+                            shared.absorb(&mut terminal);
                             terminal.take_replies()
                         };
                         shared.announce();
@@ -627,5 +676,128 @@ async fn pump<P: Producer>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tether_terminal::Key;
+
+    use super::*;
+    use crate::producer::ProducerError;
+
+    /// A shell that prints what the test sends it and records what it is
+    /// sent, in order.
+    struct Probe {
+        output: tokio::sync::mpsc::UnboundedReceiver<Output>,
+        writes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Producer for Probe {
+        async fn write(&mut self, bytes: Vec<u8>) -> Result<(), ProducerError> {
+            self.writes.lock().unwrap().extend(bytes);
+            Ok(())
+        }
+        async fn resize(&mut self, _: ScreenSize) -> Result<(), ProducerError> {
+            Ok(())
+        }
+        async fn next_output(&mut self) -> Option<Output> {
+            self.output.recv().await
+        }
+        async fn close(self) {}
+    }
+
+    fn probe() -> (TerminalSession, tokio::sync::mpsc::UnboundedSender<Output>, Arc<Mutex<Vec<u8>>>)
+    {
+        let (sender, output) = tokio::sync::mpsc::unbounded_channel();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let session = TerminalSession::start(
+            Probe { output, writes: Arc::clone(&writes) },
+            ScreenSize::new(20, 4),
+            Options::default(),
+        );
+        (session, sender, writes)
+    }
+
+    async fn printed(
+        session: &TerminalSession,
+        sender: &tokio::sync::mpsc::UnboundedSender<Output>,
+        bytes: &[u8],
+    ) {
+        let before = session.shared.generation.load(Ordering::Relaxed);
+        sender.send(Output::Bytes(bytes.to_vec())).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while session.shared.generation.load(Ordering::Relaxed) == before {
+                session.changed().await;
+            }
+        })
+        .await
+        .expect("the pump fed the bytes");
+    }
+
+    async fn received(writes: &Mutex<Vec<u8>>, expected: &[u8]) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while writes.lock().unwrap().as_slice() != expected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("sent {:?}, wanted {:?}", writes.lock().unwrap(), expected));
+    }
+
+    /// The parser holding the terminal — a long feed during a `cat` — does
+    /// not hold up typing, and the keys still go out in order, encoded
+    /// against the modes the program set.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_does_not_wait_for_the_parser() {
+        let (session, sender, writes) = probe();
+        // Application cursor keys, then enough lines to scroll back over.
+        printed(&session, &sender, b"\x1b[?1h1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8").await;
+        session.scroll(Scroll::PageUp);
+        assert!(session.viewport().offset > 0, "scrolled back before typing");
+
+        let busy = session.shared.terminal.lock().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let sent = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                session.send(&Input::character('a')).unwrap();
+                session.send(&Input::key(Key::Up)).unwrap();
+                session.send(&Input::character('b')).unwrap();
+                done.send(()).unwrap();
+            });
+            let sent = finished.recv_timeout(Duration::from_secs(1));
+            // Released before asserting, so a regression fails rather than
+            // deadlocking the scope.
+            drop(busy);
+            sent
+        });
+        assert!(sent.is_ok(), "send waited for the terminal lock");
+
+        received(&writes, b"a\x1bOAb").await;
+        assert_eq!(session.viewport().offset, 0, "typing returned to the live screen");
+    }
+
+    /// A copy request is delivered once, without the terminal lock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_copy_is_taken_once_without_the_terminal() {
+        let (session, sender, _) = probe();
+        assert_eq!(session.take_clipboard(), None);
+        printed(&session, &sender, b"\x1b]52;c;aGVsbG8=\x07").await;
+
+        let busy = session.shared.terminal.lock().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let taken = std::thread::scope(|scope| {
+            scope.spawn(|| done.send(session.take_clipboard()).unwrap());
+            let taken = finished.recv_timeout(Duration::from_secs(1));
+            drop(busy);
+            taken
+        });
+        assert_eq!(
+            taken.expect("take_clipboard waited for the terminal lock"),
+            Some("hello".to_owned())
+        );
+        assert_eq!(session.take_clipboard(), None);
     }
 }

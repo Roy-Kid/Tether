@@ -10,6 +10,27 @@ public sealed partial class MainWindow
     private readonly HashSet<Tab> _closingTabs = [];
     private bool _zen;
     private bool _windowCloseApproved, _checkingWindowClose;
+    private WorkspaceCommandState CommandState => new(_workspace.VisibleTabs.Count + _workspace.VisibleExtensions.Count,
+        _workspace.ActiveGroup?.Panes.Count ?? 0, _workspace.ActiveGroup?.Layout.Leaves.Count() ?? 0,
+        _workspace.Active?.Model.IsLive == true, _workspace.Active?.Model.CanReconnect == true,
+        _workspace.CanRestore, _connecting || _splitting,
+        _workspace.Active?.Surface.ActualWidth >= 325, _workspace.Active?.Surface.ActualHeight >= 205,
+        _zen, App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().Any(p => App.Plugins.IsEnabled(p.Metadata.Id)),
+        _workspace.ActiveExtension is not null);
+
+    private string CommandTitle(WorkspaceCommand command) => command.Id switch
+    {
+        "zen" => _zen ? "Exit Zen Mode" : "Zen Mode",
+        "toggleTabBar" => AppSettings.Current.ShowsTabBar ? "Hide Tab Bar" : "Show Tab Bar",
+        "reconnect" => _workspace.Active?.Model.RemoteHost is null ? "Restart" : "Reconnect",
+        _ => command.Title,
+    };
+
+    private async Task<bool> ConnectPaneAsync(TerminalPane pane, HostEntry host)
+    {
+        await OpenHostAsync(host, pane);
+        return pane.Model.IsLive;
+    }
     private async Task RequestWindowCloseAsync()
     {
         if (_checkingWindowClose) return;
@@ -36,6 +57,18 @@ public sealed partial class MainWindow
     private async void MaximizePane_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("maximizePane");
     private Window? _commandPicker;
 
+    private void CycleWorkspaceTab(bool forward)
+    {
+        var items = _workspace.VisibleTabs.Cast<object>().Concat(_workspace.VisibleExtensions).ToList();
+        if (items.Count == 0) return;
+        var current = _workspace.ActiveExtension is { } extension ? (object)extension
+            : _workspace.ActiveGroup is { } group ? group : null;
+        var index = current is null ? -1 : items.IndexOf(current);
+        var next = items[(index + (forward ? 1 : items.Count - 1) + items.Count) % items.Count];
+        if (next is ExtensionTab open) _workspace.Activate(open);
+        else if (next is Tab tab) _workspace.Activate(tab);
+    }
+
     private void ApplyWorkspaceVisibility()
     {
         var shows = !_zen && AppSettings.Current.ShowsTabBar;
@@ -44,29 +77,54 @@ public sealed partial class MainWindow
         VerticalTabs.Visibility = shows && vertical ? Visibility.Visible : Visibility.Collapsed;
         HiddenTitleBarDragArea.Visibility = TabStrip.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
         SetTitleBar(TabStrip.Visibility == Visibility.Visible ? TitleBarDragArea : HiddenTitleBarDragArea);
-        StatusBar.Visibility = _zen ? Visibility.Collapsed : Visibility.Visible;
+        var attention = _workspace.Active?.Model.Bar.Phase is RemotePhase.Connecting or RemotePhase.Authenticating or RemotePhase.Lost or RemotePhase.Failed;
+        StatusBar.Visibility = !_zen || attention ? Visibility.Visible : Visibility.Collapsed;
         if (_zen) InspectorHost.Visibility = Visibility.Collapsed;
+        UpdateTabBarToggle();
     }
 
-    private sealed record VerticalRow(Tab Tab) { public override string ToString() => Tab.Title; }
+    private abstract record VerticalItem(string Title) { public override string ToString() => Title; }
+    private sealed record VerticalTabRow(Tab Tab) : VerticalItem(Tab.Title);
+    private sealed record VerticalExtensionRow(ExtensionTab Extension) : VerticalItem(Extension.Title);
     private void RefreshVerticalTabs()
     {
-        var rows = _workspace.Tabs.Select(t => new VerticalRow(t)).ToArray();
+        var rows = _workspace.VisibleTabs.Select(t => (VerticalItem)new VerticalTabRow(t))
+            .Concat(_workspace.VisibleExtensions.Select(e => new VerticalExtensionRow(e))).ToArray();
         VerticalTabList.ItemsSource = rows;
-        VerticalTabList.SelectedIndex = _workspace.ActiveIndex;
+        VerticalTabList.SelectedItem = _workspace.ActiveExtension is { } extension
+            ? rows.OfType<VerticalExtensionRow>().FirstOrDefault(r => r.Extension == extension)
+            : rows.OfType<VerticalTabRow>().ElementAtOrDefault(_workspace.ActiveIndex);
     }
     private void VerticalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_refreshingTabs && VerticalTabList.SelectedItem is VerticalRow row)
-            _workspace.Select(_workspace.Tabs.ToList().IndexOf(row.Tab));
+        if (_refreshingTabs) return;
+        if (VerticalTabList.SelectedItem is VerticalExtensionRow extension) _workspace.Activate(extension.Extension);
+        else if (VerticalTabList.SelectedItem is VerticalTabRow row)
+            _workspace.Select(_workspace.VisibleTabs.ToList().IndexOf(row.Tab));
     }
-    private async void VerticalAdd_Click(object sender, RoutedEventArgs e) => await _workspace.AddAsync();
+    private async void VerticalAdd_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("newTab");
 
     private bool HandleWorkspaceShortcut(Shortcut shortcut)
     {
+        // Commands offered by an active attachment own their configured chord.
+        if (_workspace.Active is { } active)
+            foreach (var plugin in App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().Where(p => App.Plugins.IsEnabled(p.Metadata.Id)))
+                foreach (var command in active.AttachmentFor(plugin.Metadata.Id)?.Commands ?? [])
+                {
+                    var id = "plugin." + plugin.Metadata.Id + ".command." + command.Id;
+                    var chords = new[]
+                    {
+                        AppSettings.Current.KeyBindings.GetValueOrDefault(id),
+                        AppSettings.Current.KeyBindings.GetValueOrDefault(WorkspaceCommands.SecondaryKey(id)),
+                    };
+                    if (!chords.Any(chord => !string.IsNullOrWhiteSpace(chord) && Shortcut.TryParse(chord, out var key) && key == shortcut))
+                        continue;
+                    _ = RunPluginCommandAsync(command.Run);
+                    return true;
+                }
         foreach (var command in WorkspaceCommands.All)
         {
-            if (!Shortcut.TryParse(WorkspaceCommands.Binding(command, AppSettings.Current), out var binding) || binding != shortcut) continue;
+            if (!WorkspaceCommands.Matches(command, AppSettings.Current, shortcut)) continue;
             _ = RunCommandAsync(command.Id);
             return true;
         }
@@ -89,14 +147,21 @@ public sealed partial class MainWindow
 
     private async Task RunCommandAsync(string id)
     {
+        if (!WorkspaceCommands.IsEnabled(id, CommandState)) return;
         try
         {
             switch (id)
             {
-                case "newTerminal": await _workspace.AddAsync(); break;
+                case "newTerminal": await _workspace.AddTerminalAsync(ConnectPaneAsync); break;
+                case "newTab": await _workspace.AddAsync(ConnectPaneAsync); break;
                 case "changeHost": ShowHostPicker(); break;
                 case "closeTab": await CloseSelectedAsync(); break;
                 case "closeWorkspace": if (_workspace.ActiveGroup is { } group) await CloseTabAsync(group); break;
+                case "closeWindow": await RequestWindowCloseAsync(); break;
+                case "joinGroups": _workspace.JoinSplits(); break;
+                case "previousTerminal": _workspace.CycleTerminal(false); break;
+                case "nextTerminal": _workspace.CycleTerminal(true); break;
+                case "reconnect": await ReconnectSelectedAsync(); break;
                 case "splitRight": await SplitSelectedAsync(false); break;
                 case "splitDown": await SplitSelectedAsync(true); break;
                 case "maximizePane":
@@ -116,17 +181,22 @@ public sealed partial class MainWindow
                     break;
                 case "commandMenu": ShowCommandPicker(false); break;
                 case "quickSwitch": ShowCommandPicker(true); break;
-                case "previousTab": _workspace.Select((_workspace.ActiveIndex - 1 + _workspace.Tabs.Count) % _workspace.Tabs.Count); break;
-                case "nextTab": _workspace.Select((_workspace.ActiveIndex + 1) % _workspace.Tabs.Count); break;
+                case "previousTab": CycleWorkspaceTab(false); break;
+                case "nextTab": CycleWorkspaceTab(true); break;
                 case "renameTerminal":
+                case "renameTab":
                     if (_workspace.Active is not { } tab) break;
-                    var name = new TextBox { Text = tab.Title, MinWidth = 260 };
+                    var name = new TextBox { Text = id == "renameTab" ? _workspace.ActiveGroup?.Title : tab.Title, MinWidth = 260 };
                     name.Loaded += (_, _) => { name.Focus(FocusState.Programmatic); name.SelectAll(); };
                     _connecting = true;
                     try
                     {
                         if (await Alerts.ContentAsync("Rename Terminal", name, "Rename", null, WorkspaceRoot.ActualTheme, _ => { }) == ContentDialogResult.Primary &&
-                            !string.IsNullOrWhiteSpace(name.Text)) _workspace.Rename(tab, name.Text.Trim());
+                            !string.IsNullOrWhiteSpace(name.Text))
+                        {
+                            if (id == "renameTab" && _workspace.ActiveGroup is { } namedGroup) _workspace.Rename(namedGroup, name.Text.Trim());
+                            else _workspace.Rename(tab, name.Text.Trim());
+                        }
                     }
                     finally { _connecting = false; }
                     break;
@@ -139,71 +209,21 @@ public sealed partial class MainWindow
                     break;
                 case "manageHosts": await ShowHostEditorAsync(); break;
                 case "manageIdentities": await ShowIdentitiesAsync(); break;
+                case "settings": SettingsWindow.ShowFor(App.Plugins); break;
             }
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             await Alerts.ContentAsync("Unable to complete action", ex.Message, "Close", null, WorkspaceRoot.ActualTheme, _ => { });
         }
     }
 
-    private sealed record PickerRow(string Title, string Search, Func<Task> Run)
+    private async Task RunPluginCommandAsync(Func<Task> run)
     {
-        public override string ToString() => Title;
-    }
-
-    private void ShowCommandPicker(bool quick)
-    {
-        if (_commandPicker is not null) { _commandPicker.Activate(); return; }
-        var query = new TextBox { PlaceholderText = quick ? "Find a terminal or host…" : "Find a command…" };
-        var list = new ListView { MaxHeight = 360, IsItemClickEnabled = true };
-        var rows = new List<PickerRow>();
-        if (quick)
-        {
-            foreach (var tab in _workspace.Tabs)
-                rows.Add(new(tab.Title, tab.Title, () => { _workspace.Select(_workspace.Tabs.ToList().IndexOf(tab)); return Task.CompletedTask; }));
-            foreach (var host in SshConfig.Load()) rows.Add(new(host.Label, host.Label + " " + host.Target, () => OpenHostAsync(host)));
-        }
-        else
-        {
-            foreach (var command in WorkspaceCommands.All)
-            {
-                var chord = WorkspaceCommands.Binding(command, AppSettings.Current);
-                rows.Add(new(command.Title + (chord.Length > 0 ? "    " + chord : ""), command.Title + " " + chord, () => RunCommandAsync(command.Id)));
-            }
-            foreach (var plugin in App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().Where(p => App.Plugins.IsEnabled(p.Metadata.Id)))
-            {
-                rows.Add(new("Open " + plugin.Metadata.Name, plugin.Metadata.Name, () => { ToggleInspector(plugin.Metadata.Id); return Task.CompletedTask; }));
-                if (_workspace.Active is { } tab)
-                    foreach (var command in tab.Attach(plugin, Context(tab, plugin)).Commands)
-                        rows.Add(new(command.Title, command.Title, command.Run));
-            }
-        }
-        void Reload()
-        {
-            list.ItemsSource = rows.Where(r => r.Search.Contains(query.Text.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
-            list.SelectedIndex = list.Items.Count > 0 ? 0 : -1;
-        }
-        var window = new Window { Title = quick ? "Quick Switch" : "Command Menu" };
-        AppBranding.Apply(window);
-        async Task Choose(PickerRow row) { window.Close(); await row.Run(); }
-        query.TextChanged += (_, _) => Reload();
-        list.ItemClick += async (_, e) => { if (e.ClickedItem is PickerRow row) await Choose(row); };
-        var panel = new StackPanel { Padding = new Thickness(12), Spacing = 8 };
-        panel.Children.Add(query); panel.Children.Add(list);
-        panel.KeyDown += async (_, e) =>
-        {
-            if (e.Key == VirtualKey.Escape) { e.Handled = true; window.Close(); }
-            else if (e.Key == VirtualKey.Enter && list.SelectedItem is PickerRow row) { e.Handled = true; await Choose(row); }
-            else if (e.Key is VirtualKey.Down or VirtualKey.Up && list.Items.Count > 0)
-            { e.Handled = true; list.SelectedIndex = Math.Clamp(list.SelectedIndex + (e.Key == VirtualKey.Down ? 1 : -1), 0, list.Items.Count - 1); list.ScrollIntoView(list.SelectedItem); }
-        };
-        window.Content = panel;
-        window.AppWindow.Resize(new Windows.Graphics.SizeInt32(480, 450));
-        WindowPlacement.Own(window);
-        window.Closed += (_, _) => { _commandPicker = null; _workspace.Active?.Surface.FocusTerminal(); };
-        _commandPicker = window;
-        Reload(); window.Activate(); query.Focus(FocusState.Programmatic);
+        try { await run(); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { await Alerts.ContentAsync("Action Failed", ex.Message, "Close", null, WorkspaceRoot.ActualTheme, _ => { }); }
     }
 
     private async Task ShowHostEditorAsync()

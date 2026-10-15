@@ -8,6 +8,19 @@ namespace TetherApp;
 
 public sealed partial class SettingsWindow : Window
 {
+    private static SettingsWindow? _current;
+    public static void ShowFor(PluginRegistry plugins, string? section = null)
+    {
+        if (_current is null)
+        {
+            _current = new SettingsWindow(plugins);
+            _current.Closed += (_, _) => _current = null;
+        }
+        if (section is not null)
+            _current.SettingsRoot.SelectedItem = _current.SettingsRoot.MenuItems.OfType<NavigationViewItem>()
+                .FirstOrDefault(item => item.Tag as string == section);
+        _current.Activate();
+    }
     private bool _loading = true;
     private readonly PluginRegistry? _plugins;
 
@@ -18,9 +31,11 @@ public sealed partial class SettingsWindow : Window
         _plugins = plugins;
         InitializeComponent();
         AppBranding.Apply(this);
+        SystemBackdrop = new MicaBackdrop();
         BuildExtensions();
         BuildTerminal();
         BuildWorkspaceSettings();
+        BuildSecurity();
         IdentitiesPane.Children.Add(new TextBlock { Text = "Manage account identities, SSH keys, passwords, TOTP and authentication confirmation policies.", TextWrapping = TextWrapping.Wrap });
         var identities = new Button { Content = "Manage Identities" };
         identities.Click += async (_, _) => { try { await IdentityManager.ShowAsync(SettingsRoot.ActualTheme); } catch (Exception ex) { SaveProblem.Text = ex.Message; } };
@@ -34,6 +49,8 @@ public sealed partial class SettingsWindow : Window
             ShellPicker.Items.Add(new ComboBoxItem { Content = AppSettings.Current.Shell, Tag = AppSettings.Current.Shell });
         ShellPicker.SelectedItem = ShellPicker.Items.Cast<ComboBoxItem>()
             .First(item => (string)item.Tag == AppSettings.Current.Shell);
+        LastTabPicker.SelectedItem = LastTabPicker.Items.Cast<ComboBoxItem>()
+            .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.CloseLastTab) ?? LastTabPicker.Items[0];
         _loading = false;
         AppSettings.Changed += ApplyAppearance;
         SettingsRoot.ActualThemeChanged += (_, _) => UpdateTitleBar();
@@ -55,7 +72,7 @@ public sealed partial class SettingsWindow : Window
 
     private void UpdateTitleBar()
     {
-        var background = ((SolidColorBrush)SettingsRoot.Background).Color;
+        var background = ((SolidColorBrush)Application.Current.Resources["ChromeWindowBrush"]).Color;
         var foreground = ((SolidColorBrush)PageHeading.Foreground).Color;
         var titleBar = AppWindow.TitleBar;
         titleBar.BackgroundColor = titleBar.InactiveBackgroundColor = background;
@@ -69,15 +86,122 @@ public sealed partial class SettingsWindow : Window
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
         var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
-        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "History", "files" => "Files", "identities" => "Identities", _ => "Startup" };
+        PageHeading.Text = tag switch
+        {
+            "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions",
+            "keys" => "Key Bindings", "history" => "History", "security" => "Security",
+            "files" => "Files", "identities" => "Identities", _ => "Startup",
+        };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
+        SshPane.Visibility = StartupPane.Visibility;
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;
         ExtensionsPane.Visibility = tag == "extensions" ? Visibility.Visible : Visibility.Collapsed;
         KeysPane.Visibility = tag == "keys" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPane.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
+        SecurityPane.Visibility = tag == "security" ? Visibility.Visible : Visibility.Collapsed;
         FilesPane.Visibility = tag == "files" ? Visibility.Visible : Visibility.Collapsed;
         IdentitiesPane.Visibility = tag == "identities" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag == "security") BuildSecurity();
+    }
+
+    private void LastTab_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || LastTabPicker.SelectedItem is not ComboBoxItem { Tag: string value }) return;
+        ShowSaveResult((AppSettings.Current with { CloseLastTab = value }).Save());
+    }
+
+    private void BuildSecurity()
+    {
+        SecurityPane.Children.Clear();
+        var known = new Tether.KnownHosts();
+        SecurityPane.Children.Add(new TextBlock { Text = "Trusted host keys", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"] });
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Keys accepted when connecting. Forgetting one asks again on the next connection.",
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var trusted = known.Trusted();
+        if (trusted.Count == 0)
+            SecurityPane.Children.Add(new TextBlock { Text = "None", Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+        foreach (var entry in trusted)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var labels = new StackPanel { Spacing = 2 };
+            labels.Children.Add(new TextBlock { Text = entry.Endpoint, TextWrapping = TextWrapping.Wrap });
+            labels.Children.Add(new TextBlock
+            {
+                Text = entry.Algorithm + " " + entry.Fingerprint,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            });
+            row.Children.Add(labels);
+            var forget = new Button { Content = "Forget", Tag = entry.Endpoint };
+            forget.Click += async (_, _) =>
+            {
+                if (await Alerts.ContentAsync("Forget " + entry.Endpoint + "?",
+                    "You’ll be asked to trust this host again when connecting.", "Forget", null,
+                    SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                known.ForgetEndpoint(entry.Endpoint);
+                BuildSecurity();
+            };
+            Grid.SetColumn(forget, 1);
+            row.Children.Add(forget);
+            SecurityPane.Children.Add(row);
+        }
+
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Saved passwords",
+            Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Password identities stored for this Windows account. Delete removes the identity and its encrypted secret.",
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        try
+        {
+            var passwords = IdentityStore.Current.Identities.Where(i => i.Method == AuthenticationMethod.Password).ToArray();
+            if (passwords.Length == 0)
+                SecurityPane.Children.Add(new TextBlock { Text = "None", Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+            foreach (var identity in passwords)
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.Children.Add(new TextBlock { Text = identity.Name, VerticalAlignment = VerticalAlignment.Center });
+                var delete = new Button { Content = "Delete" };
+                delete.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await Alerts.ContentAsync("Delete " + identity.Name + "?",
+                            "This removes the saved password identity.", "Delete", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        IdentityStore.Current.Delete(identity.Id);
+                        BuildSecurity();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                Grid.SetColumn(delete, 1);
+                row.Children.Add(delete);
+                SecurityPane.Children.Add(row);
+            }
+        }
+        catch (Exception ex)
+        {
+            SecurityPane.Children.Add(new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+        }
     }
 
     private async void BuildTerminal()
@@ -179,16 +303,14 @@ public sealed partial class SettingsWindow : Window
             {
                 try
                 {
-                    var picker = new Windows.Storage.Pickers.FolderPicker(); picker.FileTypeFilter.Add("*");
-                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-                    if (await picker.PickSingleFolderAsync() is not { } folder) return;
-                    var package = WebPluginPackage.Read(folder.Path);
+                    if (await PickPluginFolderAsync() is not { } folder) return;
+                    var package = WebPluginPackage.Read(folder);
                     var access = string.Join("\n", package.Manifest.NetworkOrigins ?? []);
                     if (await Alerts.ContentAsync("Install " + package.Manifest.Name + "?", access, "Install", null,
                         SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
-                    WebPluginCatalog.Install(folder.Path, _plugins); BuildExtensions();
+                    WebPluginCatalog.Install(folder, _plugins); BuildExtensions();
                 }
-                catch (Exception ex) { SaveProblem.Text = ex.Message; }
+                catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
             });
             ExtensionsPane.Children.Add(install);
             foreach (var problem in WebPluginCatalog.Problems)
@@ -206,6 +328,8 @@ public sealed partial class SettingsWindow : Window
         }
         foreach (var plugin in _plugins.Plugins)
         {
+            var web = plugin as WebPlugin;
+            var installed = web is not null ? WebPluginCatalog.Installed(plugin.Metadata.Id) : null;
             var toggle = new ToggleSwitch
             {
                 Header = plugin.Metadata.Name,
@@ -227,16 +351,65 @@ public sealed partial class SettingsWindow : Window
                 Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
                 TextWrapping = TextWrapping.Wrap,
             });
+            if (installed is not null)
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = installed.Manifest.Publisher + " · " + installed.Manifest.Version,
+                    Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                var update = new Button { Content = "Update…" };
+                update.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await PickPluginFolderAsync() is not { } folder) return;
+                        var package = WebPluginPackage.Read(folder);
+                        if (package.Manifest.Id != id)
+                        {
+                            SaveProblem.Text = "That package’s id does not match " + id + ".";
+                            SaveProblem.Visibility = Visibility.Visible;
+                            return;
+                        }
+                        var detail = installed.Manifest.Version + " → " + package.Manifest.Version;
+                        if (await Alerts.ContentAsync("Update " + package.Manifest.Name + "?", detail, "Update", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        WebPluginCatalog.Update(folder, _plugins); BuildExtensions();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                var uninstall = new Button { Content = "Uninstall" };
+                uninstall.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await Alerts.ContentAsync("Uninstall " + plugin.Metadata.Name + "?",
+                            "Removes the package from this device and closes its tabs.", "Uninstall", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        WebPluginCatalog.Uninstall(id, _plugins); BuildExtensions();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                actions.Children.Add(update);
+                actions.Children.Add(uninstall);
+                card.Children.Add(actions);
+            }
             ExtensionsPane.Children.Add(new Border
             {
-                Background = (Brush)Application.Current.Resources["ChromeRaisedBrush"],
-                CornerRadius = (CornerRadius)Application.Current.Resources["RowRadius"],
-                Padding = (Thickness)Application.Current.Resources["SettingsCardInset"],
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)Application.Current.Resources["ChromeStrokeBrush"],
+                Style = (Style)Application.Current.Resources["SettingsCardStyle"],
                 Child = card,
             });
         }
+    }
+
+    private async Task<string?> PickPluginFolderAsync()
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        return (await picker.PickSingleFolderAsync())?.Path;
     }
 
     private void Theme_Changed(object sender, SelectionChangedEventArgs e)

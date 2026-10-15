@@ -48,6 +48,17 @@ public sealed class PluginRegistry
         Changed?.Invoke();
     }
 
+    /// <summary>Removes a plugin from this process. Does not delete files; the catalog owns that.</summary>
+    public bool Unregister(string id)
+    {
+        var plugin = _plugins.FirstOrDefault(item => item.Metadata.Id == id);
+        if (plugin is null) return false;
+        if (IsEnabled(id)) plugin.Deactivate();
+        _plugins.Remove(plugin);
+        Changed?.Invoke();
+        return true;
+    }
+
     public bool IsEnabled(string id) => !_disabled.Contains(id);
 
     public void SetEnabled(string id, bool enabled)

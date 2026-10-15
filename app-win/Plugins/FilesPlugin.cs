@@ -35,6 +35,7 @@ sealed class FilesAttachment : ITabAttachment
         _pane.HideRequested += tab.Dismiss;
         _pane.DialogRoot = tab.DialogRoot;
         _pane.WindowHandle = tab.WindowHandle();
+        _pane.OpenWebViewer = tab.OpenWebViewer;
     }
 
     public Microsoft.UI.Xaml.UIElement View => _pane;
@@ -45,6 +46,7 @@ sealed class FilesAttachment : ITabAttachment
     {
         _pane.WindowHandle = _tab.WindowHandle();
         _pane.DialogRoot = _tab.DialogRoot;
+        _pane.OpenWebViewer = _tab.OpenWebViewer;
         return _pane.ShowAsync();
     }
 
