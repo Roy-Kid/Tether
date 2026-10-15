@@ -261,6 +261,7 @@ final class HostStore {
     } catch { problem = error.localizedDescription }
     // The cached library, and nothing slower: the SSH file and the
     // keychain are read by `refresh`, after the first frame.
+    undoConfirmationForcedBySeed()
     rebuildHosts()
     trustArrivedSettings()
   }

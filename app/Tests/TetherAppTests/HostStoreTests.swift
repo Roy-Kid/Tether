@@ -294,6 +294,46 @@ struct HostStoreTests {
     #expect(store.hosts.first?.profile?.authentication.confirmation == .automatic)
   }
 
+  /// A library a version before that fix wrote: a host with a seed, asking
+  /// before every login, last edited before the fix existed.
+  static func libraryWithForcedConfirmation(modified: Date) throws -> (URL, HostStore) {
+    let location = temporaryFile("config")
+    let store = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    store.setOTP("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", for: try #require(store.hosts.first))
+    let id = try #require(store.hosts.first?.id)
+    try store.update { state in
+      state.records[id]?.profile.authentication.confirmation = .confirmAuthentication
+      state.records[id]?.profile.modified = modified
+      state.records[id]?.dirty = false
+    }
+    return (location, store)
+  }
+
+  /// What that version set behind someone's back is undone once, on the
+  /// next launch, and the change travels to their other devices.
+  @Test func aConfirmationTheSeedForcedIsUndone() throws {
+    let (location, _) = try Self.libraryWithForcedConfirmation(
+      modified: HostStore.seedStoppedForcingConfirmation.addingTimeInterval(-86_400))
+    defer { removeDirectory(of: location) }
+
+    let reopened = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    let host = try #require(reopened.hosts.first)
+    #expect(host.profile?.authentication.confirmation == .automatic)
+    #expect(reopened.snapshot.records[host.id]?.dirty == true)
+    #expect((host.profile?.modified ?? .distantPast) > HostStore.seedStoppedForcingConfirmation)
+    #expect(reopened.snapshot.approvals[host.id] == host.profile?.securityDigest)
+  }
+
+  /// One chosen since is a choice, and stays.
+  @Test func aConfirmationChosenSinceTheFixStays() throws {
+    let (location, _) = try Self.libraryWithForcedConfirmation(modified: Date())
+    defer { removeDirectory(of: location) }
+
+    let reopened = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(reopened.hosts.first?.profile?.authentication.confirmation == .confirmAuthentication)
+  }
+
   /// The SSH file and the keychain are read by `refresh`, off the main
   /// actor, not by opening the store. A password kept or let go of here is
   /// known at once, without listing the keychain again.
