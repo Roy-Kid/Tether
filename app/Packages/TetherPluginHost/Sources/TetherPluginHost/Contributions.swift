@@ -13,6 +13,7 @@ public struct ContributionMatch: Sendable, Equatable, Identifiable {
 public struct ContributionIndex: Sendable, Equatable {
   public private(set) var viewers: [ContributionMatch] = []
   public private(set) var commands: [ContributionMatch] = []
+  public private(set) var statusBars: [ContributionMatch] = []
   public private(set) var panels: [ContributionMatch] = []
 
   public func matches(suffix: String) -> [ContributionMatch] {
@@ -30,6 +31,7 @@ public struct ContributionIndex: Sendable, Equatable {
       case .viewer: viewers.append(match)
       case .command: commands.append(match)
       case .panel: panels.append(match)
+      case .statusBar: statusBars.append(match)
       }
     }
   }

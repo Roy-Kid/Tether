@@ -174,8 +174,8 @@ extension Host {
 /// iCloud, and on a Mac fed by `~/.ssh/config` (`HostStore+Import`). The file
 /// is written back only when a person agrees (`HostStore+Align`). There is one
 /// kind of host. A host that arrives from
-/// another device on the same Apple ID is already trusted. Private keys
-/// travel with the library; passwords stay on the device that saved them.
+/// another device on the same Apple ID is already trusted. Its private key,
+/// password and one-time-code seed travel with it (`HostStore+SharedSecrets`).
 @MainActor
 @Observable
 final class HostStore {
@@ -194,7 +194,7 @@ final class HostStore {
   private var database: IdentityDatabase?
   /// This Mac's `~/.ssh/config`, or the file a test gave instead.
   let location: URL
-  private let secrets: any SecretStore
+  let secrets: any SecretStore
   let credentials: DeviceCredentialStore
   private(set) var config = SSHConfig("")
   private(set) var unreadable = false
@@ -214,6 +214,19 @@ final class HostStore {
   private(set) var continuity: ContinuityService?
   private let allowCloud: Bool
   private var swept = false
+  /// Whether `config` is the file as read, rather than the empty stand-in
+  /// a store starts with. Launch reads it off the main actor (`refresh`).
+  private var configurationRead = false
+  /// Bumped by every read, so a background read that lands after a newer
+  /// one does not put the older file back.
+  private var configurationReads = 0
+  /// Which saved passwords the keychain holds. `nil` until it has been
+  /// listed once; listed off the main actor, then kept current by the
+  /// changes made here rather than listed again on every change.
+  private var keptPasswords: Set<UUID>?
+  /// Changes made while a listing is in flight, laid over its answer.
+  private var passwordEdits: [UUID: Bool]?
+  private var refreshing: Task<Void, Never>?
 
   var listed: [Host] { TerminalSession.isLocalAvailable ? [.local] + hosts : hosts }
   var filtered: [Host] {
@@ -246,7 +259,10 @@ final class HostStore {
       scope = try database.read(String.self, scope: "active-account") ?? "local"
       snapshot = try database.read(IdentitySnapshot.self, scope: scope) ?? IdentitySnapshot()
     } catch { problem = error.localizedDescription }
-    reload()
+    // The cached library, and nothing slower: the SSH file and the
+    // keychain are read by `refresh`, after the first frame.
+    undoConfirmationForcedBySeed()
+    rebuildHosts()
     trustArrivedSettings()
   }
 
@@ -297,7 +313,7 @@ final class HostStore {
     snapshot = next
     keyBindings?.switchAccount(account)
     accountGeneration += 1
-    reload()
+    rebuildHosts()
   }
 
   /// Every change to the library goes through here, and so does letting go
@@ -309,11 +325,7 @@ final class HostStore {
     var next = snapshot
     try change(&next)
     next.prune()
-    if skippingUnchanged {
-      let encoder = JSONEncoder()
-      encoder.outputFormatting = .sortedKeys
-      if try encoder.encode(next) == encoder.encode(snapshot) { return }
-    }
+    if skippingUnchanged, next == snapshot { return }
     try database.write(next, scope: scope)
     var released = snapshot.credentialSecrets.subtracting(next.credentialSecrets)
     var forgotten = snapshot.passwordSecrets.subtracting(next.passwordSecrets)
@@ -332,7 +344,7 @@ final class HostStore {
       }
     }
     release(credentials: released, passwords: forgotten)
-    reload()
+    rebuildHosts()
   }
 
   /// Every library but the active one.
@@ -346,8 +358,14 @@ final class HostStore {
   private func release(credentials released: Set<UUID>, passwords forgotten: Set<UUID>) {
     // Each on its own: one item the keychain refuses to delete is no reason
     // to keep the others.
-    for (id, store) in released.map({ ($0, credentials.secrets) }) + forgotten.map({ ($0, secrets) }) {
-      do { try store.forget(id) } catch { problem = error.localizedDescription }
+    for id in released {
+      do { try credentials.forget(id) } catch { problem = error.localizedDescription }
+    }
+    for id in forgotten {
+      do {
+        try secrets.forget(id)
+        notePassword(id, kept: false)
+      } catch { problem = error.localizedDescription }
     }
   }
 
@@ -355,34 +373,140 @@ final class HostStore {
   /// go of a host without letting go of its key. Once per launch, before any
   /// editor could be holding a key it has not saved yet, and only when every
   /// library could be read — one that could not might be the one using it.
-  func sweepCredentials() {
+  ///
+  /// The keychain is listed off the main actor, as launch begins. Only what
+  /// that listing saw can be swept, so a key made after it is never at risk;
+  /// what the libraries point at is read afterwards, so one that took a key
+  /// on meanwhile keeps it.
+  func sweepCredentials() async {
     // A store opened on another file sees only its own libraries, and would
     // take the real ones' keys for strays.
-    guard allowCloud, !swept, let database else { return }
+    guard allowCloud, !swept, database != nil else { return }
     swept = true
+    let credentials = credentials
     do {
-      var referenced: Set<UUID> = []
-      for scope in try database.scopes() where scope != "active-account" {
-        guard let library = try database.read(IdentitySnapshot.self, scope: scope) else { continue }
-        referenced.formUnion(library.credentialSecrets)
-      }
-      for item in try credentials.saved() where !referenced.contains(item.id) {
+      let saved = try await Task.detached(priority: .utility) { try credentials.saved() }.value
+      let referenced = try referencedCredentials()
+      for item in saved where !referenced.contains(item.id) {
         try credentials.forget(item.id)
       }
     } catch { problem = error.localizedDescription }
   }
 
+  private func referencedCredentials() throws -> Set<UUID> {
+    guard let database else { throw IdentityError.storage("Identity database unavailable.") }
+    var referenced: Set<UUID> = []
+    for scope in try database.scopes() where scope != "active-account" {
+      guard let library = try database.read(IdentitySnapshot.self, scope: scope) else { continue }
+      referenced.formUnion(library.credentialSecrets)
+    }
+    return referenced
+  }
+
+  /// Reads `~/.ssh/config` here and now. For the actions that need the file
+  /// as it is this moment — Import, alignment — and for tests. Launch and
+  /// coming forward use `refresh`, which reads it off the main actor.
   func reload() {
-    if FileManager.default.fileExists(atPath: location.path) {
-      do {
-        config = try SSHConfig.read(location)
-        unreadable = false
-      } catch {
-        unreadable = true
-        problem = "Could not read SSH configuration: \(error.localizedDescription)"
-      }
-    } else { config = SSHConfig(""); unreadable = false }
-    let remembered = Set((try? secrets.saved())?.map(\.id) ?? [])
+    adopt(Self.readConfiguration(at: location))
+    rebuildHosts()
+  }
+
+  /// The file, read now if nothing has read it yet. An empty stand-in would
+  /// read as a file with every stanza taken out of it.
+  func ensureConfiguration() {
+    if !configurationRead { reload() }
+  }
+
+  /// Reads `~/.ssh/config` and lists the saved passwords off the main
+  /// actor, then publishes both here: neither the file nor the keychain is
+  /// on the way to a first frame, or to coming forward. Calls that overlap
+  /// share one read.
+  func refresh() async {
+    if let refreshing {
+      await refreshing.value
+      return
+    }
+    let read = Task { await readOffMainActor() }
+    refreshing = read
+    await read.value
+    refreshing = nil
+  }
+
+  private func readOffMainActor() async {
+    let location = location
+    let secrets = secrets
+    let reads = configurationReads
+    passwordEdits = [:]
+    let (file, listed) = await Task.detached(priority: .userInitiated) {
+      (Self.readConfiguration(at: location), Self.listPasswords(in: secrets))
+    }.value
+    // An Import read the file meanwhile, and its read is the newer one.
+    if reads == configurationReads { adopt(file) }
+    var kept = listed
+    for (id, isKept) in passwordEdits ?? [:] {
+      if isKept { kept.insert(id) } else { kept.remove(id) }
+    }
+    passwordEdits = nil
+    keptPasswords = kept
+    rebuildHosts()
+  }
+
+  /// What reading the SSH configuration found.
+  enum ConfigurationRead: Sendable {
+    case read(SSHConfig)
+    case missing
+    case failed(String)
+  }
+
+  nonisolated static func readConfiguration(at location: URL) -> ConfigurationRead {
+    guard FileManager.default.fileExists(atPath: location.path) else { return .missing }
+    do { return .read(try SSHConfig.read(location)) } catch { return .failed(error.localizedDescription) }
+  }
+
+  /// A keychain that will not list is taken to hold nothing, so no host
+  /// claims a password that could not be read back.
+  nonisolated private static func listPasswords(in secrets: any SecretStore) -> Set<UUID> {
+    Set((try? secrets.saved())?.map(\.id) ?? [])
+  }
+
+  private func adopt(_ read: ConfigurationRead) {
+    configurationReads += 1
+    configurationRead = true
+    switch read {
+    case .read(let file):
+      config = file
+      unreadable = false
+    case .missing:
+      config = SSHConfig("")
+      unreadable = false
+    case .failed(let reason):
+      unreadable = true
+      problem = "Could not read SSH configuration: \(reason)"
+    }
+  }
+
+  /// A password was kept or let go of here. Recorded rather than listed
+  /// again, and remembered for a listing still in flight.
+  func notePassword(_ id: UUID, kept: Bool) {
+    if kept { keptPasswords?.insert(id) } else { keptPasswords?.remove(id) }
+    passwordEdits?[id] = kept
+  }
+
+  /// A saved password someone removed outside the library — the list in
+  /// Settings.
+  func passwordForgotten(_ id: UUID) {
+    notePassword(id, kept: false)
+    withdrawPassword(boundTo: id)
+    rebuildHosts()
+  }
+
+  /// The host list, from the library alone.
+  private func rebuildHosts() {
+    // Before the keychain has been listed, a password the library says is
+    // kept is taken at its word. Connecting reads it from the keychain
+    // anyway, and one that is not there is asked for, as it always was.
+    let kept = keptPasswords
+    let remembered = { (id: UUID) in kept?.contains(id) ?? true }
     var result: [Host] = []
     for record in snapshot.records.values where !record.deleted {
       let p = record.profile
@@ -394,7 +518,7 @@ final class HostStore {
       // No key or code seed on this device is not a problem to block on: the
       // login asks the person for what this device cannot answer itself.
       result.append(Host(id: p.id, label: p.label, hostname: p.hostname, port: p.port,
-        username: p.username, remembersPassword: snapshot.passwordBindings[p.id].map(remembered.contains) ?? false, keyPath: primary?.keyPath,
+        username: p.username, remembersPassword: snapshot.passwordBindings[p.id].map(remembered) ?? false, keyPath: primary?.keyPath,
         profile: p, credentialSecretID: primary?.secretID, usesDefaultKeys: primary?.defaultKeys == true,
         credentialBinding: primary, otpSecretID: otp?.secretID,
         passwordSecretID: snapshot.passwordBindings[p.id], connectionProblem: issue, accountScope: scope,
@@ -412,6 +536,7 @@ final class HostStore {
     let copy = UUID()
     try secrets.remember(password, for: Host(id: copy, label: entry.alias, hostname: entry.hostName,
       port: entry.port ?? 22, username: entry.user ?? defaultUserName()))
+    notePassword(copy, kept: true)
     return copy
   }
 
@@ -443,11 +568,21 @@ final class HostStore {
       let passwordID = snapshot.passwordBindings[p.id] ?? UUID()
       if let password, !password.isEmpty {
         var target = host; target.id = passwordID; try secrets.remember(password, for: target)
+        notePassword(passwordID, kept: true)
       }
       let profile = p
       try update { state in
-        if let password { state.passwordBindings[profile.id] = password.isEmpty ? nil : passwordID }
         var record = state.records[profile.id] ?? SharedHostRecord(profile: profile)
+        if let password {
+          // Letting go of a kept password lets go of it everywhere it went.
+          if password.isEmpty, state.passwordBindings[profile.id] != nil {
+            record.forgetSharedPassword = true
+            record.dirty = true
+          } else if !password.isEmpty {
+            record.forgetSharedPassword = nil
+          }
+          state.passwordBindings[profile.id] = password.isEmpty ? nil : passwordID
+        }
         guard !record.deleted else { throw IdentityError.storage("This host was deleted. Create a new host to restore it.") }
         guard record.conflicts.isEmpty else { throw IdentityError.needsReview }
         if record.profile != profile || state.records[profile.id] == nil {
@@ -552,7 +687,21 @@ final class HostStore {
     } catch { problem = error.localizedDescription }
   }
 
-  func receive(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String? = nil) throws {
+  func receive(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String? = nil,
+    password: String? = nil, code: String? = nil) throws {
+    do { try receiving(profile, deleted: deleted, systemFields: systemFields, privateKey: privateKey,
+      password: password, code: code) } catch {
+      // A password or seed written for a record that could not be taken is
+      // nobody's: let go of it unless the library already points at it.
+      let passwordItem = Self.syncedPasswordID(for: profile.id), codeItem = Self.syncedCodeID(for: profile.id)
+      if !snapshot.passwordSecrets.contains(passwordItem) { try? secrets.forget(passwordItem) }
+      if !snapshot.credentialSecrets.contains(codeItem) { try? credentials.forget(codeItem) }
+      throw error
+    }
+  }
+
+  private func receiving(_ profile: HostProfile, deleted: Bool, systemFields: Data?, privateKey: String?,
+    password: String?, code: String?) throws {
     try update { state in
       if var existing = state.records[profile.id] {
         let before = existing.profile
@@ -567,7 +716,11 @@ final class HostStore {
       // The private database is this Apple ID. A host that arrived through
       // it is this person's host; nothing further is asked before connecting.
       Self.trust(profile.id, in: &state)
-      if !deleted { try self.take(privateKey, for: profile.id, in: &state) }
+      if !deleted {
+        try self.take(privateKey, for: profile.id, in: &state)
+        try self.takePassword(password, for: profile.id, in: &state)
+        try self.takeCode(code, for: profile.id, in: &state)
+      }
     }
   }
 
@@ -636,6 +789,8 @@ final class HostStore {
         record.dirty = true
         // The zone these keys were sent to is gone.
         record.syncedKeyDigest = nil
+        record.syncedPasswordDigest = nil
+        record.syncedCodeDigest = nil
         state.records[id] = record
       }
     }
@@ -678,25 +833,26 @@ final class HostStore {
   func recordProblem(_ error: Error) { problem = error.localizedDescription }
 
   /// The private key this device would log in with, when it is one the
-  /// other devices on this Apple ID should have too. A password is not.
-  /// Nothing here is logged.
+  /// other devices on this Apple ID should have too. Nothing here is logged.
   func sharedPrivateKey(for profile: HostProfile) -> String? {
     privateKeyMaterial(profile: profile, bindings: snapshot.bindings)
   }
 
-  /// A key this device has and has not yet sent. Marks the host so the next
-  /// sync carries the key. A file that has not changed marks nothing.
+  /// A key, password or code seed this device has and has not yet sent.
+  /// Marks the host so the next sync carries it. A file that has not
+  /// changed marks nothing.
   func noteKeysAwaitingSync() {
     do {
       try update(skippingUnchanged: true) { state in
         for id in state.records.keys {
-          guard var record = state.records[id], !record.deleted, record.conflicts.isEmpty,
-            record.forgetSharedKey != true else { continue }
-          guard let pem = self.privateKeyMaterial(profile: record.profile, bindings: state.bindings) else { continue }
-          if record.syncedKeyDigest != Self.keyDigest(pem) {
+          guard var record = state.records[id], !record.deleted, record.conflicts.isEmpty else { continue }
+          if record.forgetSharedKey != true,
+            let pem = self.privateKeyMaterial(profile: record.profile, bindings: state.bindings),
+            record.syncedKeyDigest != Self.keyDigest(pem) {
             record.dirty = true
-            state.records[id] = record
           }
+          if self.secretsAwaitSync(record, in: state) { record.dirty = true }
+          state.records[id] = record
         }
       }
     } catch { recordProblem(error) }
@@ -714,7 +870,7 @@ final class HostStore {
 
   static let clearedKey = "cleared"
 
-  static func looksLikePrivateKey(_ text: String) -> Bool {
+  nonisolated static func looksLikePrivateKey(_ text: String) -> Bool {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.utf8.count <= 64 * 1024
       && trimmed.contains("-----BEGIN ")

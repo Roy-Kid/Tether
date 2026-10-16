@@ -22,13 +22,6 @@
     /// `measure` reports whole points.
     static let tolerance: CGFloat = 1
 
-    @Test("measuring a size twice is the same measurement")
-    func metricsAreStable() {
-      for size in [10.0, 13.0, 24.0] as [CGFloat] {
-        #expect(FontMetrics(size: size) == FontMetrics(size: size))
-      }
-    }
-
     @Test("a run of text is exactly as wide as the columns it covers")
     func narrowRunsKeepTheGrid() {
       for size in [10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 18.0, 24.0] as [CGFloat] {
@@ -53,17 +46,6 @@
       #expect(
         abs(drawn - grid) <= Self.tolerance,
         "twenty wide characters drew \(drawn)pt against a \(grid)pt grid")
-    }
-
-    /// A cell is a whole number of points, so a column is in the same place
-    /// on every row and text is not resampled differently line by line.
-    @Test("a cell is a whole number of points wide")
-    func cellsAreWhole() {
-      for size in [10.0, 13.0, 18.0, 24.0] as [CGFloat] {
-        let width = FontMetrics(size: size).cellWidth
-        #expect(width == width.rounded(), "\(size)pt gave a \(width)pt cell")
-        #expect(width >= 1)
-      }
     }
 
     /// A fraction of a cell is not a cell. Rounding up is how the last

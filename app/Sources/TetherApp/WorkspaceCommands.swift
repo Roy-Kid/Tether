@@ -1,3 +1,6 @@
+#if os(macOS)
+  import AppKit
+#endif
 import SwiftUI
 import Tether
 import TetherPluginKit
@@ -6,18 +9,31 @@ import TetherPluginKit
 /// the in-window palettes use; this is not a second set of buttons.
 struct WorkspaceCommands: Commands {
   @Bindable var tabs: TabSet
-  #if os(macOS)
-    @FocusedValue(\.workspaceShortcutsEnabled) private var shortcutsEnabled
-  #endif
+  @FocusedValue(\.workspaceShortcutsEnabled) private var shortcutsEnabled
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
-      command(.newTerminal)
-      command(.changeHost)
-      command(.manageHosts)
+      command(.newTab)
+      command(.renameTab)
     }
     CommandGroup(replacing: .saveItem) {
-      command(.closeTab)
+      #if os(macOS)
+        // No workspace window in front — Settings, say. Replacing the
+        // system's Close took ⌘W from every window, and this one still
+        // closes the way any Mac window does.
+        if shortcutsEnabled == nil {
+          Button("Close") { NSApp.keyWindow?.performClose(nil) }
+            .keyboardShortcut("w")
+        } else {
+          command(.closeTerminal)
+          command(.closeTab)
+          // With nothing open, ⌘W already reads Close Window.
+          if !tabs.closesWindow { command(.closeWindow) }
+        }
+      #else
+        command(.closeTerminal)
+        command(.closeTab)
+      #endif
       command(.restoreTab)
     }
     CommandGroup(after: .sidebar) {
@@ -25,23 +41,39 @@ struct WorkspaceCommands: Commands {
       command(.quickSwitch)
       #if os(macOS)
         command(.toggleTabBar)
+        command(.inspector)
+        Divider()
+        command(.zen)
+      #else
+        // An iPad keyboard reaches the inspector here; a phone sees it
+        // disabled, having no room for one.
+        command(.inspector)
       #endif
-      command(.inspector)
-      Divider()
-      command(.zen)
     }
     CommandGroup(after: .windowArrangement) {
       command(.previousTab)
       command(.nextTab)
     }
+    CommandMenu("Host") {
+      command(.changeHost)
+      command(.manageHosts)
+    }
     CommandMenu("Terminal") {
-      command(.renameTerminal)
       command(.newTerminal)
+      command(.renameTerminal)
+      command(.reconnect)
+      Divider()
+      command(.previousTerminal)
+      command(.nextTerminal)
+      command(.splitRight)
+      command(.splitDown)
+      command(.joinGroups)
+    }
+    CommandMenu("Plugins") {
       // One submenu per tab plugin, under its own name. The menu bar can
       // grow a menu per plugin only by knowing them in advance, which is
       // exactly what the host must not do.
       if let tab = tabs.current, !tabs.accessories.isEmpty {
-        Divider()
         ForEach(tabs.accessories) { plugin in
           Menu(plugin.title) {
             Button("\(plugin.accessory.name.localizedCapitalized)…") {
@@ -60,35 +92,62 @@ struct WorkspaceCommands: Commands {
         }
       }
     }
-    CommandGroup(after: .appInfo) {
-      ForEach(Tether.composition(), id: \.self) { part in
-        Text(part)
+    #if os(macOS)
+      // The components are credits, not menu items: rows a person cannot
+      // choose do not belong in a menu.
+      CommandGroup(replacing: .appInfo) {
+        Button("About Tether") { AboutPanel.show() }
       }
-    }
+      CommandGroup(replacing: .help) {
+        KeyboardShortcutsHelp()
+      }
+    #endif
   }
 
   private func command(_ action: WorkspaceAction) -> some View {
     Button(tabs.title(for: action)) { tabs.perform(action) }
       .disabled(!tabs.canPerform(action))
-      #if os(macOS)
-        .keyboardShortcut(tabs.keyBindings.bindings(for: action.command).compactMap { $0 }.first?.keyboardShortcut)
-        .disabled(shortcutsEnabled != true)
-      #endif
+      .keyboardShortcut(tabs.menuShortcut(for: action)?.keyboardShortcut)
+      .disabled(shortcutsEnabled != true)
   }
 }
+
+#if os(macOS)
+  /// The standard About panel, with what Tether is composed of as its credits.
+  @MainActor
+  enum AboutPanel {
+    static func show() {
+      let credits = NSAttributedString(
+        string: Tether.composition().joined(separator: "\n"),
+        attributes: [
+          .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+          .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+      NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+  }
+
+  /// Help ▸ Keyboard Shortcuts: the Key Bindings settings, where every
+  /// shortcut is listed and can be changed. One table, not a second copy.
+  private struct KeyboardShortcutsHelp: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+      Button("Keyboard Shortcuts") {
+        SettingsSectionPreference.show(.keyBindings)
+        openSettings()
+      }
+    }
+  }
+#endif
 
 private struct PluginShortcut: ViewModifier {
   let tabs: TabSet
   let id: String
-  #if os(macOS)
-    @FocusedValue(\.workspaceShortcutsEnabled) private var enabled
-  #endif
+  @FocusedValue(\.workspaceShortcutsEnabled) private var enabled
   func body(content: Content) -> some View {
     content
-      #if os(macOS)
-        .keyboardShortcut(tabs.keyBindings.bindings(for: KeyBindingCommand(id: id, title: id, group: ""))
-          .compactMap { $0 }.first?.keyboardShortcut)
-        .disabled(enabled != true)
-      #endif
+      .keyboardShortcut(tabs.keyBindings.bindings(forID: id).compactMap { $0 }.first?.keyboardShortcut)
+      .disabled(enabled != true)
   }
 }

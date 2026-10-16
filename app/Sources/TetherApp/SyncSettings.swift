@@ -1,4 +1,5 @@
 import SwiftUI
+import TetherUI
 
 /// The rest of Identities: the library's iCloud copy, key bindings, and on a
 /// Mac the SSH configuration that feeds it.
@@ -7,7 +8,11 @@ struct SyncSettings: View {
 
   var body: some View {
     Section("iCloud") {
-      LabeledContent("Status", value: store.syncStatus)
+      LabeledContent("Status") {
+        Text(store.syncStatus)
+        SettingsAction("Sync Now", systemImage: "arrow.triangle.2.circlepath") { Task { await store.syncEverything() } }
+          .disabled(store.syncing)
+      }
       if let last = store.lastSynced {
         LabeledContent("Last Synced") { Text(last, format: .relative(presentation: .named)) }
       }
@@ -17,20 +22,21 @@ struct SyncSettings: View {
           ? "Included in sync" : "\(bindings.pending.count) pending changes")
       }
       if let failure = store.syncFailure {
-        Text(failure).foregroundStyle(.red).textSelection(.enabled)
+        Text(failure).foregroundStyle(Theme.danger).textSelection(.enabled)
       }
-      Button("Sync Now") { Task { await store.syncEverything() } }
-        .disabled(store.syncing)
     }
 
     #if os(macOS)
       Section {
-        LabeledContent("Configuration", value: Self.shortened(store.location.path))
+        LabeledContent("Configuration") {
+          Text(Self.shortened(store.location.path))
+            .lineLimit(1).truncationMode(.middle)
+          SettingsAction("Import SSH Configuration", systemImage: "square.and.arrow.down") { store.importConfiguration() }
+            .disabled(store.unreadable)
+        }
         ForEach(store.hosts.filter { $0.routeProblem != nil }) { host in
           LabeledContent(host.label, value: host.routeProblem ?? "")
         }
-        Button("Import") { store.importConfiguration() }
-          .disabled(store.unreadable)
       } header: {
         Text("SSH Configuration")
       }
@@ -43,7 +49,7 @@ struct SyncSettings: View {
     if !missing.isEmpty {
       Section {
         ForEach(missing) { host in LabeledContent(host.label, value: host.address) }
-        Button("Create SSH Keys") {
+        SettingsAction("Create SSH Keys", systemImage: "key") {
           for host in missing { store.generateKey(for: host) }
         }
       } header: {

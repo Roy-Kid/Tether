@@ -1,4 +1,5 @@
 import Foundation
+import TetherPluginKit
 
 public enum PluginHostError: Error, Equatable {
   case package(PackageFailure)
@@ -8,6 +9,11 @@ public enum PluginHostError: Error, Equatable {
   case consentDenied
   case noSession
   case permissionDenied
+  case notARepository
+  case noRelease
+  case remoteUnavailable
+  case archiveUnreadable
+  case archiveTooLarge
 }
 
 @MainActor
@@ -16,29 +22,46 @@ final class CapabilityGateway {
     let pluginID: String
     let pluginName: String
     let permissions: Set<Permission>
+    let networkURLs: Set<URL>
+    let reportsStatus: Bool
     var documents: [UUID: Data] = [:]
     var storageAsked = false
     var storageAllowed = false
+    var environment: PluginEnvironment = .none
+    var reconnect: (@MainActor () async throws -> Void)?
   }
 
   private let consent: any ConsentAsking
-  private let notifying: any HostNotifying
+  private let api: PluginAPI
   private var sessions: [UUID: Session] = [:]
-  private var storage: [String: [String: String]] = [:]
+  private let streaming: any PluginStreaming
+  private var streams: [UUID: (session: UUID, task: Task<Void, Never>)] = [:]
+  var emit: (@MainActor (UUID, JSONValue) async -> Void)?
+  var status: (@MainActor (UUID, JSONValue) -> Void)?
+  private var networkGrants: [String: Set<URL>] = [:]
 
-  init(consent: any ConsentAsking, notifying: any HostNotifying) {
+  init(consent: any ConsentAsking, api: PluginAPI, streaming: any PluginStreaming) {
     self.consent = consent
-    self.notifying = notifying
+    self.api = api
+    self.streaming = streaming
   }
 
-  func open(_ id: UUID, record: PluginRecord) {
+  func open(
+    _ id: UUID, record: PluginRecord, environment: PluginEnvironment = .none,
+    reconnect: (@MainActor () async throws -> Void)? = nil
+  ) {
     sessions[id] = Session(
       pluginID: record.id, pluginName: record.manifest.name,
-      permissions: Set(record.manifest.permissions))
+      permissions: Set(record.manifest.permissions), networkURLs: Set(record.manifest.networkURLs),
+      reportsStatus: record.manifest.contributions.contains { $0.kind == .statusBar },
+      environment: environment, reconnect: reconnect)
   }
 
   func close(_ id: UUID) {
     sessions[id] = nil
+    for stream in streams.keys.filter({ streams[$0]?.session == id }) {
+      streams.removeValue(forKey: stream)?.task.cancel()
+    }
   }
 
   func pluginID(for session: UUID) -> String? {
@@ -50,18 +73,28 @@ final class CapabilityGateway {
   }
 
   func wipeStorage(pluginID: String) {
-    storage[pluginID] = nil
+    api.wipe(pluginID: pluginID)
   }
 
+  func revokeNetworkConsent(pluginID: String) { networkGrants.removeValue(forKey: pluginID) }
+
+  func authorizeNetwork(_ manifest: PluginManifest) async -> Bool {
+    guard manifest.permissions.contains(.network) else { return true }
+    return await consent.ask(pluginName: manifest.name, permission: .network,
+      resources: manifest.networkURLs.map(\.absoluteString).sorted())
+  }
+
+  func grantNetwork(pluginID: String, urls: [URL]) { networkGrants[pluginID] = Set(urls) }
+
   func grant(session id: UUID, bytes: Data) async throws -> DocumentHandle {
-    guard var session = sessions[id] else { throw PluginHostError.noSession }
+    guard let session = sessions[id] else { throw PluginHostError.noSession }
     guard session.permissions.contains(.documentRead) else { throw PluginHostError.permissionDenied }
     let allowed = await consent.ask(pluginName: session.pluginName, permission: .documentRead)
-    guard sessions[id] != nil else { throw PluginHostError.noSession }
+    guard var current = sessions[id] else { throw PluginHostError.noSession }
     guard allowed else { throw PluginHostError.consentDenied }
     let handle = DocumentHandle()
-    session.documents[handle.id] = bytes
-    sessions[id] = session
+    current.documents[handle.id] = bytes
+    sessions[id] = current
     return handle
   }
 
@@ -85,11 +118,68 @@ final class CapabilityGateway {
       response = await storage(request, session: &session, write: true)
     case .notify:
       response = await notify(request)
+    case .ask:
+      response = await ask(request)
+    case .context:
+      response = RPCResponse(session: request.session, id: request.id, ok: true, payload: session.environment.payload)
+    case .reconnect:
+      response = await reconnect(request)
+    case .stream:
+      response = await openStream(request, session: session)
+    case .closeStream:
+      guard let raw = request.payload.key("stream")?.string, let id = UUID(uuidString: raw),
+        streams[id]?.session == request.session else {
+        return .failure(session: request.session, id: request.id, error: "invalidStream")
+      }
+      streams.removeValue(forKey: id)?.task.cancel()
+      response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
+    case .status:
+      guard session.reportsStatus else {
+        return .failure(session: request.session, id: request.id, error: RPCError.permissionDenied)
+      }
+      status?(request.session, request.payload)
+      response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
     }
-    if sessions[request.session] != nil {
-      sessions[request.session] = session
+    if (method == .storageGet || method == .storageSet), var current = sessions[request.session] {
+      current.storageAsked = session.storageAsked
+      current.storageAllowed = session.storageAllowed
+      sessions[request.session] = current
     }
     return response
+  }
+
+  private func openStream(_ request: RPCRequest, session: Session) async -> RPCResponse {
+    func failure(_ error: String) -> RPCResponse {
+      .failure(session: request.session, id: request.id, error: error)
+    }
+    guard session.permissions.contains(.network),
+      let text = request.payload.key("url")?.string, let url = URL(string: text),
+      session.networkURLs.contains(url), NetworkEndpoint.valid(url) else {
+      return failure(RPCError.permissionDenied)
+    }
+    // Runtime operations never prompt. Installation supplies the durable grant.
+    guard networkGrants[session.pluginID]?.contains(url) == true else { return failure(RPCError.consentDenied) }
+    guard !streams.values.contains(where: { $0.session == request.session }) else { return failure("streamLimit") }
+    let id = UUID()
+    let owner = request.session
+    let task = Task { @MainActor [weak self, streaming] in
+      // Return the stream id before delivering its first event.
+      await Task.yield()
+      do {
+        try await streaming.stream(url: url) { [weak self] event in
+          guard let self, self.sessions[owner] != nil, !Task.isCancelled else { return }
+          await self.emit?(owner, .object(["stream": .string(id.uuidString), "type": .string("data"), "payload": event]))
+        }
+        guard !Task.isCancelled else { return }
+        await self?.emit?(owner, .object(["stream": .string(id.uuidString), "type": .string("end")]))
+      } catch {
+        guard !Task.isCancelled else { return }
+        await self?.emit?(owner, .object(["stream": .string(id.uuidString), "type": .string("error")]))
+      }
+      self?.streams[id] = nil
+    }
+    streams[id] = (owner, task)
+    return RPCResponse(session: owner, id: request.id, ok: true, payload: .object(["stream": .string(id.uuidString)]))
   }
 
   private func readDocument(_ request: RPCRequest, session: Session) -> RPCResponse {
@@ -129,22 +219,114 @@ final class CapabilityGateway {
       guard let value = request.payload.key("value")?.string, value.utf8.count <= 64 * 1024 else {
         return .failure(session: request.session, id: request.id, error: RPCError.malformed)
       }
-      var bucket = storage[session.pluginID] ?? [:]
-      bucket[key] = value
-      storage[session.pluginID] = bucket
+      api.store(pluginID: session.pluginID, key: key, value: value)
       return RPCResponse(session: request.session, id: request.id, ok: true, payload: .object([:]))
     }
-    let value = storage[session.pluginID]?[key]
+    let value = api.stored(pluginID: session.pluginID, key: key)
     return RPCResponse(
       session: request.session, id: request.id, ok: true,
       payload: .object(["value": value.map(JSONValue.string) ?? .null]))
   }
 
   private func notify(_ request: RPCRequest) async -> RPCResponse {
-    guard let title = request.payload.key("title")?.string, !title.isEmpty else {
+    guard let title = request.payload.key("title")?.string, !title.isEmpty, title.count <= 120 else {
       return .failure(session: request.session, id: request.id, error: RPCError.malformed)
     }
-    await notifying.notify(title: title)
+    let body = request.payload.key("body")?.string ?? ""
+    guard body.count <= 240 else {
+      return .failure(session: request.session, id: request.id, error: RPCError.malformed)
+    }
+    await api.notify(title: title, body: body)
     return RPCResponse(session: request.session, id: request.id, ok: true, payload: .object([:]))
+  }
+
+  private func ask(_ request: RPCRequest) async -> RPCResponse {
+    guard let title = request.payload.key("title")?.string, !title.isEmpty, title.count <= 200 else {
+      return .failure(session: request.session, id: request.id, error: RPCError.malformed)
+    }
+    var actions: [PluginAction] = []
+    if case .array(let raw) = request.payload.key("actions") {
+      for value in raw.prefix(4) {
+        guard let id = value.key("id")?.string, !id.isEmpty, id.count <= 64,
+          let name = value.key("title")?.string, !name.isEmpty, name.count <= 80 else { continue }
+        actions.append(PluginAction(id: id, title: name, destructive: value.key("destructive")?.bool ?? false))
+      }
+    }
+    if actions.isEmpty { actions = [.confirm("OK")] }
+    let field: PluginField?
+    if let label = request.payload.key("field")?.key("label")?.string {
+      field = PluginField(
+        label: String(label.prefix(80)),
+        initial: String((request.payload.key("field")?.key("initial")?.string ?? "").prefix(1024)),
+        secure: request.payload.key("field")?.key("secure")?.bool ?? false)
+    } else {
+      field = nil
+    }
+    let prompt = PluginPrompt(
+      title: title, message: request.payload.key("message")?.string.map { String($0.prefix(240)) },
+      field: field, actions: actions, cancel: String((request.payload.key("cancel")?.string ?? "Cancel").prefix(40)))
+    let answer = await api.ask(prompt)
+    return RPCResponse(
+      session: request.session, id: request.id, ok: true,
+      payload: .object([
+        "action": answer.action.map(JSONValue.string) ?? .null,
+        "value": .string(answer.value),
+      ]))
+  }
+
+  private func reconnect(_ request: RPCRequest) async -> RPCResponse {
+    guard let session = sessions[request.session] else {
+      return .failure(session: request.session, id: request.id, error: RPCError.noSession)
+    }
+    guard let reconnect = session.reconnect else {
+      return .failure(session: request.session, id: request.id, error: RPCError.unavailable)
+    }
+    do { try await reconnect() } catch {
+      return .failure(session: request.session, id: request.id, error: RPCError.unavailable)
+    }
+    guard var current = sessions[request.session] else {
+      return .failure(session: request.session, id: request.id, error: RPCError.noSession)
+    }
+    current.environment.connected = true
+    sessions[request.session] = current
+    return RPCResponse(session: request.session, id: request.id, ok: true, payload: current.environment.payload)
+  }
+
+  func read(pluginID: String, handle: UUID) async throws -> Data {
+    guard let bytes = sessions.values.first(where: { $0.pluginID == pluginID && $0.documents[handle] != nil })?.documents[handle] else {
+      throw PluginServiceError.unavailable
+    }
+    return bytes
+  }
+
+  func open(pluginID: String, url: URL) async throws -> UUID {
+    guard let id = sessions.first(where: { $0.value.pluginID == pluginID })?.key,
+      let session = sessions[id] else {
+      throw PluginServiceError.unavailable
+    }
+    let response = await openStream(
+      RPCRequest(session: id, id: "native", method: PluginMethod.stream.rawValue,
+        payload: .object(["url": .string(url.absoluteString)])),
+      session: session)
+    guard response.ok, let raw = response.payload.key("stream")?.string, let stream = UUID(uuidString: raw) else {
+      throw response.error == RPCError.consentDenied ? PluginServiceError.denied : PluginServiceError.unavailable
+    }
+    return stream
+  }
+
+  func close(pluginID: String, stream id: UUID) async {
+    guard let owner = streams[id]?.session, sessions[owner]?.pluginID == pluginID else { return }
+    streams.removeValue(forKey: id)?.task.cancel()
+  }
+}
+
+extension PluginEnvironment {
+  var payload: JSONValue {
+    .object([
+      "hostID": hostID.map { .string($0.uuidString) } ?? .null,
+      "hostLabel": .string(hostLabel),
+      "shellLabel": .string(shellLabel),
+      "connected": .bool(connected),
+    ])
   }
 }

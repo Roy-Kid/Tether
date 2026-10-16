@@ -75,7 +75,7 @@ final class IdentityDatabase {
   private func failure() -> IdentityError { .storage("Could not persist identity data (SQLite \(sqlite3_errcode(handle))).") }
 }
 
-struct IdentitySnapshot: Codable {
+struct IdentitySnapshot: Codable, Equatable {
   var records: [UUID: SharedHostRecord] = [:]
   var bindings: [UUID: LocalCredentialBinding] = [:]
   var approvals: [UUID: String] = [:]

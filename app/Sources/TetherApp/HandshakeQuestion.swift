@@ -25,7 +25,12 @@ enum HandshakeQuestion {
   var dialog: Dialog {
     switch self {
     case .trust(let host):
-      Dialog(title: "Unrecognised host", message: host.fingerprint, actions: [.cancel("Reject"), Dialog.Action("Trust")])
+      // Named by the address the key was offered for — the thing being
+      // trusted — and the key the way an administrator would publish it.
+      Dialog(
+        title: "Trust \(host.port == 22 ? host.host : "\(host.host):\(host.port)")?",
+        message: "\(host.algorithm)\n\(host.fingerprint)",
+        actions: [.cancel("Reject"), Dialog.Action("Trust")])
     case .confirmation(let title, let detail):
       Dialog(title: title, message: detail, actions: [.cancel(), Dialog.Action("Approve")])
     case .prompts(let prompts, let instruction, let notice):

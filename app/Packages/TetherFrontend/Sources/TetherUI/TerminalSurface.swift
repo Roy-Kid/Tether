@@ -34,9 +34,8 @@ public struct TerminalSurface: View {
   let onResize: (UInt16, UInt16) -> Void
   let onFocus: () -> Void
   let onScroll: (ScrollTo) -> Void
-  /// A wheel the program asked to hear. `true` takes the lines, so they are
-  /// not also reported as pointer events.
-  let onClaimWheel: (Int32, UInt16, UInt16) -> Bool
+  /// What owns the wheel at the cell under the pointer.
+  let onClaimWheel: (Int32, UInt16, UInt16) -> WheelClaim
   let links: TerminalLinks
   /// A measurement the caller already fitted to the space it has. Nil measures
   /// the setting's size. A second measurement at that size is larger than a
@@ -75,7 +74,7 @@ public struct TerminalSurface: View {
     onResize: @escaping (UInt16, UInt16) -> Void = { _, _ in },
     onFocus: @escaping () -> Void = {},
     onScroll: @escaping (ScrollTo) -> Void = { _ in },
-    onClaimWheel: @escaping (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false },
+    onClaimWheel: @escaping (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass },
     links: TerminalLinks = .none,
     metrics: FontMetrics? = nil
   ) {

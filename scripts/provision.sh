@@ -5,9 +5,10 @@
 # Xcode's automatic signing knows how to ask Apple for a profile with the
 # account a person is already signed into. So this writes a throwaway project
 # that declares the same identifiers and capabilities, and lets Xcode register
-# them — the bundle ID, the iCloud container, this Mac, a phone if one is
-# named — and download the profiles into its own store, where signing.sh
-# finds them. Nothing of the project is kept.
+# them — the bundle ID, the iCloud container, the credential provider
+# extension and its AutoFill capability, this Mac, a phone if one is named —
+# and download the profiles into its own store, where signing.sh finds them.
+# Nothing of the project is kept.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/signing.sh
@@ -42,21 +43,61 @@ command -v xcodegen >/dev/null || { echo "xcodegen not found: brew install xcode
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/src"
+mkdir -p "$work/src" "$work/provider"
 echo 'print("provision")' >"$work/src/main.swift"
+cp app/Extensions/CredentialProvider/*.swift "$work/provider/"
+cat >"$work/provider/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleShortVersionString</key><string>0.0.0</string>
+    <key>CFBundleVersion</key><string>0</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key><string>com.apple.authentication-services-credential-provider-ui</string>
+        <key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).CredentialProviderViewController</string>
+    </dict>
+</dict>
+</plist>
+EOF
 
 target() {
+  # A Mac runs an extension only in a sandbox; a phone runs every one in one.
+  local sandbox=
+  [[ "$2" != macOS ]] || sandbox="com.apple.security.app-sandbox: true"
   cat <<EOF
   Tether$1:
     type: application
     platform: $2
     deploymentTarget: "26.0"
     sources: [src]
+    dependencies:
+      - target: Provider$1
     entitlements:
       path: $1.entitlements
       properties:
         com.apple.developer.icloud-container-identifiers: [$TETHER_CLOUD_CONTAINER]
         com.apple.developer.icloud-services: [CloudKit]
+        $AUTOFILL_ENTITLEMENT: true
+  Provider$1:
+    type: app-extension
+    platform: $2
+    deploymentTarget: "26.0"
+    sources: [provider]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $TETHER_PROVIDER_ID
+        INFOPLIST_FILE: provider/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+    entitlements:
+      path: Provider$1.entitlements
+      properties:
+        $AUTOFILL_ENTITLEMENT: true
+        $sandbox
 EOF
 }
 
@@ -98,5 +139,7 @@ else
   provision TetherPhone "generic/platform=iOS"
 fi
 
-echo "macOS: $(signing_profile macos "$TEAM")"
-echo "iOS:   $(signing_profile ios "$TEAM")"
+echo "macOS: $(signing_profile macos "$TEAM" "$TETHER_BUNDLE_ID" icloud+autofill)"
+echo "       $(signing_profile macos "$TEAM" "$TETHER_PROVIDER_ID" autofill)"
+echo "iOS:   $(signing_profile ios "$TEAM" "$TETHER_BUNDLE_ID" icloud+autofill)"
+echo "       $(signing_profile ios "$TEAM" "$TETHER_PROVIDER_ID" autofill)"

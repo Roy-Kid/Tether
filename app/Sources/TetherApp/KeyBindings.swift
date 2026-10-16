@@ -85,6 +85,24 @@ struct KeyBindingCommand: Identifiable, Equatable {
   let title: String
   let group: String
   var defaults: [KeyBinding?] = [nil, nil]
+  var layer: KeyBindingLayer = .workspace
+}
+
+/// Where a command answers its chord.
+///
+/// The window's own commands are always there. A plugin's commands come and
+/// go with the attachment or workspace offering them, and while one is
+/// offered it is tried before the window's command on the same chord — so a
+/// chord is claimed once per layer, and the two layers never conflict.
+enum KeyBindingLayer: Equatable {
+  case workspace
+  case attachment
+
+  /// A binding stored for a command this device has not loaded, such as a
+  /// plugin installed elsewhere: its layer is read from the id's shape.
+  static func guessed(for id: String) -> Self {
+    id.hasPrefix("plugin.") && id.contains(".command.") ? .attachment : .workspace
+  }
 }
 
 /// Local preferences and a durable outbox, partitioned by Apple account.
@@ -150,7 +168,7 @@ final class KeyBindingStore {
   }
 
   private func winner(for binding: KeyBinding, including command: KeyBindingCommand) -> KeyBindingCommand? {
-    catalog(including: command).filter { requestedBindings(for: $0).contains(binding) }.sorted { a, b in
+    rivals(of: command).filter { requestedBindings(for: $0).contains(binding) }.sorted { a, b in
       let left = entries[a.id]?.change, right = entries[b.id]?.change
       let explicitLeft = left?.bindings != nil, explicitRight = right?.bindings != nil
       if explicitLeft != explicitRight { return explicitLeft }
@@ -165,9 +183,14 @@ final class KeyBindingStore {
     all[command.id] = command
     // Preserve and reserve assignments from plugins absent on this device.
     for id in entries.keys where all[id] == nil {
-      all[id] = KeyBindingCommand(id: id, title: id, group: "")
+      all[id] = KeyBindingCommand(id: id, title: id, group: "", layer: .guessed(for: id))
     }
     return Array(all.values)
+  }
+
+  /// The commands that could claim the same chord as `command`: its own layer.
+  private func rivals(of command: KeyBindingCommand) -> [KeyBindingCommand] {
+    catalog(including: command).filter { $0.layer == command.layer }
   }
 
   func summary(for command: KeyBindingCommand) -> String {
@@ -192,7 +215,7 @@ final class KeyBindingStore {
     register(commands)
     if let binding {
       guard binding.isValid else { throw BindingError.invalid }
-      for other in catalog(including: command) {
+      for other in rivals(of: command) {
         for (index, existing) in requestedBindings(for: other).enumerated()
           where other.id != command.id || index != slot {
           if binding == existing { throw BindingError.conflict(other.title) }
@@ -207,7 +230,7 @@ final class KeyBindingStore {
   func reset(_ command: KeyBindingCommand, commands: [KeyBindingCommand]) throws {
     register(commands)
     for binding in command.defaults.compactMap({ $0 }) {
-      if let other = catalog(including: command).first(where: {
+      if let other = rivals(of: command).first(where: {
         $0.id != command.id && requestedBindings(for: $0).contains(binding)
       }) { throw BindingError.conflict(other.title) }
     }
@@ -218,9 +241,22 @@ final class KeyBindingStore {
     for id in overrides.keys { change(id, bindings: nil) }
   }
 
-  func command(for binding: KeyBinding, in commands: [KeyBindingCommand]) -> String? {
+  /// The command a chord runs. `offered` names the plugin commands the
+  /// window is offering now; one of those holding the chord is tried before
+  /// the window's own. A plugin command nobody is offering runs nothing, and
+  /// leaves the chord to the window, the menu bar and the terminal.
+  func command(for binding: KeyBinding, in commands: [KeyBindingCommand], offered: Set<String> = []) -> String? {
     register(commands)
-    return commands.first { bindings(for: $0).contains(binding) }?.id
+    let holders = commands.filter { bindings(for: $0).contains(binding) }
+    return holders.first { $0.layer == .attachment && offered.contains($0.id) }?.id
+      ?? holders.first { $0.layer == .workspace }?.id
+  }
+
+  /// The bindings for a command known only by its id, as the menu bar knows
+  /// a plugin's: with its defaults, when it has been registered.
+  func bindings(forID id: String) -> [KeyBinding?] {
+    bindings(for: knownCommands.first { $0.id == id }
+      ?? KeyBindingCommand(id: id, title: id, group: "", layer: .guessed(for: id)))
   }
 
   func switchAccount(_ account: String) {

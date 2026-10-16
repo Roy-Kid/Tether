@@ -33,22 +33,15 @@ private enum InterfaceFixture {
 }
 
 #if os(macOS)
-#Preview("Mac · twenty tabs", traits: .fixedLayout(width: 860, height: 520)) {
-  VStack(spacing: 0) {
-    WorkspaceTabBar(tabs: InterfaceFixture.tabs(), onClose: { _ in })
-    EmptyWorkspace().frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-  .background(Theme.window)
+// Component previews deliberately omit the workspace shell. Composing a tab
+// bar over EmptyWorkspace made a populated workspace look like an old screen.
+#Preview("Tab bar · twenty tabs", traits: .fixedLayout(width: 860, height: Chrome.tab)) {
+  WorkspaceTabBar(tabs: InterfaceFixture.tabs(), onClose: { _ in })
 }
 
-#Preview("Mac · vertical tabs", traits: .fixedLayout(width: 860, height: 520)) {
-  HStack(spacing: 0) {
-    WorkspaceTabBar(tabs: InterfaceFixture.tabs(), layout: .vertical, onClose: { _ in })
-      .frame(width: Chrome.tabSidebarIdeal)
-    Divider()
-    EmptyWorkspace().frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-  .background(Theme.window)
+#Preview("Tab sidebar · twenty tabs", traits: .fixedLayout(width: Chrome.tabSidebarIdeal, height: 520)) {
+  WorkspaceTabBar(tabs: InterfaceFixture.tabs(), layout: .vertical, onClose: { _ in })
 }
+
 #endif
 #endif

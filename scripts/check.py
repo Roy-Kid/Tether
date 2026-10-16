@@ -66,8 +66,8 @@ def source_checks():
     ET.parse(ROOT / "app-win/TetherApp.Windows.csproj")
     for path in (ROOT / "app/Sources").rglob("*.swift"):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r"tmux|FilesPlugin|FilesTab", line, re.I):
-                require(bool(re.search(r"import (Tmux|Files)Plugin$|registry\.register\((Tmux|Files)Plugin\(\)\)", line)),
+            if re.search(r"tmux|FilesPlugin|FilesTab|PortsPlugin|PortsTab", line, re.I):
+                require(bool(re.search(r"import (Tmux|Files|Ports)Plugin$|registry\.register\((Tmux|Files|Ports)Plugin\(\)\)", line)),
                         f"Plugin boundary violation: {path}:{number}")
     sources = [ROOT / "app/Sources", ROOT / "app/Packages/TetherFrontend/Sources",
                ROOT / "app/Packages/TetherPluginHost/Sources"]
@@ -145,7 +145,7 @@ def apple(build=True):
     if build:
         run("bash", "scripts/build-xcframework.sh")
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
-                    "app/Plugins/Tmux", "app/Plugins/Files", "app"):
+                    "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
         run("swift", "test", "--package-path", package)
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build", cwd=ROOT / "app")

@@ -4,9 +4,10 @@ import TetherUI
 
 /// Adding or changing a saved host.
 ///
-/// Laid out like a connection editor, not a settings page: address first,
-/// then who you are, then the secret. Password is typed here and kept; the
-/// connect sheet is only for hosts that still have none.
+/// Laid out like a connection editor: address first, then who you are, then
+/// the secret. Password is typed here and kept; the connect dialog is only
+/// for hosts that still have none. A page in Settings ▸ Identities
+/// (`SettingsRoute`), never a window of its own.
 struct HostEditor: View {
   private enum Authentication: Hashable {
     case password, key
@@ -15,6 +16,8 @@ struct HostEditor: View {
   @State private var host: Host
   @State private var password: String
   let onSave: (Host, String?) -> Bool
+  /// Saved or cancelled: whoever pushed the page takes it away.
+  var onDone: (() -> Void)?
 
   @Environment(\.dismiss) private var dismiss
   @State private var picking = false
@@ -32,15 +35,17 @@ struct HostEditor: View {
       && (authentication == .password || host.offersConfiguredKey || pickedKey != nil)
   }
 
-  init(host: Host, password: String = "", onSave: @escaping (Host, String?) -> Bool) {
+  init(host: Host, password: String = "", onDone: (() -> Void)? = nil,
+    onSave: @escaping (Host, String?) -> Bool) {
     self.onSave = onSave
+    self.onDone = onDone
     _host = State(initialValue: host)
     _password = State(initialValue: password)
     _authentication = State(initialValue: host.offersConfiguredKey ? .key : .password)
   }
 
   var body: some View {
-    NavigationStack {
+    VStack(spacing: 0) {
       Form {
         Section {
           TextField("Address", text: $host.hostname, prompt: Text("hostname or IP"))
@@ -84,7 +89,7 @@ struct HostEditor: View {
             #endif
           authenticationChoice
 
-          if let importProblem { Text(importProblem).foregroundStyle(.red) }
+          if let importProblem { Text(importProblem).foregroundStyle(Theme.danger) }
           if authentication == .password {
             // A row of its own. Nesting `SecureField` in an `HStack` inside a
             // `Form` is how iOS ends up with a password row that will not
@@ -118,6 +123,8 @@ struct HostEditor: View {
       .formStyle(.grouped)
       #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
+      #else
+        .scrollContentBackground(.hidden)
       #endif
       .onChange(of: authentication) { _, value in
         if value == .password {
@@ -126,21 +133,6 @@ struct HostEditor: View {
           pickedKey = nil
         } else {
           password = ""
-        }
-      }
-      .navigationTitle(isNew ? "New Host" : "Edit Host")
-      #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-      #endif
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }
-            .keyboardShortcut(.cancelAction)
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Save") { commit() }
-            .disabled(!canSave)
-            .keyboardShortcut(.defaultAction)
         }
       }
       .fileImporter(
@@ -152,10 +144,20 @@ struct HostEditor: View {
         .fileDialogDefaultDirectory(
           URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appending(path: ".ssh"))
       #endif
+      HStack {
+        Spacer()
+        Button("Cancel", role: .cancel) { finish() }
+          .keyboardShortcut(.cancelAction)
+        Button(isNew ? "Add" : "Save") { commit() }
+          .disabled(!canSave)
+          .keyboardShortcut(.defaultAction)
+      }
+      .padding([.horizontal, .bottom], UIStyle.Space.section)
     }
-    #if os(macOS)
-      .frame(minWidth: Chrome.editorWidth, minHeight: Chrome.editorHeight)
-    #endif
+  }
+
+  private func finish() {
+    if let onDone { onDone() } else { dismiss() }
   }
 
   private var authenticationChoice: some View {
@@ -190,8 +192,8 @@ struct HostEditor: View {
     .accessibilityAddTraits(selected ? [.isSelected] : [])
   }
 
-  /// A key picked here is written on Save and syncs with the host. A password
-  /// stays on this device.
+  /// A key or password given here is written on Save, and both sync with
+  /// the host.
   private func commit() {
     var saved = host
     if authentication == .password {
@@ -215,7 +217,7 @@ struct HostEditor: View {
       written = id
     }
     if onSave(saved, authentication == .password ? password : "") {
-      dismiss()
+      finish()
     } else if let written {
       // Not saved, so nothing points at it.
       try? DeviceCredentialStore().forget(written)

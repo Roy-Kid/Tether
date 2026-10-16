@@ -55,6 +55,13 @@ struct DialogKeyboardTests {
     content.layoutSubtreeIfNeeded()
     let boxes = fields(in: content)
     try #require(boxes.count == kinds.count)
+    #expect(boxes.map(\.contentType) == kinds.map { kind in
+      switch kind {
+      case .text: nil
+      case .password: .password
+      case .code: .oneTimeCode
+      }
+    })
     for field in boxes {
       #expect(field.frame.width >= UIStyle.treeWidth - 1)
       #expect(field.frame.height >= UIStyle.controlHeight - 1)
@@ -148,6 +155,27 @@ struct DialogKeyboardTests {
     #expect(await task.value?.isAffirmative == true)
     #expect(confirmed == 1)
     #expect(surface.route(confirm) != nil, "the dialog releases its shortcut handler on dismissal")
+  }
+
+  @Test("a tab's close confirms on a second Opt+Cmd+W, and Cmd+W alone does not")
+  func commandOption() async throws {
+    let host = window()
+    let anchor = DialogAnchor()
+    anchor.window = host
+    let surface = PlatformDialogSurface()
+    let queue = DialogQueue(surface: surface)
+    var confirmed = 0
+    let dialog = Dialog.confirm("Close Project?", verb: "Close Tab", role: .destructive,
+      shortcuts: [.commandOption("w")]) { confirmed += 1 }
+    let task = Task { await queue.ask(dialog, in: anchor) }
+    defer { task.cancel(); surface.withdraw(); host.orderOut(nil) }
+    try await settle { host.attachedSheet?.isVisible == true }
+    let sheet = try #require(host.attachedSheet)
+    #expect(surface.route(try event("w", code: 13, in: sheet, modifiers: .command)) != nil)
+    #expect(confirmed == 0)
+    #expect(surface.route(try event("w", code: 13, in: sheet, modifiers: [.command, .option])) == nil)
+    try await settle { confirmed == 1 }
+    #expect(await task.value?.isAffirmative == true)
   }
 
   @Test("Escape invokes the native cancel button through the scoped handler")

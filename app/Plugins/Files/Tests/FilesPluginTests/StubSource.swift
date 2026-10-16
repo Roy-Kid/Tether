@@ -3,17 +3,46 @@ import Tether
 
 @testable import FilesPlugin
 
+/// Shut until opened; whoever waits before then waits until then.
+final class Gate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isOpen = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      let now = lock.withLock {
+        if isOpen { return true }
+        waiting.append(continuation)
+        return false
+      }
+      if now { continuation.resume() }
+    }
+  }
+
+  func open() {
+    let woken = lock.withLock {
+      isOpen = true
+      defer { waiting = [] }
+      return waiting
+    }
+    woken.forEach { $0.resume() }
+  }
+}
+
 /// A far side made of a dictionary: every path it knows, and whether each is
 /// a directory. Records what it was asked to do.
 final class StubSource: FileSource, @unchecked Sendable {
   private let lock = NSLock()
   private var files: [String: FileKind]
   private(set) var uploads: [(String, String, Bool)] = []
+  /// What each write-back put at its path, in order.
+  private var recordedWriteBacks: [(path: String, contents: String)] = []
+  var writeBacks: [(path: String, contents: String)] { lock.withLock { recordedWriteBacks } }
   private(set) var removedTrees: [String] = []
   private(set) var removed: [String] = []
   private(set) var renames: [(String, String, Bool)] = []
-  private var recordedClosed = false
-  var closed: Bool { lock.withLock { recordedClosed } }
+  private(set) var closed = false
   /// Every `stat`, in order. A name filter must not add to it.
   private var recordedStats: [String] = []
   private var recordedLists: [String] = []
@@ -27,6 +56,19 @@ final class StubSource: FileSource, @unchecked Sendable {
   var listDelay: [String: Duration] = [:]
   /// Held for the length of every download; cancelling the task ends it.
   var downloadDelay: Duration?
+  /// Every download waits here until the test opens it: a hold that does
+  /// not depend on how fast the machine running the test is.
+  var downloadGate: Gate?
+  /// What `lstat` answers instead, as a server that will not say whether a
+  /// name is free does.
+  var lstatFailure: FileError?
+  /// What every upload fails with, when set.
+  var uploadFailure: FileError?
+  /// What every download fails with, when set, after its delay.
+  var downloadFailure: FileError?
+  /// Whether each download ran on the main thread, in order.
+  private var recordedDownloadThreads: [Bool] = []
+  var downloadsOnMain: [Bool] { lock.withLock { recordedDownloadThreads } }
   /// Destinations a download finished writing. A move out of the cache does
   /// not add to this.
   private var recordedDownloads: [String] = []
@@ -55,7 +97,10 @@ final class StubSource: FileSource, @unchecked Sendable {
       return entry(path)
     }
   }
-  func lstat(_ path: String) async throws -> FileEntry { try known(path) }
+  func lstat(_ path: String) async throws -> FileEntry {
+    if let lstatFailure { throw lstatFailure }
+    return try known(path)
+  }
 
   private func known(_ path: String) throws -> FileEntry {
     try lock.withLock {
@@ -67,10 +112,14 @@ final class StubSource: FileSource, @unchecked Sendable {
   func download(_ path: String, to destination: String, progress: (@Sendable (UInt64) -> Void)?)
     async throws -> UInt64
   {
+    let onMain = pthread_main_np() != 0
+    lock.withLock { recordedDownloadThreads.append(onMain) }
+    if let downloadGate { await downloadGate.wait() }
     if let delay = downloadDelay {
       progress?(1)
       try await Task.sleep(for: delay)
     }
+    if let downloadFailure { throw downloadFailure }
     try Data(path.utf8).write(to: URL(fileURLWithPath: destination))
     progress?(UInt64(path.utf8.count))
     lock.withLock { recordedDownloads.append(destination) }
@@ -80,6 +129,9 @@ final class StubSource: FileSource, @unchecked Sendable {
   func upload(
     _ source: String, to path: String, replacing: Bool, progress: (@Sendable (UInt64) -> Void)?
   ) async throws -> UInt64 {
+    if let uploadFailure { throw uploadFailure }
+    // As `RemoteFiles` does: a cancelled task is not sent.
+    if Task.isCancelled { throw FileError.cancelled }
     try lock.withLock {
       if files[path] != nil && !replacing { throw FileError.exists(path: path) }
       files[path] = .file
@@ -87,6 +139,26 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
     return 1
   }
+
+  /// As `RemoteFiles` does: refused once the file is not the expected one.
+  /// A write that lands is a new modification time.
+  func writeBack(
+    _ source: String, to path: String, expected: FileEntry, progress: (@Sendable (UInt64) -> Void)?
+  ) async throws -> FileEntry {
+    if let uploadFailure { throw uploadFailure }
+    let contents = try String(contentsOfFile: source, encoding: .utf8)
+    return try lock.withLock {
+      guard files[path] == .file, entry(path).modified == expected.modified else {
+        throw FileError.changed(path: path)
+      }
+      modifiedAt[path] = (modifiedAt[path] ?? 1_700_000_000) + 1
+      recordedWriteBacks.append((path, contents))
+      return entry(path)
+    }
+  }
+
+  /// Something else wrote the file on the far side.
+  func touch(_ path: String) { lock.withLock { modifiedAt[path] = (modifiedAt[path] ?? 1_700_000_000) + 100 } }
 
   func makeDirectory(_ path: String) async throws {
     try lock.withLock {
@@ -119,7 +191,7 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
   }
 
-  func close() async { lock.withLock { recordedClosed = true } }
+  func close() async { lock.withLock { closed = true } }
 
   func has(_ path: String) -> Bool { lock.withLock { files[path] != nil } }
 

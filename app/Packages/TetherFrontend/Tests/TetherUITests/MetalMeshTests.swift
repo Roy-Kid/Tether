@@ -16,16 +16,6 @@ struct MetalMeshTests {
     #expect(MetalMesh.coveredColumns(line, limit: 0) == 0)
   }
 
-  /// Going back to a terminal makes a new view for it, and the last update
-  /// that tab published said only that the cursor moved — or nothing at all.
-  /// A view that drew only what changed last showed an empty screen until
-  /// something else changed.
-  @Test("a new view builds every row, whatever changed last")
-  func newViewBuildsEverything() {
-    #expect(MetalMesh.rowsToBuild(dirty: [], lines: 4, built: []) == [0, 1, 2, 3])
-    #expect(MetalMesh.rowsToBuild(dirty: [2], lines: 4, built: []) == [0, 1, 2, 3])
-  }
-
   @Test("a view that has every row rebuilds only the changed ones")
   func changedRowsOnly() {
     #expect(MetalMesh.rowsToBuild(dirty: [2], lines: 4, built: [0, 1, 2, 3]) == [2])

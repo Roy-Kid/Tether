@@ -14,7 +14,8 @@ let package = Package(
     .target(
       name: "TetherPluginHost",
       dependencies: [
-        .product(name: "TetherUI", package: "TetherFrontend")
+        .product(name: "TetherUI", package: "TetherFrontend"),
+        .product(name: "TetherPluginKit", package: "TetherFrontend")
       ]
     ),
     .testTarget(name: "TetherPluginHostTests", dependencies: ["TetherPluginHost"]),

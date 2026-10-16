@@ -18,6 +18,7 @@ extension HostStore {
   /// Compares the file with the library and, on a Mac, asks when they differ.
   func reviewConfiguration() {
     #if os(macOS)
+      ensureConfiguration()
       guard !unreadable else { return }
       let plan = alignment()
       if plan.isEmpty {

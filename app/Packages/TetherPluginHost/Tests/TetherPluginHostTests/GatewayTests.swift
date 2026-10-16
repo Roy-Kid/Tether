@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TetherPluginKit
 
 @testable import TetherPluginHost
 
@@ -33,7 +34,7 @@ func aGrantReturnsBytesAndNoPath() async throws {
 
 @Test @MainActor
 func aHandleFromAnotherActivationFails() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), notifying: RecordedNotifier())
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
   let first = try host.install(directory: try Fixture.make(id: "fixture.one"))
   let second = try host.install(directory: try Fixture.make(id: "fixture.two", suffixes: ["other"]))
   let sessionA = try await host.activate(id: first.id, runtime: IdleRuntime())
@@ -59,7 +60,7 @@ func refusedConsentStoresNothing() async throws {
 
 @Test @MainActor
 func pluginStorageDoesNotCrossPlugins() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), notifying: RecordedNotifier())
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
   let first = try host.install(directory: try Fixture.make(id: "fixture.one"))
   let second = try host.install(directory: try Fixture.make(id: "fixture.two", suffixes: ["other"]))
   let sessionA = try await host.activate(id: first.id, runtime: IdleRuntime())
@@ -88,7 +89,7 @@ func anUnknownMethodIsRejected() async throws {
 
 @Test @MainActor
 func thePageCannotSpeakAsAnotherSession() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), notifying: RecordedNotifier())
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
   let first = try host.install(directory: try Fixture.make(id: "fixture.one"))
   let second = try host.install(directory: try Fixture.make(id: "fixture.two", suffixes: ["other"]))
   let sessionA = try await host.activate(id: first.id, runtime: IdleRuntime())
@@ -111,10 +112,63 @@ func consentIsATitleAndAVerb() {
   #expect(dialog.message == "document.read")
   #expect(dialog.actions.map(\.title) == ["Allow", "Cancel"])
   #expect(dialog.actions.map(\.role) == [.confirm, .cancel])
-  let notice = NotifyPrompt.dialog(title: "Ready")
-  #expect(notice.title == "Ready")
-  #expect(notice.message == nil)
-  #expect(notice.actions.map(\.title) == ["OK"])
+  let ending = PluginDialog(.confirm("End this session?", verb: "End", destructive: true))
+  #expect(ending.dialog.title == "End this session?")
+  #expect(ending.dialog.actions.map(\.title) == ["Cancel", "End"])
+  #expect(ending.dialog.actions.map(\.role) == [.cancel, .destructive])
+}
+
+@Test @MainActor
+func aPageAndANativeCallerShareTheHost() async throws {
+  let presenter = RecordedPresenter()
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: presenter)
+  let record = try host.install(directory: try Fixture.make())
+  let session = try await host.activate(id: record.id, runtime: IdleRuntime())
+  try await host.api.services(pluginID: record.id, pluginName: record.manifest.name).storageSet("token", "native")
+  let stored = await host.perform(
+    request("storage.plugin.get", session: session, payload: .object(["key": .string("token")])))
+  #expect(stored.payload.key("value")?.string == "native")
+
+  let noted = await host.perform(
+    request("host.notify", session: session, payload: .object(["title": .string("Ready"), "body": .string("done")])))
+  #expect(noted.ok)
+  #expect(presenter.notes.map(\.0) == ["Ready"])
+  #expect(presenter.notes.map(\.1) == ["done"])
+
+  presenter.answer = PluginAnswer(action: "keep", value: "")
+  let asked = await host.perform(
+    request("host.ask", session: session, payload: .object([
+      "title": .string("Replace?"),
+      "actions": .array([
+        .object(["id": .string("replace"), "title": .string("Replace"), "destructive": .bool(true)]),
+        .object(["id": .string("keep"), "title": .string("Keep Both")]),
+      ]),
+    ])))
+  #expect(asked.payload.key("action")?.string == "keep")
+  #expect(presenter.prompts.map(\.title) == ["Replace?"])
+}
+
+@Test @MainActor
+func thePageReadsTheTabItWasOpenedAgainst() async throws {
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
+  let record = try host.install(directory: try Fixture.make())
+  let hostID = UUID()
+  var reconnected = 0
+  let session = try await host.activate(
+    id: record.id, runtime: IdleRuntime(),
+    environment: PluginEnvironment(hostID: hostID, hostLabel: "lab", shellLabel: "zsh", connected: false),
+    reconnect: { reconnected += 1 })
+  let context = await host.perform(request("host.context", session: session, payload: .object([:])))
+  #expect(context.payload.key("hostID")?.string == hostID.uuidString)
+  #expect(context.payload.key("hostLabel")?.string == "lab")
+  #expect(context.payload.key("shellLabel")?.string == "zsh")
+  #expect(context.payload.key("connected")?.bool == false)
+  let again = await host.perform(request("host.reconnect", session: session, payload: .object([:])))
+  #expect(again.ok)
+  #expect(again.payload.key("connected")?.bool == true)
+  #expect(reconnected == 1)
+  let missing = await host.perform(request("host.reconnect", session: UUID(), payload: .object([:])))
+  #expect(missing.error == "noSession")
 }
 
 @MainActor
@@ -128,7 +182,7 @@ private func activatedHost(
 private func installedHost(
   consent: ScriptedConsent = ScriptedConsent(allow: true), id: String = "fixture.host"
 ) async throws -> (PluginHost, URL) {
-  let host = PluginHost(consent: consent, notifying: RecordedNotifier())
+  let host = PluginHost(consent: consent, presenting: RecordedPresenter())
   let root = try Fixture.make(id: id)
   let record = try host.install(directory: root)
   _ = try await host.activate(id: record.id, runtime: IdleRuntime())

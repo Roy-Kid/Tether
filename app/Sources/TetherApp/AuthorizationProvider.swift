@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Tether
 
-struct RemoteAuthorization: Codable, Identifiable, Sendable {
+struct RemoteAuthorization: Codable, Equatable, Identifiable, Sendable {
   enum State: String, Codable { case awaitingAdministrator, installed, verified, revocationPending, revoked, failed }
   var id = UUID()
   var hostID: UUID

@@ -83,6 +83,16 @@ jobs:
         run: |
           python3 scripts/check.py --apple-only
 
+      # The phone's own frontend tests are `#if os(iOS)`: `swift test` on a
+      # Mac compiles them out, so they run here or nowhere.
+      - name: Frontend tests on an iPhone simulator
+        run: |
+          udid=$(xcrun simctl list devices available | grep -E '^ +iPhone' | head -1 \
+            | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          [ -n "$udid" ] || { echo "no iPhone simulator available" >&2; exit 1; }
+          cd app/Packages/TetherFrontend
+          xcodebuild test -scheme TetherFrontend-Package -destination "platform=iOS Simulator,id=$udid"
+
   fuzz:
     name: fuzz the parsers
     runs-on: ubuntu-latest

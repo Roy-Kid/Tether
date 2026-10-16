@@ -14,20 +14,26 @@
 # team signing its own build needs identifiers of its own.
 TETHER_BUNDLE_ID="${TETHER_BUNDLE_ID:-Roy-Kid.Tether}"
 TETHER_CLOUD_CONTAINER="${TETHER_CLOUD_CONTAINER:-iCloud.Roy-Kid.Tether}"
+# The credential provider extension (credential-provider.sh), which is what
+# a password manager looks for before it offers to export to Tether.
+TETHER_PROVIDER_ID="${TETHER_PROVIDER_ID:-$TETHER_BUNDLE_ID.CredentialProvider}"
+AUTOFILL_ENTITLEMENT=com.apple.developer.authentication-services.autofill-credential-provider
 
 PROFILE_DIRS=(
   "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
   "$HOME/Library/MobileDevice/Provisioning Profiles"
 )
 
-# signing_profile <macos|ios> <team>
+# signing_profile <macos|ios> <team> [bundle-id] [icloud|autofill|icloud+autofill]
 #
-# The newest unexpired development profile for this app on that platform, as
-# a path. Fails with a pointer to provision.sh when there is none — a profile
-# that merely exists is not enough, it has to name the container, or CloudKit
-# refuses the app at runtime rather than at signing.
+# The newest unexpired development profile for a bundle (the app, by default)
+# on that platform, as a path. Fails with a pointer to provision.sh when there
+# is none — a profile that merely exists is not enough, it has to grant what
+# the bundle uses: the container, or CloudKit refuses the app at runtime
+# rather than at signing; the AutoFill capability, or no password manager
+# lists the app as somewhere to export to.
 signing_profile() {
-  local platform="$1" team="$2" key extension wanted
+  local platform="$1" team="$2" bundle="${3:-$TETHER_BUNDLE_ID}" needs="${4:-icloud}" key extension wanted
   case "$platform" in
     macos) key=":Entitlements:com.apple.application-identifier"; extension=provisionprofile; wanted=OSX ;;
     ios) key=":Entitlements:application-identifier"; extension=mobileprovision; wanted=iOS ;;
@@ -42,10 +48,15 @@ signing_profile() {
     for file in "$dir"/*."$extension"; do
       [[ -f "$file" ]] || continue
       security cms -D -i "$file" >"$plist" 2>/dev/null || continue
-      [[ "$(/usr/libexec/PlistBuddy -c "Print $key" "$plist" 2>/dev/null)" == "$team.$TETHER_BUNDLE_ID" ]] || continue
+      [[ "$(/usr/libexec/PlistBuddy -c "Print $key" "$plist" 2>/dev/null)" == "$team.$bundle" ]] || continue
       /usr/libexec/PlistBuddy -c "Print :Platform" "$plist" 2>/dev/null | grep -qx " *$wanted" || continue
-      /usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.icloud-container-identifiers" "$plist" 2>/dev/null \
-        | grep -qx " *$TETHER_CLOUD_CONTAINER" || continue
+      if [[ "$needs" == *icloud* ]]; then
+        /usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.icloud-container-identifiers" "$plist" 2>/dev/null \
+          | grep -qx " *$TETHER_CLOUD_CONTAINER" || continue
+      fi
+      if [[ "$needs" == *autofill* ]]; then
+        [[ "$(/usr/libexec/PlistBuddy -c "Print :Entitlements:$AUTOFILL_ENTITLEMENT" "$plist" 2>/dev/null)" == true ]] || continue
+      fi
       expiry=$(plutil -extract ExpirationDate raw -o - "$plist")
       # ISO 8601 in UTC compares correctly as text.
       [[ "$expiry" > "$now" ]] || continue
@@ -58,7 +69,7 @@ signing_profile() {
   rm -f "$plist"
 
   if [[ -z "$best" ]]; then
-    echo "no $platform profile for $team.$TETHER_BUNDLE_ID with $TETHER_CLOUD_CONTAINER;" >&2
+    echo "no $platform profile for $team.$bundle granting $needs;" >&2
     echo "run ./scripts/provision.sh --team $team" >&2
     return 1
   fi
@@ -114,13 +125,15 @@ connected_device() {
   return 1
 }
 
-# signing_entitlements <macos|ios> <team> <output>
+# signing_entitlements <macos|ios> <team> <output> [autofill]
 #
 # What Xcode would sign a development build with, and no more. The CloudKit
 # environment is left to the profile, which makes a development build talk to
 # the development database — the one that accepts a schema as records arrive.
+# `autofill` when the bundle carries the credential provider extension.
 signing_entitlements() {
-  local platform="$1" team="$2" output="$3" application debug
+  local platform="$1" team="$2" output="$3" autofill="" application debug
+  [[ "${4:-}" != autofill ]] || autofill="<key>$AUTOFILL_ENTITLEMENT</key><true/>"
   case "$platform" in
     macos) application="com.apple.application-identifier"; debug="com.apple.security.get-task-allow" ;;
     ios) application="application-identifier"; debug="get-task-allow" ;;
@@ -137,6 +150,7 @@ signing_entitlements() {
     <array><string>$TETHER_CLOUD_CONTAINER</string></array>
     <key>com.apple.developer.icloud-services</key>
     <array><string>CloudKit</string></array>
+    $autofill
     <key>$debug</key><true/>
 </dict>
 </plist>

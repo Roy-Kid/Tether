@@ -16,6 +16,9 @@ protocol FileSource: AnyObject, Sendable {
   func upload(
     _ source: String, to path: String, replacing: Bool, progress: (@Sendable (UInt64) -> Void)?
   ) async throws -> UInt64
+  func writeBack(
+    _ source: String, to path: String, expected: FileEntry, progress: (@Sendable (UInt64) -> Void)?
+  ) async throws -> FileEntry
   func makeDirectory(_ path: String) async throws
   func rename(_ from: String, to: String, replacing: Bool) async throws
   func remove(_ path: String) async throws

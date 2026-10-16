@@ -55,13 +55,46 @@ public struct PluginCommand: Identifiable {
   }
 }
 
+/// A chord a plugin proposes for one of its commands. Only a proposal: the
+/// host owns the binding table, a person can change it, and the host decides
+/// when it is live.
+///
+/// `key` is a lowercase character or one of the host's named keys
+/// (`return`, `left`, `f1`…), the same spelling a person's binding uses.
+public struct PluginKeyChord: Sendable, Hashable {
+  public struct Modifiers: OptionSet, Sendable, Hashable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+    public static let control = Self(rawValue: 1 << 0)
+    public static let option = Self(rawValue: 1 << 1)
+    public static let shift = Self(rawValue: 1 << 2)
+    public static let command = Self(rawValue: 1 << 3)
+  }
+
+  public let key: String
+  public let modifiers: Modifiers
+
+  public init(_ key: String, _ modifiers: Modifiers = .command) {
+    self.key = key.lowercased()
+    self.modifiers = modifiers
+  }
+}
+
 /// Stable command metadata, available before a connection or workspace exists.
+///
+/// A command's chord is live only while an attachment or workspace of the
+/// plugin is offering that command, and then it is tried before the host's
+/// own command on the same chord. So a plugin may propose a chord the host
+/// already uses — for the same idea, done its own way — and the host's
+/// command still answers it everywhere the plugin is not.
 public struct PluginCommandDescriptor: Identifiable, Sendable {
   public let id: String
   public let title: String
-  public init(id: String, title: String) {
+  public let shortcut: PluginKeyChord?
+  public init(id: String, title: String, shortcut: PluginKeyChord? = nil) {
     self.id = id
     self.title = title
+    self.shortcut = shortcut
   }
 }
 
@@ -92,9 +125,18 @@ public struct PluginContext {
   public let openWorkspace: (any PluginWorkspace) -> Void
   /// Reauthentication belongs to the host, never the plugin. No credentials cross this API.
   public let reconnect: () async throws -> RemoteConnection
+  /// Which plugin this context was handed to. Empty when the caller has not said.
+  public let pluginID: String
+  public let pluginName: String
+  /// The same facts a web page reads from `tether.context`.
+  public let environment: PluginEnvironment
+  /// Host services. Native calls and `tether.call` name the same methods.
+  public var services: PluginServices { PluginServices(pluginID: pluginID, pluginName: pluginName) }
+
   public init(
     connection: RemoteConnection?, hostLabel: String, hostID: UUID,
     shellLabel: String = "Shell",
+    pluginID: String = "", pluginName: String = "",
     openWorkspace: @escaping (any PluginWorkspace) -> Void,
     reconnect: @escaping () async throws -> RemoteConnection
   ) {
@@ -102,6 +144,10 @@ public struct PluginContext {
     self.hostLabel = hostLabel
     self.shellLabel = shellLabel
     self.hostID = hostID
+    self.pluginID = pluginID
+    self.pluginName = pluginName
+    self.environment = PluginEnvironment(
+      hostID: hostID, hostLabel: hostLabel, shellLabel: shellLabel, connected: connection != nil)
     self.openWorkspace = openWorkspace
     self.reconnect = reconnect
   }
@@ -134,6 +180,8 @@ public protocol TetherPlugin: AnyObject {
   func deactivate()
   func launch(in context: PluginContext)
   func settings() -> AnyView
+  /// The host's ribbon, reported through ``PluginServices/reportStatus(_:)``.
+  func receiveStatus(_ item: PluginStatusBarItem)
 }
 extension TetherPlugin {
   public var commandDescriptors: [PluginCommandDescriptor] { [] }
@@ -146,6 +194,7 @@ extension TetherPlugin {
   public func activate() {}
   public func deactivate() {}
   public func settings() -> AnyView { AnyView(Text("No additional settings")) }
+  public func receiveStatus(_ item: PluginStatusBarItem) {}
 }
 
 /// Namespaced, nonsecret preferences. Plugins never receive the host's credential store.
@@ -174,6 +223,15 @@ public final class PluginRegistry {
     precondition(!plugins.contains { $0.metadata.id == plugin.metadata.id }, "Duplicate plugin ID")
     plugins.append(plugin)
     if isEnabled(plugin.metadata.id) { plugin.activate() }
+  }
+  /// Dynamic extensions leave through the same close-before-deactivate path.
+  public func unregister(id: String) {
+    guard let plugin = plugins.first(where: { $0.metadata.id == id }) else { return }
+    onDisable?(id)
+    plugin.deactivate()
+    plugins.removeAll { $0.metadata.id == id }
+    disabled.remove(id)
+    defaults.set(Array(disabled).sorted(), forKey: "disabledPlugins")
   }
   public func isEnabled(_ id: String) -> Bool { !disabled.contains(id) }
   public func setEnabled(_ enabled: Bool, id: String) {

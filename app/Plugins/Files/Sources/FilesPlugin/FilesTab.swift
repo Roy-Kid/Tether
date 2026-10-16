@@ -17,8 +17,6 @@ public final class FilesTab: TabAttachment {
   /// Files larger than this ask before they are fetched. The settings value
   /// wins; this is what a person gets until they change it.
   static let previewLimit: UInt64 = UInt64(FilesPreferences.defaultMegabytes) * 1_000_000
-  /// How much the preview cache keeps for one host.
-  static let cacheLimit: Int64 = 1024 * 1024 * 1024
 
   public let tab: TabContext
   let cache: FileCache
@@ -45,6 +43,9 @@ public final class FilesTab: TabAttachment {
   var selection: Set<String> = []
   /// The entry whose name is being edited in place.
   var renaming: String?
+  /// True until the next turn after a paste was accepted. ⌘V arrives both as
+  /// a key and as the Paste menu; one of them has to be the paste.
+  private var pasteDelivered = false
   /// The find field occupies the directory name's slot. Closed, the browser
   /// shows the name. ⌃F opens it only while the list or the field has the
   /// keyboard — a shortcut on the window would take ⌃F from the shell.
@@ -89,6 +90,21 @@ public final class FilesTab: TabAttachment {
       NSWorkspace.shared.open(url)
     #endif
   }
+  /// The same for a copy opened to be edited, reporting which app took it:
+  /// that app quitting is how the copy is known to be closed.
+  var openToEdit: @MainActor (URL, @escaping @MainActor (String?) -> Void) -> Void = { url, opened in
+    #if os(macOS)
+      NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { app, _ in
+        let bundleID = app?.bundleIdentifier
+        Task { @MainActor in opened(bundleID) }
+      }
+    #endif
+  }
+  /// Files opened to be edited on this host, shared with its other tabs.
+  let editing: EditingCopies
+  /// How this tab puts a question: through its plugin services. A test
+  /// answers instead.
+  var ask: @MainActor (PluginPrompt) async -> PluginAnswer
   private var session: Task<any FileSource, Error>?
   private var restorationTask: Task<Void, Never>?
   /// Printed paths recently looked for, and what was found.
@@ -101,7 +117,7 @@ public final class FilesTab: TabAttachment {
   private(set) var generation = 0
 
   init(
-    tab: TabContext, cache: FileCache? = nil,
+    tab: TabContext, cache: FileCache? = nil, editing: EditingCopies? = nil,
     open: @escaping (RemoteConnection?) async throws -> any FileSource = FilesTab.openRemote,
     present: @escaping ([URL]) -> Void = { QuickLook.show($0) },
     defaults: UserDefaults = .standard
@@ -109,9 +125,21 @@ public final class FilesTab: TabAttachment {
     self.tab = tab
     self.connection = tab.plugin.connection
     self.cache = cache ?? FileCache(host: tab.plugin.hostID)
+    // A test hands in a cache of its own and never sweeps the real ones.
+    if cache == nil { LocalCopies.sweepOnce() }
     self.opener = open
     self.presenter = present
     self.defaults = defaults
+    self.editing = editing ?? EditingCopies.shared(host: tab.plugin.hostID, label: tab.plugin.hostLabel)
+    let services = tab.plugin.services
+    self.ask = { await services.ask($0) }
+    self.editing.attach(
+      tab: tab.id,
+      source: { [weak self] in
+        guard let self else { throw FileError.disconnected(cause: "The tab closed.") }
+        return try await self.source()
+      },
+      transfers: transfers, ask: { [weak self] prompt in await self?.ask(prompt) ?? .cancelled })
   }
 
   /// Where a download panel opens. The configured folder, or Downloads.
@@ -206,6 +234,7 @@ public final class FilesTab: TabAttachment {
     openingRequests.removeAll()
     opening.removeAll()
     transfers.cancelAll()
+    editing.detach(tab: tab.id)
     let old = session
     session = nil
     Task { await (try? await old?.value)?.close() }
@@ -509,14 +538,14 @@ extension FilesTab {
           if target.kind == .directory {
             await go(to: entry.path)
           } else {
-            await preview([target])
+            await openFile(target)
           }
         } catch {
           problem = describe(error)
         }
       }
     case .file:
-      Task { await preview([entry]) }
+      Task { await openFile(entry) }
     case .other:
       break
     }
@@ -583,11 +612,8 @@ extension FilesTab {
 
   #if os(macOS)
     private func loadingPreview(for file: FileEntry) -> URL? {
-      let directory = FileCache.previewRoot
-        .appendingPathComponent("Tether Preview Loading", isDirectory: true)
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
       do {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let directory = try LocalCopies.scratch(in: LocalCopies.loading())
         let url = directory.appendingPathComponent(Names.local(file.name))
         try Data("Loading preview…".utf8).write(to: url)
         return url
@@ -628,8 +654,7 @@ extension FilesTab {
     let current = await identity(entry, from: filesSource)
     if let cached = cache.cached(current) { return cached }
     let url = try await transfers.download(current, to: cache.location(for: current), from: filesSource)
-    cache.trim(to: FilesTab.cacheLimit)
-    return url
+    return cache.keep(url)
   }
 
   /// What Quick Look should open for `file`, whose size and modification
@@ -640,8 +665,7 @@ extension FilesTab {
     }
     if let cached = cache.cached(file) { return cached }
     let url = try await transfers.download(file, to: cache.location(for: file), from: source)
-    cache.trim(to: FilesTab.cacheLimit)
-    return url
+    return cache.keep(url)
   }
 
   /// A cache copy of a file on this machine, keyed by its modification time,
@@ -658,8 +682,7 @@ extension FilesTab {
     } catch {
       return nil
     }
-    cache.trim(to: FilesTab.cacheLimit)
-    return destination
+    return cache.keep(destination)
   }
 
   /// The same files, with the size and modification time they have now.
@@ -741,6 +764,7 @@ extension FilesTab {
 
   /// Moves entries into another directory on the same machine.
   func move(_ moving: [FileEntry], into destination: String) async {
+    var failure: String?
     for entry in moving where Paths.parent(entry.path) != destination {
       // Into itself would be a loop the server refuses anyway; saying
       // nothing is kinder than relaying its complaint.
@@ -751,11 +775,11 @@ extension FilesTab {
       } catch FileError.exists {
         conflicts.append(Conflict(name: entry.name, target: target, action: .move(from: entry.path)))
       } catch {
-        problem = describe(error)
+        failure = describe(error)
       }
     }
     moving.forEach { forget($0.path) }
-    await relist(Set(moving.map { Paths.parent($0.path) } + [destination]))
+    await relist(Set(moving.map { Paths.parent($0.path) } + [destination]), keeping: failure)
   }
 
   func requestDelete(_ chosen: [FileEntry]) {
@@ -768,6 +792,7 @@ extension FilesTab {
   func confirmDelete(_ confirmed: [FileEntry]? = nil) async {
     let doomed = confirmed ?? pendingDeletion
     pendingDeletion = []
+    var failure: String?
     for entry in doomed {
       do {
         if entry.kind == .directory {
@@ -776,37 +801,66 @@ extension FilesTab {
           try await source().remove(entry.path)
         }
       } catch {
-        problem = describe(error)
+        failure = describe(error)
         break
       }
     }
     selection.subtract(doomed.map(\.path))
     doomed.forEach { forget($0.path) }
-    await relist(Set(doomed.map { Paths.parent($0.path) }))
+    await relist(Set(doomed.map { Paths.parent($0.path) }), keeping: failure)
   }
 
   // MARK: - Transfers
 
+  /// Files copied on this machine, sent where a new file would go.
+  ///
+  /// A folder that is not the root is opened so the copies show up in the
+  /// tree. Returns whether the paste was accepted: an empty board was not,
+  /// and a second delivery of the same ⌘V was already accepted.
+  @discardableResult
+  func pasteLocalFiles(_ files: [URL]) -> Bool {
+    let files = files.filter(\.isFileURL)
+    guard !files.isEmpty, let destination = targetDirectory else { return false }
+    guard claimPaste() else { return true }
+    if destination != directory { expanded.insert(destination) }
+    let scoped = files.filter { $0.startAccessingSecurityScopedResource() }
+    Task {
+      defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+      await upload(files, into: destination)
+    }
+    return true
+  }
+
+  /// One ⌘V is delivered twice, by the key and by the Paste menu.
+  private func claimPaste() -> Bool {
+    guard !pasteDelivered else { return false }
+    pasteDelivered = true
+    Task { @MainActor [weak self] in self?.pasteDelivered = false }
+    return true
+  }
+
   /// Sends files from this machine into `destination`, returning the paths
   /// that arrived. A name already there is asked about, not overwritten.
+  ///
+  /// Not stated first. The upload refuses a taken name itself, where it can
+  /// tell; a server that will not stat a name that is not there yet must
+  /// not stop the file before it has even shown a row.
   @discardableResult
   func upload(_ files: [URL], into destination: String) async -> [String] {
     var arrived: [String] = []
+    var failure: String?
     for file in files {
       let target = Paths.join(destination, file.lastPathComponent)
       do {
-        if try await exists(target) {
-          conflicts.append(
-            Conflict(name: file.lastPathComponent, target: target, action: .upload(file)))
-          continue
-        }
         try await send(file, to: target, replacing: false)
         arrived.append(target)
+      } catch FileError.exists {
+        conflicts.append(Conflict(name: file.lastPathComponent, target: target, action: .upload(file)))
       } catch {
-        if (error as? FileError) != .cancelled { problem = describe(error) }
+        if (error as? FileError) != .cancelled { failure = describe(error) }
       }
     }
-    await relist([destination])
+    await relist([destination], keeping: failure)
     return arrived
   }
 
@@ -821,6 +875,7 @@ extension FilesTab {
       target = Paths.join(destination, Names.free(conflict.name, taken: Set(taken)))
     }
     let replacing = choice == .replace
+    var failure: String?
     do {
       switch conflict.action {
       case .upload(let file):
@@ -829,35 +884,76 @@ extension FilesTab {
         try await source().rename(from, to: target, replacing: replacing)
       }
     } catch {
-      if (error as? FileError) != .cancelled { problem = describe(error) }
+      if (error as? FileError) != .cancelled { failure = describe(error) }
     }
     var touched: Set<String> = [destination]
     if case .move(let from) = conflict.action {
       touched.insert(Paths.parent(from))
       forget(from)
     }
-    await relist(touched)
+    await relist(touched, keeping: failure)
   }
 
-  /// Opens with whatever this Mac opens the type with. Never something that
-  /// would run: those are previewed or saved instead. A large remote file is
-  /// asked about first, the same gate a preview uses.
+  /// What opening a file does: on a Mac, it is edited in whatever this Mac
+  /// opens its type with and written back when saved; a phone has no other
+  /// app to write it back from, so it is previewed.
+  private func openFile(_ entry: FileEntry) async {
+    #if os(macOS)
+      await edit([entry])
+    #else
+      await preview([entry])
+    #endif
+  }
+
   func openExternally(_ files: [FileEntry]) {
-    Task { await openFetched(files) }
+    Task { await edit(files) }
   }
 
-  func openFetched(_ files: [FileEntry], confirmed: Bool = false) async {
-    let chosen = files.filter { $0.kind == .file && !Names.isRisky($0.name) }
-    guard !chosen.isEmpty else { return }
-    guard let filesSource = try? await source() else { return }
-    let current = await identities(chosen, from: filesSource)
-    if holdForSize(current, confirmed: confirmed, action: .open(current), source: filesSource) {
+  /// Opens files to be edited, each in whatever this Mac opens its type with,
+  /// and writes each back whenever it is saved (`EditingCopies`). Never a
+  /// file that would run: that is previewed instead. On this machine the
+  /// file itself is opened. A large remote file is asked about first, as a
+  /// preview is; a copy already here — being edited, or previewed — is not
+  /// fetched again.
+  func edit(_ files: [FileEntry], confirmed: Bool = false) async {
+    let chosen = files.filter { $0.kind == .file }
+    let risky = chosen.filter { Names.isRisky($0.name) }
+    if !risky.isEmpty { await preview(risky) }
+    let editable = chosen.filter { !Names.isRisky($0.name) }
+    guard !editable.isEmpty, let filesSource = try? await source() else { return }
+    let current = await identities(editable, from: filesSource)
+    if filesSource.isLocal {
+      current.forEach { openLocal(URL(fileURLWithPath: $0.path)) }
+      return
+    }
+    let unfetched = current.filter { editing.reusable($0) == nil }
+    if holdForSize(unfetched, confirmed: confirmed, action: .open(current), source: filesSource) {
       return
     }
     for file in current {
-      guard let url = try? await local(file) else { continue }
-      openLocal(url)
+      do {
+        let url = try await editingCopy(of: file, from: filesSource)
+        let editing = self.editing
+        openToEdit(url) { editor in editing.opened(file.path, in: editor) }
+      } catch {
+        if (error as? FileError) != .cancelled { problem = describe(error) }
+      }
     }
+  }
+
+  /// The copy `file` is edited in: the one already being edited, the preview
+  /// moved over, or fetched now.
+  private func editingCopy(of file: FileEntry, from source: any FileSource) async throws -> URL {
+    if let reused = editing.reusable(file) { return reused }
+    let location = try editing.location(for: file)
+    try await editing.writingCopy(file.path) {
+      try? FileManager.default.removeItem(at: location)
+      if !cache.move(file, to: location) {
+        _ = try await transfers.download(file, to: location, from: source)
+      }
+    }
+    editing.adopt(file, at: location)
+    return location
   }
 
   /// Saves the files where the person asked, or into the folder they set.
@@ -902,14 +998,27 @@ extension FilesTab {
     if !saved.isEmpty { revealSaved(saved) }
   }
 
-  /// What a drag of `entry` carries. The selection, when `entry` is part of
-  /// it; otherwise that entry alone. The same text Copy Path would copy.
-  func draggedPathText(_ entry: FileEntry) -> String {
+  /// What a drag of `entry` takes: the selection, when `entry` is part of
+  /// it, as Finder does; otherwise that entry alone.
+  func draggedEntries(_ entry: FileEntry) -> [FileEntry] {
     if selection.contains(entry.path) {
-      let paths = selected.map(\.path)
-      if !paths.isEmpty { return Names.copiedPaths(paths) }
+      let chosen = selected
+      if !chosen.isEmpty { return chosen }
     }
-    return entry.path
+    return [entry]
+  }
+
+  /// The paths a drag of `entry` carries. The same text Copy Path would copy.
+  func draggedPathText(_ entry: FileEntry) -> String {
+    Names.copiedPaths(draggedEntries(entry).map(\.path))
+  }
+
+  /// What a drag or a share of `entry` fetches, when something asks for the
+  /// bytes. Made here, on the main actor; used from wherever the asking is.
+  /// The session is the one open now: a drag that outlives it fails rather
+  /// than waiting for the next.
+  func fetch(_ entry: FileEntry) -> FileFetch {
+    FileFetch(entry: entry, session: session, cache: cache, transfers: transfers)
   }
 
   /// Types the entries' paths at the tab's prompt.
@@ -934,15 +1043,6 @@ extension FilesTab {
       // or on a network that came back, should try again.
       if session == task { session = nil }
       throw error
-    }
-  }
-
-  private func exists(_ path: String) async throws -> Bool {
-    do {
-      _ = try await source().lstat(path)
-      return true
-    } catch FileError.notFound {
-      return false
     }
   }
 

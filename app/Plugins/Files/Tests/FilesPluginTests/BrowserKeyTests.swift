@@ -96,6 +96,11 @@
     @Test("Control navigation moves between rows and expands or collapses folders")
     func unixNavigation() async throws {
       _ = NSApplication.shared
+      // ⌃V uploads when Finder files are copied. This test is page down,
+      // so the machine's clipboard must not be one of those.
+      let saved = PasteboardSnapshot()
+      defer { saved.restore() }
+      NSPasteboard.general.clearContents()
       let source = StubSource([
         "/": .directory, "/home": .directory, "/home/ada": .directory,
         "/home/ada/notes.txt": .file, "/home/ada/plot.png": .file,
@@ -161,6 +166,38 @@
       press("\u{1b}", code: 53, in: window)
       try await Task.sleep(for: .milliseconds(100))
       #expect(model.renaming == nil)
+    }
+
+    /// SwiftUI routes a key to the list through the table's own responder
+    /// chain. A responder spliced in after the table — one per rebuilt view,
+    /// since a stale one could not unsplice itself — left space with nothing
+    /// to preview. The chain stays SwiftUI's.
+    @Test("the list's responder chain is left as SwiftUI built it")
+    func responderChainUntouched() async throws {
+      let source = StubSource([
+        "/": .directory, "/home": .directory, "/home/ada": .directory, "/home/ada/notes.txt": .file,
+      ])
+      let model = FilesTab(
+        tab: context(),
+        cache: FileCache(
+          host: UUID(),
+          base: FileManager.default.temporaryDirectory.appendingPathComponent("chain-\(UUID())")),
+        open: { _ in source }, defaults: cleanDefaults())
+      await model.go(to: "/home/ada")
+      let window = NSWindow(
+        contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.orderFrontRegardless()
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(500))
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      var responder = table.nextResponder
+      while let current = responder, current !== window {
+        let module = String(reflecting: type(of: current))
+        #expect(!module.hasPrefix("FilesPlugin."), "\(module) sits in the list's responder chain")
+        responder = current.nextResponder
+      }
     }
 
     @Test("space previews a text file and Delete requests its removal")
@@ -244,6 +281,158 @@
       window.orderOut(nil)
 
       #expect(source.removed == ["/home/ada/notes.txt"])
+    }
+
+    /// The pasteboard is the user's. A test that writes it puts the previous
+    /// contents back, including when the assertion fails.
+    private final class PasteboardSnapshot {
+      private let items: [NSPasteboardItem]
+
+      init() {
+        items = (NSPasteboard.general.pasteboardItems ?? []).map { item in
+          let copy = NSPasteboardItem()
+          for type in item.types {
+            if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+          }
+          return copy
+        }
+      }
+
+      func restore() {
+        let board = NSPasteboard.general
+        board.clearContents()
+        if !items.isEmpty { board.writeObjects(items) }
+      }
+    }
+
+    @Test("⌘V uploads a file copied from Finder")
+    func commandVUploads() async throws {
+      let source = StubSource([
+        "/": .directory, "/home": .directory, "/home/ada": .directory,
+        "/home/ada/notes.txt": .file,
+      ])
+      let model = FilesTab(
+        tab: context(),
+        cache: FileCache(
+          host: UUID(),
+          base: FileManager.default.temporaryDirectory.appendingPathComponent("paste-\(UUID())")),
+        open: { _ in source }, defaults: cleanDefaults())
+      await model.go(to: "/home/ada")
+
+      let window = NSWindow(
+        contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.makeKeyAndOrderFront(nil)
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(400))
+
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      let local = FileManager.default.temporaryDirectory
+        .appendingPathComponent("finder-\(UUID().uuidString).txt")
+      try Data("copied".utf8).write(to: local)
+      defer { try? FileManager.default.removeItem(at: local) }
+      let saved = PasteboardSnapshot()
+      defer { saved.restore() }
+      let board = NSPasteboard.general
+      board.clearContents()
+      #expect(board.writeObjects([local as NSURL]))
+
+      // A click below the rows must take focus away from the terminal too.
+      // Giving the table focus directly would hide this routing failure.
+      window.makeFirstResponder(nil)
+      let scroll = try #require(table.enclosingScrollView)
+      let point = scroll.convert(NSPoint(x: scroll.bounds.midX, y: scroll.bounds.maxY - 10), to: nil)
+      let click = try #require(NSEvent.mouseEvent(
+        with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+      NSApp.sendEvent(click)
+      #expect(window.firstResponder === table)
+
+      let event = try #require(NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "v",
+        charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9))
+      NSApp.sendEvent(event)
+      for _ in 0..<100 where source.uploads.isEmpty {
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      #expect(source.uploads.map(\.1) == ["/home/ada/\(local.lastPathComponent)"])
+
+      let second = FileManager.default.temporaryDirectory
+        .appendingPathComponent("finder-\(UUID().uuidString).txt")
+      try Data("again".utf8).write(to: second)
+      defer { try? FileManager.default.removeItem(at: second) }
+      board.clearContents()
+      #expect(board.writeObjects([second as NSURL]))
+      let control = try #require(NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "\u{16}",
+        charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9))
+      NSApp.sendEvent(control)
+      let uploaded = "/home/ada/\(second.lastPathComponent)"
+      for _ in 0..<100 where !source.uploads.map(\.1).contains(uploaded) {
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      #expect(source.uploads.map(\.1) == [
+        "/home/ada/\(local.lastPathComponent)", uploaded,
+      ])
+    }
+
+    @Test("Finder paste writes complete bytes through the real local SFTP backend")
+    func finderPasteCopiesRealFiles() async throws {
+      let base = FileManager.default.temporaryDirectory.appendingPathComponent("real-paste-\(UUID())")
+      let destination = base.appendingPathComponent("destination")
+      try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: base) }
+      let session = try await TerminalSession.local()
+      defer { session.close() }
+      let connection = try #require(session.connection)
+      let source = try await connection.files()
+      let model = FilesTab(tab: context(), cache: FileCache(host: UUID(), base: base),
+        open: { _ in source }, defaults: cleanDefaults())
+      defer { model.close() }
+      await model.go(to: destination.path)
+      #expect(model.problem == nil)
+      let payload = Data((0..<131_073).map { UInt8($0 % 251) })
+      let local = base.appendingPathComponent("文件 with spaces.bin")
+      try payload.write(to: local)
+      let second = base.appendingPathComponent("second.txt")
+      try Data("second file\n".utf8).write(to: second)
+      let saved = PasteboardSnapshot()
+      defer { saved.restore() }
+      let board = NSPasteboard.general
+      board.clearContents()
+      #expect(board.writeObjects([local as NSURL, second as NSURL]))
+      let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.contentView = NSHostingView(rootView: Browser(model: model))
+      window.makeKeyAndOrderFront(nil)
+      defer { window.orderOut(nil) }
+      try await Task.sleep(for: .milliseconds(400))
+      let table = try #require(find(NSTableView.self, in: window.contentView!))
+      window.makeFirstResponder(nil)
+      let scroll = try #require(table.enclosingScrollView)
+      let point = scroll.convert(NSPoint(x: scroll.bounds.midX, y: scroll.bounds.maxY - 10), to: nil)
+      NSApp.sendEvent(try #require(NSEvent.mouseEvent(
+        with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+      #expect(window.firstResponder === table)
+      NSApp.sendEvent(try #require(NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "v",
+        charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)))
+      let copied = destination.appendingPathComponent(local.lastPathComponent)
+      let copiedSecond = destination.appendingPathComponent(second.lastPathComponent)
+      for _ in 0..<250 where model.entry(copiedSecond.path) == nil {
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      #expect(model.problem == nil)
+      #expect(model.conflicts.isEmpty)
+      #expect(try Data(contentsOf: copied) == payload)
+      #expect(try Data(contentsOf: copiedSecond) == Data(contentsOf: second))
+      #expect(model.entry(copied.path) != nil)
+      #expect(model.entry(copiedSecond.path) != nil)
     }
 
     @Test("control-f opens find only once the list has the keyboard")

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TetherApp
+import struct TetherApp.Host
 
 @MainActor
 @Suite("Closing a terminal with running work")
@@ -39,8 +40,8 @@ struct TabCloseTests {
     tabs.requestClose(id)
     try await settle(tabs)
     #expect(tabs.pendingClose == id)
-    #expect(tabs.closeNote?.contains("sleep, vim") == true)
-    #expect(tabs.closeNote?.contains("lose unsaved work") == true)
+    #expect(tabs.closeNote == ShellActivity.running(["sleep", "vim"]).closeMessage, "one line, naming what may stop")
+    #expect(tabs.closeNote?.contains("sleep") == true && tabs.closeNote?.contains("vim") == true)
     #expect(tabs.tabs.count == 1)
     tabs.pendingClose = nil
     #expect(tabs.tabs.count == 1)
@@ -109,5 +110,30 @@ struct TabCloseTests {
     #expect(tabs.pendingClose == nil)
     #expect(tabs.checkingClose == nil)
     #expect(tabs.tabs.isEmpty)
+  }
+
+  /// Launch opens this machine's shell before iCloud answers. Signing in
+  /// behind it closes what came from the old library and leaves that shell.
+  @Test("an account change keeps the shells on this machine")
+  func accountChangeKeepsLocalShells() {
+    let tabs = TabSet(inspectActivity: { _ in .idle })
+    let local = tab(live: false)
+    let remoteHost = Host(label: "lab", hostname: "lab.invalid", port: 22, username: "ada")
+    let remote = SessionTab(preview: remoteHost, known: KnownHosts(), name: "lab", live: false)
+    tabs.adopt(local)
+    tabs.adopt(remote)
+    #expect(tabs.selected == remote.id)
+
+    tabs.closeAccountSessions()
+    #expect(tabs.tabs.map(\.id) == [local.id])
+    #expect(tabs.workspaces.map(\.terminalIDs) == [[local.id]])
+    #expect(tabs.selected == local.id)
+    #expect(tabs.currentHost?.isLocal == true)
+
+    let alone = TabSet(inspectActivity: { _ in .idle })
+    alone.adopt(SessionTab(preview: remoteHost, known: KnownHosts(), name: "lab", live: false))
+    alone.closeAccountSessions()
+    #expect(alone.tabs.isEmpty)
+    #expect(alone.selected == nil)
   }
 }

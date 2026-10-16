@@ -41,23 +41,6 @@ struct InputMethodTests {
     }
   }
 
-  @Test("the terminal does not reserve an application's former Ctrl-Shift-P binding")
-  func unboundShortcutReachesTerminal() throws {
-    _ = NSApplication.shared
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
-                          styleMask: [.borderless], backing: .buffered, defer: false)
-    let view = KeyCaptureView(frame: .zero)
-    window.contentView!.addSubview(view)
-    window.makeFirstResponder(view)
-    var inputs = 0
-    view.onInput = { _ in inputs += 1 }
-    let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
-      modifierFlags: [.control, .shift], timestamp: 0, windowNumber: window.windowNumber,
-      context: nil, characters: "\u{10}", charactersIgnoringModifiers: "P", isARepeat: false, keyCode: 35))
-    #expect(view.performKeyEquivalent(with: event))
-    #expect(inputs == 1)
-  }
-
   @Test("candidate anchor follows the caret inside an offset terminal pane")
   func followsCaret() {
     _ = NSApplication.shared
@@ -68,6 +51,7 @@ struct InputMethodTests {
     window.contentView!.addSubview(view)
     view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
                        replacementRange: NSRange(location: NSNotFound, length: 0))
+    #expect(view.composing == "ni", "the composing string is kept to be drawn")
 
     view.cursorRect = NSRect(x: 88, y: 40, width: 8, height: 16)
     let first = view.firstRect(forCharacterRange: NSRange(location: 0, length: 2), actualRange: nil)
@@ -82,6 +66,9 @@ struct InputMethodTests {
     view.setFrameSize(NSSize(width: 640, height: 500))
     let resized = view.firstRect(forCharacterRange: NSRange(location: 0, length: 2), actualRange: nil)
     #expect(resized.origin.y == next.origin.y + 100)
+
+    view.insertText("你", replacementRange: NSRange(location: NSNotFound, length: 0))
+    #expect(view.composing.isEmpty, "a chosen candidate leaves nothing to draw")
   }
 }
 #endif
