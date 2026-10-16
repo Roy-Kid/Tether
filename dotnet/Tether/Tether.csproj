@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The façade. The only target a consumer references (Decisions/0004, 0017).
+
+    `Generated/tether_ffi.cs` is uniffi-bindgen-cs output and is never
+    hand-edited; every type in it is `internal`, which is what keeps the
+    generated symbols from leaking through this library.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Tether</RootNamespace>
+    <AssemblyName>Tether</AssemblyName>
+    <Description>Embeddable SSH terminal components — the C# façade.</Description>
+    <Version>0.0.0</Version>
+    <!-- UniFFI's generated code uses unsafe blocks for the FFI seam. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Generated code carries Rust doc comments in a C# shape the compiler
+         does not love. Its warnings are not ours (Decisions/0018). -->
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1587</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The import library and DLL are build outputs, never committed
+      (Decisions/0017). `scripts/build-windows.ps1` places them here.
+
+      `DllImport("tether_ffi")` resolves next to the consumer's executable,
+      so the native library is copied to the output *root*, not only under
+      `runtimes/` — the NuGet layout is for packing, not for a project
+      reference.
+    -->
+    <Content Include="runtimes\win-x64\native\tether_ffi.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>tether_ffi.dll</Link>
+    </Content>
+    <None Include="runtimes\**">
+      <Pack>true</Pack>
+      <PackagePath>runtimes</PackagePath>
+    </None>
+  </ItemGroup>
+
+</Project>

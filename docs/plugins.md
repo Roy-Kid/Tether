@@ -254,6 +254,85 @@ permission. It reads `http://127.0.0.1:17890/v1/stream?surface=tether`. Run
 `nerve-hub` separately; the web host neither installs nor launches executables.
 Reinstalling a changed package requires uninstalling the previous copy first.
 
+## Windows runtime web panels (preview)
+
+Settings → Extensions has an icon-only **Install web plugin** action. Choose
+a directory containing `manifest.json` and its web assets. The installer
+shows the plugin name and declared network origins, validates the package,
+and copies it into `%LOCALAPPDATA%\Tether\Plugins\<id>`. The manifest is
+discovered at startup without running the page. Each installed web plugin
+also offers **Update…** (same id, replace package) and **Uninstall** (delete
+package, unregister, close its workspace tabs). The inspector opens a panel
+beside a terminal; **Open … Tab** / Command Palette open the same panel as a
+full workspace tab (the Windows shape of macOS `PluginWorkspace`). Disabling
+an extension unloads attachments and closes its tabs. No project reference or
+product registration line is needed.
+
+This Windows preview supports API 1, runtime `web`, a `panel` and/or `viewer`
+contribution, optional `command` contributions, and the permissions
+`network`, `service.local`, `document.read` and `storage.plugin`. A `viewer`
+contribution lists file suffixes (no leading dot); Files open/preview routes
+matching files to that plugin after a one-shot Allow consent, grants the
+bytes to the session, and posts `{api:1,type:"document",handle}`. The page
+reads them with `document.read`. `storage.plugin.get` / `set` ask once per
+activation. `host.notify` shows a dialog titled with the plugin name. The
+optional `networkOrigins` field is a list of exact origins, including ports;
+HTTP is accepted only for literal loopback IPs, otherwise HTTPS is required.
+Optional `glyph`, `summary` and contribution `title` fields supply Windows
+chrome and command metadata. Apple's runtime integration is described above.
+
+Each activation uses an isolated InPrivate WebView2 profile and a private
+virtual asset origin. The page has no native host objects, direct network,
+file navigation, downloads, popups or permission grants. Package validation
+rejects path escapes, reparse points, native binary signatures/extensions and
+installation scripts. There is no arbitrary process-launch or terminal capability. `service.local` permits `service.ensure` for declared `services` only when the host has registered that service for this plugin. Executable and arguments are host-controlled; health is checked first and a cross-process lock coordinates startup.
+
+The transport is `window.chrome.webview`. On load the host sends
+`{api:1,type:"ready",session,context:{hostLabel,theme}}`. Requests use
+`{api:1,session,id,method,payload}`; replies use
+`{api:1,type:"response",id,result}` or `error`. Session and source checks bind
+requests to that view. Supported methods:
+
+| Method | Payload | Result |
+| --- | --- | --- |
+| `network.get` | `{url}` | `{text}` |
+| `network.subscribe` | `{url}` | `{subscription}` |
+| `network.unsubscribe` | `{subscription}` | null |
+| `document.read` | `{handle}` | `{bytes}` (base64) |
+| `storage.plugin.get` | `{key}` | `{value}` or null |
+| `storage.plugin.set` | `{key,value}` | null |
+| `host.notify` | `{title}` | null |
+
+All network operations are GET-only, with no cookies, credentials, proxies
+or redirects, and only declared origins. SSE `data:` frames arrive as
+`{api:1,type:"event",subscription,text}`; disconnects return `error`. Requests
+and event frames are bounded. Reloading, disabling or closing the attachment
+cancels its streams. Theme/host changes arrive as `type:"context"`; command
+invocations arrive as `{api:1,type:"command",id}`.
+
+Command-line installation and opening use the same package checks:
+
+```powershell
+TetherApp.Windows.exe --install-plugin C:\path\package --open-plugin publisher.plugin
+# Already installed:
+TetherApp.Windows.exe --open-plugin publisher.plugin
+```
+
+The first integrated package is Nerve's `surfaces/tether-web/package` in its
+own repository. It reads the existing local hub without a native plugin or
+changes to the terminal SDK. Start Nerve or `nerve-hub serve` first; the web
+package requests the host-approved installed hub through `service.ensure` when opened or reconnecting. Its preview is display-only and connects as
+`tether-web` so other notifying surfaces retain election priority.
+
+Validation:
+
+```powershell
+dotnet test tests/plugins/PluginTests.csproj
+# Read-only integration against a running local hub:
+$env:TETHER_TEST_WEB_PACKAGE = 'C:\path\nerve\surfaces\tether-web\package'
+dotnet test tests/plugins/PluginTests.csproj --filter FullyQualifiedName~RealHubTests
+```
+
 # Using tmux
 
 Open a local shell or connect to a host. On a Mac, the tmux button at the bottom right, beside Files, opens the session list in the inspector. Choosing a session leaves that list open. On a phone the list is inside the Shell button and closes after a choice.

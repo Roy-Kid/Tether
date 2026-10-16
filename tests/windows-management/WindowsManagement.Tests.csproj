@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../dotnet/Tether/Tether.csproj" />
+    <Compile Include="../../app-win/SshConfig.cs" Link="SshConfig.cs" />
+    <Compile Include="../../app-win/SshConfigEditor.cs" Link="SshConfigEditor.cs" />
+    <Compile Include="../../app-win/IdentityStore.cs" Link="IdentityStore.cs" />
+    <Compile Include="../../app-win/RemoteAuthorization.cs" Link="RemoteAuthorization.cs" />
+    <Compile Include="../../app-win/IdentityAuthentication.cs" Link="IdentityAuthentication.cs" />
+    <Compile Include="../../app-win/Totp.cs" Link="Totp.cs" />
+    <Compile Include="../../app-win/BoundedProcess.cs" Link="BoundedProcess.cs" />
+    <Compile Include="../../app-win/WslSession.cs" Link="WslSession.cs" />
+    <Compile Include="../../app-win/ProcessTable.cs" Link="ProcessTable.cs" />
+    <Compile Include="../../app-win/Plugins/PortScan.cs" Link="PortScan.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,36 @@
+<ContentDialog
+    x:Class="TetherApp.ConnectDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Connect"
+    PrimaryButtonText="Connect"
+    CloseButtonText="Cancel"
+    DefaultButton="Primary">
+
+    <!--
+      Silent chrome: fields carry their own names, no sentences. The window
+      is a terminal, not a document full of labels.
+    -->
+    <StackPanel Spacing="8" MinWidth="320">
+        <TextBox x:Name="HostBox"
+                 PlaceholderText="hostname or IP"
+                 Header="Address" />
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="UserBox"
+                     Grid.Column="0"
+                     PlaceholderText="username"
+                     Header="Username" />
+            <TextBox x:Name="PortBox"
+                     Grid.Column="1"
+                     PlaceholderText="22"
+                     Header="Port"
+                     InputScope="Number" />
+        </Grid>
+        <PasswordBox x:Name="PasswordBox"
+                     Header="Password" />
+    </StackPanel>
+</ContentDialog>

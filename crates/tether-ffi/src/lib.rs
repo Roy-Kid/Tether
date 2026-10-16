@@ -11,11 +11,19 @@ mod history;
 mod input;
 mod keys;
 mod link;
+#[cfg(feature = "render")]
+mod render;
 mod screen;
 mod session;
 pub use history::SessionHistory;
 mod tmux;
 pub use tmux::*;
+
+#[cfg(feature = "render")]
+pub use render::{
+    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
+    RgbaDto, SelectionDto, render_font_families,
+};
 
 pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
 
@@ -28,7 +36,7 @@ pub use screen::{
 };
 pub use session::{
     Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,
-    connect_cancellable, local_shell_available, open_local,
+    connect_cancellable, local_shell_available, open_local, open_local_with_arguments,
 };
 
 /// One prompt from an interactive authentication exchange.

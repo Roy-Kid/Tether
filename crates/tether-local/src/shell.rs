@@ -139,7 +139,7 @@ pub struct Shell {
     ///
     /// Shared, because [`hold_size`] speaks through it too — and `Weak`, on
     /// that side, so a settling thread cannot keep a closed terminal alive.
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     /// The controlling tty path, when the platform exposes it.
     tty_name: Option<String>,
     /// PID of the shell process group leader, for reading its live cwd.
@@ -182,7 +182,11 @@ impl Shell {
             native_pty_system().openpty(pty_size(size))
         }
         .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
+        #[cfg(unix)]
         let tty_name = pair.master.tty_name().map(|path| path.to_string_lossy().into_owned());
+
+        #[cfg(not(unix))]
+        let tty_name = None;
 
         let mut builder = CommandBuilder::new(program);
         for argument in arguments {
@@ -234,6 +238,10 @@ impl Shell {
             .spawn(move || pump_output(reader, bytes))
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
 
+        let wanted = Arc::new(Mutex::new(pty_size(size)));
+        let master = Arc::new(Mutex::new(Some(pair.master)));
+        #[cfg(windows)]
+        let closing_master = Arc::clone(&master);
         let (reaped, exit) = tokio::sync::oneshot::channel();
         std::thread::Builder::new()
             .name("tether-local reaper".to_owned())
@@ -242,12 +250,17 @@ impl Shell {
                 // process. The status is the useful part; the reaping is the
                 // necessary part, and it happens either way.
                 let status = child.wait().map(|status| status.exit_code()).unwrap_or_default();
+                // ConPTY retains its output pipe until the pseudo-console
+                // closes, even after the child exits. The reader keeps draining
+                // while ClosePseudoConsole flushes the final output.
+                #[cfg(windows)]
+                {
+                    let console = closing_master.lock().ok().and_then(|mut master| master.take());
+                    drop(console);
+                }
                 let _ = reaped.send(status);
             })
             .map_err(|error| LocalError::NoTerminal { cause: error.to_string() })?;
-
-        let wanted = Arc::new(Mutex::new(pty_size(size)));
-        let master = Arc::new(Mutex::new(pair.master));
 
         // A shell writes its own idea of the size back while it is starting.
         // Holding the requested size across that window is the difference
@@ -348,7 +361,11 @@ impl Shell {
         // new size rather than the one it was started with.
         *self.wanted.lock().map_err(|_| LocalError::Ended)? = wanted;
 
-        master.resize(wanted).map_err(|error| LocalError::Resize { cause: error.to_string() })?;
+        master
+            .as_ref()
+            .ok_or(LocalError::Ended)?
+            .resize(wanted)
+            .map_err(|error| LocalError::Resize { cause: error.to_string() })?;
         drop(master);
 
         self.size = size;
@@ -449,7 +466,10 @@ impl std::fmt::Debug for Shell {
 /// undoes it lands *after* the one that worked: there is nothing to detect at
 /// the time, only something to correct afterwards. It stops as soon as the
 /// shell does, and altogether when the terminal is dropped.
-fn hold_size(master: &std::sync::Weak<Mutex<Box<dyn MasterPty + Send>>>, wanted: &Mutex<PtySize>) {
+fn hold_size(
+    master: &std::sync::Weak<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    wanted: &Mutex<PtySize>,
+) {
     let until = std::time::Instant::now() + SETTLING;
 
     while std::time::Instant::now() < until {
@@ -459,6 +479,7 @@ fn hold_size(master: &std::sync::Weak<Mutex<Box<dyn MasterPty + Send>>>, wanted:
         let Some(master) = master.upgrade() else { return };
         let (Ok(master), Ok(wanted)) = (master.lock(), wanted.lock()) else { return };
 
+        let Some(master) = master.as_ref() else { return };
         match master.get_size() {
             Ok(seen) if seen.rows == wanted.rows && seen.cols == wanted.cols => continue,
             // Something else set the size. Nothing else is entitled to: the

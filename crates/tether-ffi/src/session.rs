@@ -25,6 +25,11 @@ pub struct HostIdentity {
     /// The `SHA256:…` form a person compares against what their
     /// administrator published.
     pub fingerprint: String,
+    /// The `authorized_keys` one-line form (`ssh-ed25519 AAAA…`), which is
+    /// also what a `known_hosts` file holds after the host pattern. A
+    /// verifier that stores keys rather than fingerprints needs this
+    /// (`tether-ssh::HostKey::encoded`).
+    pub encoded: Vec<u8>,
 }
 
 /// Asks the application whether a host may be talked to.
@@ -54,6 +59,7 @@ impl tether_core::ssh::HostVerifier for ForeignVerifier {
             port: endpoint.port,
             algorithm: key.algorithm.clone(),
             fingerprint: key.fingerprint.clone(),
+            encoded: key.encoded.clone(),
         };
         if self.0.trusts(identity).await {
             tether_core::ssh::Verdict::Trusted
@@ -109,6 +115,19 @@ pub enum Secret {
     },
 }
 
+/// One hop in front of [`Destination`], authenticated on its own.
+///
+/// First to last is the order OpenSSH visits a `ProxyJump` list: each hop
+/// is logged into before a channel to the next is opened. Its secrets are
+/// not the destination's.
+#[derive(uniffi::Record)]
+pub struct Jump {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub secrets: Vec<Secret>,
+}
+
 /// Where to connect and as whom.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Destination {
@@ -140,23 +159,16 @@ pub async fn connect(
     destination: Destination,
     trust: Arc<dyn HostTrust>,
     secrets: Vec<Secret>,
+    jumps: Vec<Jump>,
 ) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(destination.columns, destination.rows);
-
-    let credentials = secrets
+    let verifier = Arc::new(ForeignVerifier(trust));
+    let through = jumps
         .into_iter()
-        .map(|secret| match secret {
-            Secret::Password { password } => Credential::Password(password),
-            Secret::PrivateKey { pem, passphrase, unlock } => Credential::PrivateKey {
-                pem,
-                passphrase,
-                unlock: unlock.map(|prompter| {
-                    Arc::new(ForeignUnlocker(prompter)) as Arc<dyn tether_core::ssh::KeyUnlocker>
-                }),
-            },
-            Secret::Interactive { prompter } => {
-                Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
-            }
+        .map(|jump| tether_core::Jump {
+            endpoint: tether_core::ssh::Endpoint::new(jump.host, jump.port),
+            user: jump.user,
+            credentials: jump.secrets.into_iter().map(credential).collect(),
         })
         .collect();
 
@@ -164,12 +176,13 @@ pub async fn connect(
         tether_core::ssh::Endpoint::new(destination.host, destination.port),
         destination.user,
     )
-    .verifier(Arc::new(ForeignVerifier(trust)))
+    .verifier(verifier)
+    .through(through)
     .term(destination.term)
     .size(size)
     .options(Options { scrollback_lines: destination.scrollback_lines as usize })
     .history(destination.history.map(|h| h.inner.clone()))
-    .connect(credentials)
+    .connect(secrets.into_iter().map(credential).collect())
     .await?;
 
     Ok(Arc::new(Session { inner: session }))
@@ -181,12 +194,28 @@ pub async fn connect_cancellable(
     destination: Destination,
     trust: Arc<dyn HostTrust>,
     secrets: Vec<Secret>,
+    jumps: Vec<Jump>,
     cancellation: Arc<crate::CancellationToken>,
 ) -> Result<Arc<Session>, TetherError> {
     tokio::select! {
         biased;
         _ = cancellation.inner.cancelled() => Err(TetherError::Cancelled),
-        result = connect(destination, trust, secrets) => result,
+        result = connect(destination, trust, secrets, jumps) => result,
+    }
+}
+
+fn credential(secret: Secret) -> Credential {
+    match secret {
+        Secret::Password { password } => Credential::Password(password),
+        Secret::PrivateKey { pem, passphrase, unlock } => Credential::PrivateKey {
+            pem,
+            passphrase,
+            unlock: unlock
+                .map(|p| Arc::new(ForeignUnlocker(p)) as Arc<dyn tether_core::ssh::KeyUnlocker>),
+        },
+        Secret::Interactive { prompter } => {
+            Credential::Interactive(Arc::new(ForeignPrompter(prompter)))
+        }
     }
 }
 
@@ -209,6 +238,13 @@ pub struct LocalShell {
     pub columns: u16,
     pub rows: u16,
     pub scrollback_lines: u32,
+    /// The shell program to run — `pwsh`, `powershell`, `cmd`, or anything
+    /// else on this machine's `PATH`.
+    ///
+    /// `None` is the platform default: the person's login shell on Unix,
+    /// `pwsh` → `powershell` → `cmd` on Windows. A settings surface is what
+    /// fills this in; the SDK does not know which one a consumer offers.
+    pub shell: Option<String>,
     pub history: Option<Arc<crate::SessionHistory>>,
 }
 
@@ -232,10 +268,29 @@ pub fn local_shell_available() -> bool {
 /// an opaque `rustPanic`.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn open_local(shell: LocalShell) -> Result<Arc<Session>, TetherError> {
+    open_local_with_arguments(shell, Vec::new()).await
+}
+
+/// A local program with explicit arguments; consumers need not construct a command line.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn open_local_with_arguments(
+    shell: LocalShell,
+    arguments: Vec<String>,
+) -> Result<Arc<Session>, TetherError> {
     let size = ScreenSize::new(shell.columns, shell.rows);
 
-    let mut local = Local::running(Command::login_shell())
-        .term(shell.term)
+    let mut command = match shell.shell.as_deref().map(str::trim) {
+        Some(program) if !program.is_empty() => Command::shell(program),
+        _ => Command::login_shell(),
+    };
+    for argument in arguments {
+        command = command.arg(argument);
+    }
+    if !shell.term.is_empty() {
+        command = command.term(shell.term);
+    }
+
+    let mut local = Local::running(command)
         .size(size)
         .options(Options { scrollback_lines: shell.scrollback_lines as usize })
         .history(shell.history.map(|h| h.inner.clone()));
@@ -392,6 +447,10 @@ impl Session {
     }
 
     /// The local shell's live working directory, if available.
+    pub fn local_process_id(&self) -> Option<u32> {
+        self.inner.local_process_id()
+    }
+
     pub fn current_directory(&self) -> Option<String> {
         self.inner.current_directory()
     }
@@ -485,6 +544,12 @@ impl Session {
             Resolved::Literal(text) if text.is_empty() => Ok(()),
             Resolved::Literal(text) => self.inner.write(text.into_bytes()).map_err(Into::into),
         }
+    }
+
+    /// Routes wheel notches to the remote mouse protocol or local scrollback.
+    /// Positive lines scroll down; local forces scrollback even in mouse mode.
+    pub fn wheel(&self, lines: i32, row: u16, column: u16, local: bool) -> Result<(), TetherError> {
+        self.inner.wheel(lines, row, column, local).map_err(Into::into)
     }
 
     /// Moves the viewport over the scrollback.

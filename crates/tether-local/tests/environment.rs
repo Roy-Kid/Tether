@@ -1,5 +1,8 @@
 //! What a shell is told about the terminal it is running in.
 //!
+//! Unix-only: drives `/bin/sh`.
+#![cfg(unix)]
+//!
 //! One test in a file of its own, deliberately. It sets a process-wide
 //! environment variable, and sharing a binary with tests that spawn processes
 //! would make it race against their reads of the same environment.

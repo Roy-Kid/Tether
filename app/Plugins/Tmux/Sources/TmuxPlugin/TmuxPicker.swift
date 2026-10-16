@@ -532,4 +532,3 @@ struct CreateTmuxSheet: View {
     model.create(onSuccess: onCreate)
   }
 }
-

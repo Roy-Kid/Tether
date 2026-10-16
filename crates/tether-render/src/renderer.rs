@@ -1,0 +1,982 @@
+//! The GPU half: a draw list into a `wgpu` pass, glyphs through `glyphon`.
+//!
+//! `wgpu`, `glyphon` and `cosmic-text` types stop here (spec §8). Callers
+//! hand in a [`DrawList`](crate::draw::DrawList) and get pixels; nothing
+//! above this module knows what a texture atlas is.
+//!
+//! Grid alignment is not left to the shaper. A terminal is a grid: every
+//! cell is one column wide (or two), and letting the text system choose
+//! advances drifts out of alignment within a line of box-drawing characters.
+//! `Buffer::set_monospace_width` forces every grapheme to the column pitch we
+//! measured, which is the GPU equivalent of `FontMetrics::tracking`.
+
+use unicode_segmentation::UnicodeSegmentation;
+
+use glyphon::{
+    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
+};
+
+use crate::draw::{DrawList, Rgba, TextRun};
+use crate::metrics::FontMetrics;
+
+/// What a surface must tell us before the first frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfaceSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    #[error("no suitable GPU adapter")]
+    NoAdapter,
+    #[error("no suitable GPU device: {0}")]
+    NoDevice(String),
+    #[error("surface configuration failed: {0}")]
+    Surface(String),
+}
+
+/// Font measurements taken from a real face.
+///
+/// `cosmic-text` shapes; we ask it how far one narrow and one wide character
+/// advance at `size`, which is what [`FontMetrics`] needs. A caller that
+/// already knows the numbers can use [`FontMetrics::from_advances`] and skip
+/// this entirely.
+pub fn measure_monospace(fonts: &mut FontSystem, size: f32) -> FontMetrics {
+    measure_font(fonts, size, "", "")
+}
+
+fn family(name: &str) -> Family<'_> {
+    if name.is_empty() { Family::Monospace } else { Family::Name(name) }
+}
+
+fn measure_font(
+    fonts: &mut FontSystem,
+    size: f32,
+    primary: &str,
+    wide_family: &str,
+) -> FontMetrics {
+    let metrics = Metrics::new(size, size * 1.2);
+
+    let measure = |fonts: &mut FontSystem, text: &str, name: &str| -> f32 {
+        let mut buffer = Buffer::new(fonts, metrics);
+        let attrs = Attrs::new().family(family(name));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(fonts, false);
+        buffer.layout_runs().next().map(|run| run.line_w).unwrap_or(size * 0.6)
+    };
+
+    let narrow = measure(fonts, "M", primary);
+    let wide = measure(fonts, "中", if wide_family.is_empty() { primary } else { wide_family });
+    FontMetrics::from_advances(size, narrow, wide, size * 1.2)
+}
+
+fn glyph_color(color: Rgba) -> Color {
+    let [r, g, b, a] = color.to_bytes();
+    Color::rgba(r, g, b, a)
+}
+
+/// A solid-colour quad pipeline for cell backgrounds and the caret.
+///
+/// Not a 2D scene renderer — just the two rectangles a terminal needs under
+/// its glyphs. Anything richer would be the layer §22 forbids.
+struct QuadPipeline {
+    pipeline: wgpu::RenderPipeline,
+    vertices: wgpu::Buffer,
+    capacity: usize,
+    instances: Vec<QuadVertex>,
+    /// The target encodes on write, so colours go in linear.
+    srgb: bool,
+}
+
+/// A palette colour is sRGB. An `*Srgb` target encodes whatever is written
+/// to it, so writing sRGB values encodes them twice — `#12141A` comes out
+/// as a mid grey. glyphon linearises its own colours; quads and the clear
+/// colour are ours to convert.
+fn linear(color: Rgba) -> Rgba {
+    let channel = |c: f32| {
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    Rgba::new(channel(color.red), channel(color.green), channel(color.blue), color.alpha)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct QuadVertex {
+    position: [f32; 2],
+    color: [f32; 4],
+}
+
+const QUAD_SHADER: &str = r#"
+struct VsOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_main(@location(0) position: vec2<f32>, @location(1) color: vec4<f32>) -> VsOut {
+    var out: VsOut;
+    // Positions arrive in normalised surface space with y down.
+    out.clip = vec4<f32>(
+        position.x * 2.0 - 1.0,
+        1.0 - position.y * 2.0,
+        0.0,
+        1.0,
+    );
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+impl QuadPipeline {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tether-render quads"),
+            source: wgpu::ShaderSource::Wgsl(QUAD_SHADER.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tether-render quads"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tether-render quads"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<QuadVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let capacity = 64 * 6;
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tether-render quads"),
+            size: (capacity * std::mem::size_of::<QuadVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self { pipeline, vertices, capacity, instances: Vec::new(), srgb: format.is_srgb() }
+    }
+
+    fn push_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: Rgba,
+        screen: (f32, f32),
+    ) {
+        let (sw, sh) = screen;
+        if sw <= 0.0 || sh <= 0.0 {
+            return;
+        }
+        let normalise = |px: f32, py: f32| [px / sw, py / sh];
+        let color = if self.srgb { linear(color) } else { color };
+        let c = [color.red, color.green, color.blue, color.alpha];
+        let a = normalise(x, y);
+        let b = normalise(x + width, y);
+        let d = normalise(x, y + height);
+        let e = normalise(x + width, y + height);
+        for (p0, p1, p2) in [(a, b, d), (b, e, d)] {
+            for position in [p0, p1, p2] {
+                self.instances.push(QuadVertex { position, color: c });
+            }
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let needed = self.instances.len();
+        if needed > self.capacity {
+            self.capacity = needed.next_power_of_two().max(6);
+            self.vertices = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tether-render quads"),
+                size: (self.capacity * std::mem::size_of::<QuadVertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        if !self.instances.is_empty() {
+            queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&self.instances));
+        }
+    }
+
+    fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
+        if self.instances.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.draw(0..self.instances.len() as u32, 0..1);
+    }
+
+    fn clear(&mut self) {
+        self.instances.clear();
+    }
+}
+
+/// A terminal surface: device, swapchain-sized target, glyph atlas.
+///
+/// Construction needs a window handle only so `wgpu` can make a surface; the
+/// draw path itself is toolkit-free. An offscreen target is the same type
+/// with a texture instead of a surface — which is how the headless tests
+/// exercise a frame (spec §15).
+pub struct TerminalRenderer {
+    #[cfg(feature = "diagnostics")]
+    gpu_timers: Vec<crate::diagnostics::GpuTimer>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    fonts: FontSystem,
+    swash: SwashCache,
+    atlas: TextAtlas,
+    text: TextRenderer,
+    viewport: Viewport,
+    quads: QuadPipeline,
+    buffers: Vec<Buffer>,
+    /// What each cached buffer was shaped from. A keystroke changes one run;
+    /// reshaping the rest of the screen on the UI thread is how typing stalls.
+    buffer_keys: Vec<BufferKey>,
+    font_family: String,
+    wide_font_family: String,
+    size: SurfaceSize,
+    baseline_cache: Option<(u32, u32, f32)>,
+}
+
+impl TerminalRenderer {
+    /// Attaches the shared renderer to a host-owned Win32 window.
+    ///
+    /// Backend policy and native surface construction stay inside this crate;
+    /// bindings do not construct GPU instances. The native host owns scheduling,
+    /// input and DPI, and supplies physical-pixel sizes and font measurements.
+    ///
+    /// # Safety
+    ///
+    /// The host creates/destroys the live HWND on its owning UI thread, serializes
+    /// rendering/resizing, and drops this renderer before destroying the window.
+    pub async unsafe fn attach_hwnd(hwnd: isize, size: SurfaceSize) -> Result<Self, RenderError> {
+        let instance = crate::platform::instance();
+        // SAFETY: forwarded unchanged from this method's host lifetime contract.
+        unsafe { Self::from_hwnd(&instance, hwnd, size) }.await
+    }
+
+    /// Creates a renderer for a window the caller already owns.
+    ///
+    /// This lower-level Rust entry point accepts a wgpu surface target. Native
+    /// SDK bindings use attachment methods instead, keeping wgpu types out of
+    /// the C#/Swift API.
+    pub async fn new(
+        instance: &wgpu::Instance,
+        target: wgpu::SurfaceTarget<'static>,
+        size: SurfaceSize,
+    ) -> Result<Self, RenderError> {
+        let surface = instance
+            .create_surface(target)
+            .map_err(|error| RenderError::Surface(error.to_string()))?;
+        Self::with_surface(instance, surface, size).await
+    }
+
+    /// Creates a renderer for a Win32 `HWND`.
+    ///
+    /// The caller keeps the window alive; the surface does not own it. This is
+    /// the seam a WinUI host uses — the handle is a pointer-sized integer, not
+    /// a UI toolkit type (spec §8).
+    ///
+    /// # Safety
+    ///
+    /// `hwnd` must be a valid `HWND` that outlives the returned renderer.
+    pub async unsafe fn from_hwnd(
+        instance: &wgpu::Instance,
+        hwnd: isize,
+        size: SurfaceSize,
+    ) -> Result<Self, RenderError> {
+        // SAFETY: the host guarantees that the window outlives this renderer.
+        let surface = unsafe { crate::platform::surface_from_hwnd(instance, hwnd) }?;
+        Self::with_surface(instance, surface, size).await
+    }
+
+    /// Creates a renderer for an existing presentation surface.
+    /// This lower-level Rust integration point is not an offscreen renderer.
+    pub async fn with_surface(
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        size: SurfaceSize,
+    ) -> Result<Self, RenderError> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: true,
+            })
+            .await
+            .map_err(|error| RenderError::Surface(error.to_string()))?;
+
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::adapter(&adapter.get_info());
+        #[cfg(feature = "diagnostics")]
+        let requested = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        #[cfg(not(feature = "diagnostics"))]
+        let requested = wgpu::Features::empty();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("tether-render"),
+                required_features: requested,
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: Default::default(),
+            })
+            .await
+            .map_err(|error| RenderError::NoDevice(error.to_string()))?;
+
+        let capabilities = surface.get_capabilities(&adapter);
+        let format = capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(wgpu::TextureFormat::is_srgb)
+            .unwrap_or(capabilities.formats[0]);
+
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        #[cfg(feature = "diagnostics")]
+        let usage = if std::env::var_os("TETHER_RENDER_CAPTURE").is_some()
+            && capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            usage | wgpu::TextureUsages::COPY_SRC
+        } else {
+            usage
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            // Fifo, not mailbox. Mailbox is a flip-model present; on the GL
+            // fallback a child window presents that to nowhere.
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: capabilities.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Srgb,
+            view_formats: vec![],
+        };
+        surface.configure(&device, &config);
+
+        let cache = Cache::new(&device);
+        let mut atlas = TextAtlas::new(&device, &queue, &cache, format);
+        let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
+        let viewport = Viewport::new(&device, &cache);
+        let quads = QuadPipeline::new(&device, format);
+
+        Ok(Self {
+            #[cfg(feature = "diagnostics")]
+            gpu_timers: (0..4).filter_map(|_| crate::diagnostics::GpuTimer::new(&device)).collect(),
+            device,
+            queue,
+            surface,
+            config,
+            fonts: FontSystem::new(),
+            font_family: String::new(),
+            wide_font_family: String::new(),
+            baseline_cache: None,
+            swash: SwashCache::new(),
+            atlas,
+            text,
+            viewport,
+            quads,
+            buffers: Vec::new(),
+            buffer_keys: Vec::new(),
+            size,
+        })
+    }
+
+    pub fn size(&self) -> SurfaceSize {
+        self.size
+    }
+
+    pub fn resize(&mut self, size: SurfaceSize) {
+        self.size = SurfaceSize { width: size.width.max(1), height: size.height.max(1) };
+        self.config.width = self.size.width;
+        self.config.height = self.size.height;
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    pub fn fonts(&mut self) -> &mut FontSystem {
+        &mut self.fonts
+    }
+
+    /// Common frame entry point for every native host.
+    ///
+    /// Geometry, overlays, shaping and submission belong to the renderer, not
+    /// its C#/Swift bindings. Font size and surface dimensions are physical
+    /// pixels; the host converts native DIP/point units exactly once.
+    pub fn draw_frame(
+        &mut self,
+        frame: &crate::Frame,
+        palette: &crate::Palette,
+        overlay: &crate::Overlay,
+        font_size: f32,
+    ) -> Result<(), RenderError> {
+        #[cfg(feature = "diagnostics")]
+        let layout_started = std::time::Instant::now();
+        let metrics = self.measure(font_size);
+        let list = crate::prepare_with_overlay(frame, &metrics, palette, overlay);
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record(
+            "metrics_layout_ms",
+            layout_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        self.render(&list)
+    }
+
+    /// Draws one prepared frame.
+    ///
+    /// Background quads first, glyphs over them, the caret last — the same
+    /// paint order [`crate::layout::prepare`] emits.
+    pub fn render(&mut self, list: &DrawList) -> Result<(), RenderError> {
+        #[cfg(feature = "diagnostics")]
+        let render_started = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let text_started = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        let screen = (self.config.width as f32, self.config.height as f32);
+        self.viewport.update(
+            &self.queue,
+            Resolution { width: self.config.width, height: self.config.height },
+        );
+
+        self.quads.clear();
+        for rect in &list.rects {
+            self.quads.push_rect(rect.x, rect.y, rect.width, rect.height, rect.color, screen);
+        }
+
+        // Glyphs. One `Buffer` per run, placed by `left`/`top`. Unchanged
+        // runs keep the buffer shaped last frame.
+        self.sync_buffers(&list.texts);
+
+        // All fragments in a terminal row share the primary font's baseline.
+        // Independently centering fallback fonts makes mixed text jump vertically.
+        let baseline = list
+            .texts
+            .first()
+            .map(|run| {
+                let key = (run.font_size.to_bits(), run.height.to_bits());
+                if let Some((size, height, baseline)) = self.baseline_cache
+                    && (size, height) == key
+                {
+                    return baseline;
+                }
+                let baseline =
+                    font_baseline(&mut self.fonts, run.font_size, run.height, &self.font_family);
+                self.baseline_cache = Some((key.0, key.1, baseline));
+                baseline
+            })
+            .unwrap_or(0.0);
+        let areas: Vec<TextArea<'_>> = list
+            .texts
+            .iter()
+            .zip(self.buffers.iter())
+            .map(|(run, buffer)| TextArea {
+                buffer,
+                left: run.x,
+                top: text_top(run, buffer, baseline),
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: run.x.floor() as i32,
+                    top: run.y.floor() as i32,
+                    right: (run.x + run.width).ceil() as i32,
+                    bottom: (run.y + run.height).ceil() as i32,
+                },
+                default_color: glyph_color(run.color),
+                custom_glyphs: &[],
+            })
+            .collect();
+
+        self.text
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut self.fonts,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash,
+            )
+            .map_err(|error| RenderError::Surface(error.to_string()))?;
+
+        // Caret over the glyphs, so a block sits on its character.
+        if let Some(cursor) = &list.cursor {
+            self.quads.push_rect(
+                cursor.x,
+                cursor.y,
+                cursor.width,
+                cursor.height,
+                cursor.color,
+                screen,
+            );
+        }
+        self.quads.upload(&self.device, &self.queue);
+
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record(
+            "text_prepare_ms",
+            text_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        #[cfg(feature = "diagnostics")]
+        let acquire_started = std::time::Instant::now();
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            // The compositor is not asking for a frame right now. Skip and
+            // try again on the next wake — not an error (0006: a frame that
+            // costs nothing is still a frame we did not have to draw).
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                #[cfg(feature = "diagnostics")]
+                crate::diagnostics::record("skipped_surface", 1.0);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Lost
+            | wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(RenderError::Surface("surface outdated or lost".into()));
+            }
+        };
+        #[cfg(feature = "diagnostics")]
+        let acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record("surface_acquire_ms", acquire_ms);
+        #[cfg(feature = "diagnostics")]
+        let gpu_timer = self.gpu_timers.iter().find(|timer| timer.available());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let clear =
+            if self.config.format.is_srgb() { linear(list.background) } else { list.background };
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("tether-render"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tether-render"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: clear.red as f64,
+                            g: clear.green as f64,
+                            b: clear.blue as f64,
+                            a: clear.alpha as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                #[cfg(not(feature = "diagnostics"))]
+                timestamp_writes: None,
+                #[cfg(feature = "diagnostics")]
+                timestamp_writes: gpu_timer.map(|timer| wgpu::RenderPassTimestampWrites {
+                    query_set: &timer.query,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            self.quads.draw(&mut pass);
+            self.text
+                .render(&self.atlas, &self.viewport, &mut pass)
+                .map_err(|error| RenderError::Surface(error.to_string()))?;
+        }
+
+        #[cfg(feature = "diagnostics")]
+        {
+            if let Some(timer) = gpu_timer {
+                timer.resolve(&mut encoder, self.queue.get_timestamp_period());
+            } else {
+                crate::diagnostics::record("gpu_sample_missing", 1.0);
+            }
+            if std::env::var_os("TETHER_RENDER_CAPTURE").is_some() {
+                if self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+                    crate::diagnostics::capture(
+                        &self.device,
+                        &mut encoder,
+                        &frame.texture,
+                        &self.config,
+                    );
+                } else {
+                    crate::diagnostics::record("capture_unsupported_surface", 1.0);
+                }
+            }
+        }
+        self.queue.submit(Some(encoder.finish()));
+        #[cfg(feature = "diagnostics")]
+        let present_started = std::time::Instant::now();
+        self.queue.present(frame);
+        #[cfg(feature = "diagnostics")]
+        {
+            let present_ms = present_started.elapsed().as_secs_f64() * 1000.0;
+            crate::diagnostics::record("present_call_ms", present_ms);
+            crate::diagnostics::record(
+                "render_cpu_work_ms",
+                render_started.elapsed().as_secs_f64() * 1000.0 - acquire_ms - present_ms,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn set_fonts(&mut self, primary: String, wide: String) {
+        if self.font_family == primary && self.wide_font_family == wide {
+            return;
+        }
+        self.baseline_cache = None;
+        self.font_family = primary;
+        self.wide_font_family = wide;
+        self.buffers.clear();
+        self.buffer_keys.clear();
+    }
+
+    pub fn measure(&mut self, size: f32) -> FontMetrics {
+        measure_font(&mut self.fonts, size, &self.font_family, &self.wide_font_family)
+    }
+
+    /// Shapes only the runs whose text or metrics changed.
+    fn sync_buffers(&mut self, runs: &[TextRun]) {
+        if self.buffers.len() > runs.len() {
+            self.buffers.truncate(runs.len());
+            self.buffer_keys.truncate(runs.len());
+        }
+        for (index, run) in runs.iter().enumerate() {
+            if self.buffer_keys.get(index).is_some_and(|key| key.matches(run)) {
+                continue;
+            }
+            let key = BufferKey::of(run);
+            let buffer =
+                build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family);
+            if index < self.buffers.len() {
+                self.buffers[index] = buffer;
+                self.buffer_keys[index] = key;
+            } else {
+                self.buffers.push(buffer);
+                self.buffer_keys.push(key);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for TerminalRenderer {
+    fn drop(&mut self) {
+        if self
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .is_err()
+        {
+            crate::diagnostics::record("drain_error", 1.0);
+        }
+        crate::diagnostics::flush();
+    }
+}
+
+/// The parts of a run that decide how it is shaped. Position does not: the
+/// same buffer is placed at a new `left`/`top` when a row only scrolls.
+#[derive(PartialEq)]
+struct BufferKey {
+    font_size: f32,
+    cell_width: f32,
+    text: String,
+    width: f32,
+    height: f32,
+    color: [u8; 4],
+    bold: bool,
+    italic: bool,
+}
+
+impl BufferKey {
+    fn matches(&self, run: &TextRun) -> bool {
+        self.font_size == run.font_size
+            && self.cell_width == run.cell_width
+            && self.text == run.text
+            && self.width == run.width
+            && self.height == run.height
+            && self.color == run.color.to_bytes()
+            && self.bold == run.bold
+            && self.italic == run.italic
+    }
+
+    fn of(run: &TextRun) -> Self {
+        Self {
+            font_size: run.font_size,
+            cell_width: run.cell_width,
+            text: run.text.clone(),
+            width: run.width,
+            height: run.height,
+            color: run.color.to_bytes(),
+            bold: run.bold,
+            italic: run.italic,
+        }
+    }
+}
+
+// Measure once per grid/font change, using the same centering as the shaper.
+fn font_baseline(fonts: &mut FontSystem, size: f32, height: f32, primary: &str) -> f32 {
+    let mut buffer = Buffer::new(fonts, Metrics::new(size, height));
+    buffer.set_text("Mg", &Attrs::new().family(family(primary)), Shaping::Advanced, None);
+    buffer.shape_until_scroll(fonts, false);
+    buffer.layout_runs().next().map_or(size, |line| line.line_y)
+}
+
+fn text_top(run: &TextRun, buffer: &Buffer, baseline: f32) -> f32 {
+    run.y + baseline - buffer.layout_runs().next().map_or(baseline, |line| line.line_y)
+}
+
+/// One run shaped into a buffer, spaced to the grid.
+fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str) -> Buffer {
+    // Draw at exactly the size used to measure the cell grid.
+    let font_size = run.font_size;
+    let metrics = Metrics::new(font_size, run.height);
+    let mut buffer = Buffer::new(fonts, metrics);
+    let characters = run.text.graphemes(true).count().max(1) as f32;
+    let pitch = run.width / characters;
+    // cosmic-text 0.19 stores this as an em width: layout divides it by the
+    // font size and snaps each glyph's pixel advance to that quotient.
+    // Passing the pixel pitch snaps to `pitch / font_size` (a fraction of a
+    // pixel). A prompt of twenty characters then ends two cells short of the
+    // cursor, which is drawn on the cell grid. Multiplying back by the font
+    // size makes the snap grid one column.
+    buffer.set_monospace_width(Some(pitch * font_size));
+
+    let mut attrs = Attrs::new()
+        .family(family(if pitch > run.cell_width * 1.5 && !wide.is_empty() {
+            wide
+        } else {
+            primary
+        }))
+        .color(glyph_color(run.color));
+    if run.bold {
+        attrs = attrs.weight(Weight::BOLD);
+    }
+    if run.italic {
+        attrs = attrs.style(Style::Italic);
+    }
+
+    buffer.set_text(&run.text, &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(fonts, false);
+    buffer
+}
+
+#[cfg(test)]
+fn glyph_xs(text: &str, pitch: f32, height: f32) -> Vec<f32> {
+    let mut fonts = FontSystem::new();
+    let run = TextRun {
+        font_size: height / 1.2,
+        cell_width: pitch,
+        x: 0.0,
+        y: 0.0,
+        width: pitch * text.chars().count() as f32,
+        height,
+        text: text.to_owned(),
+        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+        tracking: 0.0,
+        bold: false,
+        italic: false,
+        underline: false,
+        underline_color: None,
+        strikethrough: false,
+    };
+    let buffer = build_buffer(&mut fonts, &run, "", "");
+    let mut xs = Vec::new();
+    for layout in buffer.layout_runs() {
+        for glyph in layout.glyphs {
+            xs.push(glyph.x);
+        }
+    }
+    xs
+}
+
+#[test]
+fn shaped_glyphs_stay_on_the_cell_pitch() {
+    let height = 13.0 * 1.2;
+    let pitch = 8.0;
+    let xs = glyph_xs("PS C:\\Users\\Roy> hello", pitch, height);
+    for (i, x) in xs.iter().enumerate() {
+        let expect = i as f32 * pitch;
+        assert!((x - expect).abs() < 0.51, "glyph {i} at {x} expected {expect}");
+    }
+    let wide = glyph_xs("你好", pitch * 2.0, height);
+    assert_eq!(wide.len(), 2, "wide xs {wide:?}");
+    for (i, x) in wide.iter().enumerate() {
+        let expect = i as f32 * pitch * 2.0;
+        assert!((x - expect).abs() < 0.51, "wide glyph {i} at {x} expected {expect}");
+    }
+}
+
+/// Families available to the shaping engine, including user-installed fonts.
+pub fn font_families() -> Vec<String> {
+    let fonts = FontSystem::new();
+    let mut names: Vec<String> = fonts
+        .db()
+        .faces()
+        .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[test]
+#[cfg(windows)]
+fn selected_fonts_and_measured_size_reach_the_shaper() {
+    let mut fonts = FontSystem::new();
+    let primary = "Consolas";
+    let wide = "Microsoft YaHei UI";
+    let measured = measure_font(&mut fonts, 26.0, primary, wide);
+    let font_baseline_value =
+        font_baseline(&mut fonts, measured.size, measured.line_height, primary);
+    let mut pixels = vec![250u8; 1200 * 150 * 3];
+    let mut cache = SwashCache::new();
+    for (row, text, columns_per_character, expected_family) in [
+        (0, "User answered Claude's questions: 0123456789", 1.0, primary),
+        (1, "中文字体测试：终端网格、复制粘贴、字体设置。", 2.0, wide),
+        (2, "operator_config  molab.config  API keys  ->", 1.0, primary),
+    ] {
+        let run = TextRun {
+            font_size: measured.size,
+            cell_width: measured.cell_width,
+            x: 16.0,
+            y: 12.0 + row as f32 * 40.0,
+            width: text.graphemes(true).count() as f32
+                * columns_per_character
+                * measured.cell_width,
+            height: measured.line_height,
+            text: text.into(),
+            color: Rgba::new(0.12, 0.13, 0.15, 1.0),
+            tracking: 0.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            underline_color: None,
+            strikethrough: false,
+        };
+        let mut buffer = build_buffer(&mut fonts, &run, primary, wide);
+        assert_eq!(
+            buffer.metrics().font_size,
+            measured.size,
+            "drawing must not shrink the measured font"
+        );
+        let installed = fonts
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == expected_family));
+        if installed {
+            for layout in buffer.layout_runs() {
+                for glyph in layout.glyphs {
+                    let face = fonts.db().face(glyph.font_id).expect("shaped font");
+                    assert!(
+                        face.families.iter().any(|(name, _)| name == expected_family),
+                        "unexpected fallback: {:?}",
+                        face.families
+                    );
+                }
+            }
+        }
+        let draw_top = text_top(&run, &buffer, font_baseline_value).round() as i32;
+        #[allow(deprecated)]
+        buffer.draw(&mut fonts, &mut cache, Color::rgb(30, 33, 38), |x, y, w, h, color| {
+            let [r, g, b, a] = color.as_rgba();
+            for py in 0..h {
+                for px in 0..w {
+                    let x = x + px as i32 + run.x as i32;
+                    let y = y + py as i32 + draw_top;
+                    if !(0..1200).contains(&x) || !(0..150).contains(&y) {
+                        continue;
+                    }
+                    let index = (y as usize * 1200 + x as usize) * 3;
+                    for (channel, value) in [r, g, b].into_iter().enumerate() {
+                        pixels[index + channel] = ((value as u32 * a as u32
+                            + pixels[index + channel] as u32 * (255 - a as u32))
+                            / 255) as u8;
+                    }
+                }
+            }
+        });
+    }
+    if let Ok(path) = std::env::var("TETHER_FONT_PREVIEW") {
+        let mut image = b"P6\n1200 150\n255\n".to_vec();
+        image.extend(pixels);
+        std::fs::write(path, image).expect("font preview");
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn mixed_font_fragments_share_the_row_baseline() {
+    let mut fonts = FontSystem::new();
+    for size in [13.0, 19.5, 26.0, 32.0] {
+        let measured = measure_font(&mut fonts, size, "Consolas", "Microsoft YaHei UI");
+        let baseline = font_baseline(&mut fonts, size, measured.line_height, "Consolas");
+        for (text, columns) in [("A", 1.0), ("中文", 2.0), ("，", 2.0), ("É", 1.0), ("汉", 2.0)]
+        {
+            for (bold, italic) in [(false, false), (true, false), (false, true)] {
+                let run = TextRun {
+                    font_size: size,
+                    cell_width: measured.cell_width,
+                    x: 0.0,
+                    y: 37.0,
+                    width: text.graphemes(true).count() as f32 * columns * measured.cell_width,
+                    height: measured.line_height,
+                    text: text.into(),
+                    color: Rgba::new(0.0, 0.0, 0.0, 1.0),
+                    tracking: 0.0,
+                    bold,
+                    italic,
+                    underline: false,
+                    underline_color: None,
+                    strikethrough: false,
+                };
+                let buffer = build_buffer(&mut fonts, &run, "Consolas", "Microsoft YaHei UI");
+                let line = buffer.layout_runs().next().expect("shaped fragment");
+                let actual = text_top(&run, &buffer, baseline) + line.line_y;
+                assert!((actual - (run.y + baseline)).abs() < 0.001, "{text} at {size}: {actual}");
+                for glyph in line.glyphs {
+                    assert_eq!(glyph.font_size, size, "{text} must retain its size");
+                }
+            }
+        }
+    }
+}

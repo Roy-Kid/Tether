@@ -235,6 +235,16 @@ public let defaultScrollbackLines: UInt32 = {
 }()
 
 /// Where to connect and as whom.
+public struct Jump: Sendable {
+  public var host: String
+  public var port: UInt16
+  public var user: String
+  public var credentials: [Credential]
+  public init(host: String, port: UInt16 = 22, user: String, credentials: [Credential]) {
+    self.host = host; self.port = port; self.user = user; self.credentials = credentials
+  }
+}
+
 public struct Destination: Sendable {
   public var host: String
   public var port: UInt16
@@ -288,6 +298,7 @@ public struct LocalShell: Sendable {
   public var rows: UInt16
   public var scrollbackLines: UInt32
   public var history: SessionHistory?
+  public var shell: String?
 
   public init(
     directory: String? = nil,
@@ -295,8 +306,10 @@ public struct LocalShell: Sendable {
     columns: UInt16 = 80,
     rows: UInt16 = 24,
     scrollbackLines: UInt32 = defaultScrollbackLines,
-    history: SessionHistory? = nil
+    history: SessionHistory? = nil,
+    shell: String? = nil
   ) {
+    self.shell = shell
     self.directory = directory
     self.term = term
     self.columns = columns
@@ -337,7 +350,8 @@ public final class TerminalSession: Sendable {
   public static func connect(
     to destination: Destination,
     trusting trust: any HostTrust,
-    offering credentials: [Credential]
+    offering credentials: [Credential],
+    through jumps: [Jump] = []
   ) async throws -> TerminalSession {
     let token = TetherFFIBindings.CancellationToken()
     return try await withTaskCancellationHandler {
@@ -353,7 +367,9 @@ public final class TerminalSession: Sendable {
             rows: destination.rows,
             scrollbackLines: destination.scrollbackLines, history: destination.history?.inner),
           trust: HostTrustBridge(trust),
-          secrets: credentials.map(secret), cancellation: token)
+          secrets: credentials.map(secret),
+          jumps: jumps.map { TetherFFIBindings.Jump(host: $0.host, port: $0.port, user: $0.user, secrets: $0.credentials.map(secret)) },
+          cancellation: token)
       }
       if Task.isCancelled {
         session.close()
@@ -379,7 +395,7 @@ public final class TerminalSession: Sendable {
           term: shell.term,
           columns: shell.columns,
           rows: shell.rows,
-          scrollbackLines: shell.scrollbackLines, history: shell.history?.inner))
+          scrollbackLines: shell.scrollbackLines, shell: shell.shell, history: shell.history?.inner))
     }
     return TerminalSession(session)
   }
@@ -427,7 +443,7 @@ public final class TerminalSession: Sendable {
             term: term,
             columns: columns,
             rows: rows,
-            scrollbackLines: scrollbackLines, history: history?.inner),
+            scrollbackLines: scrollbackLines, shell: nil, history: history?.inner),
           cancellation: token)
       }
       if Task.isCancelled {

@@ -153,12 +153,18 @@ async fn a_session_records_before_its_first_byte_and_restores_without_writing_to
     use tether_core::{Local, local_shell::Command};
     let dir = ArchiveDir::new();
     let archive = HistoryArchive::create(&dir.0, None).unwrap();
-    let session =
-        Local::running(Command::new("/bin/sh").arg("-c").arg("printf 'hello history\\n'"))
-            .history(Some(archive.clone()))
-            .open()
-            .await
-            .unwrap();
+    fn print_line(text: &str) -> Command {
+        if cfg!(windows) {
+            Command::new("cmd.exe").arg("/d").arg("/c").arg(format!("echo {text}"))
+        } else {
+            Command::new("/bin/sh").arg("-c").arg(format!("printf '{text}\\n'"))
+        }
+    }
+    let session = Local::running(print_line("hello history"))
+        .history(Some(archive.clone()))
+        .open()
+        .await
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while session.ending().is_none() {
             session.changed().await;
@@ -169,11 +175,8 @@ async fn a_session_records_before_its_first_byte_and_restores_without_writing_to
     session.close().await.unwrap();
     assert!(all(&dir).iter().any(|row| row.contains("hello history")));
     let resumed = HistoryArchive::reopen(&dir.0, None).unwrap();
-    let session = Local::running(Command::new("/bin/sh").arg("-c").arg("printf 'new shell\\n'"))
-        .history(Some(resumed))
-        .open()
-        .await
-        .unwrap();
+    let session =
+        Local::running(print_line("new shell")).history(Some(resumed)).open().await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while session.ending().is_none() {
             session.changed().await;

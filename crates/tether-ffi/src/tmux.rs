@@ -127,6 +127,9 @@ impl RemoteConnection {
         if let Some(listener) = forwards.get(&port) {
             return Ok(forwarded(listener));
         }
+        if forwards.len() >= FORWARD_LIMIT {
+            return Err(error("too many forwarded ports"));
+        }
         let result = forwarded(&listener);
         forwards.insert(port, listener);
         Ok(result)

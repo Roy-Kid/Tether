@@ -1,5 +1,8 @@
 //! What a local shell must actually do.
 //!
+//! Unix-only: drives `/bin/sh`.
+#![cfg(unix)]
+//!
 //! Every test here runs a real process on a real pseudo-terminal. Nothing is
 //! mocked, because the parts worth doubting — that the slave is closed so
 //! end-of-file arrives, that a resize reaches the child, that a hang-up is

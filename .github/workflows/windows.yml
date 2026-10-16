@@ -1,0 +1,31 @@
+name: Windows
+on:
+  push:
+    branches: [master, windows-app]
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r scripts/check-requirements.txt
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Shared source, Rust and boundary gate
+        run: python scripts/check.py --common-only
+      - name: Install C# binding generator
+        run: cargo install --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
+      - name: Shared Windows build, regression and portable release gate
+        run: python scripts/check.py --windows-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tether-win-x64
+          path: artifacts/windows-portable/Tether-win-x64.zip
+          compression-level: 0

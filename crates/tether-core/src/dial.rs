@@ -104,6 +104,22 @@ pub enum DialError {
 /// A builder because the required parts (where, who) and the tuning (what
 /// `$TERM` claims, how much scrollback) have very different lifetimes in a
 /// consumer's code.
+pub struct Jump {
+    pub endpoint: Endpoint,
+    pub user: String,
+    pub credentials: Vec<Credential>,
+}
+
+impl std::fmt::Debug for Jump {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Jump")
+            .field("endpoint", &self.endpoint)
+            .field("user", &self.user)
+            .field("credentials", &self.credentials.len())
+            .finish()
+    }
+}
+
 pub struct Dial {
     endpoint: Endpoint,
     user: String,
@@ -112,6 +128,7 @@ pub struct Dial {
     term: String,
     size: ScreenSize,
     options: Options,
+    jumps: Vec<Jump>,
     history: Option<crate::history::HistoryArchive>,
 }
 
@@ -134,7 +151,13 @@ impl Dial {
             size: ScreenSize::new(80, 24),
             options: Options::default(),
             history: None,
+            jumps: Vec::new(),
         }
+    }
+
+    pub fn through(mut self, jumps: Vec<Jump>) -> Self {
+        self.jumps = jumps;
+        self
     }
 
     pub fn verifier(mut self, verifier: Arc<dyn HostVerifier>) -> Self {
@@ -205,86 +228,133 @@ impl Dial {
         if credentials.is_empty() {
             return Err(DialError::NothingToOffer);
         }
-        let (offers, mut skipped) = prepare(credentials);
+        let (offers, skipped) = prepare(credentials);
         if offers.is_empty() {
             return Err(DialError::Unusable { skipped });
         }
-
-        let mut connection = Connection::connect(
-            self.endpoint,
-            Arc::clone(&self.verifier),
-            Arc::clone(&self.config),
-        )
-        .await?;
-
-        let mut refused = Vec::new();
-        let mut offered = offers.into_iter().peekable();
-
-        let session = loop {
-            let Some(offer) = offered.next() else {
-                // Out of credentials. Which error depends on how the last
-                // attempt went, and that distinction is the difference
-                // between "your password is wrong" and "now your code".
-                return Err(DialError::Refused { remaining: refused, skipped });
+        let mut via = None;
+        for jump in self.jumps {
+            let endpoint = jump.endpoint;
+            let connection = match via.take() {
+                Some(previous) => {
+                    Connection::connect_through(
+                        previous,
+                        endpoint,
+                        Arc::clone(&self.verifier),
+                        Arc::clone(&self.config),
+                    )
+                    .await?
+                }
+                None => {
+                    Connection::connect(
+                        endpoint,
+                        Arc::clone(&self.verifier),
+                        Arc::clone(&self.config),
+                    )
+                    .await?
+                }
             };
-
-            // A key with no readable public half is unlocked before its turn,
-            // while nothing about it has reached the server: a no, or three
-            // wrong passphrases, leave it out and keep the connection for the
-            // credentials after it — as ssh moves on to its next key.
-            let offer = match offer {
-                Offer::Key { position, key, unlock: Some(unlock) } if key.unlocks_first() => {
-                    match key.opened(unlock.as_ref()).await {
-                        Ok(open) => Offer::Key { position, key: Box::new(open), unlock: None },
-                        Err(problem) => {
-                            tracing::warn!(position, %problem, "a private key was left out");
-                            let fingerprint = key.description().fingerprint.clone();
-                            skipped.push(SkippedKey { position, fingerprint, problem });
-                            continue;
-                        }
-                    }
-                }
-                other => other,
-            };
-
-            let step = match attempt(connection, &self.user, &offer).await {
-                Ok(step) => step,
-                // A key the server accepted and that then could not be
-                // unlocked ends the login — the server is waiting for its
-                // signature, so the connection went with it — and is named
-                // like any other.
-                Err(SshError::Key(problem)) => {
-                    if let Offer::Key { position, key, .. } = &offer {
-                        skipped.push(SkippedKey {
-                            position: *position,
-                            fingerprint: key.description().fingerprint.clone(),
-                            problem,
-                        });
-                    }
-                    return Err(DialError::Unusable { skipped });
-                }
-                Err(error) => return Err(error.into()),
-            };
-
-            match step {
-                Step::Authenticated(session) => break session,
-                Step::AnotherFactor { remaining, next } => {
-                    let remaining = names(&remaining);
-                    if offered.peek().is_none() {
-                        return Err(DialError::MoreFactorsNeeded { remaining });
-                    }
-                    refused = remaining;
-                    connection = next;
-                }
-                Step::Rejected { remaining, retry } => {
-                    refused = names(&remaining);
-                    connection = retry;
-                }
+            via = Some(login(connection, &jump.user, jump.credentials).await?);
+        }
+        let connection = match via {
+            Some(previous) => {
+                Connection::connect_through(previous, self.endpoint, self.verifier, self.config)
+                    .await?
             }
+            None => Connection::connect(self.endpoint, self.verifier, self.config).await?,
+        };
+        Ok(Arc::new(login_prepared(connection, &self.user, offers, skipped).await?))
+    }
+}
+
+async fn login(
+    connection: Connection,
+    user: &str,
+    credentials: Vec<Credential>,
+) -> Result<tether_ssh::Session, DialError> {
+    if credentials.is_empty() {
+        return Err(DialError::NothingToOffer);
+    }
+    let (offers, skipped) = prepare(credentials);
+    if offers.is_empty() {
+        return Err(DialError::Unusable { skipped });
+    }
+    login_prepared(connection, user, offers, skipped).await
+}
+
+async fn login_prepared(
+    mut connection: Connection,
+    user: &str,
+    offers: Vec<Offer>,
+    mut skipped: Vec<SkippedKey>,
+) -> Result<tether_ssh::Session, DialError> {
+    let mut refused = Vec::new();
+    let mut offered = offers.into_iter().peekable();
+
+    let session = loop {
+        let Some(offer) = offered.next() else {
+            // Out of credentials. Which error depends on how the last
+            // attempt went, and that distinction is the difference
+            // between "your password is wrong" and "now your code".
+            return Err(DialError::Refused { remaining: refused, skipped });
         };
 
-        Ok(Arc::new(session))
-    }
+        // A key with no readable public half is unlocked before its turn,
+        // while nothing about it has reached the server: a no, or three
+        // wrong passphrases, leave it out and keep the connection for the
+        // credentials after it — as ssh moves on to its next key.
+        let offer = match offer {
+            Offer::Key { position, key, unlock: Some(unlock) } if key.unlocks_first() => {
+                match key.opened(unlock.as_ref()).await {
+                    Ok(open) => Offer::Key { position, key: Box::new(open), unlock: None },
+                    Err(problem) => {
+                        tracing::warn!(position, %problem, "a private key was left out");
+                        let fingerprint = key.description().fingerprint.clone();
+                        skipped.push(SkippedKey { position, fingerprint, problem });
+                        continue;
+                    }
+                }
+            }
+            other => other,
+        };
+
+        let step = match attempt(connection, user, &offer).await {
+            Ok(step) => step,
+            // A key the server accepted and that then could not be
+            // unlocked ends the login — the server is waiting for its
+            // signature, so the connection went with it — and is named
+            // like any other.
+            Err(SshError::Key(problem)) => {
+                if let Offer::Key { position, key, .. } = &offer {
+                    skipped.push(SkippedKey {
+                        position: *position,
+                        fingerprint: key.description().fingerprint.clone(),
+                        problem,
+                    });
+                }
+                return Err(DialError::Unusable { skipped });
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        match step {
+            Step::Authenticated(session) => break session,
+            Step::AnotherFactor { remaining, next } => {
+                let remaining = names(&remaining);
+                if offered.peek().is_none() {
+                    return Err(DialError::MoreFactorsNeeded { remaining });
+                }
+                refused = remaining;
+                connection = next;
+            }
+            Step::Rejected { remaining, retry } => {
+                refused = names(&remaining);
+                connection = retry;
+            }
+        }
+    };
+
+    Ok(session)
 }
 
 /// A credential that survived being read.

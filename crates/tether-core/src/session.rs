@@ -283,6 +283,10 @@ impl TerminalSession {
     }
 
     /// The local shell's live working directory when the backend can read it.
+    pub fn local_process_id(&self) -> Option<u32> {
+        self.local_process_id
+    }
+
     pub fn current_directory(&self) -> Option<String> {
         self.local_process_id.and_then(tether_local::current_directory)
     }
@@ -433,6 +437,28 @@ impl TerminalSession {
             return Ok(());
         }
         self.write(bytes)
+    }
+
+    /// Send wheel events to mouse-aware applications, or scroll local history.
+    pub fn wheel(
+        &self,
+        lines: i32,
+        row: u16,
+        column: u16,
+        local: bool,
+    ) -> Result<(), SessionError> {
+        let bytes = {
+            let mut terminal = self.shared.terminal.lock().expect("terminal lock poisoned");
+            let bytes = if local { None } else { terminal.encode_wheel(lines, row, column) };
+            if bytes.is_none() {
+                terminal.scroll(Scroll::Lines(lines.saturating_neg()));
+            }
+            bytes
+        };
+        match bytes {
+            Some(bytes) if !bytes.is_empty() => self.write(bytes),
+            _ => Ok(()),
+        }
     }
 
     /// Sends bytes as they are, for a consumer that has its own encoding.
