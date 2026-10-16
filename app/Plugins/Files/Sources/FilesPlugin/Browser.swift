@@ -111,6 +111,10 @@ private struct FileList: View {
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
         }
+        // Once its rows redraw, the table registers the folder rows' file
+        // drop and stands in front of the list's own: AppKit hands it every
+        // file, and it serves only what its rows and this ForEach declare.
+        .dropDestination(for: URL.self) { urls, _ in _ = uploadDropped(urls) }
       #else
         // A phone drills down: one directory a screen.
         ForEach(model.displayed, id: \.path) { entry in
@@ -226,12 +230,15 @@ private struct FileList: View {
     #else
       .listStyle(.plain)
     #endif
-    .dropDestination(for: URL.self) { urls, _ in
-      let files = urls.filter(\.isFileURL)
-      guard !files.isEmpty, let directory = model.directory else { return false }
-      Task { await model.upload(files, into: directory) }
-      return true
-    }
+    .dropDestination(for: URL.self) { urls, _ in uploadDropped(urls) }
+  }
+
+  /// Files from this machine dropped anywhere but on a folder row.
+  private func uploadDropped(_ urls: [URL]) -> Bool {
+    let files = urls.filter(\.isFileURL)
+    guard !files.isEmpty, let directory = model.directory else { return false }
+    Task { await model.upload(files, into: directory) }
+    return true
   }
 }
 
