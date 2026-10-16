@@ -250,6 +250,8 @@ impl QuadPipeline {
 /// with a texture instead of a surface — which is how the headless tests
 /// exercise a frame (spec §15).
 pub struct TerminalRenderer {
+    #[cfg(feature = "diagnostics")]
+    gpu_timers: Vec<crate::diagnostics::GpuTimer>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
@@ -271,11 +273,27 @@ pub struct TerminalRenderer {
 }
 
 impl TerminalRenderer {
+    /// Attaches the shared renderer to a host-owned Win32 window.
+    ///
+    /// Backend policy and native surface construction stay inside this crate;
+    /// bindings do not construct GPU instances. The native host owns scheduling,
+    /// input and DPI, and supplies physical-pixel sizes and font measurements.
+    ///
+    /// # Safety
+    ///
+    /// The host creates/destroys the live HWND on its owning UI thread, serializes
+    /// rendering/resizing, and drops this renderer before destroying the window.
+    pub async unsafe fn attach_hwnd(hwnd: isize, size: SurfaceSize) -> Result<Self, RenderError> {
+        let instance = crate::platform::instance();
+        // SAFETY: forwarded unchanged from this method's host lifetime contract.
+        unsafe { Self::from_hwnd(&instance, hwnd, size) }.await
+    }
+
     /// Creates a renderer for a window the caller already owns.
     ///
-    /// `target` is any `raw-window-handle` surface target: a WinUI
-    /// `SwapChainPanel`, an `NSView`, a test window. Nothing here names a
-    /// toolkit (spec §8).
+    /// This lower-level Rust entry point accepts a wgpu surface target. Native
+    /// SDK bindings use attachment methods instead, keeping wgpu types out of
+    /// the C#/Swift API.
     pub async fn new(
         instance: &wgpu::Instance,
         target: wgpu::SurfaceTarget<'static>,
@@ -301,36 +319,13 @@ impl TerminalRenderer {
         hwnd: isize,
         size: SurfaceSize,
     ) -> Result<Self, RenderError> {
-        use std::num::NonZeroIsize;
-
-        use raw_window_handle::{
-            RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
-        };
-
-        let hwnd =
-            NonZeroIsize::new(hwnd).ok_or_else(|| RenderError::Surface("null hwnd".into()))?;
-        let mut window = Win32WindowHandle::new(hwnd);
-        // Vulkan will not make a surface without the module that owns the
-        // window. Leave it out and wgpu falls back to GL without a word —
-        // and a GL child inside a WinUI window (`WS_EX_NOREDIRECTIONBITMAP`)
-        // presents to nowhere: a terminal that runs and shows nothing.
-        window.hinstance = window_instance(hwnd.get());
-        let raw_window_handle = RawWindowHandle::Win32(window);
-        let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
-
-        let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: Some(raw_display_handle),
-                    raw_window_handle,
-                })
-                .map_err(|error| RenderError::Surface(error.to_string()))?
-        };
+        // SAFETY: the host guarantees that the window outlives this renderer.
+        let surface = unsafe { crate::platform::surface_from_hwnd(instance, hwnd) }?;
         Self::with_surface(instance, surface, size).await
     }
 
-    /// Creates a renderer for an existing surface — including an offscreen
-    /// texture surface, which is what a headless test uses.
+    /// Creates a renderer for an existing presentation surface.
+    /// This lower-level Rust integration point is not an offscreen renderer.
     pub async fn with_surface(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
@@ -346,10 +341,16 @@ impl TerminalRenderer {
             .await
             .map_err(|error| RenderError::Surface(error.to_string()))?;
 
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::adapter(&adapter.get_info());
+        #[cfg(feature = "diagnostics")]
+        let requested = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        #[cfg(not(feature = "diagnostics"))]
+        let requested = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("tether-render"),
-                required_features: wgpu::Features::empty(),
+                required_features: requested,
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults()
                     .using_resolution(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -367,8 +368,17 @@ impl TerminalRenderer {
             .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(capabilities.formats[0]);
 
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        #[cfg(feature = "diagnostics")]
+        let usage = if std::env::var_os("TETHER_RENDER_CAPTURE").is_some()
+            && capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            usage | wgpu::TextureUsages::COPY_SRC
+        } else {
+            usage
+        };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -389,6 +399,8 @@ impl TerminalRenderer {
         let quads = QuadPipeline::new(&device, format);
 
         Ok(Self {
+            #[cfg(feature = "diagnostics")]
+            gpu_timers: (0..4).filter_map(|_| crate::diagnostics::GpuTimer::new(&device)).collect(),
             device,
             queue,
             surface,
@@ -423,11 +435,41 @@ impl TerminalRenderer {
         &mut self.fonts
     }
 
+    /// Common frame entry point for every native host.
+    ///
+    /// Geometry, overlays, shaping and submission belong to the renderer, not
+    /// its C#/Swift bindings. Font size and surface dimensions are physical
+    /// pixels; the host converts native DIP/point units exactly once.
+    pub fn draw_frame(
+        &mut self,
+        frame: &crate::Frame,
+        palette: &crate::Palette,
+        overlay: &crate::Overlay,
+        font_size: f32,
+    ) -> Result<(), RenderError> {
+        #[cfg(feature = "diagnostics")]
+        let layout_started = std::time::Instant::now();
+        let metrics = self.measure(font_size);
+        let list = crate::prepare_with_overlay(frame, &metrics, palette, overlay);
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record(
+            "metrics_layout_ms",
+            layout_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        self.render(&list)
+    }
+
     /// Draws one prepared frame.
     ///
     /// Background quads first, glyphs over them, the caret last — the same
     /// paint order [`crate::layout::prepare`] emits.
     pub fn render(&mut self, list: &DrawList) -> Result<(), RenderError> {
+        #[cfg(feature = "diagnostics")]
+        let render_started = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let text_started = std::time::Instant::now();
+        #[cfg(feature = "diagnostics")]
+        let _ = self.device.poll(wgpu::PollType::Poll);
         let screen = (self.config.width as f32, self.config.height as f32);
         self.viewport.update(
             &self.queue,
@@ -506,6 +548,13 @@ impl TerminalRenderer {
         }
         self.quads.upload(&self.device, &self.queue);
 
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record(
+            "text_prepare_ms",
+            text_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        #[cfg(feature = "diagnostics")]
+        let acquire_started = std::time::Instant::now();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -513,6 +562,8 @@ impl TerminalRenderer {
             // try again on the next wake — not an error (0006: a frame that
             // costs nothing is still a frame we did not have to draw).
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                #[cfg(feature = "diagnostics")]
+                crate::diagnostics::record("skipped_surface", 1.0);
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Outdated
@@ -521,6 +572,12 @@ impl TerminalRenderer {
                 return Err(RenderError::Surface("surface outdated or lost".into()));
             }
         };
+        #[cfg(feature = "diagnostics")]
+        let acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "diagnostics")]
+        crate::diagnostics::record("surface_acquire_ms", acquire_ms);
+        #[cfg(feature = "diagnostics")]
+        let gpu_timer = self.gpu_timers.iter().find(|timer| timer.available());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let clear =
             if self.config.format.is_srgb() { linear(list.background) } else { list.background };
@@ -546,7 +603,14 @@ impl TerminalRenderer {
                     },
                 })],
                 depth_stencil_attachment: None,
+                #[cfg(not(feature = "diagnostics"))]
                 timestamp_writes: None,
+                #[cfg(feature = "diagnostics")]
+                timestamp_writes: gpu_timer.map(|timer| wgpu::RenderPassTimestampWrites {
+                    query_set: &timer.query,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -557,8 +621,39 @@ impl TerminalRenderer {
                 .map_err(|error| RenderError::Surface(error.to_string()))?;
         }
 
+        #[cfg(feature = "diagnostics")]
+        {
+            if let Some(timer) = gpu_timer {
+                timer.resolve(&mut encoder, self.queue.get_timestamp_period());
+            } else {
+                crate::diagnostics::record("gpu_sample_missing", 1.0);
+            }
+            if std::env::var_os("TETHER_RENDER_CAPTURE").is_some() {
+                if self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+                    crate::diagnostics::capture(
+                        &self.device,
+                        &mut encoder,
+                        &frame.texture,
+                        &self.config,
+                    );
+                } else {
+                    crate::diagnostics::record("capture_unsupported_surface", 1.0);
+                }
+            }
+        }
         self.queue.submit(Some(encoder.finish()));
+        #[cfg(feature = "diagnostics")]
+        let present_started = std::time::Instant::now();
         self.queue.present(frame);
+        #[cfg(feature = "diagnostics")]
+        {
+            let present_ms = present_started.elapsed().as_secs_f64() * 1000.0;
+            crate::diagnostics::record("present_call_ms", present_ms);
+            crate::diagnostics::record(
+                "render_cpu_work_ms",
+                render_started.elapsed().as_secs_f64() * 1000.0 - acquire_ms - present_ms,
+            );
+        }
         Ok(())
     }
 
@@ -598,6 +693,23 @@ impl TerminalRenderer {
                 self.buffer_keys.push(key);
             }
         }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for TerminalRenderer {
+    fn drop(&mut self) {
+        if self
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .is_err()
+        {
+            crate::diagnostics::record("drain_error", 1.0);
+        }
+        crate::diagnostics::flush();
     }
 }
 
@@ -732,24 +844,6 @@ fn shaped_glyphs_stay_on_the_cell_pitch() {
         let expect = i as f32 * pitch * 2.0;
         assert!((x - expect).abs() < 0.51, "wide glyph {i} at {x} expected {expect}");
     }
-}
-
-/// The module that registered `hwnd`'s class — what raw-window-handle calls
-/// `hinstance`. One call into user32; no binding crate for a single symbol.
-#[cfg(windows)]
-fn window_instance(hwnd: isize) -> Option<std::num::NonZeroIsize> {
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
-    }
-    const GWLP_HINSTANCE: i32 = -6;
-    // SAFETY: the caller of `from_hwnd` guarantees `hwnd` is a live window.
-    std::num::NonZeroIsize::new(unsafe { GetWindowLongPtrW(hwnd, GWLP_HINSTANCE) })
-}
-
-#[cfg(not(windows))]
-fn window_instance(_hwnd: isize) -> Option<std::num::NonZeroIsize> {
-    None
 }
 
 /// Families available to the shaping engine, including user-installed fonts.

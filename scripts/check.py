@@ -82,6 +82,7 @@ def source_checks():
 
 def common():
     run(sys.executable, "scripts/test-check.py")
+    run(sys.executable, "scripts/test-render-evaluation.py")
     source_checks()
     if sys.platform.startswith("linux"):
         languages = run("fc-match", "--format=%{lang}", ":lang=zh-cn", capture=True)
@@ -126,6 +127,10 @@ def windows():
         "[Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$problems) | Out-Null; "
         "if($problems.Count) { throw ($problems | Out-String) } }")
     verify_bindings(stage_native())
+    run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
+        "--all-targets", "--", "-D", "warnings")
+    run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
+    run("dotnet", "run", "--project", "tests/render-evaluation", "-c", "Release", "--no-build", "--", "--validate-fixtures")
     run("dotnet", "build", "app-win/TetherApp.Windows.csproj", "-c", "Debug",
         "-p:Platform=x64", "-warnaserror")
     for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):

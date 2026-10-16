@@ -10,8 +10,8 @@
 use std::sync::{Arc, Mutex};
 
 use tether_render::{
-    Cell, CellSpan, DrawList, FontMetrics, Frame, LinkUnderline, Overlay, Palette, RenderError,
-    Rgba, SurfaceSize, TerminalRenderer, prepare_with_overlay,
+    Cell, CellSpan, Frame, LinkUnderline, Overlay, Palette, RenderError, Rgba, SurfaceSize,
+    TerminalRenderer,
 };
 
 use crate::screen::ScreenFrame;
@@ -65,10 +65,9 @@ impl RenderSurface {
     /// from `WindowNative.GetWindowHandle`; it is not a toolkit type here.
     #[uniffi::constructor]
     pub async fn from_hwnd(hwnd: u64, width: u32, height: u32) -> Result<Arc<Self>, RenderFailure> {
-        let instance = wgpu_instance();
         let size = SurfaceSize { width, height };
         // SAFETY: the caller keeps the window alive for the surface's life.
-        let renderer = unsafe { TerminalRenderer::from_hwnd(&instance, hwnd as isize, size) }
+        let renderer = unsafe { TerminalRenderer::attach_hwnd(hwnd as isize, size) }
             .await
             .map_err(RenderFailure::from)?;
         Ok(Arc::new(Self {
@@ -78,18 +77,18 @@ impl RenderSurface {
     }
 
     pub fn set_fonts(&self, primary: String, wide: String) {
-        if let Ok(mut guard) = self.inner.lock() {
-            if let Some(renderer) = guard.as_mut() {
-                renderer.set_fonts(primary, wide);
-            }
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(renderer) = guard.as_mut()
+        {
+            renderer.set_fonts(primary, wide);
         }
     }
 
     pub fn resize(&self, width: u32, height: u32) {
-        if let Ok(mut guard) = self.inner.lock() {
-            if let Some(renderer) = guard.as_mut() {
-                renderer.resize(SurfaceSize { width, height });
-            }
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(renderer) = guard.as_mut()
+        {
+            renderer.resize(SurfaceSize { width, height });
         }
     }
 
@@ -119,22 +118,22 @@ impl RenderSurface {
         palette: PaletteDto,
         overlay: Option<OverlayDto>,
     ) -> Result<(), RenderFailure> {
+        #[cfg(feature = "render-diagnostics")]
+        let _native_span = tether_render::diagnostics::Span::new("native_draw_ms");
         let mut guard = self.inner.lock().expect("renderer lock");
         let renderer = guard.as_mut().expect("renderer alive");
         let size = self.font_size.lock().map(|size| *size).unwrap_or(DEFAULT_FONT_SIZE);
-        let metrics = {
-            let measured = renderer.measure(size);
-            FontMetrics::from_advances(
-                measured.size,
-                measured.advances().0,
-                measured.advances().1,
-                measured.line_height,
-            )
-        };
+        #[cfg(feature = "render-diagnostics")]
+        let conversion_started = std::time::Instant::now();
+        let frame = Frame::from(frame);
+        let palette = Palette::from(palette);
         let overlay = overlay.map(Overlay::from).unwrap_or_default();
-        let list: DrawList =
-            prepare_with_overlay(&Frame::from(frame), &metrics, &Palette::from(palette), &overlay);
-        renderer.render(&list).map_err(RenderFailure::from)
+        #[cfg(feature = "render-diagnostics")]
+        tether_render::diagnostics::record(
+            "frame_conversion_ms",
+            conversion_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        renderer.draw_frame(&frame, &palette, &overlay, size).map_err(RenderFailure::from)
     }
 }
 
@@ -201,16 +200,6 @@ pub struct RgbaDto {
     pub green: f32,
     pub blue: f32,
     pub alpha: f32,
-}
-
-fn wgpu_instance() -> wgpu::Instance {
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    // DX12 is the Win11 GPU. Vulkan and Metal cover the other desktops.
-    // GL is last: it is the software fallback.
-    descriptor.backends = wgpu::Backends::from_env().unwrap_or(
-        wgpu::Backends::DX12 | wgpu::Backends::METAL | wgpu::Backends::VULKAN | wgpu::Backends::GL,
-    );
-    wgpu::Instance::new(descriptor)
 }
 
 impl From<ScreenFrame> for Frame {

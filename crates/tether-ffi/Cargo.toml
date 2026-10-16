@@ -17,14 +17,14 @@ default = []
 # consumer links one binary for session *and* draw (Decisions/0017). Apple
 # builds leave this off and keep the XCFramework free of a GPU stack until
 # Decisions/0006's triggers fire.
-render = ["dep:tether-render", "dep:wgpu"]
+render = ["dep:tether-render"]
+render-diagnostics = ["render", "tether-render/diagnostics"]
 
 [dependencies]
 tether-tmux = { path = "../tether-tmux" }
 tether-core = { path = "../tether-core" }
 tether-files = { path = "../tether-files" }
 tether-render = { path = "../tether-render", optional = true }
-wgpu = { workspace = true, optional = true }
 uniffi = { workspace = true, features = ["cli", "tokio"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }

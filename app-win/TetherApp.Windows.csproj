@@ -58,6 +58,7 @@
   <ItemGroup>
     <!-- The façade is the only Tether surface a host names (0004). -->
     <ProjectReference Include="..\dotnet\Tether\Tether.csproj" />
+    <Compile Include="..\tests\render-evaluation\Frames.cs" Link="EvaluationFrames.cs" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
 </Project>

@@ -22,6 +22,14 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         AppBranding.Initialize();
+#if DEBUG
+        if (CommandLineValue("--render-evaluation-output") is { } evaluationOutput)
+        {
+            _window = RenderEvaluationWindow.Create(evaluationOutput);
+            _window.Activate();
+            return;
+        }
+#endif
         AppSettings.Load();
         Plugins = new Plugins.PluginRegistry(
             AppSettings.Current.DisabledPlugins,

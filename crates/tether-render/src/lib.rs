@@ -18,7 +18,12 @@ mod frame;
 mod layout;
 mod metrics;
 mod palette;
+mod platform;
 mod renderer;
+
+#[cfg(feature = "diagnostics")]
+#[doc(hidden)]
+pub mod diagnostics;
 
 pub use draw::{
     BgRect, Cell, CellSpan, CursorQuad, DrawList, LinkUnderline, Overlay, Rgba, TextRun,

@@ -46,6 +46,12 @@ including replay of stored regressions. They require CJK fonts, nightly Rust,
 and cargo-fuzz. The scheduled CI fuzz run retains its longer 600-second budget.
 
 The CI workflows use these same entry points on Windows, Linux and macOS.
+The common checks include renderer-evidence parser regressions. Windows checks
+also lint the opt-in render-diagnostics feature and build the HWND evaluation
+harness; these compile/fixture checks do not run GPU benchmarks. Layout timing tests are
+manual and ignored by default. Hardware performance is informational and never
+a CI gate. See
+[renderer evaluation](renderer-evaluation.md) for those separate measurements.
 Windows cannot compile Apple SDK code, and macOS cannot build WinUI. A local
 pass therefore is not a cross-platform pass. Retain all three CI jobs as required
 merge checks; hooks are clone-local and Git permits bypassing them. No finite

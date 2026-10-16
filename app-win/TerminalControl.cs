@@ -42,6 +42,19 @@ public sealed class TerminalControl : Control
     private TerminalLink? _hovered;
     private bool _hoveredConfirmed;
 
+#if DEBUG
+    private ScreenFrame? _evaluationFrame;
+    internal Action<Exception>? EvaluationFailure { get; set; }
+    internal (uint Columns, uint Rows) EvaluationGrid => (
+        _metrics.ColumnsFitting(ActualWidth * DpiScale),
+        _metrics.RowsFitting(ActualHeight * DpiScale));
+    internal void SetEvaluationFrame(ScreenFrame frame)
+    {
+        _evaluationFrame = frame;
+        RequestRedraw();
+    }
+#endif
+
     // Double-click is a timing question WinUI does not answer for us
     // (`PointerPointProperties` has no click count), so we keep it.
     private DateTimeOffset _lastPress = DateTimeOffset.MinValue;
@@ -271,12 +284,20 @@ public sealed class TerminalControl : Control
         // control; a dark page is a terminal with nothing in it (law
         // app-ui-chrome — the window *is* the terminal).
         var frame = _model?.CurrentFrame ?? BlankFrame();
+#if DEBUG
+        frame = _evaluationFrame ?? frame;
+#endif
         try
         {
             _surface.Draw(frame, _model?.Palette ?? Palette.Dark, BuildOverlay());
         }
-        catch (Exception)
+        catch (Exception error)
         {
+#if DEBUG
+            EvaluationFailure?.Invoke(error);
+#else
+            _ = error;
+#endif
             // An outdated or lost swap chain: configure it again at the
             // child's size and let the next frame draw. A missed frame is
             // not a reason to stop drawing — or to stop the session.
