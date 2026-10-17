@@ -40,6 +40,23 @@ class GateTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=self.root, check=check,
                               capture_output=True, text=True)
 
+    def test_native_terminal_cannot_reintroduce_a_renderer(self):
+        source = self.root / "app/Packages/TetherFrontend/Sources/TetherUI"
+        source.mkdir(parents=True)
+        path = source / "TerminalView.swift"
+        for text in ("import MetalKit", "let pipeline = MTLRenderPipelineDescriptor()", "Canvas { context, size in }"):
+            path.write_text(text)
+            with self.assertRaises(RuntimeError):
+                gate.renderer_boundaries(self.root)
+        path.write_text("import QuartzCore\nlet layer = CAMetalLayer()")
+        gate.renderer_boundaries(self.root)
+        other = source / "WgpuTerminal.swift"
+        other.write_text("Canvas { context, size in }\n")
+        with self.assertRaises(RuntimeError):
+            gate.renderer_boundaries(self.root)
+        other.write_text("import QuartzCore\nlet layer = CAMetalLayer()\n")
+        gate.renderer_boundaries(self.root)
+
     def test_cjk_preflight_uses_a_supported_language_tag(self):
         def command(*args, **kwargs):
             if args[0] == "fc-match":

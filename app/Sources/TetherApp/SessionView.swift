@@ -73,7 +73,9 @@ struct SessionView: View {
         onFocus: onFocus,
         onScroll: { tab.scroll($0) },
         onClaimWheel: { tab.claimWheel($0, column: $1, row: $2) },
-        links: links)
+        links: links,
+        damageEpoch: tab.damageEpoch,
+        onPresented: { tab.acknowledgeDamage(epoch: $0) })
     }
   }
 }

@@ -21,8 +21,10 @@ pub use tmux::*;
 
 #[cfg(feature = "render")]
 pub use render::{
-    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderFailure, RenderSurface,
-    RgbaDto, SelectionDto, render_font_families,
+    FontFaceDto, FontMetricsDto, FontTableDto, LinkUnderlineDto, OverlayDto, PaletteDto,
+    RenderFailure, RenderSurface, RgbaDto, SelectionDto, render_font_faces, render_font_families,
+    render_measure_fonts, render_register_font, render_register_font_file,
+    render_register_font_tables,
 };
 
 pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};

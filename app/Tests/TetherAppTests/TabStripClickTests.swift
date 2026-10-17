@@ -99,6 +99,33 @@
   @MainActor
   @Suite("Tab strip clicks", .serialized)
   struct TabStripClickTests {
+    @Test("the plus beside the tab strip requests a new tab without dragging the window")
+    func plusCreatesTab() throws {
+      let window = KeyedWindow.make()
+      defer { window.close() }
+      let suite = "Tether.NewTab.\(UUID())"
+      let defaults = UserDefaults(suiteName: suite)!
+      defer { defaults.removePersistentDomain(forName: suite) }
+      let tabs = TabSet(defaults: defaults)
+      window.contentView = NSHostingView(rootView:
+        VStack(spacing: 0) {
+          WorkspaceTabBar(tabs: tabs, onClose: { _ in })
+          Spacer()
+        })
+      window.orderFront(nil)
+      HostedWorkspace.settle(0.5)
+      let (strip, frames) = try catcher(in: window)
+      let plus = try #require(frames.values.first, "the empty strip still exposes its add button")
+      let point = windowPoint(plus.midX, plus.midY, in: strip)
+      for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        window.sendEvent(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
+      }
+      HostedWorkspace.settle(0.25)
+      #expect(tabs.intent == .newTab)
+      #expect(window.drags == 0)
+    }
+
     @Test("a click on a tab in the titlebar switches to it")
     func clickSwitches() throws {
       let hosted = try HostedWorkspace(terminals: 2)

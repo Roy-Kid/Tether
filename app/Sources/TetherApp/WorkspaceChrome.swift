@@ -20,6 +20,7 @@ struct WorkspaceTabBar: View {
   /// row of crosses; one that only appears under the pointer is a tab
   /// strip with a way to close a tab.
   @State private var hovering: UUID?
+  @State private var addTabID = UUID()
   @Environment(\.colorScheme) private var scheme
   @AppStorage("terminalAppearance") private var appearance = "system"
 
@@ -53,6 +54,23 @@ struct WorkspaceTabBar: View {
     .background(alignment: .bottom) { Divider() }
   }
 
+  private var newTabButton: some View {
+    Button {
+      tabs.perform(.newTab)
+    } label: {
+      Image(systemName: "plus")
+        .font(UIStyle.symbol)
+        .foregroundStyle(Theme.subtle)
+        .frame(width: Chrome.tab, height: rowHeight)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(ChromeButtonStyle())
+    .help("New Tab")
+    .accessibilityLabel("New Tab")
+    .accessibilityIdentifier("newTabButton")
+    .anchorPreference(key: TabFrameKey.self, value: .bounds) { [addTabID: $0] }
+  }
+
   /// A terminal tab shares the grid's colour. An extension does not: its
   /// page is the window, and the accent rule is what marks it open.
   private func joinsTerminal(_ id: UUID) -> Bool {
@@ -78,6 +96,7 @@ struct WorkspaceTabBar: View {
               subtitle: entry.workspace.subtitle, symbol: entry.workspace.symbol)
               .id(entry.id)
           }
+          newTabButton
         }
       }
       .scrollIndicators(.hidden)
@@ -88,9 +107,12 @@ struct WorkspaceTabBar: View {
               frames: anchors.reduce(into: [:]) { $0[$1.key] = proxy[$1.value] },
               closeable: Set([tabs.selectedWorkspaceID, hovering].compactMap { $0 }),
               closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
-              onPrimary: { tabs.handleTabClick($0) },
-              onClose: { onClose($0) },
-              makeMenu: { tabMenu($0) })
+              onPrimary: { id in
+                if id == addTabID { tabs.perform(.newTab) }
+                else { tabs.handleTabClick(id) }
+              },
+              onClose: { if $0 != addTabID { onClose($0) } },
+              makeMenu: { $0 == addTabID ? NSMenu() : tabMenu($0) })
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           #else
             Color.clear.allowsHitTesting(false)

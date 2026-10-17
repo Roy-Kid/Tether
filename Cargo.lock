@@ -3241,10 +3241,13 @@ dependencies = [
  "bytemuck",
  "glyphon",
  "raw-window-handle",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
+ "ttf-parser",
  "unicode-segmentation",
  "wgpu",
+ "write-fonts",
 ]
 
 [[package]]
@@ -4198,6 +4201,17 @@ dependencies = [
  "group",
  "hybrid-array",
  "primefield",
+]
+
+[[package]]
+name = "write-fonts"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cae90d1d9f6d1d36ef116b0b1e651a6d7c12ba925439d4d06ff9adc94662a3d8"
+dependencies = [
+ "font-types 0.12.6",
+ "log",
+ "read-fonts 0.41.0",
 ]
 
 [[package]]

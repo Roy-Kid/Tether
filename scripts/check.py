@@ -39,7 +39,29 @@ def staged_clean():
     return run("git", "write-tree", capture=True).strip()
 
 
+def renderer_boundaries(root=ROOT):
+    # Native hosts may attach a layer/window, never implement a second terminal
+    # atlas, shader or grid painter. Keep this executable beside other seams.
+    swift_sources = [root / "app/Sources", root / "swift/Sources/Tether"]
+    swift_sources += list((root / "app/Packages").glob("*/Sources"))
+    swift_sources += list((root / "app/Plugins").glob("*/Sources"))
+    bases = [(base, "swift") for base in swift_sources]
+    bases += [(root / "app-win", "cs"), (root / "dotnet/Tether", "cs")]
+    for base, suffix in bases:
+        for path in base.rglob("*." + suffix):
+            if "Generated" in path.parts:
+                continue
+            source = path.read_text(encoding="utf-8")
+            forbidden = r"\b(?:GlyphAtlas|RowPictureCache|MTLRenderPipelineDescriptor|MTLRenderCommandEncoder|MTLCommandQueue|CTLineDraw|CreateShaderModule|CreateRenderPipeline|CreateGraphicsPipelineState)\b"
+            require(not re.search(forbidden, source), f"Renderer boundary violation: {path}")
+            if suffix == "swift":
+                require(not re.search(r"^\s*import Metal(?:Kit)?\s*$", source, re.M),
+                        f"Renderer boundary violation: {path}")
+                require(not re.search(r"\bCanvas\s*[{(]", source), f"Independent terminal painter: {path}")
+
+
 def source_checks():
+    renderer_boundaries(ROOT)
     try:
         import yaml
     except ImportError as error:

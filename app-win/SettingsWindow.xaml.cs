@@ -1,3 +1,4 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -22,6 +23,7 @@ public sealed partial class SettingsWindow : Window
         _current.Activate();
     }
     private bool _loading = true;
+    private Action? _closeFontPreview;
     private readonly PluginRegistry? _plugins;
 
     public SettingsWindow() : this(null) { }
@@ -55,7 +57,7 @@ public sealed partial class SettingsWindow : Window
         AppSettings.Changed += ApplyAppearance;
         SettingsRoot.ActualThemeChanged += (_, _) => UpdateTitleBar();
         SettingsRoot.Loaded += (_, _) => UpdateTitleBar();
-        Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
+        Closed += (_, _) => { AppSettings.Changed -= ApplyAppearance; _closeFontPreview?.Invoke(); _closeFontPreview = null; };
         ApplyAppearance();
         Activate();
     }
@@ -206,6 +208,7 @@ public sealed partial class SettingsWindow : Window
 
     private async void BuildTerminal()
     {
+        _closeFontPreview?.Invoke();
         TerminalPane.Children.Clear();
         var preferences = AppSettings.Current.Terminal;
         var scheme = new ComboBox { Header = "Color scheme", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -213,18 +216,77 @@ public sealed partial class SettingsWindow : Window
         scheme.Items.Add(new ComboBoxItem { Content = "Classic", Tag = "classic" });
         scheme.SelectedIndex = preferences.ColorScheme == "classic" ? 1 : 0;
         TerminalPane.Children.Add(scheme);
-        var family = new ComboBox { Header = "Terminal font", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var wideFamily = new ComboBox { Header = "CJK / wide-character font", HorizontalAlignment = HorizontalAlignment.Stretch };
-        family.Items.Add(preferences.FontFamily);
-        wideFamily.Items.Add(preferences.WideFontFamily);
-        family.SelectedItem = preferences.FontFamily;
-        wideFamily.SelectedItem = preferences.WideFontFamily;
+        var family = new ComboBox { Header = "Terminal font", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name", SelectedValuePath = "Id" };
+        var wideFamily = new ComboBox { Header = "CJK / wide-character font", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name", SelectedValuePath = "Id" };
+        family.Items.Add(new Tether.FontFace(preferences.FontFamily, preferences.FontFamily, preferences.FontFamily));
+        wideFamily.Items.Add(new Tether.FontFace(preferences.WideFontFamily, preferences.WideFontFamily, preferences.WideFontFamily));
+        family.SelectedValue = preferences.FontFamily;
+        wideFamily.SelectedValue = preferences.WideFontFamily;
         TerminalPane.Children.Add(family);
         TerminalPane.Children.Add(wideFamily);
-        var preview = new TextBlock { Text = "AaBb 0123  → ┌─┐  中文测试 日本語 한글", FontSize = preferences.FontSize, TextWrapping = TextWrapping.Wrap };
-        void Preview()
+        var preview = new Image { Height = 40, Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
+        var previewFontSize = preferences.FontSize;
+        var previewVersion = 0;
+        var previewClosed = false;
+        var previewScaleHooked = false;
+        var previewQueue = DispatcherQueue.GetForCurrentThread();
+        var previewTarget = Tether.TerminalSurface.OffscreenAsync(600, 40);
+        _closeFontPreview = async () =>
         {
-            preview.FontFamily = new FontFamily($"{family.SelectedItem}, {wideFamily.SelectedItem}");
+            previewClosed = true;
+            try { (await previewTarget).Dispose(); } catch { /* Reported by Preview. */ }
+        };
+        void ShowPreviewProblem(string message)
+        {
+            if (previewQueue.HasThreadAccess) SaveProblem.Text = message;
+            else previewQueue.TryEnqueue(() => SaveProblem.Text = message);
+        }
+        async void Preview()
+        {
+            var version = ++previewVersion;
+            try
+            {
+                var surface = await previewTarget.ConfigureAwait(false);
+                var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!previewQueue.TryEnqueue(() => done.TrySetResult())) return;
+                await done.Task;
+                if (previewClosed || version != previewVersion) return;
+                if (SettingsRoot.XamlRoot is null)
+                {
+                    if (!previewScaleHooked)
+                    {
+                        previewScaleHooked = true;
+                        SettingsRoot.Loaded += (_, _) => Preview();
+                    }
+                    return;
+                }
+                if (!previewScaleHooked)
+                {
+                    previewScaleHooked = true;
+                    SettingsRoot.XamlRoot.Changed += (_, _) => Preview();
+                }
+                var scale = SettingsRoot.XamlRoot.RasterizationScale;
+                if (scale <= 0) return;
+                var width = (uint)(600 * scale); var height = (uint)(40 * scale);
+                surface.Resize(width, height);
+                surface.SetFonts((string)family.SelectedValue, (string)wideFamily.SelectedValue);
+                surface.Measure((float)(previewFontSize * scale));
+                const string latin = "AaBb 0123 → ┌─┐ ";
+                var style = Tether.RunStyle.Default;
+                var frame = new Tether.ScreenFrame(80, 1, 0, 0, Tether.CaretShape.Hidden, false, false, 0, 0, "",
+                    [new Tether.ScreenRow([new(latin, (uint)latin.Length, style), new("中文测试", 8, style),
+                        new(" ", 1, style), new("日本語", 6, style), new(" ", 1, style), new("한글", 4, style)])]);
+                if (!surface.Draw(frame, Tether.Palette.Dark)) return;
+                var pixels = surface.ReadPixels();
+                // WriteableBitmap is BGRA; the renderer's portable readback is RGBA.
+                for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 2]) = (pixels[i + 2], pixels[i]);
+                var bitmap = new Microsoft.UI.Xaml.Media.Imaging.WriteableBitmap((int)width, (int)height);
+                using (var stream = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsStream(bitmap.PixelBuffer))
+                    stream.Write(pixels);
+                bitmap.Invalidate();
+                preview.Source = bitmap;
+            }
+            catch (Exception ex) { ShowPreviewProblem("Couldn't preview font: " + ex.Message); }
         }
         Preview();
         TerminalPane.Children.Add(preview);
@@ -233,7 +295,7 @@ public sealed partial class SettingsWindow : Window
         var size = new NumberBox { Header = "Font size", Minimum = 10, Maximum = 32, Value = preferences.FontSize, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
         size.ValueChanged += (_, _) =>
         {
-            if (double.IsFinite(size.Value) && size.Value is >= 10 and <= 32) preview.FontSize = size.Value;
+            if (double.IsFinite(size.Value) && size.Value is >= 10 and <= 32) { previewFontSize = size.Value; Preview(); }
         };
         var threshold = new NumberBox { Header = "Confirm paste at character count", Minimum = 1, Maximum = 1000000, Value = preferences.PasteThreshold };
         TerminalPane.Children.Add(size);
@@ -254,7 +316,7 @@ public sealed partial class SettingsWindow : Window
         {
             var updated = new TerminalPreferences
             {
-                FontFamily = (string)family.SelectedItem, WideFontFamily = (string)wideFamily.SelectedItem,
+                FontFamily = (string)family.SelectedValue, WideFontFamily = (string)wideFamily.SelectedValue,
                 FontSize = size.Value,
                 Inset = inset.Value, ColorScheme = (string)((ComboBoxItem)scheme.SelectedItem).Tag,
                 PasteThreshold = double.IsFinite(threshold.Value) ? (int)threshold.Value : 0,
@@ -275,22 +337,46 @@ public sealed partial class SettingsWindow : Window
         TerminalPane.Children.Add(reset);
         void SaveFonts()
         {
-            if (family.SelectedItem is not string primary || wideFamily.SelectedItem is not string wide) return;
+            if (family.SelectedValue is not string primary || wideFamily.SelectedValue is not string wide) return;
             ShowSaveResult((AppSettings.Current with { Terminal = AppSettings.Current.Terminal with
                 { FontFamily = primary, WideFontFamily = wide } }).Save());
         }
         try
         {
-            var fonts = await Task.Run(Tether.TerminalSurface.FontFamilies);
+            var fonts = await Task.Run(TerminalFontStore.Faces);
+            problem.Text = TerminalFontStore.LoadProblem;
             foreach (var name in fonts)
             {
-                if (!family.Items.Contains(name)) family.Items.Add(name);
-                if (!wideFamily.Items.Contains(name)) wideFamily.Items.Add(name);
+                if (!family.Items.Cast<Tether.FontFace>().Any(face => face.Id == name.Id)) family.Items.Add(name);
+                if (!wideFamily.Items.Cast<Tether.FontFace>().Any(face => face.Id == name.Id)) wideFamily.Items.Add(name);
             }
+            Preview();
             family.SelectionChanged += (_, _) => SaveFonts();
             wideFamily.SelectionChanged += (_, _) => SaveFonts();
         }
         catch (Exception ex) { problem.Text = "Couldn't list installed fonts: " + ex.Message; }
+
+        var import = new Button { Content = "Import Font" };
+        import.Click += async (_, _) =>
+        {
+            try
+            {
+                var picker = new Windows.Storage.Pickers.FileOpenPicker();
+                foreach (var extension in new[] { ".ttf", ".otf", ".ttc" }) picker.FileTypeFilter.Add(extension);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+                if (await picker.PickSingleFileAsync() is not { } file) return;
+                var imported = await TerminalFontStore.ImportAsync(file.Path);
+                foreach (var face in imported)
+                {
+                    if (!family.Items.Cast<Tether.FontFace>().Any(item => item.Id == face.Id)) family.Items.Add(face);
+                    if (!wideFamily.Items.Cast<Tether.FontFace>().Any(item => item.Id == face.Id)) wideFamily.Items.Add(face);
+                }
+                family.SelectedValue = imported[0].Id;
+                SaveFonts();
+            }
+            catch (Exception ex) { problem.Text = "Couldn't import font: " + ex.Message; }
+        };
+        TerminalPane.Children.Add(import);
 
     }
 

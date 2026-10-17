@@ -58,8 +58,6 @@ pub struct TextRun {
     pub height: f32,
     pub text: String,
     pub color: Rgba,
-    /// Extra advance per character so `text` covers exactly `width`.
-    pub tracking: f32,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -111,7 +109,7 @@ pub struct Overlay {
     /// while the host is still asking whether the thing exists.
     pub link_underlines: Vec<LinkUnderline>,
     /// What to fill a selected cell with. The consumer owns this the way it
-    /// owns the palette (Decision 0011); `TetherUI` uses accent at 0.12.
+    /// owns the palette (Decision 0011); the caller's selection tint.
     pub selection_color: Rgba,
     /// What to underline a link with.
     pub link_color: Rgba,

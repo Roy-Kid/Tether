@@ -14,8 +14,7 @@ public enum TerminalDrawing: String {
   case canvas
   case metal
 
-  /// Metal on both. The canvas stays as the fallback where there is no
-  /// Metal device, and as a setting for comparing the two.
+  /// Legacy cases remain source compatible; all values use the shared renderer.
   public static var platformDefault: String { TerminalDrawing.metal.rawValue }
 }
 
@@ -41,6 +40,9 @@ public struct TerminalSurface: View {
   /// the setting's size. A second measurement at that size is larger than a
   /// fitted frame, and the last line is then clipped away.
   let metrics: FontMetrics?
+  /// Generation of `dirtyRows`. A successful draw acknowledges this generation.
+  let damageEpoch: Int
+  let onPresented: (Int) -> Void
   /// The link under a ⌘-held pointer, underlined while it is.
   @State private var hovered: TerminalLink?
   /// Cells a drag is covering. Nil is a click: nothing highlighted, and the
@@ -59,8 +61,12 @@ public struct TerminalSurface: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage("terminalAppearance") private var appearance = "system"
-  @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
-  @State private var rowCache = RowPictureCache()
+  @AppStorage(TerminalFonts.primaryKey) private var primaryFont = TerminalFonts.defaultPrimary
+  @AppStorage(TerminalFonts.wideKey) private var wideFont = "PingFang SC"
+  @Environment(\.displayScale) private var displayScale
+  /// Scale of the layer that draws. Nil until that view has one.
+  @State private var layerScale: CGFloat?
+  @State private var fontRevision = 0
   /// The frame a selection is copied from. The capture view keeps the
   /// `applySelection` it was given, which can be an older render than the
   /// one on screen: the highlight then matches the text and the pasteboard
@@ -76,7 +82,9 @@ public struct TerminalSurface: View {
     onScroll: @escaping (ScrollTo) -> Void = { _ in },
     onClaimWheel: @escaping (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass },
     links: TerminalLinks = .none,
-    metrics: FontMetrics? = nil
+    metrics: FontMetrics? = nil,
+    damageEpoch: Int = 0,
+    onPresented: @escaping (Int) -> Void = { _ in }
   ) {
     self.frame = frame
     self.dirtyRows = dirtyRows
@@ -89,9 +97,13 @@ public struct TerminalSurface: View {
     self.onClaimWheel = onClaimWheel
     self.links = links
     self.metrics = metrics
+    self.damageEpoch = damageEpoch
+    self.onPresented = onPresented
   }
   public var body: some View {
-    let metrics = self.metrics ?? FontMetrics(size: min(24, max(10, fontSize)))
+    let _ = fontRevision
+    let scale = layerScale ?? displayScale
+    let metrics = self.metrics ?? FontMetrics(size: min(24, max(10, fontSize)), scale: scale, primary: primaryFont, wide: wideFont)
     let palette = Palette.chosen(setting: appearance, scheme: scheme)
     VStack(spacing: 0) {
       grid(metrics: metrics, palette: palette)
@@ -147,8 +159,6 @@ public struct TerminalSurface: View {
         let tracking: MouseTracking = frame.viewportOffset == 0 ? frame.mouse : .off
         terminal(metrics: metrics, palette: palette)
           .padding(inset)
-        SelectionHighlight(selection: selection, frame: frame, geometry: cells)
-        LinkUnderline(link: hovered, confirmed: confirmed, geometry: cells)
         capture(cells: cells, metrics: metrics, tracking: tracking)
 
         if frame.viewportOffset > 0 {
@@ -180,13 +190,10 @@ public struct TerminalSurface: View {
       .onChange(of: frame.columns) { _, _ in selection = nil }
       .onChange(of: frame.rows) { _, _ in selection = nil }
       .onChange(of: fontSize) { _, _ in
-        rowCache.clear()
         applyFit(geometry.size, metrics)
       }
-      .onChange(of: metrics.cellWidth) { _, _ in rowCache.clear() }
-      .onChange(of: metrics.lineHeight) { _, _ in rowCache.clear() }
-      .onChange(of: appearance) { _, _ in rowCache.clear() }
-      .onChange(of: scheme) { _, _ in rowCache.clear() }
+      .onChange(of: metrics) { _, value in applyFit(geometry.size, value) }
+      .onReceive(NotificationCenter.default.publisher(for: .terminalFontsChanged)) { _ in fontRevision += 1 }
       .onDisappear {
         pendingFit?.cancel()
         hoverCheck?.cancel()
@@ -195,15 +202,22 @@ public struct TerminalSurface: View {
       }
     }
   }
-  @ViewBuilder
   private func terminal(metrics: FontMetrics, palette: Palette) -> some View {
-    let useMetal = drawing == TerminalDrawing.metal.rawValue && MetalTerminal.isAvailable
-    if useMetal {
-      MetalTerminal(frame: frame, dirtyRows: dirtyRows, metrics: metrics, palette: palette)
-    } else {
-      TerminalView(
-        frame: frame, dirtyRows: dirtyRows, metrics: metrics, palette: palette, cache: rowCache)
-    }
+    WgpuTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette,
+      overlay: renderOverlay, onPresented: onPresented, onScale: { layerScale = $0 })
+  }
+
+  private var renderOverlay: RenderOverlay {
+    let spans = selection.map { GridText.spans($0, in: frame) } ?? []
+    let mark: RenderSelection?
+    if let first = spans.first, let last = spans.last {
+      mark = RenderSelection(anchorColumn: UInt32(first.start), anchorRow: UInt32(first.row),
+        focusColumn: UInt32(last.end - 1), focusRow: UInt32(last.row))
+    } else { mark = nil }
+    return RenderOverlay(selection: mark, linkUnderlines: (hovered?.spans ?? []).map {
+      RenderLinkUnderline(row: UInt32($0.row), start: UInt32($0.start), end: UInt32($0.end), confirmed: confirmed)
+    }, selectionColor: Color.accentColor.opacity(UIStyle.textSelectionOpacity).renderColor,
+      linkColor: Color.accentColor.renderColor)
   }
 
   /// A drag highlights as it moves and copies when it ends. The text is taken
@@ -277,6 +291,7 @@ public struct TerminalSurface: View {
   }
 
   private func fit(_ size: CGSize, _ metrics: FontMetrics) {
+    guard metrics.cellWidth > 0, metrics.lineHeight > 0 else { return }
     onResize(
       metrics.columns(fitting: size.width - inset * 2),
       metrics.rows(fitting: size.height - inset * 2))

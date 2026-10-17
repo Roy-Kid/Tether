@@ -42,7 +42,9 @@ final class SessionTab: Identifiable {
   private(set) var stage: Stage = .connecting
   private(set) var frame: ScreenFrame?
   /// `nil` means every row is new. An empty set means only the cursor moved.
+  /// Damage accumulates until the draw that sampled it succeeds.
   private(set) var dirtyRows: Set<Int>?
+  private(set) var damageEpoch = 0
   private(set) var remoteTitle: String = ""
 
   /// Primary tab label. Identity is `id`, never this string.
@@ -239,7 +241,7 @@ final class SessionTab: Identifiable {
     shellTTY = nil
     // The last screen stays until the new shell draws one: a reconnect
     // that fails again must not take what the person was reading with it.
-    dirtyRows = nil
+    noteDamage(nil)
     problemRaised = false
     stage = .connecting
     self.typedNow = typedNow
@@ -406,7 +408,7 @@ final class SessionTab: Identifiable {
         // the grid from before it; the screen now is the one to draw.
         if self.resizeEpoch != epoch {
           self.frame = session.frame()
-          self.dirtyRows = nil
+          self.noteDamage(nil)
           continue
         }
         self.publish(update, session: session)
@@ -436,12 +438,12 @@ final class SessionTab: Identifiable {
     switch update {
     case .full(let frame):
       self.frame = frame
-      dirtyRows = nil
+      noteDamage(nil)
       remoteTitle = frame.title
     case .rows(let rows, let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else {
         self.frame = session.frame()
-        dirtyRows = nil
+        noteDamage(nil)
         remoteTitle = self.frame?.title ?? title
         return
       }
@@ -449,7 +451,7 @@ final class SessionTab: Identifiable {
         current, rows: rows, cursorRow: cursorRow, cursorColumn: cursorColumn,
         cursorShape: cursorShape, cursorVisible: cursorVisible, title: title,
         viewportOffset: viewportOffset, historyLines: historyLines, mouse: mouse)
-      dirtyRows = Set(rows.map { Int($0.row) })
+      noteDamage(Set(rows.map { Int($0.row) }))
       remoteTitle = title
     case .idle(let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else { return }
@@ -458,9 +460,25 @@ final class SessionTab: Identifiable {
         cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
         alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
         historyLines: historyLines, title: title, lines: current.lines)
-      dirtyRows = []
+      noteDamage([])
       remoteTitle = title
     }
+  }
+
+  /// Unions row damage. `nil` stays a full rebuild. An empty update does not
+  /// drop rows the GPU has not drawn yet.
+  private func noteDamage(_ next: Set<Int>?) {
+    damageEpoch += 1
+    switch (dirtyRows, next) {
+    case (nil, _), (_, nil): dirtyRows = nil
+    case (let old?, let new?): dirtyRows = old.union(new)
+    }
+  }
+
+  /// Clears damage only when nothing newer arrived while that frame was drawing.
+  func acknowledgeDamage(epoch: Int) {
+    guard epoch == damageEpoch else { return }
+    dirtyRows = []
   }
 
   /// Turns copying on for the tab someone is looking at, and pulls the
@@ -650,7 +668,7 @@ final class SessionTab: Identifiable {
     // the next byte left the old grid up until something else was printed.
     guard publishesFrames, let session else { return }
     frame = session.frame()
-    dirtyRows = nil
+    noteDamage(nil)
   }
 
   /// Names this shell's far-side tty, when the session itself has none.

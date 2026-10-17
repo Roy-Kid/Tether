@@ -468,7 +468,6 @@ private struct AppearanceSettings: View {
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
-  @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
 
   var body: some View {
@@ -493,10 +492,7 @@ private struct AppearanceSettings: View {
         Text("Dark").tag("dark")
       }
       Stepper("Font Size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
-      Picker("Drawing", selection: $drawing) {
-        Text("Canvas").tag(TerminalDrawing.canvas.rawValue)
-        Text("Metal").tag(TerminalDrawing.metal.rawValue)
-      }
+      TerminalFontSettings()
     }
   }
 }

@@ -47,3 +47,6 @@ __pycache__/
 /artifacts/windows-*/
 /artifacts/han-*.png
 /artifacts/han-*.ppm
+
+# Local shared-renderer build logs, screenshots and device evidence.
+/artifacts/render-unification/

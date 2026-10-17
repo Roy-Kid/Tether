@@ -155,9 +155,10 @@ artifact shape are decided and exercised by CI.
 
 Phase 2's acceptance is in place — recorded §12 workloads asserted against
 screen state, and `cargo-fuzz` over everything that reads remote bytes. Phase 4
-draws with Metal on both platforms; the SwiftUI canvas stays as the fallback
-and a setting. The Metal path is tested by drawing off screen and reading the
-pixels back, since nothing else in CI would notice it drawing nothing.
+uses the shared Rust wgpu renderer on Windows and Apple, with native platform
+hosts. Apple uses the Metal backend; there is no separate terminal Canvas or
+Swift Metal painter. Pixel readback tests exercise the same shared render pass.
+Device release qualification is recorded separately (ADR 0021).
 
 A login asks through dialogs, and reads a question that comes back as the
 answer before it refused. A refused saved password is never sent again, and a

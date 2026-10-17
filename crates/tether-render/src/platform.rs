@@ -1,9 +1,59 @@
 //! Native surface attachment and GPU instance policy.
 //!
 //! Keep OS handles here and all grid/shaping/draw logic in the shared renderer.
-//! Future Apple attachment belongs here; it must feed the same draw_frame path.
+//! Apple attaches a CAMetalLayer here and presents through the same draw_frame path.
 
 use crate::RenderError;
+
+/// Captured synchronously on the native UI thread, before any async device work.
+pub struct NativeAttachment {
+    pub(crate) instance: wgpu::Instance,
+    pub(crate) surface: wgpu::Surface<'static>,
+}
+
+impl NativeAttachment {
+    /// # Safety
+    /// Called on the main thread with a live CAMetalLayer. The host retains the
+    /// layer until initialization has finished and the renderer is closed.
+    pub unsafe fn metal_layer(layer: u64) -> Result<Self, RenderError> {
+        #[cfg(target_vendor = "apple")]
+        {
+            if layer == 0 {
+                return Err(RenderError::Surface("null Metal layer".into()));
+            }
+            unsafe extern "C" {
+                fn pthread_main_np() -> std::ffi::c_int;
+            }
+            // SAFETY: pthread_main_np has no arguments or preconditions.
+            if unsafe { pthread_main_np() } == 0 {
+                return Err(RenderError::Surface(
+                    "Metal layer attachment requires the main thread".into(),
+                ));
+            }
+            let instance = instance();
+            // SAFETY: native caller supplies and retains a real CAMetalLayer.
+            let surface = unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
+                    layer as *mut std::ffi::c_void,
+                ))
+            }
+            .map_err(|e| RenderError::Surface(e.to_string()))?;
+            Ok(Self { instance, surface })
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            let _ = layer;
+            Err(RenderError::Surface("Metal layer attachment requires Apple".into()))
+        }
+    }
+
+    pub async fn initialize(
+        self,
+        size: crate::SurfaceSize,
+    ) -> Result<crate::TerminalRenderer, RenderError> {
+        crate::TerminalRenderer::with_surface(&self.instance, self.surface, size).await
+    }
+}
 
 pub(crate) fn instance() -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();

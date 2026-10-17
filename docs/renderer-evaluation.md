@@ -2,9 +2,9 @@
 
 Date: 2026-10-16. Branch: `evaluate/wgpu-renderer`.
 
-**The existing Windows Rust wgpu path works on this machine. Performance is an approximate manual observation, never a CI gate.** Apple continues using Swift Metal; a future Apple prototype must compare against it. Windows observations cannot establish iOS quality or performance.
+**The existing Windows Rust wgpu path works on this machine. Performance is an approximate manual observation, never a CI gate.** Windows observations cannot establish iOS quality or performance. [ADR 0021](../Decisions/0021-renderer-unification-is-measurement-gated.md) is the ownership decision, and Apple presents through this same wgpu renderer.
 
-See [the shared renderer architecture](renderer-architecture.md) for ownership, native host contracts and the future Apple attachment path. The Windows binding now delegates layout and backend creation to that shared Rust implementation.
+See [the shared renderer architecture](renderer-architecture.md) for ownership and native host contracts. The Windows binding delegates layout and backend creation to that shared Rust implementation.
 
 ## Scope and reproduction
 
@@ -65,6 +65,6 @@ Optional `--presentmon C:\Tools\PresentMon.exe` supports v2 QPC display evidence
 
 CI runs builds, Rust checks, binding consistency, fixture contracts, evidence-parser tests and Windows release checks. It runs no GPU benchmark and makes no frame-time assertions. Existing prepare() cost measurements remain as ignored manual tests without timing thresholds; they do not cover GPU execution or presentation. The full common/Windows checks passed locally, including publishing; the updated parser tests and fixture checks also passed. Apple/Linux checks were not run on this Windows host.
 
-The Windows path is credible enough to consider a separate Apple comparison prototype. No Apple migration is approved by these numbers. Cross-monitor DPI, device loss, integrated GPUs and long-duration stability remain unverified Windows coverage. For Apple, compare identical input against current Swift Metal on actual macOS/iOS devices, including fonts, power, memory, native integration and background recovery. Retain independent iOS rendering if it regresses.
+The Windows path was credible enough to measure. Cross-monitor DPI, device loss, integrated GPUs and long-duration stability remain unverified Windows coverage. Apple drawing has since moved to the shared renderer; this report does not approve or retain a second painter. A regression is fixed on that shared path. See [ADR 0021](../Decisions/0021-renderer-unification-is-measurement-gated.md).
 
 [Machine-readable observations and provenance](renderer-evaluation/windows-baseline.json) retain per-scenario percentiles and cold/resource readings; raw local evidence lives in `artifacts/windows-render-evaluation/`. Supplied cached binaries are identified by hashes; recorded source hashes alone do not prove their build provenance.

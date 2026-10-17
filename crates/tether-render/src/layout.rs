@@ -17,10 +17,8 @@ pub fn prepare(frame: &Frame, metrics: &FontMetrics, palette: &Palette) -> DrawL
 
 /// Turns one frame, plus what the pointer is doing, into what to paint.
 ///
-/// Full-frame today: every visible run is emitted. Damage-driven partial
-/// redraw is the contract's other half (spec §12, §20) and lands against
-/// [`crate::frame::Frame`] row spans; until then this is the measured path
-/// from 0006 — a frame linear in runs, never in cells.
+/// Stateless full-frame entry point. Native surfaces use `LayoutCache` to
+/// rebuild only damaged rows with these same layout functions.
 ///
 /// The overlay is the pointer's own marks: a selection and link underlines.
 /// Both are just rects under the glyphs, which is what the Swift
@@ -40,56 +38,69 @@ pub fn prepare_with_overlay(
     let visible_rows = frame.lines.len().min(frame.rows as usize);
 
     for (index, row) in frame.lines.iter().take(visible_rows).enumerate() {
-        let y = metrics.cell_y(index as u32);
-        let mut column = 0u32;
-
-        for run in &row.runs {
-            if column as usize >= visible_columns {
-                break;
-            }
-
-            let x = metrics.cell_x(column);
-            let width = metrics.cells_width(run.columns);
-
-            let (foreground, background) = resolved(&run.style, palette);
-            if background != palette.background {
-                list.rects.push(BgRect {
-                    x,
-                    y,
-                    width,
-                    height: metrics.line_height,
-                    color: background,
-                });
-            }
-
-            // Text present but not to be drawn: what a shell does while
-            // reading a password. The background above is still painted, so
-            // the cell does not become a hole in a highlighted region.
-            let draws_text = !run.style.hidden && !run.text.chars().all(char::is_whitespace);
-            if draws_text {
-                let characters = run.text.chars().count();
-                list.texts.push(TextRun {
-                    font_size: metrics.size,
-                    cell_width: metrics.cell_width,
-                    x,
-                    y,
-                    width,
-                    height: metrics.line_height,
-                    text: run.text.clone(),
-                    color: if run.style.dim { foreground.with_alpha(0.6) } else { foreground },
-                    tracking: metrics.tracking(run.columns, characters),
-                    bold: run.style.bold,
-                    italic: run.style.italic,
-                    underline: !matches!(run.style.underline, crate::frame::Underline::None),
-                    underline_color: run.style.underline_color.map(|paint| palette.resolve(paint)),
-                    strikethrough: run.style.strikethrough,
-                });
-            }
-
-            column += run.columns;
-        }
+        append_row(&mut list, row, index, visible_columns, metrics, palette);
     }
+    append_marks(&mut list, frame, metrics, palette, overlay);
+    list
+}
 
+fn append_row(
+    list: &mut DrawList,
+    row: &crate::Row,
+    index: usize,
+    columns: usize,
+    metrics: &FontMetrics,
+    palette: &Palette,
+) {
+    let y = metrics.cell_y(index as u32);
+    let mut column = 0u32;
+
+    for run in &row.runs {
+        if column as usize >= columns {
+            break;
+        }
+
+        let x = metrics.cell_x(column);
+        let width = metrics.cells_width(run.columns.min(columns as u32 - column));
+
+        let (foreground, background) = resolved(&run.style, palette);
+        if background != palette.background {
+            list.rects.push(BgRect { x, y, width, height: metrics.line_height, color: background });
+        }
+
+        // Text present but not to be drawn: what a shell does while
+        // reading a password. The background above is still painted, so
+        // the cell does not become a hole in a highlighted region.
+        let draws_text = !run.style.hidden && !run.text.chars().all(char::is_whitespace);
+        if draws_text {
+            list.texts.push(TextRun {
+                font_size: metrics.size,
+                cell_width: metrics.cell_width,
+                x,
+                y,
+                width,
+                height: metrics.line_height,
+                text: run.text.clone(),
+                color: if run.style.dim { foreground.with_alpha(0.6) } else { foreground },
+                bold: run.style.bold,
+                italic: run.style.italic,
+                underline: !matches!(run.style.underline, crate::frame::Underline::None),
+                underline_color: run.style.underline_color.map(|paint| palette.resolve(paint)),
+                strikethrough: run.style.strikethrough,
+            });
+        }
+
+        column += run.columns;
+    }
+}
+
+fn append_marks(
+    list: &mut DrawList,
+    frame: &Frame,
+    metrics: &FontMetrics,
+    palette: &Palette,
+    overlay: &Overlay,
+) {
     // Hidden is a shape as well as a flag: a full-screen program hides the
     // cursor constantly while redrawing, and drawing it anyway is how a
     // terminal ends up with a block flickering across the screen.
@@ -113,36 +124,68 @@ pub fn prepare_with_overlay(
             color,
             shape: frame.cursor_shape,
         });
-        // And as a glyph, so a backend whose quad path is not drawing still
-        // shows the caret. The text pass is the one every backend has.
-        list.texts.push(TextRun {
-            font_size: metrics.size,
-            cell_width: metrics.cell_width,
-            x,
-            y,
-            width,
-            height: metrics.line_height,
-            text: match frame.cursor_shape {
-                Caret::Block => "█".to_owned(),
-                Caret::Underline => "_".to_owned(),
-                Caret::Beam => "▏".to_owned(),
-                Caret::Hidden => String::new(),
-            },
-            color,
-            tracking: 0.0,
-            bold: false,
-            italic: false,
-            underline: false,
-            underline_color: None,
-            strikethrough: false,
-        });
     }
 
     // Pointer marks last among the rects so a selection sits over a cell
     // background and under the glyphs.
-    push_overlay(&mut list, metrics, overlay, frame.columns);
+    push_overlay(list, metrics, overlay, frame.columns);
+}
 
-    list
+/// Per-surface row geometry. Pointer marks and the caret are always current;
+/// an empty damage set never prevents a newly attached surface from drawing.
+#[derive(Default)]
+pub(crate) struct LayoutCache {
+    configuration: Option<(u32, u32, FontMetrics, Palette)>,
+    rows: Vec<DrawList>,
+}
+
+impl LayoutCache {
+    pub fn invalidate(&mut self) {
+        self.configuration = None;
+    }
+
+    pub fn prepare(
+        &mut self,
+        frame: &Frame,
+        metrics: &FontMetrics,
+        palette: &Palette,
+        overlay: &Overlay,
+        dirty: Option<&[u32]>,
+    ) -> DrawList {
+        let configuration = (frame.columns, frame.rows, *metrics, palette.clone());
+        let full = self.configuration.as_ref() != Some(&configuration) || dirty.is_none();
+        self.configuration = Some(configuration);
+        let count = frame.lines.len().min(frame.rows as usize);
+        self.rows.truncate(count);
+        for (index, row) in frame.lines.iter().take(count).enumerate() {
+            if full
+                || index >= self.rows.len()
+                || dirty.is_some_and(|rows| rows.contains(&(index as u32)))
+            {
+                let mut list = DrawList::default();
+                append_row(
+                    &mut list,
+                    row,
+                    index,
+                    frame.columns.min(1000) as usize,
+                    metrics,
+                    palette,
+                );
+                if index < self.rows.len() {
+                    self.rows[index] = list;
+                } else {
+                    self.rows.push(list);
+                }
+            }
+        }
+        let mut list = DrawList { background: palette.background, ..Default::default() };
+        for row in &self.rows {
+            list.rects.extend_from_slice(&row.rects);
+            list.texts.extend_from_slice(&row.texts);
+        }
+        append_marks(&mut list, frame, metrics, palette, overlay);
+        list
+    }
 }
 
 /// Selection and link underlines, as rects under the glyphs.
@@ -254,6 +297,63 @@ mod tests {
 
     fn styled(text: &str, columns: u32) -> Run {
         Run { text: text.to_string(), columns, style: RunStyle::default() }
+    }
+
+    #[test]
+    fn damage_cache_matches_full_layout_and_does_not_rebuild_clean_rows() {
+        let mut frame = one_row(vec![styled("hello", 5)]);
+        frame.rows = 2;
+        frame.lines.push(Row { runs: vec![styled("world", 5)] });
+        let mut cache = LayoutCache::default();
+        let palette = Palette::dark();
+        let overlay = Overlay::default();
+        assert_eq!(
+            cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[])),
+            prepare(&frame, &metrics(), &palette)
+        );
+        // Damage belongs to the cached surface: an unmarked row is reused.
+        frame.lines[0].runs[0].text = "other".into();
+        let cached = cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[]));
+        assert_eq!(cached.texts[0].text, "hello");
+        assert_eq!(
+            cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[0])),
+            prepare(&frame, &metrics(), &palette)
+        );
+        frame.cursor_visible = true;
+        frame.cursor_shape = Caret::Block;
+        let cursor = cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[]));
+        assert_eq!(cursor.texts.len(), 2, "caret is never submitted as another text glyph");
+        assert!(cursor.cursor.is_some());
+        assert_eq!(
+            cache.prepare(&frame, &metrics(), &Palette::light(), &overlay, Some(&[])),
+            prepare(&frame, &metrics(), &Palette::light())
+        );
+        frame.lines.clear();
+        assert!(cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[])).texts.is_empty());
+    }
+
+    #[test]
+    fn absent_damage_rebuilds_a_warm_cache() {
+        let mut frame = one_row(vec![styled("hello", 5)]);
+        frame.rows = 2;
+        frame.lines.push(Row { runs: vec![styled("world", 5)] });
+        let mut cache = LayoutCache::default();
+        let palette = Palette::dark();
+        let overlay = Overlay::default();
+        cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[]));
+        frame.lines[0].runs[0].text = "other".into();
+        let rebuilt = cache.prepare(&frame, &metrics(), &palette, &overlay, None);
+        assert_eq!(rebuilt.texts[0].text, "other");
+        assert_eq!(rebuilt, prepare(&frame, &metrics(), &palette));
+    }
+
+    #[test]
+    fn an_overflowing_run_is_clipped_to_the_column_count() {
+        let mut frame = one_row(vec![styled("abcdef", 6)]);
+        frame.columns = 4;
+        let list = prepare(&frame, &metrics(), &Palette::dark());
+        assert_eq!(list.texts.len(), 1);
+        assert_eq!(list.texts[0].width, 4.0 * metrics().cell_width);
     }
 
     #[test]

@@ -1,0 +1,150 @@
+{
+  "baseline_revision": "0af920417b704743aad89d7803d2861355da8223",
+  "current_revision": "0af920417b704743aad89d7803d2861355da8223",
+  "native_artifact_sha256": "b5299c45e7ef6c630b9a4b373c40de1ee7356fbfa1a2cad55325c8bc41f53d98",
+  "harness_sha256": "4414053cf859d3cfde5e0112c5e09e212e407d42526ea2649e82daaed3e56a68",
+  "source_hashes": {
+    "crates/tether-render/src/palette.rs": "78b250623a567a02bcba8e9b8a593ca435a5bc5d994980996d8e6aa78220816c",
+    "crates/tether-render/src/layout.rs": "27f2dec0c574c08f96b0a33c4be6ba98ed1d1377aac6492a23824c7cd95b73a5",
+    "crates/tether-render/src/diagnostics.rs": "b5e24329db730ed6fc748eb11c59f983e312e77180a56949f8143863ac0d6f52",
+    "crates/tether-render/src/renderer.rs": "f43d6762e7354c1e8c1e2ee06eaa1fdcc19d39c60b45762eee7f21d3c875135e",
+    "crates/tether-render/src/lib.rs": "143c0a6befa4093fadf6b4a4439d9d18109531a467da602bb585a63dc025ba43",
+    "crates/tether-render/src/metrics.rs": "a06f1539fc479fc6368e52eb5a9e902f804ad2d85f6785a0e6fdae63eb432e7d",
+    "crates/tether-render/src/draw.rs": "df32f6af21da63a060c3211ba2ddc669edb823751197d4061a6ba49798a48fc9",
+    "crates/tether-render/src/fonts.rs": "d4e825c865d3c9061de903c8e6b8813c7db155e7bbe547d1d0b9fe9586d83237",
+    "crates/tether-render/src/frame.rs": "8bef94c7d4c2765db95bb62be489f840d9bad1f307f147cf526d0e9035f21612",
+    "crates/tether-render/src/platform.rs": "2c845892659801186fd738651853c1eafc50b8755214605de1b49c90f2bf9ead",
+    "crates/tether-ffi/src/keys.rs": "c59a1888fae5fab001a1350e6db027af07e90a334f7ceb0431b05cf0046b8394",
+    "crates/tether-ffi/src/session.rs": "7493363c746abf07067ccb1281bf51e4405f08bd61bf0cef56833e3237c540ac",
+    "crates/tether-ffi/src/tmux.rs": "24071d124b77fa5b930af38f482b798c60dd5ddada705cd951054256968dca3a",
+    "crates/tether-ffi/src/render.rs": "469cfd6fd04500921656e63170d9e52ce8780de033a26ce2a4dcfd9e3e682f11",
+    "crates/tether-ffi/src/lib.rs": "b6863e01fcc475af13a6998581005fd81ed83b8db31cb0d7cedf3139fe3f8612",
+    "crates/tether-ffi/src/screen.rs": "cc7a291ad1c0fd96f0fc6d7f969fa3b675b399cf50d1b29d545d14a0d04b6842",
+    "crates/tether-ffi/src/link.rs": "c9251b41117d4db2e0d5b98db653d29a79fd7c844f8824cf0ff8ff2dc26fcfd4",
+    "crates/tether-ffi/src/files.rs": "3b838dd0a58d7d1a151e324b6d1982cf00c64de6c49c54fb139f381da5135ff4",
+    "crates/tether-ffi/src/history.rs": "a35cafc7efd631a415e911a8574e54bbbb413b7cc26af518e0834c715c955581",
+    "crates/tether-ffi/src/input.rs": "8f3d803e162fa248611cd745b7121f81ab145dc0574cc0f3561714d7cb539ade",
+    "crates/tether-ffi/src/bin/frame-cost.rs": "93ede3df6e2bcfebf94b15bf39e7be8d9bd795aa415228c587b6f8fe57b493f1",
+    "crates/tether-ffi/src/bin/uniffi-bindgen.rs": "55a5501b6239f6f219489db85de7ead6d2bf0c927f4fa1cfd674779e33d59c31"
+  },
+  "os": "27.0.1",
+  "cpu": "Apple M4",
+  "observations": {
+    "metal": {
+      "font_size_physical_px": 26,
+      "measurement": "offscreen frame update plus GPU completion; screenshots/readback are separate; not presentation latency",
+      "observations": [
+        {
+          "columns": 80,
+          "cpu_submit_p50_ms": 0.712709,
+          "cpu_submit_p95_ms": 0.822875,
+          "p50_ms": 1.151875,
+          "p95_ms": 1.400166,
+          "physical_height": 768,
+          "physical_width": 1280,
+          "rows": 24,
+          "samples": 20,
+          "shape": "prose"
+        },
+        {
+          "columns": 120,
+          "cpu_submit_p50_ms": 2.977167,
+          "cpu_submit_p95_ms": 3.190125,
+          "p50_ms": 3.761709,
+          "p95_ms": 3.956125,
+          "physical_height": 1280,
+          "physical_width": 1920,
+          "rows": 40,
+          "samples": 20,
+          "shape": "highlighted"
+        },
+        {
+          "columns": 200,
+          "cpu_submit_p50_ms": 5.517916,
+          "cpu_submit_p95_ms": 6.386833,
+          "p50_ms": 6.706583,
+          "p95_ms": 7.324958,
+          "physical_height": 1920,
+          "physical_width": 3200,
+          "rows": 60,
+          "samples": 20,
+          "shape": "highlighted"
+        },
+        {
+          "columns": 120,
+          "cpu_submit_p50_ms": 40.076458,
+          "cpu_submit_p95_ms": 42.522833,
+          "p50_ms": 41.078292,
+          "p95_ms": 43.587834,
+          "physical_height": 1280,
+          "physical_width": 1920,
+          "rows": 40,
+          "samples": 20,
+          "shape": "per-cell"
+        }
+      ],
+      "renderer": "metal",
+      "samples_per_scenario": 20
+    },
+    "wgpu": {
+      "font_size_physical_px": 26,
+      "measurement": "offscreen frame update plus GPU completion; screenshots/readback are separate; not presentation latency",
+      "observations": [
+        {
+          "columns": 80,
+          "cpu_submit_p50_ms": 0.162958,
+          "cpu_submit_p95_ms": 0.177875,
+          "p50_ms": 0.611333,
+          "p95_ms": 0.686875,
+          "physical_height": 768,
+          "physical_width": 1280,
+          "rows": 24,
+          "samples": 20,
+          "shape": "prose"
+        },
+        {
+          "columns": 120,
+          "cpu_submit_p50_ms": 0.334875,
+          "cpu_submit_p95_ms": 0.353917,
+          "p50_ms": 0.988083,
+          "p95_ms": 1.056,
+          "physical_height": 1280,
+          "physical_width": 1920,
+          "rows": 40,
+          "samples": 20,
+          "shape": "highlighted"
+        },
+        {
+          "columns": 200,
+          "cpu_submit_p50_ms": 0.580083,
+          "cpu_submit_p95_ms": 0.636667,
+          "p50_ms": 1.750625,
+          "p95_ms": 1.91125,
+          "physical_height": 1920,
+          "physical_width": 3200,
+          "rows": 60,
+          "samples": 20,
+          "shape": "highlighted"
+        },
+        {
+          "columns": 120,
+          "cpu_submit_p50_ms": 2.207542,
+          "cpu_submit_p95_ms": 2.702292,
+          "p50_ms": 2.931833,
+          "p95_ms": 3.446667,
+          "physical_height": 1280,
+          "physical_width": 1920,
+          "rows": 40,
+          "samples": 20,
+          "shape": "per-cell"
+        }
+      ],
+      "renderer": "wgpu",
+      "samples_per_scenario": 20
+    }
+  },
+  "displayed_fps": null,
+  "gpu_pass_ms": null,
+  "power": null,
+  "limitations": "20 short samples after 3 warmup draws; CPU spans can include driver waits. Offscreen GPU completion is not presentation latency; screenshot readback is collected separately. Source revision alone does not prove native artifact provenance. No performance pass/fail thresholds."
+}

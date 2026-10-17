@@ -99,6 +99,21 @@ public sealed class SessionModel : IAsyncDisposable
         get { lock (_gate) return _frame; }
     }
 
+    /// <summary>The frame and the generation written with it, under one lock.</summary>
+    public readonly record struct FrameSample(ScreenFrame? Frame, long Generation);
+
+    private long _contentGeneration;
+
+    public long ContentGeneration
+    {
+        get { lock (_gate) return _contentGeneration; }
+    }
+
+    public FrameSample SampleFrame()
+    {
+        lock (_gate) return new FrameSample(_frame, _contentGeneration);
+    }
+
     /// <summary>
     /// Whether this platform lets an application start a shell. The host
     /// leaves the feature out of its interface rather than offering one that
@@ -430,7 +445,11 @@ public sealed class SessionModel : IAsyncDisposable
 
     private void Publish(ScreenFrame frame)
     {
-        lock (_gate) _frame = frame;
+        lock (_gate)
+        {
+            _contentGeneration++;
+            _frame = frame;
+        }
         FrameChanged?.Invoke(frame);
     }
 

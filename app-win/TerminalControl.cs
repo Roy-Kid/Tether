@@ -1,4 +1,4 @@
-// The terminal surface: SwapChainPanel-hosted GPU draw + semantic input.
+// The terminal surface: native HWND + shared Rust GPU draw + semantic input.
 //
 // Input is keys, not bytes (spec §12). Scroll chords are stolen before Send,
 // the way `SessionModel.swift` does. One palette chooser feeds both the draw
@@ -33,7 +33,15 @@ public sealed class TerminalControl : Control
     private TerminalSurface? _surface;
     private ChildHwnd? _child;
     private FontMetrics _metrics = FontMetrics.FromAdvances(13, 8, 16, 16);
+    private bool _metricsReady;
+    private bool _autoRetried;
+    private bool _failureHeld;
     private bool _ready;
+    private bool _disposed;
+    private int _frameRedraw = 1;
+    private long _consumedGeneration;
+    private double _measuredScale = 1;
+    private bool _scaleHooked;
     private double _fontSize = AppSettings.Current.Terminal.FontSize;
     private bool _pasting;
     private Selection? _selection;
@@ -51,6 +59,7 @@ public sealed class TerminalControl : Control
     internal void SetEvaluationFrame(ScreenFrame frame)
     {
         _evaluationFrame = frame;
+        Interlocked.Exchange(ref _frameRedraw, 1);
         RequestRedraw();
     }
 #endif
@@ -92,6 +101,7 @@ public sealed class TerminalControl : Control
         _gridResize.Tick += (_, _) => CommitSize();
 
         Loaded += OnLoaded;
+        RegisterPropertyChangedCallback(XamlRootProperty, (_, _) => HookRasterization());
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
         LayoutUpdated += (_, _) => { if (_ready) _child?.Fit(this); };
@@ -125,14 +135,19 @@ public sealed class TerminalControl : Control
     public async Task BindAsync(SessionModel model)
     {
         _model = model;
+        Interlocked.Exchange(ref _frameRedraw, 1);
         SetPalette(model.Palette);
         // Frames arrive on the session's thread; the surface and the
         // pointer state are this control's, so drawing happens here.
-        model.FrameChanged += _ => RequestRedraw();
+        model.FrameChanged += _ => { Interlocked.Exchange(ref _frameRedraw, 1); RequestRedraw(); };
         if (_ready)
         {
-            await EnsureSurfaceAsync();
-            Redraw();
+            try
+            {
+                await EnsureSurfaceAsync();
+                Redraw();
+            }
+            catch (Exception error) { NotePaintFailure(error); }
         }
     }
 
@@ -175,6 +190,7 @@ public sealed class TerminalControl : Control
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         _ready = true;
+        HookRasterization();
         AppSettings.Changed += ApplyPreferences;
         ApplyPreferences();
         if (_child is not null)
@@ -184,9 +200,55 @@ public sealed class TerminalControl : Control
             _child.Fit(this);
             if (!_overlayVisible && _covers == 0) _child.Show();
         }
-        await EnsureSurfaceAsync();
-        Redraw();
+        try
+        {
+            await EnsureSurfaceAsync();
+            Redraw();
+        }
+        catch (Exception error) { NotePaintFailure(error); }
         if (WantsFocus?.Invoke() ?? true) FocusTerminal();
+    }
+
+    private Task RunOnUi(Action body)
+    {
+        if (_uiQueue.HasThreadAccess)
+        {
+            body();
+            return Task.CompletedTask;
+        }
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_uiQueue.TryEnqueue(() =>
+        {
+            try { body(); done.TrySetResult(); }
+            catch (Exception error) { done.TrySetException(error); }
+        })) done.TrySetException(new InvalidOperationException("The UI queue is not accepting work."));
+        return done.Task;
+    }
+
+    private async Task RetryCreateAsync()
+    {
+        try
+        {
+            await EnsureSurfaceAsync();
+            Redraw();
+        }
+        catch (Exception error) { NotePaintFailure(error); }
+    }
+
+    private async Task ShowPaintDialog(Exception error)
+    {
+        var result = await Alerts.ContentAsync(
+            "Terminal Rendering Failed", error.Message, "Retry", "Close", ActualTheme, _ => { });
+        if (result != ContentDialogResult.Primary) return;
+        _failureHeld = false;
+        _autoRetried = false;
+        try
+        {
+            await EnsureSurfaceAsync();
+            Interlocked.Exchange(ref _frameRedraw, 1);
+            Redraw();
+        }
+        catch (Exception again) { NotePaintFailure(again); }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -204,12 +266,16 @@ public sealed class TerminalControl : Control
     /// </summary>
     public void DisposeSurface()
     {
+        _disposed = true;
         _ready = false;
         _autoScroll.Stop();
         _gridResize.Stop();
         AppSettings.Changed -= ApplyPreferences;
         _surface?.Dispose(); _surface = null;
-        _child?.Dispose(); _child = null;
+        // An async attachment still borrows the HWND. Its completion closes
+        // the renderer before releasing this window.
+        _child?.Hide();
+        if (_creating is null || _creating.IsCompleted) { _child?.Dispose(); _child = null; }
         TerminalFocused = null;
     }
 
@@ -232,7 +298,7 @@ public sealed class TerminalControl : Control
     /// </summary>
     private Task EnsureSurfaceAsync()
     {
-        if (_surface is not null) return Task.CompletedTask;
+        if (_disposed || _surface is not null) return Task.CompletedTask;
 
         var parent = ((App)Microsoft.UI.Xaml.Application.Current).MainWindowHandle;
         if (parent == 0 || ActualWidth <= 0 || ActualHeight <= 0) return Task.CompletedTask;
@@ -245,23 +311,105 @@ public sealed class TerminalControl : Control
 
     private async Task CreateSurfaceAsync(nint parent)
     {
-        _child ??= ChildHwnd.Create(parent, this, SendText, HandleKey, OnChildPointer);
-        _child.Focused = () => TerminalFocused?.Invoke();
-        _child.Fit(this);
-        var (width, height) = _child.Size;
-        _backedWidth = width;
-        _backedHeight = height;
-        _surface = await TerminalSurface.FromHwndAsync(_child.Handle, (uint)width, (uint)height);
-        // The surface is in physical pixels. Measuring at a DIP size on a 4K
-        // display gives half-sized glyphs and a cursor that stands beside the
-        // character it is on — the grid is in the wrong units.
-        _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
-        _metrics = _surface.Measure((float)(_fontSize * DpiScale));
-        ApplyResize();
+        ChildHwnd? created = null;
+        var width = 0;
+        var height = 0;
+        try
+        {
+            // Font loading is the only work that leaves the UI thread. WinUI has
+            // no synchronization context, so the continuation comes back here
+            // through the dispatcher before any HWND or XamlRoot use.
+            await Task.Run(TerminalFontStore.EnsureLoaded).ConfigureAwait(false);
+            if (_disposed) return;
+            await RunOnUi(() =>
+            {
+                if (_disposed) return;
+                _child ??= ChildHwnd.Create(parent, this, SendText, HandleKey, OnChildPointer);
+                _child.Focused = () => TerminalFocused?.Invoke();
+                _child.Fit(this);
+                (width, height) = _child.Size;
+                _backedWidth = width;
+                _backedHeight = height;
+                created = _child;
+            });
+            if (_disposed || created is null) return;
+            var surface = await TerminalSurface.FromHwndAsync(created.Handle, (uint)width, (uint)height)
+                .ConfigureAwait(false);
+            await RunOnUi(() =>
+            {
+                if (_disposed)
+                {
+                    surface.Dispose();
+                    _child?.Dispose();
+                    _child = null;
+                    return;
+                }
+                _surface = surface;
+                // The surface is in physical pixels. Measuring at a DIP size on a 4K
+                // display gives half-sized glyphs and a cursor that stands beside the
+                // character it is on — the grid is in the wrong units.
+                _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
+                Remeasure();
+                ApplyResize();
+                _autoRetried = false;
+            });
+        }
+        catch
+        {
+            await RunOnUi(() =>
+            {
+                _surface?.Dispose();
+                _surface = null;
+                if (_disposed) { _child?.Dispose(); _child = null; }
+            });
+            if (!_disposed) throw;
+        }
+        finally
+        {
+            if (_surface is null) _creating = null;
+        }
     }
 
     /// <summary>Device pixels per DIP. 2 on a 4K display at 200%.</summary>
     private double DpiScale => XamlRoot?.RasterizationScale ?? 1.0;
+
+    private void HookRasterization()
+    {
+        if (_scaleHooked || XamlRoot is null) return;
+        XamlRoot.Changed += OnRasterizationChanged;
+        _measuredScale = DpiScale;
+        _scaleHooked = true;
+    }
+
+    private void OnRasterizationChanged(XamlRoot sender, XamlRootChangedEventArgs args)
+    {
+        if (!ReferenceEquals(sender, XamlRoot)) return;
+        _ = args;
+        if (Math.Abs(DpiScale - _measuredScale) < 0.001 || _surface is null) return;
+        try { Remeasure(); }
+        catch (Exception error) { NotePaintFailure(error); return; }
+        _child?.Fit(this);
+        if (_child is not null && _surface is not null)
+        {
+            var (width, height) = _child.Size;
+            try { _surface.Resize((uint)width, (uint)height); }
+            catch (Exception error) { NotePaintFailure(error); return; }
+            _backedWidth = width;
+            _backedHeight = height;
+        }
+        ApplyResize();
+        Interlocked.Exchange(ref _frameRedraw, 1);
+        RequestRedraw();
+    }
+
+    private void Remeasure()
+    {
+        if (_surface is null) return;
+        var metrics = _surface.Measure((float)(_fontSize * DpiScale));
+        _metrics = metrics;
+        _measuredScale = DpiScale;
+        _metricsReady = true;
+    }
 
     private int _redrawQueued;
 
@@ -283,29 +431,49 @@ public sealed class TerminalControl : Control
         // frame with the palette's background. A light window is a missing
         // control; a dark page is a terminal with nothing in it (law
         // app-ui-chrome — the window *is* the terminal).
-        var frame = _model?.CurrentFrame ?? BlankFrame();
+        var sample = _model?.SampleFrame() ?? new SessionModel.FrameSample(null, 0);
+        var frame = sample.Frame ?? BlankFrame();
 #if DEBUG
         frame = _evaluationFrame ?? frame;
 #endif
+        var forced = Interlocked.Exchange(ref _frameRedraw, 0) != 0;
+        var full = forced || sample.Generation != _consumedGeneration;
         try
         {
-            _surface.Draw(frame, _model?.Palette ?? Palette.Dark, BuildOverlay());
+            // Pointer-only updates reuse shared row layout. A content frame is
+            // paired with the generation sampled under the same lock, so a
+            // frame that arrives during the draw is not marked as already drawn.
+            var presented = _surface.DrawUpdate(frame, _model?.Palette ?? Palette.Dark, BuildOverlay(),
+                (float)(_fontSize * DpiScale), full ? null : []);
+            if (!presented)
+            {
+                // The compositor skipped the acquire. Keep this generation so
+                // the next successful draw is still the unacknowledged frame.
+                Interlocked.Exchange(ref _frameRedraw, 1);
+                RequestRedraw();
+                return;
+            }
+            _autoRetried = false;
+            if (_model is null || _model.ContentGeneration == sample.Generation)
+                _consumedGeneration = sample.Generation;
+            else RequestRedraw();
         }
         catch (Exception error)
         {
-#if DEBUG
-            EvaluationFailure?.Invoke(error);
-#else
-            _ = error;
-#endif
+            Interlocked.Exchange(ref _frameRedraw, 1);
             // An outdated or lost swap chain: configure it again at the
             // child's size and let the next frame draw. A missed frame is
             // not a reason to stop drawing — or to stop the session.
-            if (_child is not null)
+            if (_child is not null && _surface is not null)
             {
-                var (width, height) = _child.Size;
-                _surface.Resize((uint)width, (uint)height);
+                try
+                {
+                    var (width, height) = _child.Size;
+                    _surface.Resize((uint)width, (uint)height);
+                }
+                catch { /* The dialog reports the draw that failed. */ }
             }
+            NotePaintFailure(error);
         }
     }
 
@@ -347,8 +515,12 @@ public sealed class TerminalControl : Control
         {
             // Loaded at zero size: the surface waits for a real rectangle.
             if (!_ready) return;
-            await EnsureSurfaceAsync();
-            Redraw();
+            try
+            {
+                await EnsureSurfaceAsync();
+                Redraw();
+            }
+            catch (Exception error) { NotePaintFailure(error); }
             if (WantsFocus?.Invoke() ?? true) FocusTerminal();
             return;
         }
@@ -544,7 +716,7 @@ public sealed class TerminalControl : Control
     private bool ReportPointer(Windows.Foundation.Point position, PointerButton button, PointerPhase phase)
     {
         if (_model?.CurrentFrame is not { Mouse: not MouseTracking.Off } frame || IsDown(VirtualKey.Shift)) return false;
-        var cell = CellAt(position);
+        if (CellAt(position) is not Cell cell) return false;
         _remoteCell = cell;
         if (phase == PointerPhase.Move && (frame.Mouse == MouseTracking.Clicks || frame.Mouse == MouseTracking.Drag && button == PointerButton.None)) return true;
         _model.Send(new TerminalInput.Pointer(button, phase, (ushort)Math.Clamp(cell.Column, 0, (int)frame.Columns - 1),
@@ -591,12 +763,12 @@ public sealed class TerminalControl : Control
     private void HandleWheel(int delta, Windows.Foundation.Point position)
     {
         if (_model is null) return;
+        if (CellAt(position) is not Cell cell) return;
         _scrollRemainder += -delta / 120.0;
         var lines = (int)_scrollRemainder;
         if (lines != 0)
         {
             _scrollRemainder -= lines;
-            var cell = CellAt(position);
             var shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             _model.Wheel(lines, (ushort)Math.Max(0, cell.Row), (ushort)Math.Max(0, cell.Column), shift);
@@ -618,7 +790,7 @@ public sealed class TerminalControl : Control
     private void PressAt(Windows.Foundation.Point position)
     {
         FocusTerminal();
-        var cell = CellAt(position);
+        if (CellAt(position) is not Cell cell) return;
 
         // Ctrl+click opens a link. A plain click stays the remote's when
         // mouse reporting is on (Decisions/0015).
@@ -670,7 +842,7 @@ public sealed class TerminalControl : Control
 
     private void MoveAt(Windows.Foundation.Point raw)
     {
-        var cell = CellAt(raw);
+        if (CellAt(raw) is not Cell cell) return;
         if (!_selecting && ReportPointer(raw, _remoteButton, PointerPhase.Move)) return;
 
         if (_selecting && _selection is { } current)
@@ -827,8 +999,7 @@ public sealed class TerminalControl : Control
 
     private void ShowMenu(Windows.Foundation.Point position)
     {
-        var cell = CellAt(position);
-        var link = LinkAt(cell);
+        var link = CellAt(position) is Cell cell ? LinkAt(cell) : null;
         var commands = new List<(string Title, Action Run)>();
         if (_selection is { } selected && !selected.IsEmpty())
             commands.Add(("Copy", () => CopySelection(selected)));
@@ -887,8 +1058,11 @@ public sealed class TerminalControl : Control
         _ => link.Text,
     };
 
-    private Cell CellAt(Windows.Foundation.Point point)
+    private Cell? CellAt(Windows.Foundation.Point point)
     {
+        // The placeholder advance is not the face the renderer measured.
+        // Hits wait until Remeasure has stored that face.
+        if (!_metricsReady || _metrics.CellWidth <= 0 || _metrics.LineHeight <= 0) return null;
         // Pointer positions are DIPs; the grid is in physical pixels. A 4K
         // display at 200% would otherwise report every cell as four times
         // its column.
@@ -960,10 +1134,29 @@ public sealed class TerminalControl : Control
         if (Margin != inset) Margin = inset;
         if (_surface is null) return;
         _surface.SetFonts(AppSettings.Current.Terminal.FontFamily, AppSettings.Current.Terminal.WideFontFamily);
-        _metrics = _surface.Measure((float)(_fontSize * DpiScale));
+        try { Remeasure(); }
+        catch (Exception error) { NotePaintFailure(error); return; }
         _selection = null;
         ApplyResize();
         RequestRedraw();
+    }
+
+    private void NotePaintFailure(Exception error)
+    {
+#if DEBUG
+        EvaluationFailure?.Invoke(error);
+#endif
+        if (_disposed || _failureHeld) return;
+        if (!_autoRetried)
+        {
+            _autoRetried = true;
+            Interlocked.Exchange(ref _frameRedraw, 1);
+            if (_surface is null) _ = RetryCreateAsync();
+            else RequestRedraw();
+            return;
+        }
+        _failureHeld = true;
+        _ = ShowPaintDialog(error);
     }
 
     private static bool IsDown(VirtualKey key) =>

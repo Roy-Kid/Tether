@@ -1,148 +1,163 @@
-import Metal
+import CoreText
+import CoreGraphics
+import ImageIO
+import Foundation
 import Tether
 import Testing
-
 @testable import TetherUI
 
-/// The Metal path, drawn off screen and read back.
-///
-/// A renderer whose output nobody looks at in CI is one that can draw
-/// nothing and pass every other test. These read the pixels.
 @MainActor
-@Suite("Metal rendering")
-struct MetalRenderTests {
-  private let metrics = FontMetrics(size: 13)
-  private let scale = 2
-
-  private func style(underline: UnderlineStyle = .none, strikethrough: Bool = false) -> CellStyle {
-    CellStyle(
-      foreground: .named(name: .foreground), background: .named(name: .background),
-      underline: underline, underlineColor: nil, bold: false, dim: false, italic: false,
-      strikethrough: strikethrough, inverse: false, hidden: false)
-  }
-
-  private func frame(_ rows: [ScreenRow], columns: UInt32 = 12, cursor: CaretShape = .hidden) -> ScreenFrame {
-    ScreenFrame(
-      columns: columns, rows: UInt32(rows.count), cursorRow: 0, cursorColumn: 0, cursorShape: cursor,
-      cursorVisible: cursor != .hidden, alternateScreen: false, mouse: .off,
-      viewportOffset: 0, historyLines: 0, title: "",
-      lines: rows)
-  }
-
-  private func row(_ text: String, _ style: CellStyle) -> ScreenRow {
-    ScreenRow(runs: [StyledRun(text: text, columns: UInt32(text.count), style: style)])
-  }
-
-  /// Pixels of `rect` (points) whose colour is not the background's.
-  private func inked(_ image: MetalSnapshot, _ rect: CGRect) -> Int {
-    colours(image, rect).filter { $0 != image.rgb(x: image.width - 1, y: image.height - 1) }.count
-  }
-
-  private func colours(_ image: MetalSnapshot, _ rect: CGRect) -> [UInt32] {
-    var found: [UInt32] = []
-    for y in Int(rect.minY) * scale..<min(image.height, Int(rect.maxY) * scale) {
-      for x in Int(rect.minX) * scale..<min(image.width, Int(rect.maxX) * scale) {
-        found.append(image.rgb(x: x, y: y))
-      }
+@Suite("Shared wgpu rendering", .serialized)
+struct SharedRenderTests {
+  private func screen(_ text: String? = nil, cursor: CaretShape = .hidden) -> ScreenFrame {
+    func style(bold: Bool = false, italic: Bool = false, lines: Bool = false, hidden: Bool = false) -> CellStyle {
+      CellStyle(foreground: .named(name: .foreground), background: hidden ? .named(name: .red) : .named(name: .background),
+        underline: lines ? .single : .none, underlineColor: lines ? .named(name: .cyan) : nil, bold: bold, dim: false,
+        italic: italic, strikethrough: lines, inverse: false, hidden: hidden)
     }
-    return found
+    let segments: [(String, UInt32)] = text.map { [($0, UInt32($0.count))] } ?? [
+      ("Hello ", 6), ("中文", 4), (" ", 1), ("e\u{301}", 1), (" ", 1), ("👩‍💻", 2),
+      (" ", 1), ("┌─┐", 3), (" éΩЖ ∑", 6),
+    ]
+    var runs = segments.map { StyledRun(text: $0.0, columns: $0.1, style: style()) }
+    let used = segments.reduce(UInt32(0)) { $0 + $1.1 }
+    runs.append(StyledRun(text: String(repeating: " ", count: Int(39 - used)) + "|", columns: 40 - used, style: style()))
+    return ScreenFrame(columns: 40, rows: 2, cursorRow: 1, cursorColumn: 0, cursorShape: cursor,
+      cursorVisible: cursor != .hidden, alternateScreen: false, mouse: .off, viewportOffset: 0,
+      historyLines: 0, title: "", lines: [ScreenRow(runs: runs), ScreenRow(runs: [
+        StyledRun(text: "Bold ", columns: 5, style: style(bold: true)),
+        StyledRun(text: "Italic ", columns: 7, style: style(italic: true)),
+        StyledRun(text: "Lines ", columns: 6, style: style(lines: true)),
+        StyledRun(text: "secret", columns: 6, style: style(hidden: true)),
+      ])])
   }
 
-  /// No device is a failure, not a pass: a build machine without one would
-  /// otherwise go green having drawn nothing.
-  private func device() throws -> any MTLDevice {
-    try #require(MTLCreateSystemDefaultDevice(), "no Metal device to draw with")
-  }
-
-  private func render(_ screen: ScreenFrame, dirty: Set<Int>?) throws -> MetalSnapshot {
-    let view = TerminalMetalView(device: try device())
-    view.present(frame: screen, dirtyRows: dirty, metrics: metrics, palette: .dark)
-    return try #require(
-      view.snapshot(
-        width: Int(metrics.cellWidth) * Int(screen.columns), height: Int(metrics.lineHeight) * screen.lines.count,
-        scale: scale))
-  }
-
-  /// Going back to a tab makes a new view whose first update says only
-  /// that nothing changed. Every row must still be drawn.
-  @Test("a new view draws every row, even when nothing changed last")
-  func newViewDrawsEverything() throws {
-    let screen = frame([row("hello", style()), row("world", style())])
-    let image = try render(screen, dirty: [])
-    let width = metrics.cellWidth * 5
-    #expect(inked(image, CGRect(x: 0, y: 0, width: width, height: metrics.lineHeight)) > 20)
-    #expect(inked(image, CGRect(x: 0, y: metrics.lineHeight, width: width, height: metrics.lineHeight)) > 20)
-  }
-
-  /// A long session meets more characters than one texture holds — a
-  /// Chinese one sooner than most. Full is a reason to start the atlas
-  /// again, not to stop drawing new characters.
-  @Test("a full atlas starts again rather than dropping characters")
-  func fullAtlas() throws {
-    let device = try self.device()
-    let atlas = GlyphAtlas(device: device, side: 64)
-    let cell = CGSize(width: 8, height: 16)
-    var generations: Set<Int> = []
-    for scalar in 0x4E00..<0x4E40 {
-      let text = String(UnicodeScalar(scalar)!)
-      atlas.allowsReset = true
-      #expect(atlas.glyph(text, bold: false, italic: false, points: cell, fontSize: 13, scale: 2) != nil)
-      generations.insert(atlas.generation)
+  @Test("actual pixels cover initial empty damage, cursor changes, restyling and shrink")
+  func pixels() async throws {
+    TerminalFonts.prepare()
+    #expect(TerminalFonts.failure == nil)
+    #expect(!TerminalFonts.systemFaces.isEmpty, "the native default font must actually be loaded")
+    let renderer = try await TerminalRenderer.offscreen(width: 800, height: 100)
+    defer { renderer.close() }
+    renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
+    let metrics = try renderer.measure(size: 26)
+    let frame = screen()
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    let first = try renderer.readPixels()
+    #expect(first.count == 800 * 100 * 4)
+    let colors = Set(stride(from: 0, to: first.count, by: 4).map { first[$0..<$0+3].map(String.init).joined(separator: ",") })
+    #expect(colors.count > 5, "text must produce visible ink")
+    let background = first[(first.count - 4)..<first.count]
+    let lastX = Int(metrics.cellWidth * 39)
+    let lastRight = min(800, Int(metrics.cellWidth * 40))
+    let lastColumnHasInk = (0..<Int(metrics.lineHeight)).contains { y in
+      (lastX..<lastRight).contains { x in first[(y * 800 + x) * 4..<(y * 800 + x) * 4 + 4] != background }
     }
-    #expect(generations.count > 1, "the atlas filled and started again")
-  }
+    #expect(lastColumnHasInk, "the last terminal column must actually be drawn")
+    let secretIndex = (Int(metrics.lineHeight * 1.5) * 800 + Int(metrics.cellWidth * 20)) * 4
+    #expect(Array(first[secretIndex..<secretIndex+4]) == [255, 59, 48, 255], "hidden text keeps its opaque cell background")
 
-  /// A block cursor, a coloured background, an underline: all drawn from
-  /// one opaque patch of the atlas. Sampled across a single texel, that
-  /// patch faded into its empty neighbour and every one of them shaded
-  /// from corner to corner.
-  @Test("a solid quad is one colour, edge to edge")
-  func solidQuads() throws {
-    let image = try render(frame([row("    ", style())], cursor: .block), dirty: nil)
-    // Inset by a pixel: the edges of a quad fall between pixels.
-    let cell = CGRect(x: 0.5, y: 0.5, width: metrics.cellWidth - 1, height: metrics.lineHeight - 1)
-    #expect(Set(colours(image, cell)).count == 1)
-    #expect(image.alpha(x: 0, y: 0) == 255, "opaque, not a hole in the layer")
-  }
-
-  @Test("underline and strikethrough are drawn, as the canvas draws them")
-  func decorations() throws {
-    let blank = row("    ", style())
-    let plainRow = row("abcd", style())
-    let lined = row("abcd", style(underline: .single, strikethrough: true))
-    let plain = try render(frame([plainRow, blank]), dirty: nil)
-    let decorated = try render(frame([lined, blank]), dirty: nil)
-    let band = CGRect(x: 0, y: 0, width: metrics.cellWidth * 4, height: metrics.lineHeight)
-    #expect(inked(decorated, band) > inked(plain, band) + Int(metrics.cellWidth) * 4)
-  }
-  @Test("cached rows survive cursor updates and rebuild when text changes")
-  func cachedRowsAndCursor() throws {
-    let device = try self.device()
-    let view = TerminalMetalView(device: device)
-    let lines = [row("hello", style()), row("    ", style())]
-    func snapshot() throws -> MetalSnapshot {
-      try #require(view.snapshot(width: 120, height: 48, scale: scale))
+    if let directory = ProcessInfo.processInfo.environment["TETHER_RENDER_EVIDENCE_DIR"] {
+      let url = URL(fileURLWithPath: directory).appending(path: "shared-font-grid.png")
+      let provider = try #require(CGDataProvider(data: first as CFData))
+      let image = try #require(CGImage(width: 800, height: 100, bitsPerComponent: 8, bitsPerPixel: 32,
+        bytesPerRow: 800 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+      let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
+      CGImageDestinationAddImage(destination, image, nil)
+      #expect(CGImageDestinationFinalize(destination))
     }
-    view.present(frame: frame(lines), dirtyRows: nil, metrics: metrics, palette: .dark)
-    let original = try snapshot()
-    view.present(frame: frame(lines, cursor: .block), dirtyRows: [], metrics: metrics, palette: .dark)
-    let cursor = try snapshot()
-    #expect(cursor.bytes != original.bytes)
-    view.present(frame: frame(lines), dirtyRows: [], metrics: metrics, palette: .dark)
-    #expect(try snapshot().bytes == original.bytes)
-    let changed = [row("world", style()), lines[1]]
-    view.present(frame: frame(changed), dirtyRows: [0], metrics: metrics, palette: .dark)
-    #expect(try snapshot().bytes != original.bytes)
-    // Restyling invalidates cached geometry even with empty damage.
-    view.present(frame: frame(changed), dirtyRows: [], metrics: metrics, palette: .light)
-    let fresh = TerminalMetalView(device: device)
-    fresh.present(frame: frame(changed), dirtyRows: nil, metrics: metrics, palette: .light)
-    let reference = try #require(fresh.snapshot(width: 120, height: 48, scale: scale))
-    #expect(try snapshot().bytes == reference.bytes)
-    view.present(frame: frame([]), dirtyRows: [], metrics: metrics, palette: .light)
-    fresh.present(frame: frame([]), dirtyRows: nil, metrics: metrics, palette: .light)
-    let empty = try #require(fresh.snapshot(width: 120, height: 48, scale: scale))
-    #expect(try snapshot().bytes == empty.bytes, "a smaller grid must release old row geometry")
+
+    #expect(stride(from: 3, to: first.count, by: 4).allSatisfy { first[$0] == 255 }, "opaque layer")
+    _ = try renderer.draw(frame: screen(cursor: .block), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() != first)
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() == first)
+    let overlay = RenderOverlay(selection: RenderSelection(anchorColumn: 1, anchorRow: 0, focusColumn: 3, focusRow: 0),
+      linkUnderlines: [RenderLinkUnderline(row: 0, start: 5, end: 10, confirmed: false)],
+      selectionColor: RenderColor(red: 0, green: 0.5, blue: 1, alpha: 0.2),
+      linkColor: RenderColor(red: 0, green: 0.5, blue: 1, alpha: 1))
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, overlay: overlay, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() != first, "pointer marks must redraw without cell damage")
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() == first, "clearing marks must restore the original pixels")
+    _ = try renderer.draw(frame: screen("Changed"), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [0])
+    #expect(try renderer.readPixels() != first)
+    _ = try renderer.draw(frame: frame, palette: Palette.light.renderPalette, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() != first)
+    renderer.resize(width: 400, height: 80)
+    _ = try renderer.draw(frame: screen(""), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels().count == 400 * 80 * 4)
+    renderer.close()
+    renderer.close()
+    #expect(throws: RenderingError.self) {
+      _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26)
+    }
+  }
+
+  @Test("native and render metrics agree at each display scale")
+  func metricsAgree() async throws {
+    TerminalFonts.prepare()
+    let renderer = try await TerminalRenderer.offscreen(width: 100, height: 100)
+    defer { renderer.close() }
+    renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
+    for scale in [1.0, 2.0, 3.0] {
+      let native = FontMetrics(size: 13, scale: scale)
+      let shared = try renderer.measure(size: Float(13 * scale))
+      #expect(abs(native.cellWidth * scale - Double(shared.cellWidth)) < 0.001)
+      #expect(abs(native.lineHeight * scale - Double(shared.lineHeight)) < 0.001)
+    }
+  }
+
+  @Test("invalid imports preserve the catalogue and selected font")
+  func invalidFont() {
+    let before = TerminalFonts.faces()
+    #expect(throws: RenderingError.self) { try RenderingFonts.register(Data("invalid font".utf8)) }
+    #expect(TerminalFonts.faces() == before)
+  }
+  @Test("font import deduplicates faces and reloads stable identities")
+  func importAndReload() throws {
+    TerminalFonts.prepare()
+    let collection = CTFontCollectionCreateFromAvailableFonts(nil)
+    let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []
+    let source = try #require(descriptors.compactMap { CTFontDescriptorCopyAttribute($0, kCTFontURLAttribute) as? URL }.first {
+      let size = (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+      return size < 5 * 1024 * 1024
+    })
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = try TerminalFonts.importFont(source, into: directory)
+    let second = try TerminalFonts.importFont(source, into: directory)
+    #expect(first == second)
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+    #expect(files.count == 1)
+    #expect(try RenderingFonts.register(Data(contentsOf: files[0])) == first)
+    #expect(first.allSatisfy { face in RenderingFonts.faces().filter { $0.id == face.id }.count == 1 })
+  }
+
+  @Test("new CJK glyphs remain visible after atlas churn")
+  func atlasChurn() async throws {
+    TerminalFonts.prepare()
+    let renderer = try await TerminalRenderer.offscreen(width: 800, height: 100)
+    defer { renderer.close() }
+    renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
+    _ = try renderer.measure(size: 26)
+    var latest = screen()
+    for batch in 0..<100 {
+      let text = (0..<20).compactMap { UnicodeScalar(0x4E00 + batch * 20 + $0) }.map(String.init).joined()
+      let style = screen().lines[0].runs[0].style
+      latest = ScreenFrame(columns: 40, rows: 1, cursorRow: 0, cursorColumn: 0,
+        cursorShape: .hidden, cursorVisible: false, alternateScreen: false, mouse: .off,
+        viewportOffset: 0, historyLines: 0, title: "", lines: [ScreenRow(runs: [StyledRun(text: text, columns: 40, style: style)])])
+      _ = try renderer.draw(frame: latest, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [0])
+    }
+    let image = try renderer.readPixels()
+    let fresh = try await TerminalRenderer.offscreen(width: 800, height: 100)
+    defer { fresh.close() }
+    fresh.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
+    _ = try fresh.measure(size: 26)
+    _ = try fresh.draw(frame: latest, palette: Palette.dark.renderPalette, fontSize: 26)
+    #expect(try fresh.readPixels() == image, "eviction must not drop the current frame's glyphs")
   }
 
 }

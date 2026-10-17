@@ -14,7 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, fontdb,
 };
 
 use crate::draw::{DrawList, Rgba, TextRun};
@@ -35,6 +35,8 @@ pub enum RenderError {
     NoDevice(String),
     #[error("surface configuration failed: {0}")]
     Surface(String),
+    #[error("font: {0}")]
+    Font(String),
 }
 
 /// Font measurements taken from a real face.
@@ -43,33 +45,89 @@ pub enum RenderError {
 /// advance at `size`, which is what [`FontMetrics`] needs. A caller that
 /// already knows the numbers can use [`FontMetrics::from_advances`] and skip
 /// this entirely.
-pub fn measure_monospace(fonts: &mut FontSystem, size: f32) -> FontMetrics {
-    measure_font(fonts, size, "", "")
-}
-
 fn family(name: &str) -> Family<'_> {
     if name.is_empty() { Family::Monospace } else { Family::Name(name) }
 }
 
-fn measure_font(
+/// A stored face id names one face. cosmic-text keeps a named face only when
+/// its weight matches exactly (or its `wght` axis covers the request); any
+/// other weight falls through to a different face. Pin that one face for both
+/// a normal and a bold run. A shared family such as "Consolas" keeps the CSS
+/// weight so its bold sibling is still chosen.
+fn requested_weight(fonts: &FontSystem, name: &str, bold: bool) -> Weight {
+    let css = if bold { Weight::BOLD } else { Weight::NORMAL };
+    if name.is_empty() {
+        return css;
+    }
+    let matched = fonts
+        .db()
+        .faces()
+        .filter(|face| face.families.iter().any(|(family, _)| family == name))
+        .take(2)
+        .map(|face| (face.id, face.weight))
+        .collect::<Vec<_>>();
+    let [(id, face_weight)] = matched.as_slice() else {
+        return css;
+    };
+    let target = if bold { Weight::BOLD.0 } else { Weight::NORMAL.0 };
+    if variable_covers(fonts.db(), *id, target) { css } else { *face_weight }
+}
+
+fn variable_covers(db: &fontdb::Database, id: fontdb::ID, weight: u16) -> bool {
+    db.with_face_data(id, |data, index| {
+        let Ok(font) = ttf_parser::Face::parse(data, index) else {
+            return false;
+        };
+        let tag = ttf_parser::Tag::from_bytes(b"wght");
+        let weight = f32::from(weight);
+        font.variation_axes()
+            .into_iter()
+            .any(|axis| axis.tag == tag && axis.min_value <= weight && weight <= axis.max_value)
+    })
+    .unwrap_or(false)
+}
+
+fn face_matches(fonts: &FontSystem, id: fontdb::ID, name: &str) -> bool {
+    fonts.db().face(id).is_some_and(|face| face.families.iter().any(|(family, _)| family == name))
+}
+
+pub(crate) fn measure_font(
     fonts: &mut FontSystem,
     size: f32,
     primary: &str,
     wide_family: &str,
-) -> FontMetrics {
+) -> Result<FontMetrics, RenderError> {
     let metrics = Metrics::new(size, size * 1.2);
 
-    let measure = |fonts: &mut FontSystem, text: &str, name: &str| -> f32 {
+    let measure = |fonts: &mut FontSystem, text: &str, name: &str| -> Result<f32, RenderError> {
+        if !name.is_empty()
+            && !fonts
+                .db()
+                .faces()
+                .any(|face| face.families.iter().any(|(family, _)| family == name))
+        {
+            return Err(RenderError::Font(format!("font '{name}' is not installed")));
+        }
         let mut buffer = Buffer::new(fonts, metrics);
-        let attrs = Attrs::new().family(family(name));
+        let attrs = Attrs::new().family(family(name)).weight(requested_weight(fonts, name, false));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(fonts, false);
-        buffer.layout_runs().next().map(|run| run.line_w).unwrap_or(size * 0.6)
+        let Some(run) = buffer.layout_runs().next() else {
+            return Err(RenderError::Font(format!("font '{name}' produced no glyphs")));
+        };
+        if !name.is_empty()
+            && (run.glyphs.is_empty()
+                || run.glyphs.iter().any(|glyph| !face_matches(fonts, glyph.font_id, name)))
+        {
+            return Err(RenderError::Font(format!("font '{name}' cannot shape {text:?}")));
+        }
+        Ok(run.line_w)
     };
 
-    let narrow = measure(fonts, "M", primary);
-    let wide = measure(fonts, "中", if wide_family.is_empty() { primary } else { wide_family });
-    FontMetrics::from_advances(size, narrow, wide, size * 1.2)
+    let narrow = measure(fonts, "M", primary)?;
+    let wide_name = if wide_family.is_empty() { primary } else { wide_family };
+    let wide = measure(fonts, "中", wide_name)?;
+    Ok(FontMetrics::from_advances(size, narrow, wide, size * 1.2))
 }
 
 fn glyph_color(color: Rgba) -> Color {
@@ -229,13 +287,17 @@ impl QuadPipeline {
         }
     }
 
-    fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
+    fn draw_range<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        range: std::ops::Range<u32>,
+    ) {
         if self.instances.is_empty() {
             return;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.draw(0..self.instances.len() as u32, 0..1);
+        pass.draw(range, 0..1);
     }
 
     fn clear(&mut self) {
@@ -254,7 +316,11 @@ pub struct TerminalRenderer {
     gpu_timers: Vec<crate::diagnostics::GpuTimer>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
+    offscreen: Option<wgpu::Texture>,
+    readback: Option<wgpu::Buffer>,
+    layout: crate::layout::LayoutCache,
+    font_generation: u64,
     config: wgpu::SurfaceConfiguration,
     fonts: FontSystem,
     swash: SwashCache,
@@ -270,6 +336,8 @@ pub struct TerminalRenderer {
     wide_font_family: String,
     size: SurfaceSize,
     baseline_cache: Option<(u32, u32, f32)>,
+    metrics_cache: Option<(u32, FontMetrics)>,
+    device_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl TerminalRenderer {
@@ -331,15 +399,31 @@ impl TerminalRenderer {
         surface: wgpu::Surface<'static>,
         size: SurfaceSize,
     ) -> Result<Self, RenderError> {
+        Self::initialize(instance, Some(surface), size).await
+    }
+
+    /// Headless GPU target. Uses exactly the same layout, atlas and render pass.
+    pub async fn offscreen(size: SurfaceSize) -> Result<Self, RenderError> {
+        Self::initialize(&crate::platform::instance(), None, size).await
+    }
+
+    async fn initialize(
+        instance: &wgpu::Instance,
+        surface: Option<wgpu::Surface<'static>>,
+        size: SurfaceSize,
+    ) -> Result<Self, RenderError> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
                 apply_limit_buckets: true,
             })
             .await
-            .map_err(|error| RenderError::Surface(error.to_string()))?;
+            .map_err(|error| {
+                tracing::debug!(%error, "no suitable GPU adapter");
+                RenderError::NoAdapter
+            })?;
 
         #[cfg(feature = "diagnostics")]
         crate::diagnostics::adapter(&adapter.get_info());
@@ -360,18 +444,34 @@ impl TerminalRenderer {
             .await
             .map_err(|error| RenderError::NoDevice(error.to_string()))?;
 
-        let capabilities = surface.get_capabilities(&adapter);
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(wgpu::TextureFormat::is_srgb)
-            .unwrap_or(capabilities.formats[0]);
+        let device_error = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let lost = std::sync::Arc::clone(&device_error);
+        device.set_device_lost_callback(move |reason, message| {
+            *lost.lock().expect("device error") =
+                Some(format!("device lost: {reason:?}: {message}"));
+        });
+        let uncaptured = std::sync::Arc::clone(&device_error);
+        device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
+            *uncaptured.lock().expect("device error") = Some(error.to_string());
+        }));
 
+        let capabilities = surface.as_ref().map(|surface| surface.get_capabilities(&adapter));
+        let format = capabilities
+            .as_ref()
+            .and_then(|caps| {
+                caps.formats
+                    .iter()
+                    .copied()
+                    .find(wgpu::TextureFormat::is_srgb)
+                    .or_else(|| caps.formats.first().copied())
+            })
+            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         #[cfg(feature = "diagnostics")]
         let usage = if std::env::var_os("TETHER_RENDER_CAPTURE").is_some()
-            && capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC)
+            && capabilities
+                .as_ref()
+                .is_some_and(|c| c.usages.contains(wgpu::TextureUsages::COPY_SRC))
         {
             usage | wgpu::TextureUsages::COPY_SRC
         } else {
@@ -386,11 +486,16 @@ impl TerminalRenderer {
             // fallback a child window presents that to nowhere.
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
-            alpha_mode: capabilities.alpha_modes[0],
+            alpha_mode: capabilities
+                .as_ref()
+                .and_then(|c| c.alpha_modes.first().copied())
+                .unwrap_or(wgpu::CompositeAlphaMode::Opaque),
             color_space: wgpu::SurfaceColorSpace::Srgb,
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
+        if let Some(surface) = &surface {
+            surface.configure(&device, &config);
+        }
 
         let cache = Cache::new(&device);
         let mut atlas = TextAtlas::new(&device, &queue, &cache, format);
@@ -398,6 +503,7 @@ impl TerminalRenderer {
         let viewport = Viewport::new(&device, &cache);
         let quads = QuadPipeline::new(&device, format);
 
+        let (fonts, font_generation) = crate::fonts::snapshot();
         Ok(Self {
             #[cfg(feature = "diagnostics")]
             gpu_timers: (0..4).filter_map(|_| crate::diagnostics::GpuTimer::new(&device)).collect(),
@@ -405,10 +511,16 @@ impl TerminalRenderer {
             queue,
             surface,
             config,
-            fonts: FontSystem::new(),
+            fonts,
+            font_generation,
+            layout: Default::default(),
+            offscreen: None,
+            readback: None,
             font_family: String::new(),
             wide_font_family: String::new(),
             baseline_cache: None,
+            metrics_cache: None,
+            device_error,
             swash: SwashCache::new(),
             atlas,
             text,
@@ -424,15 +536,82 @@ impl TerminalRenderer {
         self.size
     }
 
+    /// Explicit GPU completion for tests/evaluation. Native frame submission
+    /// never calls this and does not wait for presentation or readback.
+    pub fn wait_idle(&self) -> Result<(), RenderError> {
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .map(|_| ())
+            .map_err(|error| RenderError::Surface(error.to_string()))
+    }
+
+    /// Read the last offscreen frame as tightly packed RGBA8. Window drawing
+    /// never waits for readback; this explicit operation is for pixel tests.
+    pub fn read_pixels(&mut self) -> Result<Vec<u8>, RenderError> {
+        let texture = self
+            .offscreen
+            .as_ref()
+            .ok_or_else(|| RenderError::Surface("no offscreen frame".into()))?;
+        let width = self.config.width;
+        let height = self.config.height;
+        let pitch = (width * 4).div_ceil(256) * 256;
+        let bytes = u64::from(pitch) * u64::from(height);
+        if self.readback.as_ref().is_none_or(|buffer| buffer.size() != bytes) {
+            self.readback = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("terminal snapshot"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }));
+        }
+        let buffer = self.readback.as_ref().expect("readback buffer");
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        encoder.map_buffer_on_submit(buffer, wgpu::MapMode::Read, .., move |result| {
+            let _ = sender.send(result);
+        });
+        self.queue.submit(Some(encoder.finish()));
+        self.wait_idle()?;
+        receiver
+            .recv()
+            .map_err(|e| RenderError::Surface(e.to_string()))?
+            .map_err(|e| RenderError::Surface(e.to_string()))?;
+        let mapped =
+            buffer.slice(..).get_mapped_range().map_err(|e| RenderError::Surface(e.to_string()))?;
+        let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+        for row in mapped.chunks(pitch as usize).take(height as usize) {
+            for pixel in row[..width as usize * 4].as_chunks::<4>().0 {
+                rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+            }
+        }
+        drop(mapped);
+        buffer.unmap();
+        Ok(rgba)
+    }
+
     pub fn resize(&mut self, size: SurfaceSize) {
         self.size = SurfaceSize { width: size.width.max(1), height: size.height.max(1) };
         self.config.width = self.size.width;
         self.config.height = self.size.height;
-        self.surface.configure(&self.device, &self.config);
-    }
-
-    pub fn fonts(&mut self) -> &mut FontSystem {
-        &mut self.fonts
+        self.layout.invalidate();
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
     }
 
     /// Common frame entry point for every native host.
@@ -440,17 +619,33 @@ impl TerminalRenderer {
     /// Geometry, overlays, shaping and submission belong to the renderer, not
     /// its C#/Swift bindings. Font size and surface dimensions are physical
     /// pixels; the host converts native DIP/point units exactly once.
+    /// `Ok(true)` means a target was drawn: a presented swapchain image, or
+    /// the offscreen texture. `Ok(false)` means the compositor skipped the
+    /// acquire. The layout cache is already updated; the caller keeps its
+    /// damage and tries again.
     pub fn draw_frame(
         &mut self,
         frame: &crate::Frame,
         palette: &crate::Palette,
         overlay: &crate::Overlay,
         font_size: f32,
-    ) -> Result<(), RenderError> {
+    ) -> Result<bool, RenderError> {
+        self.draw_update(frame, palette, overlay, font_size, None)
+    }
+
+    /// `None` rebuilds all rows; an empty slice updates only pointer/caret marks.
+    pub fn draw_update(
+        &mut self,
+        frame: &crate::Frame,
+        palette: &crate::Palette,
+        overlay: &crate::Overlay,
+        font_size: f32,
+        dirty: Option<&[u32]>,
+    ) -> Result<bool, RenderError> {
         #[cfg(feature = "diagnostics")]
         let layout_started = std::time::Instant::now();
-        let metrics = self.measure(font_size);
-        let list = crate::prepare_with_overlay(frame, &metrics, palette, overlay);
+        let metrics = self.measure(font_size)?;
+        let list = self.layout.prepare(frame, &metrics, palette, overlay, dirty);
         #[cfg(feature = "diagnostics")]
         crate::diagnostics::record(
             "metrics_layout_ms",
@@ -463,7 +658,15 @@ impl TerminalRenderer {
     ///
     /// Background quads first, glyphs over them, the caret last — the same
     /// paint order [`crate::layout::prepare`] emits.
-    pub fn render(&mut self, list: &DrawList) -> Result<(), RenderError> {
+    /// `Ok(false)` is a skipped acquire (timeout or occlusion), not a presented
+    /// frame. An offscreen target has no swapchain and returns `Ok(true)`.
+    pub fn render(&mut self, list: &DrawList) -> Result<bool, RenderError> {
+        if let Some(error) = self.device_error.lock().expect("device error").as_ref() {
+            return Err(RenderError::Surface(error.clone()));
+        }
+        // Release the previous frame's atlas pins, including when presentation
+        // was skipped while hidden. glyphon can then evict unused glyphs.
+        self.atlas.trim();
         #[cfg(feature = "diagnostics")]
         let render_started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
@@ -535,7 +738,30 @@ impl TerminalRenderer {
             )
             .map_err(|error| RenderError::Surface(error.to_string()))?;
 
-        // Caret over the glyphs, so a block sits on its character.
+        // Decorations use the same geometry on every platform.
+        for run in &list.texts {
+            if run.underline {
+                self.quads.push_rect(
+                    run.x,
+                    run.y + run.height * 0.85,
+                    run.width,
+                    1.0,
+                    run.underline_color.unwrap_or(run.color),
+                    screen,
+                );
+            }
+            if run.strikethrough {
+                self.quads.push_rect(
+                    run.x,
+                    run.y + run.height * 0.55,
+                    run.width,
+                    1.0,
+                    run.color,
+                    screen,
+                );
+            }
+        }
+        let caret_start = self.quads.instances.len() as u32;
         if let Some(cursor) = &list.cursor {
             self.quads.push_rect(
                 cursor.x,
@@ -555,22 +781,26 @@ impl TerminalRenderer {
         );
         #[cfg(feature = "diagnostics")]
         let acquire_started = std::time::Instant::now();
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            // The compositor is not asking for a frame right now. Skip and
-            // try again on the next wake — not an error (0006: a frame that
-            // costs nothing is still a frame we did not have to draw).
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                #[cfg(feature = "diagnostics")]
-                crate::diagnostics::record("skipped_surface", 1.0);
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Outdated
-            | wgpu::CurrentSurfaceTexture::Lost
-            | wgpu::CurrentSurfaceTexture::Validation => {
-                return Err(RenderError::Surface("surface outdated or lost".into()));
-            }
+        let frame = if let Some(surface) = &self.surface {
+            Some(match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                // The compositor is not asking for a frame. The layout cache
+                // already holds this draw. Tell the caller it was not
+                // presented, so damage stays unacknowledged.
+                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    #[cfg(feature = "diagnostics")]
+                    crate::diagnostics::record("skipped_surface", 1.0);
+                    return Ok(false);
+                }
+                wgpu::CurrentSurfaceTexture::Outdated
+                | wgpu::CurrentSurfaceTexture::Lost
+                | wgpu::CurrentSurfaceTexture::Validation => {
+                    return Err(RenderError::Surface("surface outdated or lost".into()));
+                }
+            })
+        } else {
+            None
         };
         #[cfg(feature = "diagnostics")]
         let acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
@@ -578,7 +808,29 @@ impl TerminalRenderer {
         crate::diagnostics::record("surface_acquire_ms", acquire_ms);
         #[cfg(feature = "diagnostics")]
         let gpu_timer = self.gpu_timers.iter().find(|timer| timer.available());
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        if frame.is_none()
+            && self.offscreen.as_ref().is_none_or(|texture| {
+                texture.width() != self.config.width || texture.height() != self.config.height
+            })
+        {
+            self.offscreen = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("tether-offscreen"),
+                size: wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+        }
+        let texture =
+            frame.as_ref().map(|f| &f.texture).or(self.offscreen.as_ref()).expect("render target");
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let clear =
             if self.config.format.is_srgb() { linear(list.background) } else { list.background };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -615,10 +867,11 @@ impl TerminalRenderer {
                 multiview_mask: None,
             });
 
-            self.quads.draw(&mut pass);
+            self.quads.draw_range(&mut pass, 0..caret_start);
             self.text
                 .render(&self.atlas, &self.viewport, &mut pass)
                 .map_err(|error| RenderError::Surface(error.to_string()))?;
+            self.quads.draw_range(&mut pass, caret_start..self.quads.instances.len() as u32);
         }
 
         #[cfg(feature = "diagnostics")]
@@ -630,12 +883,7 @@ impl TerminalRenderer {
             }
             if std::env::var_os("TETHER_RENDER_CAPTURE").is_some() {
                 if self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
-                    crate::diagnostics::capture(
-                        &self.device,
-                        &mut encoder,
-                        &frame.texture,
-                        &self.config,
-                    );
+                    crate::diagnostics::capture(&self.device, &mut encoder, texture, &self.config);
                 } else {
                     crate::diagnostics::record("capture_unsupported_surface", 1.0);
                 }
@@ -644,7 +892,9 @@ impl TerminalRenderer {
         self.queue.submit(Some(encoder.finish()));
         #[cfg(feature = "diagnostics")]
         let present_started = std::time::Instant::now();
-        self.queue.present(frame);
+        if let Some(frame) = frame {
+            self.queue.present(frame);
+        }
         #[cfg(feature = "diagnostics")]
         {
             let present_ms = present_started.elapsed().as_secs_f64() * 1000.0;
@@ -654,98 +904,103 @@ impl TerminalRenderer {
                 render_started.elapsed().as_secs_f64() * 1000.0 - acquire_ms - present_ms,
             );
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn set_fonts(&mut self, primary: String, wide: String) {
+        let primary = crate::fonts::family_name(&primary);
+        let wide = crate::fonts::family_name(&wide);
         if self.font_family == primary && self.wide_font_family == wide {
             return;
         }
+        self.layout.invalidate();
         self.baseline_cache = None;
+        self.metrics_cache = None;
         self.font_family = primary;
         self.wide_font_family = wide;
         self.buffers.clear();
         self.buffer_keys.clear();
     }
 
-    pub fn measure(&mut self, size: f32) -> FontMetrics {
-        measure_font(&mut self.fonts, size, &self.font_family, &self.wide_font_family)
+    pub fn measure(&mut self, size: f32) -> Result<FontMetrics, RenderError> {
+        if self.font_generation != crate::fonts::generation() {
+            (self.fonts, self.font_generation) = crate::fonts::snapshot();
+            self.layout.invalidate();
+            self.baseline_cache = None;
+            self.metrics_cache = None;
+            self.buffer_keys.clear();
+            self.buffers.clear();
+            self.swash = SwashCache::new();
+            self.atlas = TextAtlas::new(
+                &self.device,
+                &self.queue,
+                &Cache::new(&self.device),
+                self.config.format,
+            );
+        }
+        if let Some((key, metrics)) = self.metrics_cache
+            && key == size.to_bits()
+        {
+            return Ok(metrics);
+        }
+        let metrics =
+            measure_font(&mut self.fonts, size, &self.font_family, &self.wide_font_family)?;
+        self.metrics_cache = Some((size.to_bits(), metrics));
+        Ok(metrics)
     }
 
     /// Shapes only the runs whose text or metrics changed.
     fn sync_buffers(&mut self, runs: &[TextRun]) {
-        if self.buffers.len() > runs.len() {
-            self.buffers.truncate(runs.len());
-            self.buffer_keys.truncate(runs.len());
+        let mut old: std::collections::HashMap<BufferKey, Vec<Buffer>> = Default::default();
+        for (key, buffer) in
+            std::mem::take(&mut self.buffer_keys).into_iter().zip(std::mem::take(&mut self.buffers))
+        {
+            old.entry(key).or_default().push(buffer);
         }
-        for (index, run) in runs.iter().enumerate() {
-            if self.buffer_keys.get(index).is_some_and(|key| key.matches(run)) {
-                continue;
-            }
+        for run in runs {
             let key = BufferKey::of(run);
-            let buffer =
-                build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family);
-            if index < self.buffers.len() {
-                self.buffers[index] = buffer;
-                self.buffer_keys[index] = key;
-            } else {
-                self.buffers.push(buffer);
-                self.buffer_keys.push(key);
-            }
+            let buffer = old.get_mut(&key).and_then(Vec::pop).unwrap_or_else(|| {
+                build_buffer(&mut self.fonts, run, &self.font_family, &self.wide_font_family)
+            });
+            self.buffer_keys.push(key);
+            self.buffers.push(buffer);
         }
     }
 }
 
-#[cfg(feature = "diagnostics")]
 impl Drop for TerminalRenderer {
     fn drop(&mut self) {
-        if self
-            .device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_secs(5)),
-            })
-            .is_err()
-        {
+        if self.wait_idle().is_err() {
+            tracing::warn!("GPU drain timed out while closing terminal surface");
+            #[cfg(feature = "diagnostics")]
             crate::diagnostics::record("drain_error", 1.0);
         }
+        #[cfg(feature = "diagnostics")]
         crate::diagnostics::flush();
     }
 }
 
 /// The parts of a run that decide how it is shaped. Position does not: the
 /// same buffer is placed at a new `left`/`top` when a row only scrolls.
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq, Hash)]
 struct BufferKey {
-    font_size: f32,
-    cell_width: f32,
+    font_size: u32,
+    cell_width: u32,
     text: String,
-    width: f32,
-    height: f32,
+    width: u32,
+    height: u32,
     color: [u8; 4],
     bold: bool,
     italic: bool,
 }
-
 impl BufferKey {
-    fn matches(&self, run: &TextRun) -> bool {
-        self.font_size == run.font_size
-            && self.cell_width == run.cell_width
-            && self.text == run.text
-            && self.width == run.width
-            && self.height == run.height
-            && self.color == run.color.to_bytes()
-            && self.bold == run.bold
-            && self.italic == run.italic
-    }
-
     fn of(run: &TextRun) -> Self {
         Self {
-            font_size: run.font_size,
-            cell_width: run.cell_width,
+            font_size: run.font_size.to_bits(),
+            cell_width: run.cell_width.to_bits(),
             text: run.text.clone(),
-            width: run.width,
-            height: run.height,
+            width: run.width.to_bits(),
+            height: run.height.to_bits(),
             color: run.color.to_bytes(),
             bold: run.bold,
             italic: run.italic,
@@ -756,7 +1011,9 @@ impl BufferKey {
 // Measure once per grid/font change, using the same centering as the shaper.
 fn font_baseline(fonts: &mut FontSystem, size: f32, height: f32, primary: &str) -> f32 {
     let mut buffer = Buffer::new(fonts, Metrics::new(size, height));
-    buffer.set_text("Mg", &Attrs::new().family(family(primary)), Shaping::Advanced, None);
+    let attrs =
+        Attrs::new().family(family(primary)).weight(requested_weight(fonts, primary, false));
+    buffer.set_text("Mg", &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fonts, false);
     buffer.layout_runs().next().map_or(size, |line| line.line_y)
 }
@@ -781,16 +1038,11 @@ fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str
     // size makes the snap grid one column.
     buffer.set_monospace_width(Some(pitch * font_size));
 
+    let chosen = if pitch > run.cell_width * 1.5 && !wide.is_empty() { wide } else { primary };
     let mut attrs = Attrs::new()
-        .family(family(if pitch > run.cell_width * 1.5 && !wide.is_empty() {
-            wide
-        } else {
-            primary
-        }))
+        .family(family(chosen))
+        .weight(requested_weight(fonts, chosen, run.bold))
         .color(glyph_color(run.color));
-    if run.bold {
-        attrs = attrs.weight(Weight::BOLD);
-    }
     if run.italic {
         attrs = attrs.style(Style::Italic);
     }
@@ -802,7 +1054,7 @@ fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str
 
 #[cfg(test)]
 fn glyph_xs(text: &str, pitch: f32, height: f32) -> Vec<f32> {
-    let mut fonts = FontSystem::new();
+    let (mut fonts, _) = crate::fonts::snapshot();
     let run = TextRun {
         font_size: height / 1.2,
         cell_width: pitch,
@@ -812,7 +1064,6 @@ fn glyph_xs(text: &str, pitch: f32, height: f32) -> Vec<f32> {
         height,
         text: text.to_owned(),
         color: Rgba::new(1.0, 1.0, 1.0, 1.0),
-        tracking: 0.0,
         bold: false,
         italic: false,
         underline: false,
@@ -827,6 +1078,42 @@ fn glyph_xs(text: &str, pitch: f32, height: f32) -> Vec<f32> {
         }
     }
     xs
+}
+
+#[test]
+fn unique_face_id_keeps_its_own_weight_when_the_run_is_bold() {
+    let language = fontdb::Language::English_UnitedStates;
+    let face = |families: Vec<&str>, postscript: &str, weight: fontdb::Weight| fontdb::FaceInfo {
+        id: fontdb::ID::dummy(),
+        source: fontdb::Source::Binary(std::sync::Arc::new(Vec::<u8>::new())),
+        index: 0,
+        families: families.into_iter().map(|name| (name.to_owned(), language)).collect(),
+        post_script_name: postscript.to_owned(),
+        style: fontdb::Style::Normal,
+        weight,
+        stretch: fontdb::Stretch::Normal,
+        monospaced: true,
+    };
+    let mut db = fontdb::Database::new();
+    db.push_face_info(face(
+        vec!["Menlo", "Menlo-Regular"],
+        "Menlo-Regular",
+        fontdb::Weight::NORMAL,
+    ));
+    db.push_face_info(face(vec!["Menlo", "Menlo-Bold"], "Menlo-Bold", fontdb::Weight::BOLD));
+    let fonts = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    assert_eq!(requested_weight(&fonts, "Menlo-Regular", true), Weight::NORMAL);
+    assert_eq!(requested_weight(&fonts, "Menlo-Bold", false), Weight::BOLD);
+    assert_eq!(requested_weight(&fonts, "Menlo", true), Weight::BOLD);
+    assert_eq!(requested_weight(&fonts, "Menlo", false), Weight::NORMAL);
+    assert_eq!(requested_weight(&fonts, "", true), Weight::BOLD);
+}
+
+#[test]
+fn a_missing_face_is_not_sized_from_a_fallback() {
+    let (mut fonts, _) = crate::fonts::snapshot();
+    let error = measure_font(&mut fonts, 13.0, "Tether Missing Face", "").unwrap_err();
+    assert!(matches!(error, RenderError::Font(_)), "{error}");
 }
 
 #[test]
@@ -848,12 +1135,7 @@ fn shaped_glyphs_stay_on_the_cell_pitch() {
 
 /// Families available to the shaping engine, including user-installed fonts.
 pub fn font_families() -> Vec<String> {
-    let fonts = FontSystem::new();
-    let mut names: Vec<String> = fonts
-        .db()
-        .faces()
-        .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
-        .collect();
+    let mut names: Vec<String> = crate::font_faces().into_iter().map(|face| face.family).collect();
     names.sort();
     names.dedup();
     names
@@ -865,7 +1147,7 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
     let mut fonts = FontSystem::new();
     let primary = "Consolas";
     let wide = "Microsoft YaHei UI";
-    let measured = measure_font(&mut fonts, 26.0, primary, wide);
+    let measured = measure_font(&mut fonts, 26.0, primary, wide).expect("measure font");
     let font_baseline_value =
         font_baseline(&mut fonts, measured.size, measured.line_height, primary);
     let mut pixels = vec![250u8; 1200 * 150 * 3];
@@ -886,7 +1168,6 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
             height: measured.line_height,
             text: text.into(),
             color: Rgba::new(0.12, 0.13, 0.15, 1.0),
-            tracking: 0.0,
             bold: false,
             italic: false,
             underline: false,
@@ -948,7 +1229,8 @@ fn selected_fonts_and_measured_size_reach_the_shaper() {
 fn mixed_font_fragments_share_the_row_baseline() {
     let mut fonts = FontSystem::new();
     for size in [13.0, 19.5, 26.0, 32.0] {
-        let measured = measure_font(&mut fonts, size, "Consolas", "Microsoft YaHei UI");
+        let measured =
+            measure_font(&mut fonts, size, "Consolas", "Microsoft YaHei UI").expect("measure font");
         let baseline = font_baseline(&mut fonts, size, measured.line_height, "Consolas");
         for (text, columns) in [("A", 1.0), ("中文", 2.0), ("，", 2.0), ("É", 1.0), ("汉", 2.0)]
         {
@@ -962,7 +1244,6 @@ fn mixed_font_fragments_share_the_row_baseline() {
                     height: measured.line_height,
                     text: text.into(),
                     color: Rgba::new(0.0, 0.0, 0.0, 1.0),
-                    tracking: 0.0,
                     bold,
                     italic,
                     underline: false,

@@ -111,28 +111,3 @@ struct CellGeometry: Equatable {
     link.spans.map(rect(for:)).reduce(CGRect.null) { $0.union($1) }
   }
 }
-
-/// The underline under a link someone is pointing at: dotted while it is
-/// being looked for, solid once it is known to be there.
-struct LinkUnderline: View {
-  let link: TerminalLink?
-  let confirmed: Bool
-  let geometry: CellGeometry
-
-  var body: some View {
-    Canvas { context, _ in
-      guard let link else { return }
-      for span in link.spans {
-        let rect = geometry.rect(for: span)
-        var line = Path()
-        line.move(to: CGPoint(x: rect.minX, y: rect.maxY - 1))
-        line.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 1))
-        context.stroke(
-          line, with: .color(.accentColor),
-          style: StrokeStyle(lineWidth: UIStyle.Mark.hairline, dash: confirmed ? [] : [UIStyle.Space.tight, UIStyle.Space.tight]))
-      }
-    }
-    .allowsHitTesting(false)
-    .accessibilityHidden(true)
-  }
-}
