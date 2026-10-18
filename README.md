@@ -35,6 +35,10 @@ document.
 
 ## Building
 
+For repository development, install the commit gate once per clone with
+`python3 scripts/install-hooks.py`. See [commit checks](docs/commit-checks.md)
+for platform coverage and required tools.
+
 Build with the latest stable Rust (`rustup update stable`); the current minimum is 1.98.1.
 
 ```bash

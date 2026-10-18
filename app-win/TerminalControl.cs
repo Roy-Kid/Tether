@@ -101,7 +101,6 @@ public sealed class TerminalControl : Control
         _gridResize.Tick += (_, _) => CommitSize();
 
         Loaded += OnLoaded;
-        RegisterPropertyChangedCallback(XamlRootProperty, (_, _) => HookRasterization());
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
         LayoutUpdated += (_, _) => { if (_ready) _child?.Fit(this); };

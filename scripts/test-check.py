@@ -132,15 +132,22 @@ class GateTests(unittest.TestCase):
         (self.root / ".githooks").mkdir()
         hook = self.root / ".githooks/pre-commit"
         shutil.copyfile(ROOT / ".githooks/pre-commit", hook)
-        hook.chmod(0o755)
         (self.root / "scripts").mkdir()
-        (self.root / "scripts/check.py").write_text("raise SystemExit(23)\n")
-        self.git("config", "core.hooksPath", ".githooks")
-        self.git("config", "tether.python", sys.executable)
+        (self.root / "scripts/check.py").write_text(
+            "from pathlib import Path\nPath('.git/checker-ran').touch()\nraise SystemExit(23)\n")
+        # Exercise the real installer: manually setting the configuration here
+        # used to leave hook installation itself completely untested.
+        shutil.copyfile(ROOT / "scripts/install-hooks.py", self.root / "scripts/install-hooks.py")
+        (self.root / "scripts/check-requirements.txt").write_text("")
+        subprocess.run([sys.executable, str(self.root / "scripts/install-hooks.py")],
+                       cwd=self.root, check=True, capture_output=True, text=True)
+        self.assertEqual(self.git("config", "--get", "core.hooksPath").stdout.strip(), ".githooks")
+        self.assertEqual(self.git("config", "--get", "tether.python").stdout.strip(), sys.executable)
         self.git("add", ".")
         result = self.git("-c", "user.name=Gate Test", "-c", "user.email=gate@example.invalid",
                           "-c", "commit.gpgsign=false", "commit", "-m", "must be blocked", check=False)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / ".git/checker-ran").exists(), result.stdout + result.stderr)
         self.assertNotEqual(self.git("rev-parse", "--verify", "HEAD", check=False).returncode, 0)
 
 

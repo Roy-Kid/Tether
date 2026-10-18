@@ -40,6 +40,18 @@ the WinUI build and release publish.
 macOS commits run common checks, build the Apple XCFramework (device and
 simulator included), and execute all Swift suites and the additional scheduling
 runs. They require the appropriate Xcode SDK and Rust Apple targets.
+The Files browser UI suites share one serialized parent because windows,
+clipboard contents and the plugin dialog gateway are process-wide state.
+The Apple gate repeats this entire UI group twice after the full package run;
+an initial failure still blocks immediately. The installer regression invokes
+the real installer in a disposable repository and verifies that a failing
+checker prevents an actual commit.
+
+Hook files alone do not enable a hook. Verify installation with
+`git config --show-origin --get core.hooksPath` (expected `.githooks`) and
+`git config --get tether.python` (expected the installed Python interpreter).
+Rerun the installer if either setting is absent; Git does not transfer local
+hook configuration when cloning a repository.
 
 Linux commits run common checks and all fuzz targets for 60 seconds each,
 including replay of stored regressions. They require CJK fonts, nightly Rust,

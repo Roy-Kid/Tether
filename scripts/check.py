@@ -173,6 +173,7 @@ def apple(build=True):
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build", cwd=ROOT / "app")
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
+        run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "BrowserUITests")
         run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession")
         run("swift", "test", "--package-path", "app", "--filter", "ShellActivityTests")
 

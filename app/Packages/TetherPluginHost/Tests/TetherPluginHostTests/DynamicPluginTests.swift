@@ -198,7 +198,11 @@ private func networkFixture(status: Bool = false) throws -> URL {
   let runtime = WebKitRuntime(background: true)
   let session = try await host.activate(id: record.id, runtime: runtime)
   defer { host.unload(session: session) }
-  for _ in 0..<100 where reported == nil { try await Task.sleep(for: .milliseconds(10)) }
+  // A background WebKit process can defer JavaScript callbacks past one second.
+  // Wait for the bridge's result, with a deadline that also catches lost events.
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(10))
+  while reported == nil, clock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
   #expect(reported?.key("label")?.string == "任务更新", "UTF-8 survives the native → JavaScript event bridge")
 }
 

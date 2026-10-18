@@ -42,6 +42,7 @@ swift/Artifacts/
 __pycache__/
 
 /artifacts/merged-swift-bindings/
+/artifacts/ios-check/
 
 # Side-by-side Windows trial builds and font-render diagnostics.
 /artifacts/windows-*/
