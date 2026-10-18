@@ -182,23 +182,28 @@ struct CloseCheckTests {
     let connection = try #require(session.connection)
     let tty = try #require(session.terminalName)
     let probe = Probe()
+    probe.answer = .unknown
     let check = CloseCheck(quiet: .milliseconds(300)) {
       let answer = await ShellActivity.check(on: connection, terminal: tty, columns: 80, rows: 24, matchSize: false)
+      probe.answer = answer
       probe.runs += 1
       return answer
     }
-    // The shell starts, prints its prompt, and goes quiet.
-    var listed: ShellActivity = .unknown
+    // A waiting shell can briefly be running while ps samples it. Establish
+    // an actual idle answer ahead of the close, rather than assuming the
+    // first sample is idle because an earlier, independent listing was.
     let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-    while listed != .idle && ContinuousClock.now < deadline {
-      listed = await ShellActivity.check(on: connection, terminal: tty, columns: 80, rows: 24, matchSize: false)
-    }
-    #expect(listed == .idle)
-    check.noteActivity()
-    try await settle(check) { probe.runs == 1 }
+    repeat {
+      let previous = probe.runs
+      check.noteActivity()
+      try await settle(check) { probe.runs > previous }
+      try #require(probe.runs > previous, "the check ahead did not finish")
+    } while probe.answer != .idle && ContinuousClock.now < deadline
+    try #require(probe.answer == .idle, "the shell did not reach an idle answer ahead of the close")
+    let checksBeforeClose = probe.runs
 
     #expect(await check.activity() == .idle)
-    #expect(probe.runs == 1, "closing listed the processes again")
+    #expect(probe.runs == checksBeforeClose, "closing listed the processes again")
 
     try session.send(.key(.text("sleep 30")))
     try session.send(.key(.enter))
