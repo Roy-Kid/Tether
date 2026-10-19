@@ -28,7 +28,7 @@ public struct Palette: Equatable, Sendable {
   public static let dark = Palette(
     background: srgb(0x12141A),
     foreground: srgb(0xDEE0E6),
-    cursor: srgb(0x0A84FF),
+    cursor: srgb(0xDEE0E6),
     normal: [
       srgb(0x292B33),  // black
       srgb(0xFF3B30),  // red
@@ -68,7 +68,7 @@ public struct Palette: Equatable, Sendable {
   public static let light = Palette(
     background: srgb(0xFBFBFC),
     foreground: srgb(0x1F2129),
-    cursor: srgb(0x0A84FF),
+    cursor: srgb(0x1F2129),
     normal: [
       srgb(0x1C1C1E),  // black
       srgb(0xC50006),  // red
@@ -89,6 +89,23 @@ public struct Palette: Equatable, Sendable {
       srgb(0x087BA8),
       srgb(0x8E8E93),
     ])
+
+  /// The quieter app palette, shared with the Windows frontend's
+  /// TerminalAppearance. ANSI meanings and explicit true-color output stay intact.
+  public static let softDark = Palette(
+    background: srgb(0x171B22), foreground: srgb(0xD8DEE9), cursor: srgb(0xD8DEE9),
+    normal: [0x353D4B, 0xE58C91, 0xA3C99C, 0xEBCB8B, 0x8DB4E2, 0xC5A0D8, 0x88C6CA, 0xCBD3DF].map(srgb),
+    bright: [0x758298, 0xF0A5AA, 0xB9DBB3, 0xF5DAA2, 0xACCBEE, 0xDBBCE9, 0xA5DBDF, 0xEEF2F8].map(srgb))
+
+  public static let softLight = Palette(
+    background: srgb(0xF7F8FA), foreground: srgb(0x283242), cursor: srgb(0x283242),
+    normal: [0x283242, 0xA83C48, 0x326C46, 0x805C19, 0x315FA3, 0x78509D, 0x246F78, 0x526074].map(srgb),
+    bright: [0x677388, 0xBA4854, 0x397A50, 0x89631B, 0x3B6BB4, 0x865BAB, 0x2C7D86, 0x526074].map(srgb))
+
+  public static let colorStyleKey = "terminalColorStyle"
+  public static let defaultColorStyle = "soft"
+
+  public var isDark: Bool { self == .dark || self == .softDark }
 
   func color(_ color: CellColor) -> Color {
     switch color {
@@ -161,8 +178,9 @@ extension Palette {
   /// One place, because two would drift: the surface draws with this and the
   /// session tells the far side about it, and a screen drawn light while the
   /// far side was told "dark" is worse than either mistake alone.
-  public static func chosen(setting: String, scheme: ColorScheme) -> Palette {
+  public static func chosen(setting: String, scheme: ColorScheme, style: String = "classic") -> Palette {
     let dark = setting == "dark" || (setting == "system" && scheme == .dark)
+    if style == "soft" { return dark ? .softDark : .softLight }
     return dark ? .dark : .light
   }
 

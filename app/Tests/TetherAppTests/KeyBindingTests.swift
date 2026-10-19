@@ -187,7 +187,8 @@ struct KeyBindingTests {
       #if os(macOS)
         #expect(store.filtered(commands, query: "⌃⌥⇧⌘R", boundOnly: true) == [rename])
       #endif
-      #expect(store.filtered(commands, query: "window", boundOnly: false).count == 3)
+      #expect(Set(store.filtered(commands, query: "window", boundOnly: false).map(\.id)) ==
+        Set([WorkspaceAction.previousTab, .nextTab, .closeWindow, .quickTerminal, .restoreWindow, .alwaysOnTop].map(\.rawValue)))
       #expect(store.filtered(commands, query: "nothing matches", boundOnly: false).isEmpty)
     }
   }

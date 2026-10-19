@@ -74,7 +74,7 @@ public sealed partial class SettingsWindow : Window
 
     private void UpdateTitleBar()
     {
-        var background = ((SolidColorBrush)Application.Current.Resources["ChromeWindowBrush"]).Color;
+        var background = Microsoft.UI.Colors.Transparent;
         var foreground = ((SolidColorBrush)PageHeading.Foreground).Color;
         var titleBar = AppWindow.TitleBar;
         titleBar.BackgroundColor = titleBar.InactiveBackgroundColor = background;

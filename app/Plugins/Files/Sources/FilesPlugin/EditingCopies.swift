@@ -41,6 +41,13 @@ struct EditingRecord: Codable, Equatable, Sendable {
 /// (`LocalCopies.editing`). One per host, shared by every Files tab on it,
 /// so a file is one copy and one writer whichever tab opened it.
 ///
+/// An open copy stays watched. A save here is written back, and a change on
+/// the far side is brought into the copy, as soon as either happens: a save
+/// only while the far side's file is still the one that was opened, and a
+/// far-side change only while the copy still matches it. Both changed, and
+/// the person decides. The far side has no way to say it changed, so an open
+/// copy asks it, briefly, for as long as the copy is open.
+///
 /// A copy goes when it holds nothing that is not on the far side and its
 /// editor has gone: the app quit, or — once no tab on the host is left — it
 /// is not running. One with an edit still to write back stays until that
@@ -50,6 +57,8 @@ final class EditingCopies {
   enum State: Equatable {
     case synced
     case writing
+    /// The far side changed, and that change is on its way into the copy.
+    case receiving
     /// An edit waiting for a connection, and why the last try failed.
     case pending(String?)
     /// The far side changed too; the person is deciding, or put it off.
@@ -74,8 +83,11 @@ final class EditingCopies {
   /// Whether an app is running; a test says instead.
   var isRunning: @MainActor (String) -> Bool = EditingCopies.running
   /// How long a copy is left quiet before it is written back: an editor
-  /// saving writes more than once.
-  var settle: Duration = .seconds(1)
+  /// saving writes more than once, and the quiet moment is the save.
+  var settle: Duration = .milliseconds(250)
+  /// How often an open copy asks what the far side's file is now. Longer
+  /// than `settle`, so a save already on its way is not postponed by the ask.
+  var watchEvery: Duration = .milliseconds(500)
   /// How long a write-back that failed waits before trying again.
   var retry: Duration = .seconds(30)
   /// How long an editor is given to report in before a copy with none is
@@ -95,8 +107,20 @@ final class EditingCopies {
   private struct Watch {
     let folder: any DispatchSourceFileSystemObject
     var file: (any DispatchSourceFileSystemObject)?
+    /// The file the watch is on. An editor that saves by renaming a new
+    /// file into place leaves the old watch on a file that is gone.
+    var node: UInt64?
   }
   private var watches: [String: Watch] = [:]
+  /// Asks the far side, and puts a local save the file watch missed onto
+  /// the same path as one it saw. Idle while nothing is open: the task
+  /// holds this object only while it is asking, not while it waits.
+  private var watchLoop: Task<Void, Never>?
+  private let clock = ContinuousClock()
+  /// Set when the far side could not be asked, so a dead connection is not
+  /// dialled on every pass.
+  private var remoteWait: Duration = .zero
+  private var remoteNotBefore: ContinuousClock.Instant?
   /// A wait before a check, cancelled by a newer save. Never a check that
   /// has started: that runs to the end.
   private var waiting: [String: Task<Void, Never>] = [:]
@@ -300,9 +324,12 @@ final class EditingCopies {
     ask: @escaping @MainActor (PluginPrompt) async -> PluginAnswer
   ) {
     writers[tab] = Writer(source: source, transfers: transfers, ask: ask)
+    remoteWait = .zero
+    remoteNotBefore = nil
     for (path, state) in states {
       if case .pending = state { schedule(path, after: .zero) }
     }
+    ensureWatching()
   }
 
   /// The last tab on the host gone: copies with nothing left to write back
@@ -353,18 +380,204 @@ final class EditingCopies {
     let folder = root.appendingPathComponent(record.folder, isDirectory: true)
     guard let source = Self.source(folder.path, on: { [weak self] _ in self?.changed(folder: record.folder) })
     else { return }
-    watches[record.path] = Watch(folder: source, file: nil)
+    watches[record.path] = Watch(folder: source, file: nil, node: nil)
     rearm(record)
+    ensureWatching()
   }
 
-  /// A fresh watch on the copy as it is now.
+  /// A watch on the copy as it is now. The same file keeps its watch: taking
+  /// it down to make it again is how the save that arrives in between is lost.
   private func rearm(_ record: EditingRecord) {
     guard var watch = watches[record.path] else { return }
-    watch.file?.cancel()
     let file = root.appendingPathComponent(record.folder, isDirectory: true)
       .appendingPathComponent(record.localName)
-    watch.file = Self.source(file.path) { [weak self] _ in self?.changed(folder: record.folder) }
+    let node = Self.node(file.path)
+    if watch.file != nil, node != nil, node == watch.node { return }
+    watch.file?.cancel()
+    watch.node = node
+    watch.file = node == nil ? nil : Self.source(file.path) { [weak self] _ in self?.changed(folder: record.folder) }
     watches[record.path] = watch
+  }
+
+  /// The open copies, asked again. One whose watch was left on a replaced
+  /// file is armed on the file that is there now; a save the watch did not
+  /// see is written back; a far-side change with no local edit is brought in.
+  private func ensureWatching() {
+    guard watchLoop == nil, !records.isEmpty else { return }
+    watchLoop = Task { [weak self] in
+      while !Task.isCancelled {
+        guard let wait = await self?.pump() else { return }
+        try? await Task.sleep(for: wait)
+      }
+    }
+  }
+
+  /// One pass over the open copies, and how long to wait before the next.
+  /// Nothing left open ends the loop.
+  private func pump() async -> Duration? {
+    if records.isEmpty {
+      watchLoop = nil
+      return nil
+    }
+    await scan()
+    if records.isEmpty || Task.isCancelled {
+      watchLoop = nil
+      return nil
+    }
+    return watchEvery
+  }
+
+  private func scan() async {
+    for record in records.values { guardWatch(record) }
+    for path in Array(records.keys) {
+      if Task.isCancelled { return }
+      await follow(path)
+    }
+  }
+
+  /// The folder watch, and a file watch on the inode that is there now.
+  private func guardWatch(_ record: EditingRecord) {
+    if watches[record.path] == nil { watch(record) }
+    else { rearm(record) }
+  }
+
+  /// Local first. A copy that has moved is written back — unless that is
+  /// already the question in front of the person — and one that still
+  /// matches is the one a far-side change may replace.
+  private func follow(_ path: String) async {
+    guard !running.contains(path), !quiet.contains(path) else { return }
+    guard let record = records[path], let url = copy(of: record) else { return }
+    if !matches(record, url) {
+      if case .conflict = states[path] { return }
+      schedule(path, resetting: false)
+      return
+    }
+    guard states[path] == .synced, remoteDue(), let writer = writers.values.first else { return }
+    await absorb(path, through: writer)
+  }
+
+  /// The far side's file moved and the copy has not. Bring that file in,
+  /// atomically, and only while the copy is still the one that was asked
+  /// about: a save that arrives while the bytes are in flight is the
+  /// person's, and goes back instead.
+  private func absorb(_ path: String, through writer: Writer) async {
+    guard !running.contains(path) else { return }
+    running.insert(path)
+    defer {
+      running.remove(path)
+      if again.remove(path) != nil { schedule(path) }
+    }
+    let current: FileEntry
+    do {
+      current = try await writer.source().stat(path)
+      remoteWorked()
+    } catch let error as FileError {
+      if case .notFound = error { return }
+      remoteFailed()
+      return
+    } catch {
+      remoteFailed()
+      return
+    }
+    guard let record = records[path], current.kind == .file,
+      current.size != record.size || current.modified != record.modified
+    else { return }
+    guard let url = copy(of: record), matches(record, url) else {
+      schedule(path)
+      return
+    }
+    let temp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("tether-edit-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temp) }
+    states[path] = .receiving
+    do {
+      let source = try await writer.source()
+      _ = try await source.download(current.path, to: temp.path, progress: nil)
+      let landed = try await source.stat(path)
+      guard landed.kind == .file, landed.size == current.size, landed.modified == current.modified else {
+        states[path] = .synced
+        return
+      }
+      guard let fresh = records[path], let freshURL = copy(of: fresh), matches(fresh, freshURL),
+        let expected = Self.stamp(freshURL)
+      else {
+        states[path] = .synced
+        schedule(path)
+        return
+      }
+      var applied = false
+      try await writingCopy(path) {
+        applied = try await Task.detached {
+          try Self.install(temp, over: freshURL, size: expected.size, modified: expected.modified)
+        }.value
+        guard applied else { return }
+        LocalCopies.seal(freshURL)
+        guard let stamp = Self.stamp(freshURL) else { return }
+        var updated = records[path] ?? fresh
+        updated.size = landed.size
+        updated.modified = landed.modified
+        updated.localSize = stamp.size
+        updated.localModified = stamp.modified
+        store(updated)
+        states[path] = .synced
+      }
+      if !applied || states[path] == .receiving {
+        states[path] = .synced
+        schedule(path)
+      }
+    } catch {
+      if states[path] == .receiving { states[path] = .synced }
+      remoteFailed()
+    }
+  }
+
+  /// Puts `temp` in place of `url` so an editor that has `url` open is told,
+  /// and only while `url` is still `size` bytes modified at `modified`.
+  /// The coordinator is what a document-based editor watches. The check is
+  /// inside it, so a save that took the file first is left where it is.
+  private nonisolated static func install(
+    _ temp: URL, over url: URL, size: Int64, modified: Date
+  ) throws -> Bool {
+    var coordination: NSError?
+    var failure: Error?
+    var applied = false
+    NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordination) { writingURL in
+      guard let current = stamp(url), current.size == size, current.modified == modified else { return }
+      do {
+        // Replacing, not "for replacing": that option tells an open document
+        // the file went away. This one tells it the contents moved.
+        _ = try FileManager.default.replaceItemAt(writingURL, withItemAt: temp)
+        applied = true
+      } catch {
+        failure = error
+      }
+    }
+    if let coordination { throw coordination }
+    if let failure { throw failure }
+    return applied
+  }
+
+  private func remoteDue() -> Bool {
+    guard let remoteNotBefore else { return true }
+    return clock.now >= remoteNotBefore
+  }
+
+  private func remoteWorked() {
+    remoteWait = .zero
+    remoteNotBefore = nil
+  }
+
+  private func remoteFailed() {
+    remoteWait = remoteWait == .zero ? .seconds(2) : min(retry, remoteWait * 2)
+    remoteNotBefore = clock.now.advanced(by: remoteWait)
+  }
+
+  /// The inode at `path`, when it is there. `lstat` rather than `stat`: the
+  /// function and the struct share a name, and a copy is never a link.
+  private nonisolated static func node(_ path: String) -> UInt64? {
+    var info = stat()
+    guard lstat(path, &info) == 0 else { return nil }
+    return UInt64(info.st_ino)
   }
 
   private func changed(folder: String) {
@@ -374,12 +587,16 @@ final class EditingCopies {
     schedule(record.path)
   }
 
-  private func schedule(_ path: String, after delay: Duration? = nil) {
+  /// `resetting` is a save, whose further writes postpone the one before.
+  /// A pass that only noticed the file had moved leaves a wait that is
+  /// already running: postponing it is how the save would never go.
+  private func schedule(_ path: String, after delay: Duration? = nil, resetting: Bool = true) {
     guard !quiet.contains(path) else { return }
     if running.contains(path) {
       again.insert(path)
       return
     }
+    if !resetting, waiting[path] != nil { return }
     waiting[path]?.cancel()
     let wait = delay ?? settle
     waiting[path] = Task { [weak self] in
@@ -457,7 +674,7 @@ final class EditingCopies {
     return stamp.size == record.localSize && stamp.modified == record.localModified
   }
 
-  static func stamp(_ url: URL) -> (size: Int64, modified: Date)? {
+  nonisolated static func stamp(_ url: URL) -> (size: Int64, modified: Date)? {
     guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
       let size = values.fileSize, let modified = values.contentModificationDate
     else { return nil }

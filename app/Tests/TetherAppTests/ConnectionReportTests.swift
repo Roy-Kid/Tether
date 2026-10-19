@@ -15,6 +15,29 @@ import struct TetherApp.Host
 struct ConnectionReportTests {
   private let host = Host(label: "Arrhenius", hostname: "login.example.org", port: 22, username: "ada")
 
+  @Test("a cancelled reader cannot end the replacement shell",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func redialKeepsReplacementLive() async throws {
+    let tabs = TabSet()
+    let tab = SessionTab(host: .local, password: "", known: tabs.known, name: "Terminal 1")
+    tabs.adopt(tab)
+    defer { tabs.closeAll() }
+    var lease = try await tab.connectionReady()
+    for _ in 0..<3 {
+      // Let the reader wait on the old shell before redial closes it.
+      try await Task.sleep(for: .milliseconds(50))
+      tab.redial(host: .local, password: "", typedNow: false)
+      lease = try await tab.connectionReady()
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(tab.isLive)
+      #expect(tab.connection != nil)
+      #expect(!tabs.isDisconnected(try #require(tabs.currentWorkspace)))
+      #expect(tab.problem == nil)
+      let output = try await lease.execute("printf reconnected")
+      #expect(String(data: output.stdout, encoding: .utf8) == "reconnected")
+    }
+  }
+
   private func tab(in tabs: TabSet) -> SessionTab {
     let tab = SessionTab(
       preview: host, known: KnownHosts(location: URL(fileURLWithPath: "/dev/null")), name: "Terminal 1",
@@ -147,5 +170,24 @@ struct ConnectionReportTests {
     let dialog = ConnectionDialog.keep(offer, replacing: true, keep: {}, decline: {})
     #expect(dialog.title == "Update the saved password for Arrhenius?")
     #expect(dialog.actions.map(\.title) == ["Not Now", "Update"])
+  }
+}
+
+extension ConnectionReportTests {
+  @Test("plugin terminal identity is the local shell's TTY and vanishes on close",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func pluginIdentityFollowsTerminalLifetime() async throws {
+    let tabs = TabSet()
+    let shell = SessionTab(host: .local, password: "", known: tabs.known, name: "Terminal 1")
+    tabs.adopt(shell)
+    defer { tabs.closeAll() }
+    _ = try await shell.connectionReady()
+    let identity = try #require(shell.pluginTerminalIdentity)
+    #expect(identity.host == ProcessInfo.processInfo.hostName.lowercased())
+    #expect(identity.terminal == shell.terminalName)
+    shell.name = "renamed"
+    #expect(shell.pluginTerminalIdentity == identity, "display names cannot change task association")
+    shell.close()
+    #expect(shell.pluginTerminalIdentity == nil)
   }
 }

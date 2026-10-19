@@ -26,7 +26,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         AppBranding.Apply(this);
-        SystemBackdrop = new MicaBackdrop();
+        SystemBackdrop = new MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt };
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBarDragArea);
         WorkspaceRoot.Loaded += (_, _) =>
@@ -766,7 +766,7 @@ public sealed partial class MainWindow : Window
 
         var window = new Window { Title = "Hosts", Content = panel };
         AppBranding.Apply(window);
-        window.SystemBackdrop = new MicaBackdrop();
+        window.SystemBackdrop = new DesktopAcrylicBackdrop();
         var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForDialog();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;

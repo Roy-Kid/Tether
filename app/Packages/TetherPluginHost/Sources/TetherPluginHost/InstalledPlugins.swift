@@ -20,6 +20,10 @@ public final class InstalledPlugins {
     host.onStatus = { [weak registry] id, payload in
       (registry?.plugins.first { $0.metadata.id == id } as? WebPlugin)?.receiveStatus(payload)
     }
+    host.onTabIndicators = { [weak registry] session, id, items in
+      (registry?.plugins.first { $0.metadata.id == id } as? WebPlugin)?
+        .receiveTabIndicators(items, session: session)
+    }
   }
 
   public static var defaultDirectory: URL {

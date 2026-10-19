@@ -188,3 +188,43 @@ private func installedHost(
   _ = try await host.activate(id: record.id, runtime: IdleRuntime())
   return (host, root)
 }
+
+@Test @MainActor
+func tabIndicatorsRequireAContributionAndReplaceOnlyTheirOwnSession() async throws {
+  let host = PluginHost(consent: ScriptedConsent(allow: true))
+  let root = try Fixture.make(contributions: "[{\"kind\":\"tabIndicator\",\"id\":\"tabs/status\"}]")
+  defer { try? FileManager.default.removeItem(at: root) }
+  let record = try host.install(directory: root)
+  let first = try await host.activate(id: record.id, runtime: IdleRuntime())
+  let second = try await host.activate(id: record.id, runtime: IdleRuntime())
+  var reports: [UUID: [PluginTabIndicator]] = [:]
+  host.onTabIndicators = { session, id, items in
+    #expect(id == record.id)
+    reports[session] = items
+  }
+  let item: JSONValue = .object([
+    "target": .object(["host": .string("studio"), "terminal": .string("/dev/ttys001")]),
+    "color": .number(0x0A84FF), "label": .string("Compiling")])
+  let result = await host.perform(request("host.tabIndicators", session: first, payload: .array([item])))
+  #expect(result.ok)
+  #expect(reports[first]?.first?.color == 0x0A84FF)
+  _ = await host.perform(request("host.tabIndicators", session: second, payload: .array([item])))
+  let duplicate = await host.perform(request("host.tabIndicators", session: first, payload: .array([item, item])))
+  #expect(duplicate.error == "malformed")
+  let bad: JSONValue = .object(["target": item.key("target")!, "color": .number(0x1000000), "label": .string("Bad")])
+  let invalid = await host.perform(request("host.tabIndicators", session: first, payload: .array([bad])))
+  #expect(invalid.error == "malformed")
+  #expect(reports[first]?.count == 1, "malformed updates leave the last valid set intact")
+  host.unload(session: first)
+  #expect(reports[first] == [])
+  #expect(reports[second]?.count == 1, "unloading a panel cannot erase a background session's marks")
+  try host.setEnabled(false, id: record.id)
+  #expect(reports[second] == [])
+  let otherRoot = try Fixture.make(id: "fixture.no-indicators")
+  defer { try? FileManager.default.removeItem(at: otherRoot) }
+  let other = try host.install(directory: otherRoot)
+  let session = try await host.activate(id: other.id, runtime: IdleRuntime())
+  defer { host.unload(session: session) }
+  let denied = await host.perform(request("host.tabIndicators", session: session, payload: .array([item])))
+  #expect(denied.error == "permissionDenied")
+}

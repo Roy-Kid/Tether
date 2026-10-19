@@ -12,6 +12,14 @@ public final class WebPlugin: TetherPlugin {
   private var workspaces: [UUID: WebPluginWorkspace] = [:]
   private var enabled = false
   public private(set) var statusBarItem: PluginStatusBarItem?
+  private var indicatorSessions: [UUID: [PluginTabIndicator]] = [:]
+  public var tabIndicators: [PluginTabIndicator] {
+    indicatorSessions.keys.sorted { $0.uuidString < $1.uuidString }
+      .flatMap { indicatorSessions[$0] ?? [] }
+  }
+  func receiveTabIndicators(_ items: [PluginTabIndicator], session: UUID) {
+    indicatorSessions[session] = items.isEmpty ? nil : items
+  }
 
   public init(record: PluginRecord, host: PluginHost) {
     self.record = record
@@ -30,8 +38,10 @@ public final class WebPlugin: TetherPlugin {
     guard !enabled else { return }
     enabled = true
     try? host.setEnabled(true, id: record.id)
-    guard record.manifest.contributions.contains(where: { $0.kind == .statusBar }) else { return }
-    statusBarItem = PluginStatusBarItem(id: record.id, label: record.manifest.name, segments: [])
+    guard record.manifest.contributions.contains(where: { $0.kind == .statusBar || $0.kind == .tabIndicator }) else { return }
+    if record.manifest.contributions.contains(where: { $0.kind == .statusBar }) {
+      statusBarItem = PluginStatusBarItem(id: record.id, label: record.manifest.name, segments: [])
+    }
     starting = Task { @MainActor [weak self] in
       guard let self else { return }
       do {
@@ -54,6 +64,7 @@ public final class WebPlugin: TetherPlugin {
     try? host.setEnabled(false, id: record.id)
     background = nil
     statusBarItem = nil
+    indicatorSessions.removeAll()
   }
 
   public func launch(in context: PluginContext) {

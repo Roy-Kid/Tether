@@ -37,7 +37,7 @@ struct WorkspaceSplitTests {
     #endif
   }
 
-  @Test("right and down split the requested tab, including a background tab", arguments: SplitDirection.allCases)
+  @Test("four directions split the requested tab, including a background tab", arguments: SplitDirection.allCases)
   func splitRequestedTab(direction: SplitDirection) {
     let tabs = TabSet()
     let first = tab("first"), background = tab("background"), new = tab("new")
@@ -45,10 +45,81 @@ struct WorkspaceSplitTests {
     tabs.adopt(background)
     tabs.select(first.id)
     tabs.split(new, beside: background.id, direction: direction)
-    #expect(tabs.workspaceSplit == .split(direction, .tab(background.id), .tab(new.id)))
+    let expected: WorkspaceSplit
+    switch direction {
+    case .left, .up: expected = .split(direction, .tab(new.id), .tab(background.id))
+    case .right, .down: expected = .split(direction, .tab(background.id), .tab(new.id))
+    }
+    #expect(tabs.workspaceSplit == expected)
     #expect(tabs.selected == new.id)
     #expect(tabs.tabs.count == 3)
   }
+
+  @Test("all split commands target the selected terminal and respect available space")
+  func directionalCommands() {
+    let tabs = TabSet()
+    let shell = tab("shell")
+    let actions: [(WorkspaceAction, SplitDirection)] = [
+      (.splitLeft, .left), (.splitRight, .right), (.splitUp, .up), (.splitDown, .down),
+    ]
+    tabs.adopt(shell)
+    for (action, direction) in actions {
+      #expect(WorkspaceAction.available.contains(action))
+      #expect(tabs.canPerform(action))
+      tabs.perform(action)
+      #expect(tabs.intent == .splitTerminal(shell.id, direction))
+      tabs.intent = nil
+      tabs.wide = false
+      #expect(!tabs.canPerform(action))
+      tabs.perform(action)
+      #expect(tabs.intent == nil)
+      tabs.wide = true
+    }
+  }
+
+  @Test("left and up remain in visual order through nesting, persistence, remapping and close")
+  func leadingSplits() throws {
+    let tabs = TabSet()
+    let a = tab("a"), b = tab("b"), c = tab("c")
+    tabs.adopt(a)
+    tabs.split(b, beside: a.id, direction: .left)
+    tabs.split(c, beside: a.id, direction: .up)
+    let expected: WorkspaceSplit = .split(.left, .tab(b.id), .split(.up, .tab(c.id), .tab(a.id)))
+    #expect(tabs.workspaceSplit == expected)
+    #expect(tabs.selected == c.id)
+    let decoded = try JSONDecoder().decode(WorkspaceSplit.self, from: JSONEncoder().encode(expected))
+    #expect(decoded == expected)
+    let x = UUID(), y = UUID(), z = UUID()
+    #expect(decoded.remapping([a.id: x, b.id: y, c.id: z]) ==
+      .split(.left, .tab(y), .split(.up, .tab(z), .tab(x))))
+    tabs.close(a.id, remember: false)
+    #expect(tabs.workspaceSplit == .split(.left, .tab(b.id), .tab(c.id)))
+    #expect(tabs.selected == c.id)
+    tabs.close(c.id, remember: false)
+    #expect(tabs.workspaceSplit == nil)
+    #expect(tabs.selected == b.id)
+  }
+
+  #if os(macOS)
+  @Test("terminal context splits target a background pane in every direction")
+  func contextDirections() {
+    let tabs = TabSet()
+    let a = tab("a"), b = tab("b")
+    tabs.adopt(a)
+    tabs.adopt(b)
+    for (title, direction): (String, SplitDirection) in [
+      ("Split Left", .left), ("Split Right", .right), ("Split Up", .up), ("Split Down", .down),
+    ] {
+      tabs.select(b.id)
+      let item = tabs.terminalMenu(for: a.id).first { $0.title == title }
+      #expect(item != nil)
+      item?.action?()
+      #expect(tabs.current?.id == a.id)
+      #expect(tabs.intent == .splitTerminal(a.id, direction))
+      tabs.intent = nil
+    }
+  }
+  #endif
 
   @Test("nested splits collapse on close and preserve the surviving pane")
   func closePane() {

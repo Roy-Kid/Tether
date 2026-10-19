@@ -156,6 +156,11 @@ public struct PluginContext {
 @MainActor
 public protocol TetherPlugin: AnyObject {
   var metadata: PluginMetadata { get }
+  /// Full current set of terminal marks. Removing an item clears its mark.
+  var tabIndicators: [PluginTabIndicator] { get }
+  /// The symbol in front of a terminal tab's name. Removing an item restores
+  /// the host's own mark. An empty symbol is not a mark.
+  var tabSymbols: [PluginTabSymbol] { get }
   var commandDescriptors: [PluginCommandDescriptor] { get }
   /// A data-only lamp shown beside the host selector, when the plugin has live status.
   var statusBarItem: PluginStatusBarItem? { get }
@@ -184,6 +189,8 @@ public protocol TetherPlugin: AnyObject {
   func receiveStatus(_ item: PluginStatusBarItem)
 }
 extension TetherPlugin {
+  public var tabIndicators: [PluginTabIndicator] { [] }
+  public var tabSymbols: [PluginTabSymbol] { [] }
   public var commandDescriptors: [PluginCommandDescriptor] { [] }
   public var statusBarItem: PluginStatusBarItem? { nil }
   public func statusBarLabel() -> AnyView? { nil }
@@ -234,6 +241,18 @@ public final class PluginRegistry {
     defaults.set(Array(disabled).sorted(), forKey: "disabledPlugins")
   }
   public func isEnabled(_ id: String) -> Bool { !disabled.contains(id) }
+  /// Registration order breaks ties between enabled plugins; domain priority
+  /// within a plugin belongs to that plugin, not to the host.
+  public func tabIndicator(for terminal: PluginTerminalIdentity) -> PluginTabIndicator? {
+    plugins.lazy.filter { self.isEnabled($0.metadata.id) }
+      .compactMap { $0.tabIndicators.first { $0.target == terminal } }.first
+  }
+  /// The first enabled plugin's symbol for this terminal, registration order.
+  public func tabSymbol(for terminal: PluginTerminalIdentity) -> String? {
+    plugins.lazy.filter { self.isEnabled($0.metadata.id) }
+      .compactMap { $0.tabSymbols.first { $0.target == terminal }?.symbol }
+      .first { !$0.isEmpty }
+  }
   public func setEnabled(_ enabled: Bool, id: String) {
     guard let plugin = plugins.first(where: { $0.metadata.id == id }), enabled != isEnabled(id)
     else { return }

@@ -67,6 +67,7 @@ public enum PluginMethod: String, Sendable, Equatable, CaseIterable {
   case stream = "network.stream"
   case closeStream = "network.closeStream"
   case status = "host.status"
+  case tabIndicators = "host.tabIndicators"
 }
 
 public struct RPCRequest: Sendable, Equatable, Codable {

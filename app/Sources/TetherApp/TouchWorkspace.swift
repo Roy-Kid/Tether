@@ -9,7 +9,7 @@ extension WorkspaceAction {
   /// window wide enough to hold it, which a phone never is.
   var needsWidth: Bool {
     switch self {
-    case .inspector, .splitRight, .splitDown, .joinGroups: true
+    case .inspector, .splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups: true
     default: false
     }
   }
@@ -28,7 +28,10 @@ extension WorkspaceAction {
 enum TouchCommands {
   static func sections(wide: Bool) -> [[WorkspaceAction]] {
     var sections: [[WorkspaceAction]] = [[.renameTerminal, .reconnect], [.manageHosts]]
-    if wide { sections.append([.splitRight, .splitDown, .joinGroups]) }
+    if wide {
+      sections.append([.splitLeft, .splitRight, .splitUp, .splitDown])
+      sections.append([.joinGroups])
+    }
     return sections
   }
 }

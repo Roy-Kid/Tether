@@ -66,6 +66,8 @@ public final class TmuxTab: TabAttachment {
   /// The terminal stays the terminal. tmux, when it is there, is what that
   /// terminal is showing.
   public var isShowing: Bool { false }
+  /// While this shell is a tmux client, the tab wears the plugin's mark.
+  public var symbol: String { shellSessionID == nil ? "" : "rectangle.split.2x2" }
   public var subtitle: String {
     guard let id = shellSessionID else { return "" }
     return sessions.first { $0.id == id }?.name ?? shellSessionName
@@ -141,8 +143,24 @@ public final class TmuxTab: TabAttachment {
   public func content() -> AnyView { AnyView(EmptyView()) }
   public func inspector() -> AnyView { AnyView(TmuxPicker(model: self)) }
   public func accessoryContent() -> AnyView { AnyView(TmuxPicker(model: self)) }
+  public func workingDirectory(for link: TerminalLink?) async -> String? {
+    guard !closed, let connection, let tty = tab.terminalName() else { return nil }
+    // Ask the client again: panes and windows can change through tmux's
+    // own keys or another client, without any command passing through us.
+    guard let session = try? await connection.tmuxSession(forClientTTY: tty),
+      let command = TmuxPaneDirectories.listCommand(session: session),
+      let output = try? await connection.execute(command), output.status == 0,
+      !closed, !Task.isCancelled, self.connection?.leaseID() == connection.leaseID(),
+      tab.terminalName() == tty,
+      let text = String(data: output.stdout, encoding: .utf8),
+      let directories = TmuxPaneDirectories.parse(text)
+    else { return nil }
+    noteShellClient(tty: tty, session: session)
+    return TmuxPaneDirectories.directory(in: directories, for: link)
+  }
+
   public func connectionChanged(_ connection: RemoteConnection) {
-    guard self.connection !== connection else { return }
+    guard self.connection?.leaseID() != connection.leaseID() else { return }
     self.connection = connection
     shellLookup?.cancel()
     shellLookup = nil
@@ -937,21 +955,24 @@ enum TmuxPaneLayout {
   /// The pane under a terminal cell. `row` counts from the top of the
   /// terminal, which is where the status line sits when it is on top.
   static func decide(_ panes: [TmuxPaneWheel], column: Int, row: Int) -> TmuxWheelTarget {
-    guard column >= 0, row >= 0, let sample = panes.first else { return .report }
-    if sample.statusTop {
-      if row < sample.statusLines { return .ignore }
-    } else if sample.statusLines > 0, row >= sample.windowHeight {
-      return .ignore
-    }
-    let paneRow = row - (sample.statusTop ? sample.statusLines : 0)
-    let visible = panes.filter { !$0.zoomed || $0.active }
-    guard let pane = visible.first(where: { hit($0, column: column, row: paneRow) }) else {
-      return .ignore
-    }
+    guard !panes.isEmpty, column >= 0, row >= 0 else { return .report }
+    guard let pane = pane(in: panes, column: column, row: row) else { return .ignore }
     if pane.inMode { return .scroll(pane.id) }
     if pane.wantsMouse { return .report }
     if pane.alternate { return .stop }
     return .scroll(pane.id)
+  }
+
+  static func pane(in panes: [TmuxPaneWheel], column: Int, row: Int) -> TmuxPaneWheel? {
+    guard column >= 0, row >= 0, let sample = panes.first else { return nil }
+    if sample.statusTop {
+      if row < sample.statusLines { return nil }
+    } else if sample.statusLines > 0, row >= sample.windowHeight {
+      return nil
+    }
+    let paneRow = row - (sample.statusTop ? sample.statusLines : 0)
+    let visible = panes.filter { !$0.zoomed || $0.active }
+    return visible.first(where: { hit($0, column: column, row: paneRow) })
   }
 
   /// The claim a view makes from the pane under the pointer.
@@ -1024,6 +1045,43 @@ enum TmuxPaneLayout {
       guard let value = Int(text), (0...5).contains(value) else { return nil }
       return value
     }
+  }
+}
+
+/// A directory travels with the same geometry used to hit-test the pane.
+/// Keeping it in the final field allows spaces and `|` in directory names.
+enum TmuxPaneDirectories {
+  struct Entry {
+    let pane: TmuxPaneWheel
+    let directory: String
+  }
+
+  static func listCommand(session: String) -> String? {
+    TmuxPaneLayout.listCommand(session: session).map {
+      String($0.dropLast()) + "|#{pane_current_path}'"
+    }
+  }
+
+  static func parse(_ text: String) -> [Entry]? {
+    var entries: [Entry] = []
+    for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+      let fields = line.split(separator: "|", maxSplits: 13, omittingEmptySubsequences: false)
+      guard fields.count == 14, fields[13].hasPrefix("/"),
+        let pane = TmuxPaneLayout.parse(fields.prefix(13).joined(separator: "|"))?.first
+      else { return nil }
+      entries.append(Entry(pane: pane, directory: String(fields[13])))
+    }
+    return entries.isEmpty ? nil : entries
+  }
+
+  static func directory(in entries: [Entry], for link: TerminalLink?) -> String? {
+    if let span = link?.spans.first {
+      guard let pane = TmuxPaneLayout.pane(
+        in: entries.map(\.pane), column: Int(span.start), row: Int(span.row))
+      else { return nil }
+      return entries.first { $0.pane.id == pane.id }?.directory
+    }
+    return entries.first { $0.pane.active }?.directory
   }
 }
 

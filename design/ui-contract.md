@@ -1,6 +1,8 @@
 # Tether UI contract
 
-Current Windows direction: **Windows Terminal** is the visual reference only.
+Native platform controls and system materials are the visual authority.
+Windows Terminal, OTTY (otty.sh), and Ely GPUI Components inform hierarchy and
+interaction; their custom rendering does not replace SwiftUI/AppKit or WinUI.
 macOS remains the operation reference: a new tab uses the startup profile,
 closing a background tab keeps the selection, the last tab closes the window,
 the host chooser stays in the status bar, settings stay a separate window, and
@@ -134,3 +136,58 @@ resources to one host chooser/editor flow. Keep full terminal lifecycle, plugins
 settings redesign, zen and inspectors outside that step unless explicitly scoped.
 
 Host chooser copy follows WorkspaceChrome.swift: `Find a host…` and `No matching hosts.` (including an empty host collection). The 280-DIP width includes panel padding. Search supports Up/Down selection and Enter activation; Escape remains native Flyout behavior. Build passed; keyboard interaction still needs manual verification.
+
+## Native material refinement · 2026-10
+
+The comparison found three immediate gaps: opaque navigation surfaces hiding
+system materials, floating panels drawing their own rim and shadow over the
+material, and weak distinction between selected, hovered and inactive controls.
+OTTY's [window and split documentation](https://docs.otty.sh/user-interface/window-tab-split)
+and [native screenshots](https://otty.sh/) emphasize the separation of navigation
+and terminal content. The [Ely terminal gallery](https://elygpui.com/components/terminal/terminal-terminaltabs-terminalsplit-terminaltoolbar-shellselector-terminalsearch-terminallink/)
+is a reference for component consistency, spacing and restrained state colors.
+
+On Apple platforms, system appearance remains the default. Appearance chooses
+System, Light or Dark; Theme chooses Soft, Classic or (on Mac) Frosted Glass.
+The existing terminalColorStyle preference retains Soft/Classic selections.
+Frosted Glass uses the Classic palette and exposes a 50–100% Background Opacity
+slider, initially 60%. Changes apply immediately and persist across launches.
+
+Opaque themes use Theme.window and an opaque native window. Frosted Glass uses
+one NSGlassEffectView behind the entire workspace. Titlebar, status bar,
+terminal padding and inspectors expose this common backdrop. The terminal palette's background
+tint is applied once at the root; glass regions never add their own palette tint.
+Using windowBackgroundColor here turns the whole terminal gray, so the shared
+glass tint must come from the same palette that supplies terminal color replies. Native lists
+hide their solid content backgrounds in glass mode. Only default terminal
+backgrounds become transparent: glyphs, ANSI colors and explicit RGB cell
+backgrounds keep their original colors. Reverse-video glyphs remain opaque. Transparent render clears use premultiplied
+RGB so the compositor cannot add a gray or colored wash.
+The renderer prefers an unorm attachment containing sRGB bytes and glyphon's
+Web color mode, matching the native compositor's premultiplied sRGB contract.
+Antialiased text is tested with transparent backgrounds; checking only solid
+color blocks cannot detect bright fringes from incorrect gamma/alpha handling.
+The rendering palette and remote color-query responses share the same RGB
+values; background alpha is presentation only. Reduce Transparency or Increased
+Contrast restores opaque backgrounds without discarding the selected theme.
+Transient controls and overlays retain their existing native materials.
+
+Windows uses Mica Alt for the tabbed main window. The sidebar/status background
+uses the system's translucent commanding-layer color instead of an opaque fill.
+Settings titlebar backgrounds are transparent so the existing Mica backdrop can
+show. The transient host chooser uses DesktopAcrylicBackdrop. WinUI owns focus,
+contrast, disabled-transparency and power-saving fallbacks; see
+[Microsoft's Mica guidance](https://learn.microsoft.com/en-us/windows/apps/design/style/mica).
+The terminal canvas stays opaque for legibility. No backdrop effect is simulated
+with blur images or a second renderer.
+
+Validation: native Mac dark/light checks, app and frontend tests, and iOS
+simulator compilation. Windows API availability and XAML structure were checked
+against the declared WinUI SDK; Windows compilation and visual verification must
+run on a Windows host.
+
+The host chooser and tab selection use the existing ChromeButtonStyle roles:
+quiet borderless host button, accent selection wash and the shared row radius.
+Tabs do not draw a separate opaque rounded panel over the window material.
+Frosted Glass preserves Classic ANSI colors. Soft is an explicit palette choice;
+window translucency must not silently substitute desaturated terminal colors.

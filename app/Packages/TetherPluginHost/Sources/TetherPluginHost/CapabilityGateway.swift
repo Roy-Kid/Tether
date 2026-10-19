@@ -24,6 +24,7 @@ final class CapabilityGateway {
     let permissions: Set<Permission>
     let networkURLs: Set<URL>
     let reportsStatus: Bool
+    let reportsTabIndicators: Bool
     var documents: [UUID: Data] = [:]
     var storageAsked = false
     var storageAllowed = false
@@ -38,6 +39,7 @@ final class CapabilityGateway {
   private var streams: [UUID: (session: UUID, task: Task<Void, Never>)] = [:]
   var emit: (@MainActor (UUID, JSONValue) async -> Void)?
   var status: (@MainActor (UUID, JSONValue) -> Void)?
+  var tabIndicators: (@MainActor (UUID, String, [PluginTabIndicator]) -> Void)?
   private var networkGrants: [String: Set<URL>] = [:]
 
   init(consent: any ConsentAsking, api: PluginAPI, streaming: any PluginStreaming) {
@@ -54,10 +56,14 @@ final class CapabilityGateway {
       pluginID: record.id, pluginName: record.manifest.name,
       permissions: Set(record.manifest.permissions), networkURLs: Set(record.manifest.networkURLs),
       reportsStatus: record.manifest.contributions.contains { $0.kind == .statusBar },
+      reportsTabIndicators: record.manifest.contributions.contains { $0.kind == .tabIndicator },
       environment: environment, reconnect: reconnect)
   }
 
   func close(_ id: UUID) {
+    if let session = sessions[id], session.reportsTabIndicators {
+      tabIndicators?(id, session.pluginID, [])
+    }
     sessions[id] = nil
     for stream in streams.keys.filter({ streams[$0]?.session == id }) {
       streams.removeValue(forKey: stream)?.task.cancel()
@@ -110,6 +116,24 @@ final class CapabilityGateway {
     }
     let response: RPCResponse
     switch method {
+    case .tabIndicators:
+      guard session.reportsTabIndicators else {
+        return .failure(session: request.session, id: request.id, error: RPCError.permissionDenied)
+      }
+      guard case .array(let values) = request.payload, values.count <= 512,
+        let data = try? JSONEncoder().encode(request.payload),
+        let items = try? JSONDecoder().decode([PluginTabIndicator].self, from: data),
+        items.allSatisfy({ item in
+          !item.target.host.isEmpty && item.target.host.utf8.count <= 255
+            && item.target.host == item.target.host.lowercased()
+            && item.target.terminal.hasPrefix("/dev/") && item.target.terminal.utf8.count <= 256
+            && item.color <= 0xFFFFFF && !item.label.isEmpty && item.label.count <= 256
+            && !item.target.host.contains(where: { $0.isWhitespace || $0.isNewline })
+        }), Set(items.map(\.target)).count == items.count else {
+        return .failure(session: request.session, id: request.id, error: RPCError.malformed)
+      }
+      tabIndicators?(request.session, session.pluginID, items)
+      response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
     case .documentRead:
       response = readDocument(request, session: session)
     case .storageGet:

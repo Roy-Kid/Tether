@@ -314,3 +314,21 @@ private func networkFixture(status: Bool = false) throws -> URL {
   for _ in 0..<200 where webView(in: view) == nil { try await Task.sleep(for: .milliseconds(10)) }
   _ = try #require(webView(in: view), "the existing hosting view must leave loading without reopening the panel")
 }
+
+@Test @MainActor
+func aTabIndicatorOnlyPluginOwnsABackgroundPageWithoutARibbon() async throws {
+  let root = try Fixture.make(contributions: "[{\"kind\":\"tabIndicator\",\"id\":\"tabs/status\"}]")
+  defer { try? FileManager.default.removeItem(at: root) }
+  let host = PluginHost(consent: ScriptedConsent(allow: true))
+  let record = try host.install(directory: root)
+  #expect(host.index.tabIndicators.count == 1)
+  let plugin = WebPlugin(record: record, host: host)
+  plugin.activate()
+  defer { plugin.deactivate() }
+  for _ in 0..<100 where host.liveSessions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+  #expect(host.liveSessions.count == 1)
+  #expect(plugin.statusBarItem == nil)
+  plugin.deactivate()
+  #expect(host.liveSessions.isEmpty)
+  #expect(plugin.tabIndicators.isEmpty)
+}

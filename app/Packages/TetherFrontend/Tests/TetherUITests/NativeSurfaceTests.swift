@@ -104,7 +104,7 @@ struct NativeSurfaceTests {
       try await renderer.initialize(width: 900, height: 300)
       renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
       _ = try renderer.measure(size: 39)
-      _ = try renderer.draw(frame: frame(), palette: Palette.dark.renderPalette, fontSize: 39, dirtyRows: [])
+      _ = try renderer.draw(frame: frame(), palette: Palette.dark.renderPalette(), fontSize: 39, dirtyRows: [])
       renderer.close()
       renderer.close()
     }
@@ -121,7 +121,7 @@ struct NativeSurfaceTests {
     renderer.close()
     await initialization.value
     #expect(throws: RenderingError.self) {
-      _ = try renderer.draw(frame: frame(), palette: Palette.dark.renderPalette, fontSize: 13)
+      _ = try renderer.draw(frame: frame(), palette: Palette.dark.renderPalette(), fontSize: 13)
     }
   }
 

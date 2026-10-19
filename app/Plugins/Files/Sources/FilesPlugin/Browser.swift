@@ -22,7 +22,13 @@ struct Browser: View {
 
   var body: some View {
     content
-      .task { model.appear() }
+      .task {
+        model.appear()
+        while !Task.isCancelled {
+          do { try await Task.sleep(for: .seconds(1)) } catch { return }
+          await model.followTerminalDirectory()
+        }
+      }
       .onChange(of: model.query) { previous, next in
         let cleaned = next.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
         if cleaned != next {
@@ -84,6 +90,7 @@ struct Browser: View {
 /// The entries of the current directory.
 private struct FileList: View {
   @Bindable var model: FilesTab
+  @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
   @FocusState private var listFocused: Bool
   @State private var listHeight = UIStyle.listHeight
 
@@ -108,6 +115,7 @@ private struct FileList: View {
         ForEach(model.displayedRows) { row in
           FileRow(model: model, entry: row.entry, depth: row.depth)
             .tag(row.entry.path)
+            .listRowBackground(backgroundOpacity < 1 ? Color.clear : nil)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
         }
@@ -125,6 +133,7 @@ private struct FileList: View {
     }
     #if os(macOS)
       .listStyle(.inset)
+      .scrollContentBackground(backgroundOpacity < 1 ? .hidden : .automatic)
       .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
       .focused($listFocused)
       .background {
@@ -528,8 +537,9 @@ private struct FileRow: View {
 /// On a Mac that offer is a file promise (`RowDragSource`), kept by AppKit
 /// until the drop is over. A phone keeps SwiftUI's drag, whose receiver
 /// loads the file without holding the main thread.
-/// A file open in an editor here: written back, waiting to be, or changed
-/// on the far side as well. The name is the tooltip.
+/// A file open in an editor here: in step with the far side, being written
+/// back, being brought up to date, waiting to be, or changed on both sides.
+/// The name is the tooltip.
 private struct EditingMark: View {
   let state: EditingCopies.State
 
@@ -545,6 +555,7 @@ private struct EditingMark: View {
     switch state {
     case .synced: "pencil"
     case .writing: "arrow.up"
+    case .receiving: "arrow.down"
     case .pending: "arrow.up.circle"
     case .conflict: "exclamationmark.triangle"
     }
@@ -554,6 +565,7 @@ private struct EditingMark: View {
     switch state {
     case .synced: "Editing"
     case .writing: "Saving to Server"
+    case .receiving: "Updating from Server"
     case .pending(let reason): reason.map { "Not Saved to Server: \($0)" } ?? "Not Saved to Server"
     case .conflict: "Changed on Server"
     }
@@ -751,6 +763,7 @@ private func findChord(_ press: KeyPress) -> Bool {
   private struct MacHeader: View {
     @Bindable var model: FilesTab
     @Binding var importing: Bool
+    @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
     @FocusState private var findFocused: Bool
 
     var body: some View {
@@ -787,7 +800,7 @@ private func findChord(_ press: KeyPress) -> Bool {
       .padding(.horizontal, UIStyle.Space.group)
       .frame(height: UIStyle.controlHeight + UIStyle.Space.group)
       .frame(maxWidth: .infinity)
-      .background(Theme.sidebar)
+      .background(backgroundOpacity < 1 ? Color.clear : Theme.sidebar)
       .onChange(of: model.findTicket) { _, _ in findFocused = true }
     }
 
@@ -993,6 +1006,7 @@ private func findChord(_ press: KeyPress) -> Bool {
 /// Copies in flight, and the ones that failed: a row each, under the list.
 private struct TransferList: View {
   let transfers: Transfers
+  @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
 
   var body: some View {
     if !transfers.items.isEmpty {
@@ -1024,7 +1038,7 @@ private struct TransferList: View {
           .frame(height: UIStyle.rowHeight)
         }
       }
-      .background(Theme.window)
+      .background(backgroundOpacity < 1 ? Color.clear : Theme.window)
     }
   }
 }
@@ -1038,7 +1052,7 @@ private struct DownloadPicker: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .onChange(of: model.pendingSave.map(\.path)) { _, paths in
+      .onChange(of: model.pendingSave.map(\.path), initial: true) { _, paths in
         guard !paths.isEmpty else { return }
         saving = model.pendingSave
         presented = true

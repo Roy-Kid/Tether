@@ -411,4 +411,31 @@ struct PaneWheelTests {
     #expect(TmuxPaneLayout.parse("") == nil)
     #expect(TmuxPaneLayout.decide(parsed ?? [], column: 0, row: 3) == .scroll("%0"))
   }
+
+  @Test("Files follows the active pane while a printed link uses its own pane")
+  func paneDirectories() throws {
+    let text = """
+      %0|0|0|80|9|0|0|0|0|0|19|top|on|/srv/first | project
+      %1|0|10|80|9|0|0|0|1|0|19|top|on|/srv/second
+      """
+    let entries = try #require(TmuxPaneDirectories.parse(text))
+    #expect(TmuxPaneDirectories.directory(in: entries, for: nil) == "/srv/second")
+    func link(row: UInt16) -> TerminalLink {
+      TerminalLink(
+        text: "out.csv", kind: .path(path: "out.csv", line: nil, column: nil),
+        spans: [LinkSpan(row: row, start: 2, end: 9)])
+    }
+    #expect(TmuxPaneDirectories.directory(in: entries, for: link(row: 2)) == "/srv/first | project")
+    #expect(TmuxPaneDirectories.directory(in: entries, for: link(row: 12)) == "/srv/second")
+    #expect(TmuxPaneDirectories.directory(in: entries, for: link(row: 0)) == nil, "status line")
+    #expect(TmuxPaneDirectories.directory(in: entries, for: link(row: 10)) == nil, "pane border")
+    let switched = try #require(TmuxPaneDirectories.parse(text
+      .replacingOccurrences(of: "|0|0|19|", with: "|1|0|19|")
+      .replacingOccurrences(of: "%1|0|10|80|9|0|0|0|1|", with: "%1|0|10|80|9|0|0|0|0|")))
+    #expect(TmuxPaneDirectories.directory(in: switched, for: nil) == "/srv/first | project")
+    #expect(TmuxPaneDirectories.parse("bad") == nil)
+    #expect(TmuxPaneDirectories.parse("") == nil)
+    #expect(TmuxPaneDirectories.listCommand(session: "$2")?.contains("#{pane_current_path}") == true)
+    #expect(TmuxPaneDirectories.listCommand(session: "$2'; touch /tmp/unsafe") == nil)
+  }
 }

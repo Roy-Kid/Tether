@@ -2,7 +2,6 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <!-- Product roles follow Windows appearance and contrast settings. -->
  <SolidColorBrush x:Key="ChromeWindowBrush" Color="{ThemeResource SolidBackgroundFillColorBase}" />
- <SolidColorBrush x:Key="ChromeSidebarBrush" Color="{ThemeResource SolidBackgroundFillColorSecondary}" />
  <SolidColorBrush x:Key="ChromeRaisedBrush" Color="{ThemeResource LayerFillColorDefault}" />
  <SolidColorBrush x:Key="ChromeStrokeBrush" Color="{ThemeResource DividerStrokeColorDefault}" />
  <SolidColorBrush x:Key="ChromeTextBrush" Color="{ThemeResource TextFillColorPrimary}" />

@@ -153,3 +153,24 @@ contents and the manifest to prevent stale permissions being reused.
 The Nerve example lives in Nerve's `surfaces/tether`, independently of the
 host, with SSE-driven jobs, structured status and ribbon contributions. Its hub
 is an independently running service, not code loaded or launched by the plugin.
+
+## Tab indicator contribution (2026-10-19)
+
+`tabIndicator` grants `host.tabIndicators`: a complete replacement array of
+`{target:{host,terminal},color,label}`. The target is a lowercase actual hostname
+and controlling TTY path, not a user-facing host alias or tab title. The generic
+TetherPluginKit types are `PluginTerminalIdentity` and `PluginTabIndicator`;
+native plugins expose their set through `TetherPlugin.tabIndicators`.
+
+The gateway validates the complete set before publishing it: at most 512 unique
+targets, colors in 0...0xFFFFFF, host/TTY lengths 255/256 and nonempty labels up to
+256 characters. Marks belong to activations. Unload clears that session only;
+disable/uninstall clears the background too. A tabIndicator-only plugin starts a
+background page without creating a ribbon. Competing enabled plugins use registry
+order; task priority remains the provider's business.
+
+The app draws one 6pt circle before the tab title, in both Mac tab layouts, for
+the focused terminal of a workspace. Local identity reuses the producer TTY and
+ProcessInfo.hostName; remote identity reuses ShellTTY and executes hostname over
+the current authenticated lease. An unknown/disconnected identity yields no mark.
+This slot conveys data only and adds no terminal-input capability.

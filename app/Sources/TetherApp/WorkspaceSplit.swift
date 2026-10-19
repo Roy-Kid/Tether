@@ -3,11 +3,12 @@ import Foundation
 /// App-owned panes. Each leaf displays one existing workspace; the session and
 /// its connection remain owned by TabSet, never by the layout.
 enum SplitDirection: String, CaseIterable, Codable {
-  case right, down
+  case left, right, up, down
 }
 
 indirect enum WorkspaceSplit: Equatable, Codable {
   case tab(UUID)
+  /// Children are in visual order: left to right or top to bottom.
   case split(SplitDirection, WorkspaceSplit, WorkspaceSplit)
 
   var ids: [UUID] {

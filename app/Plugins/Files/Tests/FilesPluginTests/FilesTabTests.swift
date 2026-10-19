@@ -14,6 +14,9 @@ private final class HostProbe {
   var shown = 0
   var focused = 0
   var workingDirectory: String?
+  var paneDirectory: String?
+  var directoryGate: Gate?
+  var directoryRequests = 0
 
   func context() -> TabContext {
     TabContext(
@@ -24,6 +27,11 @@ private final class HostProbe {
       focus: { [weak self] in self?.focused += 1 }, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
       insertText: { [weak self] in self?.typed.append($0) },
       workingDirectory: { [weak self] in self?.workingDirectory },
+      resolveWorkingDirectory: { [weak self] _ in
+        self?.directoryRequests += 1
+        await self?.directoryGate?.wait()
+        return self?.paneDirectory ?? self?.workingDirectory
+      },
       showAccessory: { [weak self] in self?.shown += 1 })
   }
 }
@@ -32,9 +40,13 @@ private final class HostProbe {
 /// never the real Application Support.
 @MainActor
 func scratchEditing() -> EditingCopies {
-  EditingCopies(
+  let copies = EditingCopies(
     host: UUID(), label: "lab",
     base: FileManager.default.temporaryDirectory.appendingPathComponent("files-editing-\(UUID())"))
+  // The watch asks the far side on its own. A test that is not about that
+  // leaves it quiet, so a touch meant for one check is not fetched first.
+  copies.watchEvery = .seconds(60)
+  return copies
 }
 
 private func scratchCache() -> FileCache {
@@ -87,6 +99,86 @@ struct FilesTabTests {
     "/home/ada/runs": .directory, "/home/ada/b.txt": .file, "/home/ada/A.png": .file,
     "/home/ada/.env": .file, "/home/ada/runs/plot.png": .file,
   ]
+
+  @Test("Files follows pane directories and leaves manual browsing alone between changes")
+  func followsPaneDirectory() async {
+    let source = StubSource(tree)
+    let host = HostProbe()
+    host.workingDirectory = "/home"
+    host.paneDirectory = "/home/ada/runs"
+    let model = browser(source, host: host)
+    defer { model.close() }
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/home/ada/runs")
+    await model.go(to: "/")
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/", "an unchanged pane does not undo manual browsing")
+    host.paneDirectory = "/home/ada"
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/home/ada")
+    #expect(model.history.last == "/")
+    let count = source.lists.count
+    await model.followTerminalDirectory()
+    #expect(source.lists.count == count, "unchanged directories are not relisted every second")
+  }
+
+  @Test("a late pane directory cannot undo manual navigation or reopen a closed tab")
+  func latePaneDirectory() async throws {
+    let host = HostProbe()
+    host.paneDirectory = "/home/ada/runs"
+    let gate = Gate()
+    host.directoryGate = gate
+    let model = browser(StubSource(tree), host: host)
+    await model.go(to: "/home/ada")
+    let following = Task { await model.followTerminalDirectory() }
+    try await settle(model) { host.directoryRequests == 1 }
+    await model.go(to: "/")
+    gate.open()
+    await following.value
+    #expect(model.directory == "/")
+    host.directoryGate = Gate()
+    let closing = Task { await model.followTerminalDirectory() }
+    try await settle(model) { host.directoryRequests == 2 }
+    model.close()
+    host.directoryGate?.open()
+    await closing.value
+    #expect(model.directory == "/")
+  }
+
+  @Test("pasted relative paths use the pane directory instead of the outer shell")
+  func queryUsesPaneDirectory() async {
+    let host = HostProbe()
+    host.workingDirectory = "/"
+    host.paneDirectory = "/home/ada/runs"
+    let model = browser(StubSource(tree), host: host)
+    defer { model.close() }
+    await model.go(to: "/")
+    model.beginFind()
+    await model.revealQuery("plot.png", commit: model.findCommit)
+    #expect(model.selection == ["/home/ada/runs/plot.png"])
+    #expect(!model.finding)
+  }
+
+  @Test("terminal download and edit commands open Files to present their controls")
+  func linkCommandsShowBrowser() async throws {
+    let host = HostProbe()
+    let model = browser(StubSource(tree), host: host)
+    defer { model.close() }
+    await model.go(to: "/home/ada")
+    let actions = try #require(model.actions(for: pointed("b.txt", in: "/home/ada")))
+    #expect(actions.commands.contains { $0.id == "quickLook" })
+    #if os(macOS)
+      let edit = try #require(actions.commands.first { $0.id == "edit" })
+      edit.action()
+      try await settle(model) { host.shown == 1 }
+    #endif
+    let before = host.shown
+    let download = try #require(actions.commands.first { $0.id == "download" })
+    download.action()
+    try await settle(model) { !model.pendingSave.isEmpty }
+    #expect(host.shown == before + 1)
+    #expect(model.pendingSave.map(\.path) == ["/home/ada/b.txt"])
+  }
 
   @Test("a reopened tab restores the browser's directory on a fresh attachment")
   func restoreDirectory() async throws {
@@ -145,6 +237,39 @@ struct FilesTabTests {
     try await settle(model) { opens >= 2 && model.directory == "/home/ada" }
     #expect(model.problem == nil)
     #expect(model.visible.map(\.name).contains("A.png"))
+  }
+
+  @Test("wrappers of the same lease keep files open",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func connectionIdentityUsesLease() async throws {
+    let shell = try await TerminalSession.local()
+    defer { shell.close() }
+    let connection = try #require(shell.connection)
+    let context = TabContext(
+      id: UUID(),
+      plugin: PluginContext(connection: connection, hostLabel: "local", hostID: UUID(),
+        openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
+      focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {}, insertText: { _ in })
+    var sources: [StubSource] = []
+    let model = FilesTab(tab: context, cache: scratchCache(), editing: scratchEditing(),
+      open: { _ in
+        let source = StubSource(tree)
+        sources.append(source)
+        return source
+      }, present: { _ in }, defaults: cleanDefaults())
+    defer { model.close() }
+    await model.go(to: "/home/ada/runs")
+    let wrapper = try #require(shell.connection)
+    #expect(wrapper !== connection)
+    #expect(wrapper.leaseID() == connection.leaseID())
+    model.connectionChanged(wrapper)
+    await Task.yield()
+    #expect(sources.count == 1)
+    #expect(!sources[0].closed)
+
+    #expect(model.directory == "/home/ada/runs")
+    #expect(model.entries.map(\.name) == ["plot.png"])
+    #expect(model.problem == nil)
   }
 
   @Test("a lease that arrives after a failed open still lists")

@@ -6,8 +6,9 @@ enum WorkspaceAction: String, CaseIterable {
   case previousTab, nextTab, renameTerminal, manageHosts
   case toggleTabBar
   case restoreTab
-  case splitRight, splitDown, joinGroups
+  case splitLeft, splitRight, splitUp, splitDown, joinGroups
   case reconnect
+  case quickTerminal, restoreWindow, alwaysOnTop
 
   /// The tab bar, zen and closing the window belong to a Mac window. The inspector and splits
   /// are here everywhere, and `TabSet.canPerform` keeps them to a window
@@ -16,7 +17,7 @@ enum WorkspaceAction: String, CaseIterable {
     #if os(macOS)
       allCases
     #else
-      allCases.filter { $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow }
+      allCases.filter { $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow && $0 != .quickTerminal && $0 != .restoreWindow && $0 != .alwaysOnTop }
     #endif
   }
 
@@ -40,6 +41,9 @@ enum WorkspaceAction: String, CaseIterable {
     case .restoreTab: definition("Reopen Closed Tab", "File", KeyBinding("t", [.command, .shift]))
     case .commandMenu:
       definition("Command Palette", "View", KeyBinding("p", [.command, .shift]), KeyBinding("p", [.control, .shift]))
+    case .quickTerminal: definition("Toggle Quick Terminal", "Window", KeyBinding("`", .control))
+    case .restoreWindow: definition("Return to Normal Window", "Window")
+    case .alwaysOnTop: definition("Keep Window on Top", "Window")
     case .quickSwitch: definition("Quick Switch…", "View", KeyBinding("p"))
     case .inspector: definition("Inspector", "View")
     // No default: ⌘S is Save on a Mac, and hiding the strip is rare.
@@ -52,6 +56,8 @@ enum WorkspaceAction: String, CaseIterable {
       definition("Next Tab", "Window", KeyBinding("right", [.command, .option]), KeyBinding("]", [.command, .shift]))
     case .renameTerminal: definition("Rename Terminal…", "Terminal", KeyBinding("r"))
     case .manageHosts: definition("Manage Hosts…", "Host")
+    case .splitLeft: definition("Split Left", "Terminal")
+    case .splitUp: definition("Split Up", "Terminal")
     case .splitRight: definition("Split Right", "Terminal", KeyBinding("\\"))
     case .splitDown: definition("Split Down", "Terminal", KeyBinding("\\", [.command, .shift]))
     case .joinGroups: definition("Join All Splits", "Terminal")
@@ -125,6 +131,12 @@ extension TabSet {
     case .zen: zen ? "Exit Zen Mode" : action.command.title
     case .toggleTabBar: showsTabBar ? "Hide Tab Bar" : "Show Tab Bar"
     case .reconnect: current?.host.isLocal == true ? "Restart" : action.command.title
+    case .alwaysOnTop:
+      #if os(macOS)
+        quickTerminal.alwaysOnTop ? "Stop Keeping Window on Top" : action.command.title
+      #else
+        action.command.title
+      #endif
     case .closeTerminal: closesWindow ? "Close Window" : action.command.title
     default: action.command.title
     }
@@ -170,11 +182,29 @@ extension TabSet {
     switch action {
     case .closeTerminal: hasSomethingToClose || closesWindow
     case .closeTab: hasSomethingToClose
+    case .quickTerminal:
+      #if os(macOS)
+        quickTerminal.enabled
+      #else
+        false
+      #endif
+    case .restoreWindow:
+      #if os(macOS)
+        quickTerminal.isQuick
+      #else
+        false
+      #endif
+    case .alwaysOnTop:
+      #if os(macOS)
+        true
+      #else
+        false
+      #endif
     case .restoreTab: canRestoreTab
     case .renameTerminal: current != nil
     case .renameTab: currentWorkspace != nil
     case .previousTerminal, .nextTerminal: currentTerminals.count > 1
-    case .splitRight, .splitDown:
+    case .splitLeft, .splitRight, .splitUp, .splitDown:
       wide && (current.map { $0.isLive || $0.host.isLocal } ?? false)
     case .joinGroups: workspaceSplit != nil
     case .reconnect: current?.canReconnect == true
@@ -187,6 +217,18 @@ extension TabSet {
   func perform(_ action: WorkspaceAction) {
     guard canPerform(action) else { return }
     switch action {
+    case .quickTerminal:
+      #if os(macOS)
+        quickTerminal.toggle()
+      #endif
+    case .restoreWindow:
+      #if os(macOS)
+        quickTerminal.restore()
+      #endif
+    case .alwaysOnTop:
+      #if os(macOS)
+        quickTerminal.alwaysOnTop.toggle()
+      #endif
     case .newTerminal: intent = currentWorkspace.map { .addTerminal($0.id) } ?? .newTerminal
     case .newTab: intent = .newTab
     case .closeTerminal: requestCloseFocused()
@@ -206,6 +248,10 @@ extension TabSet {
     case .nextTab: cycleTab(forward: true)
     case .renameTerminal: renaming = current?.id
     case .manageHosts: SettingsRoute.shared.show()
+    case .splitLeft:
+      if let id = current?.id { intent = .splitTerminal(id, .left) }
+    case .splitUp:
+      if let id = current?.id { intent = .splitTerminal(id, .up) }
     case .splitRight:
       if let id = current?.id { intent = .splitTerminal(id, .right) }
     case .splitDown:

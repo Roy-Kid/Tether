@@ -101,6 +101,10 @@ public struct TabContext {
   /// The directory the tab's shell last reported, if it reports one. What
   /// a relative path printed in the terminal is most likely relative to.
   public let workingDirectory: () -> String?
+  /// The directory of the terminal's active program, or of the pane that
+  /// contains a printed link. Attachments can supply it when the outer
+  /// shell's reported directory no longer describes what is on screen.
+  public let resolveWorkingDirectory: (TerminalLink?) async -> String?
   /// Brings this plugin's accessory up on this tab, if it is not already —
   /// to show something the person asked for from the terminal.
   public let showAccessory: () -> Void
@@ -133,6 +137,7 @@ public struct TabContext {
     insertText: @escaping (String) -> Void = { _ in },
     runInTerminal: @escaping (String) -> Void = { _ in },
     workingDirectory: @escaping () -> String? = { nil },
+    resolveWorkingDirectory: ((TerminalLink?) async -> String?)? = nil,
     showAccessory: @escaping () -> Void = {},
     linkActions: @escaping (PointedLink) -> LinkActions? = { _ in nil },
     shells: @escaping () -> [ShellChoice] = { [] },
@@ -152,6 +157,7 @@ public struct TabContext {
     self.insertText = insertText
     self.runInTerminal = runInTerminal
     self.workingDirectory = workingDirectory
+    self.resolveWorkingDirectory = resolveWorkingDirectory ?? { _ in workingDirectory() }
     self.showAccessory = showAccessory
     self.linkActions = linkActions
     self.shells = shells
@@ -213,6 +219,9 @@ public protocol TabAttachment: AnyObject {
   var isShowing: Bool { get }
   /// Beside the tab's name while showing.
   var subtitle: String { get }
+  /// SF Symbol in front of the tab's name while this stands in for the shell.
+  /// Empty leaves the host's terminal mark, or a `tabSymbols` entry.
+  var symbol: String { get }
   /// What is showing lost its connection. The host words it, once, in its
   /// own status bar.
   var isDisconnected: Bool { get }
@@ -245,6 +254,9 @@ public protocol TabAttachment: AnyObject {
   /// for nothing. Asked when a person points, and answered at once: anything
   /// slow — checking the path exists — happens inside the actions.
   func actions(for pointed: PointedLink) -> LinkActions?
+  /// Where the active program is, or the pane containing `link`. `nil`
+  /// leaves directory resolution to another attachment or the shell.
+  func workingDirectory(for link: TerminalLink?) async -> String?
   /// A wheel at the cell under the pointer, in lines. Positive goes back.
   ///
   /// `column` and `row` are that cell on the live grid. `.pass` leaves the
@@ -261,11 +273,13 @@ public protocol TabAttachment: AnyObject {
 }
 
 extension TabAttachment {
+  public var symbol: String { "" }
   public var requiresCloseConfirmation: Bool { false }
   public var restorationState: Data? { nil }
   public func restore(from state: Data) {}
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
+  public func workingDirectory(for link: TerminalLink?) async -> String? { nil }
   public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim { .pass }
   public var shellInputWaits: Bool { false }
   public func restoreShellForInput() async {}

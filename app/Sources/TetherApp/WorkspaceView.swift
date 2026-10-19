@@ -42,6 +42,12 @@ struct RootView: View {
   /// kept — or a host that cannot be connected to as configured.
   @State private var notice: WorkspaceNotice?
   @AppStorage("appearance") private var appearance = "system"
+  #if os(macOS)
+    @AppStorage(TetherUI.Palette.colorStyleKey) private var theme = TetherUI.Palette.defaultColorStyle
+    @AppStorage(WorkspaceAppearance.opacityKey) private var backgroundOpacity = WorkspaceAppearance.defaultOpacity
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+  #endif
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
   @Environment(\.openURL) private var openURL
   #if os(macOS)
@@ -88,10 +94,12 @@ struct RootView: View {
 
   #if os(macOS)
     private var macWorkspace: some View {
-      ZStack(alignment: .bottomLeading) {
+      let opacity = WorkspaceAppearance.opacity(theme: theme, stored: backgroundOpacity,
+        reduceTransparency: reduceTransparency, contrast: contrast)
+      return ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
           if tabs.showsTabBar && tabLayout == .horizontal {
-            WorkspaceTabBar(tabs: tabs, onClose: { id in
+            WorkspaceTabBar(tabs: tabs, registry: registry, onClose: { id in
               if tabs.workspaces.contains(where: { $0.id == id }) { tabs.requestCloseWorkspace(id) }
               else { tabs.requestClose(id) }
             })
@@ -104,11 +112,11 @@ struct RootView: View {
               Color.clear.background { WindowDragArea() }
             }
             .frame(height: tabs.zen ? Chrome.titlebar : Chrome.tab)
-            .background(tabs.zen ? Theme.window : Theme.sidebar)
+            .background { WorkspaceMaterial() }
           }
           HSplitView {
             if tabs.showsTabBar && tabLayout == .vertical {
-              WorkspaceTabBar(tabs: tabs, layout: .vertical, onClose: { id in
+              WorkspaceTabBar(tabs: tabs, registry: registry, layout: .vertical, onClose: { id in
               if tabs.workspaces.contains(where: { $0.id == id }) { tabs.requestCloseWorkspace(id) }
               else { tabs.requestClose(id) }
             })
@@ -121,9 +129,10 @@ struct RootView: View {
             // row as the listing it controls (design 16-inspector).
             if showInspector {
               inspectorPane
+                .scrollContentBackground(opacity < 1 ? .hidden : .automatic)
                 .frame(minWidth: Chrome.inspectorMin, idealWidth: Chrome.inspectorIdeal, maxWidth: Chrome.inspectorMax)
                 .frame(maxHeight: .infinity)
-                .background(Theme.sidebar)
+                .background { WorkspaceMaterial() }
             }
           }
           if !tabs.zen {
@@ -153,8 +162,9 @@ struct RootView: View {
             .padding(.bottom, Chrome.status + UIStyle.Space.group)
         }
       }
-      .background(Theme.window)
+      .background { WorkspaceBackdrop() }
       .background { CompactTitlebar(closeRequests: tabs.windowCloseRequests) }
+      .environment(\.workspaceBackgroundOpacity, opacity)
       .ignoresSafeArea(.container, edges: .top)
       .onChange(of: tabLayout) { _, _ in
         tabs.accessory = nil
@@ -464,10 +474,20 @@ struct RootView: View {
               .allowsHitTesting(false)
           }
         })
-    case .split(.right, let first, let second):
-      return AnyView(HSplitView { splitCanvas(first); splitCanvas(second) })
-    case .split(.down, let first, let second):
-      return AnyView(VSplitView { splitCanvas(first); splitCanvas(second) })
+    case .split(.left, let first, let second), .split(.right, let first, let second):
+      return AnyView(GeometryReader { geometry in
+        HSplitView {
+          splitCanvas(first).frame(idealWidth: geometry.size.width / 2)
+          splitCanvas(second).frame(idealWidth: geometry.size.width / 2)
+        }
+      })
+    case .split(.up, let first, let second), .split(.down, let first, let second):
+      return AnyView(GeometryReader { geometry in
+        VSplitView {
+          splitCanvas(first).frame(idealHeight: geometry.size.height / 2)
+          splitCanvas(second).frame(idealHeight: geometry.size.height / 2)
+        }
+      })
     }
   }
   #endif
@@ -756,9 +776,9 @@ struct RootView: View {
       switch layout {
       case .tab(let id):
         return AnyView(touchPane(id))
-      case .split(.right, let first, let second):
+      case .split(.left, let first, let second), .split(.right, let first, let second):
         return AnyView(HStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
-      case .split(.down, let first, let second):
+      case .split(.up, let first, let second), .split(.down, let first, let second):
         return AnyView(VStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
       }
     }
@@ -1168,6 +1188,10 @@ extension RootView {
         tab?.send(.key(.enter))
       },
       workingDirectory: { [weak tab] in tab?.workingDirectory },
+      resolveWorkingDirectory: { [weak tab] link in
+        guard let tab else { return nil }
+        return await workingDirectory(for: link, on: tab)
+      },
       showAccessory: { tabs.showAccessory(pluginID, on: id) },
       linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
       shells: {
@@ -1199,9 +1223,20 @@ extension RootView {
       actions: { [weak tab] link in
         guard let tab else { return nil }
         return linkActions(
-          for: PointedLink(link: link, directory: { [weak tab] in tab?.workingDirectory }),
+          for: PointedLink(link: link, directory: { [weak tab] in
+            guard let tab else { return nil }
+            return await workingDirectory(for: link, on: tab)
+          }),
           on: tab)
       })
+  }
+
+  private func workingDirectory(for link: TerminalLink?, on tab: SessionTab) async -> String? {
+    for plugin in tabs.accessories { prepareAttachment(plugin.id, on: tab) }
+    for item in tab.attachments {
+      if let directory = await item.attachment.workingDirectory(for: link) { return directory }
+    }
+    return tab.workingDirectory
   }
 
   /// Everything offered for a link on a tab, as one.

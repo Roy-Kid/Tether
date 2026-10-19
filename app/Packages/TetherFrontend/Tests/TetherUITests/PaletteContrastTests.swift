@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import Tether
 
@@ -19,12 +20,14 @@ import Tether
     // Black is a background colour on a dark ground; text in it is meant
     // to vanish. Bright black is the dim grey for what should recede.
     "dark": [0: 0, 8: seen],
+    "softDark": [0: 0, 8: seen],
     // Bright white on near-white can be light or legible, not both. It
     // stays the lightest grey of the four so it still sorts above white.
     "light": [15: seen],
   ]
 
-  @Test(arguments: [("dark", Palette.dark), ("light", Palette.light)])
+  @Test(arguments: [("dark", Palette.dark), ("light", Palette.light),
+                    ("softDark", Palette.softDark), ("softLight", Palette.softLight)])
   func everySlotClearsItsFloor(name: String, palette: Palette) {
     let form = palette.remoteForm
     #expect(ratio(form.foreground, form.background) >= Self.text, "\(name) foreground")
@@ -45,6 +48,26 @@ import Tether
         luminance(ansi[index + 8]) > luminance(ansi[index]),
         "light bright slot \(index + 8) is not lighter than \(index)")
     }
+  }
+
+  @Test("soft and classic share appearance selection and keep the correct terminal environment")
+  func appearanceSelection() {
+    #expect(Palette.chosen(setting: "system", scheme: .dark, style: "soft") == .softDark)
+    #expect(Palette.chosen(setting: "system", scheme: .light, style: "soft") == .softLight)
+    #expect(Palette.chosen(setting: "light", scheme: .dark, style: "soft") == .softLight)
+    #expect(Palette.chosen(setting: "dark", scheme: .light, style: "soft") == .softDark)
+    #expect(Palette.chosen(setting: "system", scheme: .dark, style: "frosted") == .dark)
+    #expect(Palette.chosen(setting: "system", scheme: .light, style: "frosted") == .light)
+    for scheme in [SwiftUI.ColorScheme.light, .dark] {
+      let glass = Palette.chosen(setting: "system", scheme: scheme, style: "frosted")
+      let classic = Palette.chosen(setting: "system", scheme: scheme, style: "classic")
+      #expect(glass.remoteForm == classic.remoteForm, "glass changes the window material, never ANSI colors")
+    }
+    // Existing SDK callers that omit style retain their original contract.
+    #expect(Palette.chosen(setting: "dark", scheme: .light) == .dark)
+    #expect(Palette.chosen(setting: "light", scheme: .dark, style: "classic") == .light)
+    #expect(Palette.dark.isDark && Palette.softDark.isDark)
+    #expect(!Palette.light.isDark && !Palette.softLight.isDark)
   }
 
   private func ratio(_ one: TerminalColor, _ other: TerminalColor) -> Double {

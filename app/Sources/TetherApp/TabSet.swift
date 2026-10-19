@@ -68,6 +68,9 @@ enum WorkspaceIntent: Equatable {
 @Observable
 final class TabSet {
   let keyBindings = KeyBindingStore()
+  #if os(macOS)
+    let quickTerminal: QuickTerminalController
+  #endif
   var tabs: [SessionTab] = []
   var workspaces: [TerminalWorkspace] = []
   var renamingWorkspace: UUID?
@@ -158,7 +161,12 @@ final class TabSet {
     let base = layout.ids.contains(id) ? layout : layout.replacing(page.focused, with: .tab(id))
     adopt(newTab, in: page.id)
     if let index = workspaces.firstIndex(where: { $0.id == page.id }) {
-      workspaces[index].layout = base.replacing(id, with: .split(direction, .tab(id), .tab(newTab.id)))
+      let panes: WorkspaceSplit
+      switch direction {
+      case .left, .up: panes = .split(direction, .tab(newTab.id), .tab(id))
+      case .right, .down: panes = .split(direction, .tab(id), .tab(newTab.id))
+      }
+      workspaces[index].layout = base.replacing(id, with: panes)
     }
     persistHistory()
   }
@@ -215,6 +223,9 @@ final class TabSet {
     }
   ) {
     self.defaults = defaults
+    #if os(macOS)
+      quickTerminal = QuickTerminalController(defaults: defaults)
+    #endif
     self.historyStore = historyStore
     closedTabs = historyStore?.load() ?? []
     historyProblem = historyStore?.problem

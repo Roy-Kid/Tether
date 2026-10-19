@@ -133,6 +133,12 @@ final class SessionTab: Identifiable {
   /// The far-side tty, once a listing has named it. A local shell already
   /// has one on the session; this is only for a connection that does not.
   private var shellTTY: String?
+  private var terminalHost: String?
+  private var identityTask: Task<Void, Never>?
+  var pluginTerminalIdentity: PluginTerminalIdentity? {
+    guard isLive, let terminalHost, let terminalName else { return nil }
+    return PluginTerminalIdentity(host: terminalHost, terminal: terminalName)
+  }
   private var ttySearch: Task<Void, Never>?
   /// Set when the view has reported a size. Until then the pty is still the
   /// 80×24 it was opened at, which cannot pick this shell out of several.
@@ -239,6 +245,8 @@ final class SessionTab: Identifiable {
     closeCheck.reset()
     ttySearch?.cancel()
     shellTTY = nil
+    identityTask?.cancel()
+    terminalHost = nil
     // The last screen stays until the new shell draws one: a reconnect
     // that fails again must not take what the person was reading with it.
     noteDamage(nil)
@@ -316,6 +324,17 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
+    identityTask?.cancel()
+    terminalHost = host.isLocal ? ProcessInfo.processInfo.hostName : nil
+    if !host.isLocal, let connection = session.connection {
+      identityTask = Task { [weak self] in
+        guard let output = try? await connection.execute("hostname"), output.status == 0,
+          let value = String(data: output.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty, value.count <= 255, !value.contains(where: { $0.isWhitespace }),
+          !Task.isCancelled, let self, self.session === session else { return }
+        self.terminalHost = value
+      }
+    }
     closeCheck.reset()
     reportHistoryError()
     // Before the first byte where possible: a program can ask what the
@@ -380,7 +399,7 @@ final class SessionTab: Identifiable {
   private func startPumping(_ session: TerminalSession) {
     pump = Task { [weak self] in
       while await session.awaitChange() {
-        guard let self, !Task.isCancelled else { return }
+        guard let self, !Task.isCancelled, self.session === session else { return }
         self.closeCheck.noteActivity()
         let pause = ProcessInfo.processInfo.isLowPowerModeEnabled ? 33 : 8
         do { try await Task.sleep(for: .milliseconds(pause)) } catch { return }
@@ -403,7 +422,8 @@ final class SessionTab: Identifiable {
         guard self.publishesFrames else { continue }
         let epoch = self.resizeEpoch
         let update = await Self.copyUpdate(session)
-        guard !Task.isCancelled, self.publishesFrames else { continue }
+        guard !Task.isCancelled, self.session === session else { return }
+        guard self.publishesFrames else { continue }
         // A resize landed while this copy was in flight. The copy may be
         // the grid from before it; the screen now is the one to draw.
         if self.resizeEpoch != epoch {
@@ -416,11 +436,14 @@ final class SessionTab: Identifiable {
 
       // One last repaint. The final frame is announced before the
       // ending is, so stopping here would leave a program's last line
-      // undrawn.
-      guard let self else { return }
+      // undrawn. A cancelled reader may wake here after redial; only the
+      // current session can publish its final frame or end this tab.
+      guard let self, !Task.isCancelled, self.session === session else { return }
       let copied = session.takeClipboard()
       if self.publishesFrames, let copied { copyToPasteboard(copied) }
-      self.publish(await Self.copyUpdate(session), session: session)
+      let update = await Self.copyUpdate(session)
+      guard !Task.isCancelled, self.session === session else { return }
+      self.publish(update, session: session)
       self.finish(session.ending())
     }
   }
@@ -489,7 +512,7 @@ final class SessionTab: Identifiable {
     guard publishing, let session, !closed else { return }
     Task { [weak self] in
       let update = await Self.copyUpdate(session)
-      guard let self, self.publishesFrames, !self.closed else { return }
+      guard let self, self.publishesFrames, !self.closed, self.session === session else { return }
       self.publish(update, session: session)
     }
   }
@@ -717,6 +740,8 @@ final class SessionTab: Identifiable {
   }
 
   func close() {
+    identityTask?.cancel()
+    terminalHost = nil
     closed = true
     problem = nil
     passwordOffer = nil

@@ -31,7 +31,8 @@ extension TabSet {
     var result = [TerminalMenuItem("Switch Terminal", children: choices), .separator,
       item(.newTerminal), item(.newTab)]
     #if os(macOS)
-      result += [item(.splitRight, enabled: canSplit), item(.splitDown, enabled: canSplit),
+      result += [item(.splitLeft, enabled: canSplit), item(.splitRight, enabled: canSplit),
+        item(.splitUp, enabled: canSplit), item(.splitDown, enabled: canSplit),
         item(.joinGroups, enabled: page.layout != nil)]
     #endif
     result += [.separator, item(.renameTerminal), item(.closeTerminal)]

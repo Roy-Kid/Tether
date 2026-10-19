@@ -28,7 +28,22 @@ public struct TerminalSurface: View {
   /// `nil` redraws every row. An empty set redraws none of them.
   let dirtyRows: Set<Int>?
   let active: Bool
-  let inset: CGFloat
+  private let explicitInset: CGFloat?
+  public static let insetPreferenceKey = "terminalInset"
+  public static var defaultInset: Double {
+    #if os(macOS)
+      16
+    #else
+      12
+    #endif
+  }
+  @AppStorage(Self.insetPreferenceKey) private var preferredInset = Self.defaultInset
+
+  private var inset: CGFloat {
+    if let explicitInset { return explicitInset }
+    let value = preferredInset.isFinite ? preferredInset : Self.defaultInset
+    return CGFloat(min(40, max(0, value)))
+  }
   let onInput: (TerminalInput) -> Void
   let onResize: (UInt16, UInt16) -> Void
   let onFocus: () -> Void
@@ -58,9 +73,10 @@ public struct TerminalSurface: View {
   /// Shared with the phone's key row, so a lit Ctrl is the chord that is sent.
   @State private var latch = Latch()
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage("terminalFontSize") private var fontSize = 13.0
-  @AppStorage("terminalAppearance") private var appearance = "system"
+  @AppStorage(Palette.colorStyleKey) private var colorStyle = Palette.defaultColorStyle
   @AppStorage(TerminalFonts.primaryKey) private var primaryFont = TerminalFonts.defaultPrimary
   @AppStorage(TerminalFonts.wideKey) private var wideFont = "PingFang SC"
   @Environment(\.displayScale) private var displayScale
@@ -75,7 +91,7 @@ public struct TerminalSurface: View {
 
   public init(
     frame: ScreenFrame, dirtyRows: Set<Int>? = nil, active: Bool = true,
-    inset: CGFloat = UIStyle.Space.inset,
+    inset: CGFloat? = nil,
     onInput: @escaping (TerminalInput) -> Void,
     onResize: @escaping (UInt16, UInt16) -> Void = { _, _ in },
     onFocus: @escaping () -> Void = {},
@@ -89,7 +105,7 @@ public struct TerminalSurface: View {
     self.frame = frame
     self.dirtyRows = dirtyRows
     self.active = active
-    self.inset = inset
+    explicitInset = inset
     self.onInput = onInput
     self.onResize = onResize
     self.onFocus = onFocus
@@ -104,7 +120,7 @@ public struct TerminalSurface: View {
     let _ = fontRevision
     let scale = layerScale ?? displayScale
     let metrics = self.metrics ?? FontMetrics(size: min(24, max(10, fontSize)), scale: scale, primary: primaryFont, wide: wideFont)
-    let palette = Palette.chosen(setting: appearance, scheme: scheme)
+    let palette = Palette.chosen(setting: "system", scheme: scheme, style: colorStyle)
     VStack(spacing: 0) {
       grid(metrics: metrics, palette: palette)
       #if os(iOS)
@@ -183,12 +199,16 @@ public struct TerminalSurface: View {
       }
       .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: frame.viewportOffset > 0)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .background(palette.background)
+      .background(backgroundOpacity < 1 ? Color.clear : palette.background)
       .clipped()
       .onAppear { applyFit(geometry.size, metrics) }
       .onChange(of: geometry.size) { _, size in noteSize(size, metrics) }
       .onChange(of: frame.columns) { _, _ in selection = nil }
       .onChange(of: frame.rows) { _, _ in selection = nil }
+      .onChange(of: inset) { _, _ in
+        selection = nil
+        applyFit(geometry.size, metrics)
+      }
       .onChange(of: fontSize) { _, _ in
         applyFit(geometry.size, metrics)
       }

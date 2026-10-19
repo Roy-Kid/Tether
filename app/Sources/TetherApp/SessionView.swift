@@ -11,20 +11,21 @@ struct SessionView: View {
   var menuItems: [TerminalMenuItem] = []
   var active = true
   var onFocus: () -> Void = {}
-  @AppStorage("terminalAppearance") private var appearance = "system"
+  @AppStorage(TetherUI.Palette.colorStyleKey) private var colorStyle = TetherUI.Palette.defaultColorStyle
   @Environment(\.colorScheme) private var scheme
 
   /// What the surface below will draw with, and what the far side is told.
+  /// The window already followed the system theme; the grid follows that.
   ///
   /// Qualified: this app's own `Palette` is the command palette, which is a
   /// different thing with the same name.
   private var palette: TetherUI.Palette {
-    TetherUI.Palette.chosen(setting: appearance, scheme: scheme)
+    TetherUI.Palette.chosen(setting: "system", scheme: scheme, style: colorStyle)
   }
 
   var body: some View {
     ZStack {
-      palette.background
+      Color.clear
       switch tab.stage {
       case .connecting, .asking:
         // A reconnect keeps the screen it is trying to bring back.
@@ -43,7 +44,6 @@ struct SessionView: View {
     // Marks and the spinner follow the terminal, so a dark grid in a light
     // window still has light chrome on it.
     .terminalContextMenu(menuItems)
-    .environment(\.colorScheme, palette == .dark ? .dark : .light)
     // The far side is told what this window draws with, and told again when
     // that changes: a program asks once, at the start, and paints itself for
     // the answer it got.

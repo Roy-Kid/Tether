@@ -14,6 +14,7 @@ import TetherUI
 /// The same tabs in the titlebar or in a column beside the terminal.
 struct WorkspaceTabBar: View {
   @Bindable var tabs: TabSet
+  var registry: PluginRegistry? = nil
   var layout: TabLayout = .horizontal
   var onClose: (UUID) -> Void
   /// The chip the pointer is over. A close box on every tab at once is a
@@ -21,20 +22,13 @@ struct WorkspaceTabBar: View {
   /// strip with a way to close a tab.
   @State private var hovering: UUID?
   @State private var addTabID = UUID()
-  @Environment(\.colorScheme) private var scheme
-  @AppStorage("terminalAppearance") private var appearance = "system"
-
-  /// Same choice the grid draws with, so the open tab is the top of that surface.
-  private var palette: TetherUI.Palette {
-    TetherUI.Palette.chosen(setting: appearance, scheme: scheme)
-  }
 
   @ViewBuilder
   var body: some View {
     if layout == .vertical {
       tabList
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.sidebar)
+        .background { WorkspaceMaterial() }
     } else {
       titlebar
     }
@@ -48,7 +42,7 @@ struct WorkspaceTabBar: View {
         .background { WindowDragArea() }
     }
     .frame(height: Chrome.tab)
-    .background(Theme.sidebar)
+    .background { WorkspaceMaterial() }
     // Behind the chips, so an open terminal tab can cover it and continue
     // into the grid. An overlay would paint the line back on top.
     .background(alignment: .bottom) { Divider() }
@@ -71,12 +65,6 @@ struct WorkspaceTabBar: View {
     .anchorPreference(key: TabFrameKey.self, value: .bounds) { [addTabID: $0] }
   }
 
-  /// A terminal tab shares the grid's colour. An extension does not: its
-  /// page is the window, and the accent rule is what marks it open.
-  private func joinsTerminal(_ id: UUID) -> Bool {
-    tabs.workspaces.first { $0.id == id }.flatMap { page in tabs.tabs.first { $0.id == page.focused } }?.shown == nil
-  }
-
   private var tabList: some View {
     ScrollViewReader { proxy in
       ScrollView(layout == .vertical ? .vertical : .horizontal) {
@@ -86,8 +74,8 @@ struct WorkspaceTabBar: View {
         stack {
           ForEach(tabs.visibleWorkspaces) { tab in
             tabChip(
-              id: tab.id, title: tab.name, subtitle: tabs.caption(for: tab), symbol: nil,
-              disconnected: tabs.isDisconnected(tab))
+              id: tab.id, title: tab.name, subtitle: tabs.caption(for: tab),
+              symbol: symbol(for: tab), disconnected: tabs.isDisconnected(tab))
               .id(tab.id)
           }
           ForEach(tabs.visibleExtensions) { entry in
@@ -131,18 +119,35 @@ struct WorkspaceTabBar: View {
     layout == .vertical ? Chrome.tabSidebarRow : Chrome.tab
   }
 
-  /// A plugin's own symbol, or — on a terminal page that is down — the mark
-  /// that says so where it is, rather than over what the person is doing.
+  /// What sits in front of a terminal tab's name.
+  ///
+  /// A plugin's `tabSymbols` entry wins, then the attachment that is standing
+  /// in for the shell. Otherwise it is a terminal: the same mark for every
+  /// host, because a local shell is a host like any other.
+  private func symbol(for page: TerminalWorkspace) -> String {
+    guard let tab = tabs.tabs.first(where: { $0.id == page.focused }) else { return "terminal" }
+    if let identity = tab.pluginTerminalIdentity,
+      let symbol = registry?.tabSymbol(for: identity), !symbol.isEmpty
+    {
+      return symbol
+    }
+    if let shown = tab.shown, !shown.symbol.isEmpty { return shown.symbol }
+    return "terminal"
+  }
+
+  /// The tab's symbol, or — when the terminal is down — the mark that says
+  /// so, in the symbol's place.
   @ViewBuilder
   private func chipMark(symbol: String?, disconnected: Bool, color: Color) -> some View {
-    if let symbol {
-      Image(systemName: symbol)
-        .font(UIStyle.symbol)
-        .foregroundStyle(color)
-    } else if disconnected {
+    if disconnected {
       Image(systemName: "bolt.slash.fill")
         .font(UIStyle.symbol)
         .foregroundStyle(Theme.warning)
+        .accessibilityHidden(true)
+    } else if let symbol {
+      Image(systemName: symbol)
+        .font(UIStyle.symbol)
+        .foregroundStyle(color)
         .accessibilityHidden(true)
     }
   }
@@ -151,17 +156,24 @@ struct WorkspaceTabBar: View {
     id: UUID, title: String, subtitle: String, symbol: String?, disconnected: Bool = false
   ) -> some View {
     let selected = tabs.selectedWorkspaceID == id
-    let joined = selected && joinsTerminal(id)
     let focused = tabs.workspaces.first { $0.id == id }?.focused ?? id
     let tab = tabs.tabs.first { $0.id == focused }
-    let titleColor = joined ? palette.foreground : (selected ? Theme.text : Theme.subtle)
-    let secondary = joined ? palette.foreground.opacity(0.62) : Theme.subtle
+    let indicator = tab?.pluginTerminalIdentity.flatMap { registry?.tabIndicator(for: $0) }
+    let titleColor: Color = selected ? Theme.text : Theme.subtle
+    let secondary = Theme.subtle
     return HStack(spacing: UIStyle.Space.inline) {
       Button {
         tabs.handleTabClick(id)
       } label: {
         HStack(spacing: UIStyle.Space.inline) {
           chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
+          if let indicator, !disconnected {
+            Circle()
+              .fill(Color(hex: indicator.color))
+              .frame(width: 6, height: 6)
+              .help(indicator.label)
+              .accessibilityLabel(indicator.label)
+          }
           let labels = layout == .vertical
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
             : AnyLayout(HStackLayout(spacing: UIStyle.Space.inline))
@@ -189,9 +201,9 @@ struct WorkspaceTabBar: View {
       #if !os(macOS)
         .contextMenu { tabContextMenu(id) }
       #endif
-      .help(subtitle.isEmpty ? title : "\(title) · \(subtitle)")
+      .help([title, subtitle, indicator?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
       .accessibilityAddTraits(selected ? .isSelected : [])
-      .accessibilityValue(disconnected ? "Disconnected" : "")
+      .accessibilityValue(disconnected ? "Disconnected" : (indicator?.label ?? ""))
       // The space is held whether or not the cross is drawn: a tab that
       // grew by 18pt under the pointer would push the strip along.
       Button {
@@ -218,7 +230,8 @@ struct WorkspaceTabBar: View {
     .padding(.leading, layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.group)
     .padding(.trailing, layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small)
     .frame(height: rowHeight)
-    .background { tabFace(joined: joined, selected: selected) }
+    .background(Theme.accent.opacity(selected ? UIStyle.selectionOpacity : 0),
+      in: RoundedRectangle(cornerRadius: UIStyle.rowRadius))
     .onHover { inside in
       if inside {
         hovering = id
@@ -227,7 +240,7 @@ struct WorkspaceTabBar: View {
       }
     }
     .overlay(alignment: layout == .vertical ? .leading : .bottom) {
-      if selected && !joined {
+      if selected {
         Rectangle()
           .fill(Color.accentColor)
           .frame(
@@ -264,33 +277,20 @@ struct WorkspaceTabBar: View {
           ) { tabs.select(terminalID) })
         }
         menu.addItem(.separator())
+        let canSplit = tabs.tabs.first { $0.id == page.focused }
+          .map { tabs.wide && ($0.isLive || $0.host.isLocal) } ?? false
+        for action: WorkspaceAction in [.splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups] {
+          let item = ActionMenuItem(tabs.title(for: action)) { tabs.select(id); tabs.perform(action) }
+          item.isEnabled = action == .joinGroups ? page.layout != nil : canSplit
+          menu.addItem(item)
+        }
+        menu.addItem(.separator())
         menu.addItem(ActionMenuItem("Rename Tab…") { tabs.renamingWorkspace = id })
       }
       menu.addItem(ActionMenuItem("Close Tab") { onClose(id) })
       return menu
     }
   #endif
-
-  /// A titlebar tab is a tongue: round at the top, square where it meets the
-  /// terminal. A sidebar row stays a rectangle.
-  @ViewBuilder
-  private func tabFace(joined: Bool, selected: Bool) -> some View {
-    let fill = joined ? palette.background : Theme.raised.opacity(0.85)
-    if !selected {
-      Color.clear
-    } else if layout == .horizontal {
-      UnevenRoundedRectangle(
-        topLeadingRadius: Chrome.tabRadius,
-        bottomLeadingRadius: 0,
-        bottomTrailingRadius: 0,
-        topTrailingRadius: Chrome.tabRadius,
-        style: .continuous
-      )
-      .fill(fill)
-    } else {
-      fill
-    }
-  }
 
   #if !os(macOS)
   @ViewBuilder
@@ -307,6 +307,16 @@ struct WorkspaceTabBar: View {
               else { Text(tabs.terminalMenuTitle(terminal)) }
             }
           }
+        }
+      }
+      if tabs.wide {
+        Section {
+          ForEach([WorkspaceAction.splitLeft, .splitRight, .splitUp, .splitDown], id: \.self) { action in
+            Button(tabs.title(for: action)) { tabs.select(id); tabs.perform(action) }
+              .disabled(!(tabs.tabs.first { $0.id == page.focused }.map { $0.isLive || $0.host.isLocal } ?? false))
+          }
+          Button(tabs.title(for: .joinGroups)) { tabs.select(id); tabs.perform(.joinGroups) }
+            .disabled(page.layout == nil)
         }
       }
       Section {
@@ -479,7 +489,7 @@ struct HostStatusBar: View {
             .foregroundStyle(Theme.subtle)
         }
       }
-      .buttonStyle(ChromeButtonStyle())
+      .buttonStyle(ChromeButtonStyle(selected: tabs.hostPicker))
       .help(tabs.currentHost == nil ? "Choose host" : hostLabel)
       .accessibilityLabel("Host, \(hostLabel)")
       .accessibilityValue(statusDescription)
@@ -507,7 +517,7 @@ struct HostStatusBar: View {
     }
     .padding(.horizontal, UIStyle.Space.inset)
     .frame(height: Chrome.status)
-    .background(Theme.sidebar)
+    .background { WorkspaceMaterial() }
     .overlay(alignment: .top) { Divider() }
   }
 
@@ -525,7 +535,7 @@ struct HostStatusBar: View {
         .frame(width: UIStyle.Mark.icon, height: Chrome.status)
         .contentShape(Rectangle())
     }
-    .buttonStyle(ChromeButtonStyle())
+    .buttonStyle(ChromeButtonStyle(selected: showing))
     .disabled(tabs.current?.canOpen(plugin.id) != true)
     .help(plugin.accessory.name)
     .accessibilityLabel(plugin.accessory.name)
@@ -896,10 +906,11 @@ struct EmptyWorkspace: View {
   /// in the window to close.
   struct CompactTitlebar: NSViewRepresentable {
     var closeRequests = 0
-
-    func makeNSView(context: Context) -> NSView { Hook(closeRequests: closeRequests) }
+    @Environment(\.workspaceBackgroundOpacity) private var opacity
+    func makeNSView(context: Context) -> NSView { Hook(closeRequests: closeRequests, translucent: opacity < 1) }
     func updateNSView(_ view: NSView, context: Context) {
       guard let hook = view as? Hook else { return }
+      hook.translucent = opacity < 1
       hook.apply()
       hook.close(ifNew: closeRequests)
     }
@@ -912,8 +923,11 @@ struct EmptyWorkspace: View {
       /// not this window's to act on.
       private var closeRequests: Int
 
-      init(closeRequests: Int) {
+      var translucent: Bool
+
+      init(closeRequests: Int, translucent: Bool) {
         self.closeRequests = closeRequests
+        self.translucent = translucent
         super.init(frame: .zero)
       }
 
@@ -944,6 +958,8 @@ struct EmptyWorkspace: View {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.styleMask.insert(.fullSizeContentView)
+        window.isOpaque = !translucent
+        window.backgroundColor = translucent ? .clear : .windowBackgroundColor
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = false

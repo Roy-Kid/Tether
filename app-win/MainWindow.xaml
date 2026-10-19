@@ -39,7 +39,7 @@
   </Grid>
   <Grid Grid.Row="1">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <StackPanel x:Name="VerticalTabs" Grid.Column="0" Width="180" Visibility="Collapsed" Background="{ThemeResource ChromeSidebarBrush}">
+   <StackPanel x:Name="VerticalTabs" Grid.Column="0" Width="180" Visibility="Collapsed" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
     <ListView x:Name="VerticalTabList" SelectionChanged="VerticalTabs_SelectionChanged" AutomationProperties.Name="Terminal tabs" />
     <Button Content="&#xE710;" Style="{StaticResource ChromeIconButtonStyle}" Click="VerticalAdd_Click" ToolTipService.ToolTip="New Terminal" AutomationProperties.Name="New Terminal" />
    </StackPanel>
@@ -57,7 +57,7 @@
    <Thumb Grid.Column="2" Width="4" HorizontalAlignment="Left" Background="Transparent"
     Visibility="{Binding Visibility, ElementName=InspectorHost}" DragDelta="InspectorResize_DragDelta" AutomationProperties.Name="Resize inspector"/>
   </Grid>
-  <Border x:Name="StatusBar" Grid.Row="2" Background="{ThemeResource ChromeSidebarBrush}"
+  <Border x:Name="StatusBar" Grid.Row="2" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
    BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="0,1,0,0">
    <Grid Padding="{StaticResource ChromeHorizontalInset}">
     <Grid.ColumnDefinitions>

@@ -9,9 +9,9 @@ import Testing
 @MainActor
 @Suite("Shared wgpu rendering", .serialized)
 struct SharedRenderTests {
-  private func screen(_ text: String? = nil, cursor: CaretShape = .hidden) -> ScreenFrame {
+  private func screen(_ text: String? = nil, cursor: CaretShape = .hidden, hiddenBackground: CellColor = .named(name: .red)) -> ScreenFrame {
     func style(bold: Bool = false, italic: Bool = false, lines: Bool = false, hidden: Bool = false) -> CellStyle {
-      CellStyle(foreground: .named(name: .foreground), background: hidden ? .named(name: .red) : .named(name: .background),
+      CellStyle(foreground: .named(name: .foreground), background: hidden ? hiddenBackground : .named(name: .background),
         underline: lines ? .single : .none, underlineColor: lines ? .named(name: .cyan) : nil, bold: bold, dim: false,
         italic: italic, strikethrough: lines, inverse: false, hidden: hidden)
     }
@@ -42,7 +42,7 @@ struct SharedRenderTests {
     renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
     let metrics = try renderer.measure(size: 26)
     let frame = screen()
-    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     let first = try renderer.readPixels()
     #expect(first.count == 800 * 100 * 4)
     let colors = Set(stride(from: 0, to: first.count, by: 4).map { first[$0..<$0+3].map(String.init).joined(separator: ",") })
@@ -69,29 +69,71 @@ struct SharedRenderTests {
     }
 
     #expect(stride(from: 3, to: first.count, by: 4).allSatisfy { first[$0] == 255 }, "opaque layer")
-    _ = try renderer.draw(frame: screen(cursor: .block), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    // Changing only presentation alpha must redraw an idle terminal. Text and
+    // program-painted backgrounds remain opaque over the native window blur.
+    let remote = Palette.dark.remoteForm
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(backgroundOpacity: 0), fontSize: 26, dirtyRows: [])
+    let transparent = try renderer.readPixels()
+    #expect(Array(transparent.suffix(4)) == [0, 0, 0, 0],
+      "transparent pixels must not add a grey or colored wash during native compositing")
+    #expect(Array(transparent[secretIndex..<secretIndex+4]) == [255, 59, 48, 255], "explicit cell background stays solid")
+    #expect(stride(from: 3, to: transparent.count, by: 4).contains { transparent[$0] == 255 }, "glyph ink remains opaque")
+    // Core Animation consumes premultiplied sRGB. Check antialiased text,
+    // not just fully opaque color blocks or the fully transparent clear.
+    let textWidth = Int(metrics.cellWidth * 6)
+    let textHeight = Int(metrics.lineHeight)
+    let edgePixels = (0..<textHeight).flatMap { y in
+      (0..<textWidth).map { x in (y * 800 + x) * 4 }
+    }.filter { transparent[$0 + 3] > 32 && transparent[$0 + 3] < 224 }
+    #expect(!edgePixels.isEmpty)
+    #expect(edgePixels.allSatisfy { index in
+      (0..<3).allSatisfy { Int(transparent[index + $0]) <= Int(transparent[index + 3]) + 1 }
+    }, "translucent glyph edges must not add a bright color fringe to the native backdrop")
+    let ink = [remote.foreground.red, remote.foreground.green, remote.foreground.blue]
+    #expect(edgePixels.allSatisfy { index in
+      let alpha = Int(transparent[index + 3])
+      return (0..<3).allSatisfy { channel in
+        abs(Int(transparent[index + channel]) * 255 - Int(ink[channel]) * alpha) <= 510
+      }
+    }, "antialiased text must retain the palette's sRGB hue and brightness after unpremultiplication")
+    #expect(Palette.dark.remoteForm == remote, "window presentation never changes remote color responses")
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
+    #expect(try renderer.readPixels() == first, "turning glass off restores the opaque frame")
+    for palette in [Palette.dark, .light, .softDark, .softLight] {
+      let expected = palette.remoteForm.background
+      _ = try renderer.draw(frame: screen(hiddenBackground: .rgb(red: 17, green: 133, blue: 211)),
+        palette: palette.renderPalette(), fontSize: 26, dirtyRows: [1])
+      let pixels = try renderer.readPixels()
+      #expect(Array(pixels.suffix(4)) == [expected.red, expected.green, expected.blue, 255],
+        "rendered background must match the sRGB color reported to terminal programs")
+      #expect(Array(pixels[secretIndex..<secretIndex+4]) == [17, 133, 211, 255],
+        "true-color output must keep its exact RGB values in every theme")
+    }
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
+
+    _ = try renderer.draw(frame: screen(cursor: .block), palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() != first)
-    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() == first)
     let overlay = RenderOverlay(selection: RenderSelection(anchorColumn: 1, anchorRow: 0, focusColumn: 3, focusRow: 0),
       linkUnderlines: [RenderLinkUnderline(row: 0, start: 5, end: 10, confirmed: false)],
       selectionColor: RenderColor(red: 0, green: 0.5, blue: 1, alpha: 0.2),
       linkColor: RenderColor(red: 0, green: 0.5, blue: 1, alpha: 1))
-    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, overlay: overlay, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), overlay: overlay, fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() != first, "pointer marks must redraw without cell damage")
-    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() == first, "clearing marks must restore the original pixels")
-    _ = try renderer.draw(frame: screen("Changed"), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [0])
+    _ = try renderer.draw(frame: screen("Changed"), palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [0])
     #expect(try renderer.readPixels() != first)
-    _ = try renderer.draw(frame: frame, palette: Palette.light.renderPalette, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: frame, palette: Palette.light.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() != first)
     renderer.resize(width: 400, height: 80)
-    _ = try renderer.draw(frame: screen(""), palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [])
+    _ = try renderer.draw(frame: screen(""), palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels().count == 400 * 80 * 4)
     renderer.close()
     renderer.close()
     #expect(throws: RenderingError.self) {
-      _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette, fontSize: 26)
+      _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26)
     }
   }
 
@@ -149,14 +191,14 @@ struct SharedRenderTests {
       latest = ScreenFrame(columns: 40, rows: 1, cursorRow: 0, cursorColumn: 0,
         cursorShape: .hidden, cursorVisible: false, alternateScreen: false, mouse: .off,
         viewportOffset: 0, historyLines: 0, title: "", lines: [ScreenRow(runs: [StyledRun(text: text, columns: 40, style: style)])])
-      _ = try renderer.draw(frame: latest, palette: Palette.dark.renderPalette, fontSize: 26, dirtyRows: [0])
+      _ = try renderer.draw(frame: latest, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [0])
     }
     let image = try renderer.readPixels()
     let fresh = try await TerminalRenderer.offscreen(width: 800, height: 100)
     defer { fresh.close() }
     fresh.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
     _ = try fresh.measure(size: 26)
-    _ = try fresh.draw(frame: latest, palette: Palette.dark.renderPalette, fontSize: 26)
+    _ = try fresh.draw(frame: latest, palette: Palette.dark.renderPalette(), fontSize: 26)
     #expect(try fresh.readPixels() == image, "eviction must not drop the current frame's glyphs")
   }
 

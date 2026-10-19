@@ -5,31 +5,22 @@ import SwiftUI
 import TetherUI
 
 extension KeyBinding {
+  private static let keyNamesByCode: [UInt16: String] = [
+    36: "return", 76: "return", 48: "tab", 49: "space", 51: "backspace", 53: "escape",
+    117: "delete", 115: "home", 119: "end", 116: "pageup", 121: "pagedown",
+    123: "left", 124: "right", 125: "down", 126: "up",
+    122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7",
+    100: "f8", 101: "f9", 109: "f10", 103: "f11", 111: "f12", 105: "f13",
+    107: "f14", 113: "f15", 106: "f16", 64: "f17", 79: "f18", 80: "f19", 90: "f20",
+  ]
+
   init?(event: NSEvent) {
     var modifiers: KeyModifiers = []
     if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
     if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
     if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
     if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
-    let named: String?
-    switch event.keyCode {
-    case 36, 76: named = "return"
-    case 48: named = "tab"
-    case 49: named = "space"
-    case 51: named = "backspace"
-    case 53: named = "escape"
-    case 117: named = "delete"
-    case 115: named = "home"
-    case 119: named = "end"
-    case 116: named = "pageup"
-    case 121: named = "pagedown"
-    case 123: named = "left"
-    case 124: named = "right"
-    case 125: named = "down"
-    case 126: named = "up"
-    default: named = nil
-    }
-    if let named { self.init(named, modifiers); return }
+    if let named = Self.keyNamesByCode[event.keyCode] { self.init(named, modifiers); return }
     guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else { return nil }
     if let scalar = characters.unicodeScalars.first,
       (NSF1FunctionKey...NSF20FunctionKey).contains(Int(scalar.value)) {
@@ -37,6 +28,25 @@ extension KeyBinding {
     } else {
       self.init(characters, modifiers)
     }
+  }
+
+  /// Carbon registration uses the same ASCII-capable layout as local shortcuts.
+  var carbonKeyCode: UInt16? {
+    if let code = Self.keyNamesByCode.filter({ $0.value == key }).keys.min() { return code }
+    return (UInt16(0)..<128).first {
+      Self.asciiCharacter(keyCode: $0)?.lowercased() == key
+        || (modifiers.contains(.shift)
+          && Self.asciiCharacter(keyCode: $0, modifiers: UInt32(shiftKey >> 8))?.lowercased() == key)
+    }
+  }
+
+  var carbonModifiers: UInt32 {
+    var result: UInt32 = 0
+    if modifiers.contains(.control) { result |= UInt32(controlKey) }
+    if modifiers.contains(.option) { result |= UInt32(optionKey) }
+    if modifiers.contains(.shift) { result |= UInt32(shiftKey) }
+    if modifiers.contains(.command) { result |= UInt32(cmdKey) }
+    return result
   }
 
   /// The chord with Shift read as a modifier of the key rather than part of
@@ -58,7 +68,7 @@ extension KeyBinding {
   /// layout whatever input method is active: with Pinyin on, the "[" key
   /// types "【", but ⇧⌘[ is still ⇧⌘[. Reading the active input source
   /// instead made the chord depend on what language someone was typing.
-  static func asciiCharacter(keyCode: UInt16) -> String? {
+  static func asciiCharacter(keyCode: UInt16, modifiers: UInt32 = 0) -> String? {
     guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
       let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
     else { return nil }
@@ -71,7 +81,7 @@ extension KeyBinding {
         return OSStatus(paramErr)
       }
       return UCKeyTranslate(
-        keyboard, keyCode, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+        keyboard, keyCode, UInt16(kUCKeyActionDown), modifiers, UInt32(LMGetKbdType()),
         OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &deadKeys, characters.count, &length,
         &characters)
     }

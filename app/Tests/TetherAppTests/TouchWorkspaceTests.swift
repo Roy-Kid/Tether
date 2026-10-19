@@ -37,7 +37,7 @@ struct TouchWorkspaceTests {
     }
     #expect(phone.flatMap { $0 }.allSatisfy { !$0.needsWidth })
     #expect(pad.flatMap { $0 }.contains(.splitRight))
-    #expect(pad.last == [.splitRight, .splitDown, .joinGroups])
+    #expect(pad.suffix(2) == [[.splitLeft, .splitRight, .splitUp, .splitDown], [.joinGroups]])
   }
 
   @Test("a window without room for a second column cannot open one")

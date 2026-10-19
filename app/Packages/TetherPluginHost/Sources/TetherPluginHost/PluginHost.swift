@@ -10,6 +10,7 @@ public final class PluginHost: PluginBridge {
   private var runtimes: [UUID: any PluginRuntime] = [:]
 
   public var onStatus: (@MainActor (String, JSONValue) -> Void)?
+  public var onTabIndicators: (@MainActor (UUID, String, [PluginTabIndicator]) -> Void)?
 
   public init(api: PluginAPI, streaming: any PluginStreaming = HTTPEventStream()) {
     self.api = api
@@ -22,6 +23,9 @@ public final class PluginHost: PluginBridge {
     gateway.status = { [weak self] session, payload in
       guard let self, let id = self.gateway.pluginID(for: session) else { return }
       self.onStatus?(id, payload)
+    }
+    gateway.tabIndicators = { [weak self] session, pluginID, items in
+      self?.onTabIndicators?(session, pluginID, items)
     }
   }
 

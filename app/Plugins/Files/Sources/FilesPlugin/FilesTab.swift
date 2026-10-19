@@ -27,6 +27,9 @@ public final class FilesTab: TabAttachment {
   /// The account's home, once asked. The path menu uses it to avoid listing
   /// that directory twice.
   private(set) var homeDirectory: String?
+  /// Last directory reported by the terminal. Manual browsing stays put
+  /// until the terminal moves to another directory.
+  private(set) var terminalDirectory: String?
   /// What each listed directory holds, folders first, then by name as
   /// Finder sorts: the root, and every folder the tree has opened.
   var listings: [String: [FileEntry]] = [:]
@@ -205,7 +208,8 @@ public final class FilesTab: TabAttachment {
   public func accessoryContent() -> AnyView { AnyView(Browser(model: self)) }
 
   public func connectionChanged(_ connection: RemoteConnection) {
-    guard connection !== self.connection else { return }
+    // Reading a terminal's connection creates a new wrapper of the same lease.
+    guard connection.leaseID() != self.connection?.leaseID() else { return }
     self.connection = connection
     reopen()
   }
@@ -290,14 +294,31 @@ public final class FilesTab: TabAttachment {
   func appear() {
     guard directory == nil, !loading else { return }
     Task { await learnHome() }
-    guard let working = tab.workingDirectory() else { return goHome() }
     Task {
+      let mine = generation
+      let working = await tab.resolveWorkingDirectory(nil)
+      guard !Task.isCancelled, mine == generation else { return }
+      guard let working else { return goHome() }
+      terminalDirectory = working
       await go(to: working)
       if directory == nil {
         problem = nil
         goHome()
       }
     }
+  }
+
+  /// Called only while Files is visible. Ignore an answer overtaken by a
+  /// manual navigation, and let `go` reject listings overtaken by a newer one.
+  func followTerminalDirectory() async {
+    let mine = generation
+    guard let working = await tab.resolveWorkingDirectory(nil),
+      !Task.isCancelled, mine == generation
+    else { return }
+    let previous = terminalDirectory
+    terminalDirectory = working
+    guard previous != working, directory != working else { return }
+    await go(to: working)
   }
 
   func learnHome() async {
@@ -308,7 +329,8 @@ public final class FilesTab: TabAttachment {
   /// The path menu's rows: enclosing directories, plus Home or Shell when
   /// those are not already in that list.
   var pathPlaces: PathPlaces {
-    PathPlaces(directory: directory, home: homeDirectory, shell: tab.workingDirectory())
+    PathPlaces(
+      directory: directory, home: homeDirectory, shell: terminalDirectory ?? tab.workingDirectory())
   }
 
   func goHome() {
@@ -371,14 +393,19 @@ public final class FilesTab: TabAttachment {
   /// Where the shell is, when the browser is showing somewhere else. Absent
   /// when they already agree, so the bar does not spend a control on it.
   var shellDirectory: String? {
-    guard let working = tab.workingDirectory(), working != directory else { return nil }
+    guard let working = terminalDirectory ?? tab.workingDirectory(), working != directory else {
+      return nil
+    }
     return working
   }
 
   /// Moves to the shell's directory. Back still returns to where the browser was.
   func goToShell() {
-    guard let shellDirectory else { return }
-    Task { await go(to: shellDirectory) }
+    Task {
+      guard let working = await tab.resolveWorkingDirectory(nil), !Task.isCancelled else { return }
+      terminalDirectory = working
+      await go(to: working)
+    }
   }
 
   func beginFind() {
@@ -909,8 +936,9 @@ extension FilesTab {
     Task { await edit(files) }
   }
 
-  /// Opens files to be edited, each in whatever this Mac opens its type with,
-  /// and writes each back whenever it is saved (`EditingCopies`). Never a
+  /// Opens files to be edited, each in whatever this Mac opens its type with.
+  /// The copy stays watched (`EditingCopies`): a save is written back, and a
+  /// change on the far side is brought in, as soon as either happens. Never a
   /// file that would run: that is previewed instead. On this machine the
   /// file itself is opened. A large remote file is asked about first, as a
   /// preview is; a copy already here — being edited, or previewed — is not

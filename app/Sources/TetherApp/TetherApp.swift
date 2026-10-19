@@ -30,6 +30,10 @@ import TmuxPlugin
       MainActor.assumeIsolated { quitGate.shouldTerminate(sender, tabs: tabs) }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+      tabs?.quickTerminal.stop()
+    }
+
     /// The main window, not just any: with Settings open and the main
     /// window put away, the icon still means the terminals. Answered here,
     /// so nothing else opens a second window for the same scene.
@@ -99,8 +103,14 @@ struct TetherApp: App {
       // host list with nothing open in it.
       Window("Tether", id: "main") {
         root
+          .containerBackground(.clear, for: .window)
           .frame(minWidth: Chrome.windowMinWidth, minHeight: Chrome.windowMinHeight)
           .onAppear { appDelegate.tabs = tabs }
+          .background {
+            QuickTerminalHost(controller: tabs.quickTerminal,
+              bindings: tabs.keyBindings)
+              .frame(width: 0, height: 0)
+          }
       }
       // `.contentSize` would bind the window to the content's *ideal* size,
       // and a terminal has no ideal size — measured: the window opened

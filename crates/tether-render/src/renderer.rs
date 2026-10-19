@@ -13,8 +13,8 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, fontdb,
+    Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping,
+    Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, fontdb,
 };
 
 use crate::draw::{DrawList, Rgba, TextRun};
@@ -462,10 +462,10 @@ impl TerminalRenderer {
                 caps.formats
                     .iter()
                     .copied()
-                    .find(wgpu::TextureFormat::is_srgb)
+                    .find(|format| !format.is_srgb())
                     .or_else(|| caps.formats.first().copied())
             })
-            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         #[cfg(feature = "diagnostics")]
         let usage = if std::env::var_os("TETHER_RENDER_CAPTURE").is_some()
@@ -488,7 +488,15 @@ impl TerminalRenderer {
             desired_maximum_frame_latency: 2,
             alpha_mode: capabilities
                 .as_ref()
-                .and_then(|c| c.alpha_modes.first().copied())
+                .and_then(|c| {
+                    // Allow the native compositor to honor background alpha;
+                    // opaque mode discards the window's transparent pixels.
+                    c.alpha_modes
+                        .iter()
+                        .copied()
+                        .find(|mode| *mode == wgpu::CompositeAlphaMode::PostMultiplied)
+                        .or_else(|| c.alpha_modes.first().copied())
+                })
                 .unwrap_or(wgpu::CompositeAlphaMode::Opaque),
             color_space: wgpu::SurfaceColorSpace::Srgb,
             view_formats: vec![],
@@ -498,7 +506,16 @@ impl TerminalRenderer {
         }
 
         let cache = Cache::new(&device);
-        let mut atlas = TextAtlas::new(&device, &queue, &cache, format);
+        // Store premultiplied sRGB bytes, matching native UI compositors.
+        // Encoding a linear blend into an sRGB attachment raises RGB without
+        // raising alpha, producing bright/color fringes on transparent text.
+        let mut atlas = TextAtlas::with_color_mode(
+            &device,
+            &queue,
+            &cache,
+            format,
+            if format.is_srgb() { ColorMode::Accurate } else { ColorMode::Web },
+        );
         let text = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
         let viewport = Viewport::new(&device, &cache);
         let quads = QuadPipeline::new(&device, format);
@@ -831,8 +848,14 @@ impl TerminalRenderer {
         let texture =
             frame.as_ref().map(|f| &f.texture).or(self.offscreen.as_ref()).expect("render target");
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let clear =
+        let mut clear =
             if self.config.format.is_srgb() { linear(list.background) } else { list.background };
+        // Blending produces premultiplied pixels. The clear must follow the
+        // same contract: nonzero RGB at alpha zero adds a grey/color wash
+        // when Core Animation composites the transparent terminal layer.
+        clear.red *= clear.alpha;
+        clear.green *= clear.alpha;
+        clear.blue *= clear.alpha;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("tether-render"),
         });
@@ -931,11 +954,12 @@ impl TerminalRenderer {
             self.buffer_keys.clear();
             self.buffers.clear();
             self.swash = SwashCache::new();
-            self.atlas = TextAtlas::new(
+            self.atlas = TextAtlas::with_color_mode(
                 &self.device,
                 &self.queue,
                 &Cache::new(&self.device),
                 self.config.format,
+                if self.config.format.is_srgb() { ColorMode::Accurate } else { ColorMode::Web },
             );
         }
         if let Some((key, metrics)) = self.metrics_cache

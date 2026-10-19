@@ -38,6 +38,7 @@ struct EditingTests {
       done("com.example.editor")
     }
     model.editing.settle = .milliseconds(10)
+    model.editing.watchEvery = .seconds(60)
     return model
   }
 
@@ -270,6 +271,71 @@ struct EditingTests {
     await model.edit([entry("/home/ada/run.sh")])
     #expect(opened.urls.isEmpty)
     #expect(model.previewed.count == 1)
+  }
+
+  /// The watch stays on the file an editor replaced, so the next save goes too.
+  @Test("a copy stays watched across saves")
+  func staysWatched() async throws {
+    let source = StubSource(tree)
+    let opened = Opened()
+    let model = tab(source, opened: opened)
+    await model.edit([entry(Self.notes)])
+    let url = try #require(opened.urls.first)
+    try Data("one".utf8).write(to: url, options: .atomic)
+    for _ in 0..<200 where source.writeBacks.count < 1 { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(source.writeBacks.map(\.contents) == ["one"])
+    try Data("two".utf8).write(to: url, options: .atomic)
+    for _ in 0..<200 where source.writeBacks.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(source.writeBacks.map(\.contents) == ["one", "two"])
+    #expect(model.editing.states[Self.notes] == .synced)
+  }
+
+  /// While the copy still matches, the far side's edit replaces it, and that
+  /// replacement is not itself written back. A save after that still goes.
+  @Test("a change on the far side updates the open copy")
+  func remoteChangeUpdatesTheCopy() async throws {
+    let source = StubSource(tree)
+    let opened = Opened()
+    let model = tab(source, opened: opened)
+    model.editing.watchEvery = .milliseconds(20)
+    await model.edit([entry(Self.notes)])
+    let url = try #require(opened.urls.first)
+    source.revise(Self.notes, "from the server")
+    for _ in 0..<200 where (try? text(url)) != "from the server" {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(try text(url) == "from the server")
+    #expect(model.editing.states[Self.notes] == .synced)
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(source.writeBacks.isEmpty, "bringing the far side in is not an edit")
+
+    try save("and mine", to: url)
+    for _ in 0..<200 where source.writeBacks.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(source.writeBacks.map(\.contents) == ["and mine"])
+    #expect(model.editing.states[Self.notes] == .synced)
+  }
+
+  /// A save here and a change there is the conflict it always was. The watch
+  /// does not fetch the far side over the save.
+  @Test("a local edit is not replaced by a change on the far side")
+  func remoteChangeLeavesALocalEdit() async throws {
+    let source = StubSource(tree)
+    let opened = Opened()
+    let model = tab(source, opened: opened)
+    var asked = 0
+    model.ask = { _ in asked += 1; return .cancelled }
+    model.editing.watchEvery = .milliseconds(20)
+    await model.edit([entry(Self.notes)])
+    let url = try #require(opened.urls.first)
+    try save("mine", to: url)
+    source.revise(Self.notes, "theirs")
+    for _ in 0..<200 where model.editing.states[Self.notes] != .conflict {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(try text(url) == "mine")
+    #expect(model.editing.states[Self.notes] == .conflict)
+    #expect(source.writeBacks.isEmpty)
+    #expect(asked == 1)
   }
 
   @Test("a file on this machine opens as itself")

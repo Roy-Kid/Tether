@@ -368,3 +368,35 @@ swift test --package-path app/Plugins/Ports
 
 Debug builds support `TETHER_HOSTS_FILE=/absolute/path/hosts.json` for isolated UI
 fixtures. This does not change the normal host store and is absent from release builds.
+
+## Tab indicators
+
+A native `TetherPlugin` can expose `tabIndicators: [PluginTabIndicator]`. An installed
+web plugin declares a `tabIndicator` contribution, which gives it a background page
+while enabled, and calls `tether.call('host.tabIndicators', items)` with a complete
+replacement array:
+
+```js
+[{target: {host: 'studio.local', terminal: '/dev/ttys001'},
+  color: 0x0A84FF, label: 'Building'}]
+```
+
+`host` is the actual machine's lowercase hostname, not a saved-host label or SSH
+alias. `terminal` is the shell's controlling TTY device path. The app reuses its
+local producer's TTY or its existing remote TTY discovery, and reads the remote
+hostname over the same authenticated lease. If identity cannot be established,
+no mark is shown; task titles and working directories are never used for matching.
+
+The host draws one 6pt solid circle before the tab name in horizontal and vertical
+tab bars; the label is a tooltip/accessibility description. A split workspace shows
+the mark for its focused terminal. Disabled plugins contribute nothing. Between
+plugins, registration order wins; each plugin must resolve its own domain priority
+before reporting. An empty array clears that session's marks. Unloading a session
+clears only its own marks; closing a panel does not erase a background page's set.
+
+The RPC requires the contribution and accepts at most 512 unique terminal targets,
+24-bit integer colors and nonempty labels of at most 256 characters. Invalid updates
+are rejected atomically. Connection loss is the plugin's responsibility: clear its
+marks rather than leaving an apparently live indicator. No shell input, task
+control or arbitrary native code is exposed by this capability. Existing running
+shells need no restart: producers can report hostname and TTY with their next event.

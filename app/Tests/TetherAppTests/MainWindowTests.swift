@@ -2,6 +2,7 @@
   import AppKit
   import Foundation
   import Testing
+  import SwiftUI
 
   @testable import TetherApp
 
@@ -135,6 +136,51 @@
       HostedWorkspace.settle(0.25)
       #expect(!hosted.window.isVisible)
       #expect(hosted.tabs.tabs.count == 1)
+    }
+  }
+#endif
+
+#if os(macOS)
+  @Suite("Workspace background preferences")
+  struct WorkspaceAppearanceTests {
+    @Test("glass is opt-in and accessibility always restores a solid window")
+    func accessibility() {
+      #expect(WorkspaceAppearance.opacity(theme: "soft", stored: 0.5, reduceTransparency: false, contrast: .standard) == 1)
+      #expect(WorkspaceAppearance.opacity(theme: "frosted", stored: 0.65, reduceTransparency: false, contrast: .standard) == 0.65)
+      #expect(WorkspaceAppearance.opacity(theme: "frosted", stored: 0.65, reduceTransparency: true, contrast: .standard) == 1)
+      #expect(WorkspaceAppearance.opacity(theme: "frosted", stored: 0.65, reduceTransparency: false, contrast: .increased) == 1)
+    }
+
+    @MainActor
+    @Test("glass chrome leaves the shared backdrop pixels untouched")
+    func sharedBackdrop() throws {
+      for scheme in [ColorScheme.light, .dark] {
+        let backdrop = Color(.sRGB, red: 0.2, green: 0.6, blue: 0.9)
+        let reference = ImageRenderer(content: backdrop.frame(width: 32, height: 32))
+        let referencePixels = NSBitmapImageRep(cgImage: try #require(reference.cgImage))
+        let expected = try #require(referencePixels.colorAt(x: 16, y: 16)?.usingColorSpace(.sRGB))
+        let content = ZStack {
+          backdrop
+          WorkspaceMaterial()
+        }
+        .frame(width: 32, height: 32)
+        .environment(\.workspaceBackgroundOpacity, 0.8)
+        .environment(\.colorScheme, scheme)
+        let renderer = ImageRenderer(content: content)
+        let pixels = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+        let pixel = try #require(pixels.colorAt(x: 16, y: 16)?.usingColorSpace(.sRGB))
+        #expect(abs(pixel.redComponent - expected.redComponent) < 0.01)
+        #expect(abs(pixel.greenComponent - expected.greenComponent) < 0.01)
+        #expect(abs(pixel.blueComponent - expected.blueComponent) < 0.01)
+        #expect(pixel.alphaComponent == 1)
+      }
+    }
+
+    @Test("invalid saved opacity cannot make the workspace unreadable")
+    func storedValues() {
+      for (stored, expected) in [(0.1, 0.5), (2.0, 1.0), (.nan, WorkspaceAppearance.defaultOpacity), (.infinity, WorkspaceAppearance.defaultOpacity)] {
+        #expect(WorkspaceAppearance.opacity(theme: "frosted", stored: stored, reduceTransparency: false, contrast: .standard) == expected)
+      }
     }
   }
 #endif

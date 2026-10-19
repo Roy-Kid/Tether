@@ -105,18 +105,25 @@ fn append_marks(
     // cursor constantly while redrawing, and drawing it anyway is how a
     // terminal ends up with a block flickering across the screen.
     if frame.cursor_visible && frame.cursor_shape != Caret::Hidden {
-        let x = metrics.cell_x(frame.cursor_column);
-        let y = metrics.cell_y(frame.cursor_row);
+        // Whole pixels. A caret that starts between pixels reads as if it
+        // has walked off the column the glyphs are in.
+        let x = metrics.cell_x(frame.cursor_column).round();
+        let y = metrics.cell_y(frame.cursor_row).round();
+        let beam = (metrics.cell_width * 0.12).round().max(2.0).min(metrics.cell_width).max(1.0);
         let (width, height, offset_y) = match frame.cursor_shape {
             Caret::Block => (metrics.cell_width, metrics.line_height, 0.0),
             Caret::Underline => (metrics.cell_width, 2.0, metrics.line_height - 2.0),
-            Caret::Beam => (2.0, metrics.line_height, 0.0),
+            Caret::Beam => (beam, metrics.line_height, 0.0),
             Caret::Hidden => unreachable!("checked above"),
         };
-        let color = palette.cursor.with_alpha(0.75);
+        // A block stays translucent so the glyph under it can still be read.
+        // A beam or underline is the caret itself, and a washed one looks
+        // like it is sitting beside the column rather than in it.
+        let alpha = if frame.cursor_shape == Caret::Block { 0.85 } else { 1.0 };
+        let color = palette.cursor.with_alpha(alpha);
         list.cursor = Some(CursorQuad {
             x,
-            y: y + offset_y,
+            y: (y + offset_y).round(),
             width,
             height,
             // Blended rather than filled, so the character underneath stays
@@ -267,7 +274,9 @@ fn push_link_underline(
 fn resolved(style: &RunStyle, palette: &Palette) -> (Rgba, Rgba) {
     let foreground = palette.resolve(style.foreground);
     let background = palette.resolve(style.background);
-    if style.inverse { (background, foreground) } else { (foreground, background) }
+    // Background alpha controls the window surface. Once inverse video uses
+    // that color as ink, it must be opaque or reverse-video text disappears.
+    if style.inverse { (background.with_alpha(1.0), foreground) } else { (foreground, background) }
 }
 
 #[cfg(test)]
@@ -396,10 +405,13 @@ mod tests {
     fn inverse_swaps_colours() {
         let mut run = styled("x", 1);
         run.style.inverse = true;
-        let palette = Palette::dark();
-        let list = prepare(&one_row(vec![run]), &metrics(), &palette);
-        assert_eq!(list.texts[0].color, palette.background);
-        assert_eq!(list.rects[0].color, palette.foreground);
+        for alpha in [0.0, 0.5, 1.0] {
+            let mut palette = Palette::dark();
+            palette.background = palette.background.with_alpha(alpha);
+            let list = prepare(&one_row(vec![run.clone()]), &metrics(), &palette);
+            assert_eq!(list.texts[0].color, palette.background.with_alpha(1.0));
+            assert_eq!(list.rects[0].color, palette.foreground);
+        }
     }
 
     #[test]
@@ -453,7 +465,8 @@ mod tests {
             assert_eq!((cursor.width, cursor.height), expect, "shape {shape:?}");
             assert_eq!(cursor.x, 24.0);
             assert_eq!(cursor.y, 32.0 + if shape == Caret::Underline { 14.0 } else { 0.0 });
-            assert!((cursor.color.alpha - 0.75).abs() < 1e-6);
+            let alpha = if shape == Caret::Block { 0.85 } else { 1.0 };
+            assert!((cursor.color.alpha - alpha).abs() < 1e-6);
         }
     }
 

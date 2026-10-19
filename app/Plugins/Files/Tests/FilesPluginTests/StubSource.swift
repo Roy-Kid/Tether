@@ -52,6 +52,9 @@ final class StubSource: FileSource, @unchecked Sendable {
   var isLocal = false
   /// Modification time `stat` and `list` report, when a test has changed it.
   var modifiedAt: [String: UInt64] = [:]
+  /// Bytes `download` writes, when a test has changed the file. Absent, the
+  /// path is the contents, as a far side with nothing in particular in it.
+  private var bodies: [String: String] = [:]
   /// Held for the length of a listing, so a test can overtake it.
   var listDelay: [String: Duration] = [:]
   /// Held for the length of every download; cancelling the task ends it.
@@ -120,10 +123,11 @@ final class StubSource: FileSource, @unchecked Sendable {
       try await Task.sleep(for: delay)
     }
     if let downloadFailure { throw downloadFailure }
-    try Data(path.utf8).write(to: URL(fileURLWithPath: destination))
-    progress?(UInt64(path.utf8.count))
+    let body = lock.withLock { bodies[path].map { Data($0.utf8) } ?? Data(path.utf8) }
+    try body.write(to: URL(fileURLWithPath: destination))
+    progress?(UInt64(body.count))
     lock.withLock { recordedDownloads.append(destination) }
-    return UInt64(path.utf8.count)
+    return UInt64(body.count)
   }
 
   func upload(
@@ -151,6 +155,7 @@ final class StubSource: FileSource, @unchecked Sendable {
       guard files[path] == .file, entry(path).modified == expected.modified else {
         throw FileError.changed(path: path)
       }
+      bodies[path] = contents
       modifiedAt[path] = (modifiedAt[path] ?? 1_700_000_000) + 1
       recordedWriteBacks.append((path, contents))
       return entry(path)
@@ -159,6 +164,14 @@ final class StubSource: FileSource, @unchecked Sendable {
 
   /// Something else wrote the file on the far side.
   func touch(_ path: String) { lock.withLock { modifiedAt[path] = (modifiedAt[path] ?? 1_700_000_000) + 100 } }
+
+  /// Something else wrote `text` into the file: a new body and a new time.
+  func revise(_ path: String, _ text: String) {
+    lock.withLock {
+      bodies[path] = text
+      modifiedAt[path] = (modifiedAt[path] ?? 1_700_000_000) + 100
+    }
+  }
 
   func makeDirectory(_ path: String) async throws {
     try lock.withLock {
@@ -198,7 +211,8 @@ final class StubSource: FileSource, @unchecked Sendable {
   private func entry(_ path: String) -> FileEntry {
     FileEntry(
       name: String(path.split(separator: "/").last ?? "/"), path: path,
-      kind: files[path] ?? .other, size: 3, modified: modifiedAt[path] ?? 1_700_000_000,
+      kind: files[path] ?? .other, size: UInt64(bodies[path]?.utf8.count ?? 3),
+      modified: modifiedAt[path] ?? 1_700_000_000,
       permissions: 0o644)
   }
 }

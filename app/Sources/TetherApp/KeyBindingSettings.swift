@@ -4,6 +4,7 @@ import TetherUI
 struct KeyBindingSettings: View {
   let store: KeyBindingStore
   let commands: [KeyBindingCommand]
+  var onRecordingChange: (Bool) -> Void = { _ in }
   @State private var query = ""
   @State private var grouped = true
   @State private var recording: Slot?
@@ -30,6 +31,8 @@ struct KeyBindingSettings: View {
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
     }
+    .onChange(of: recording != nil) { _, recording in onRecordingChange(recording) }
+    .onDisappear { onRecordingChange(false) }
     .onChange(of: commands, initial: true) { _, commands in store.register(commands) }
   }
 

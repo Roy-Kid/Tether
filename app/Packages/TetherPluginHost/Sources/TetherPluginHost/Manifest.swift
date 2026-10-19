@@ -10,6 +10,7 @@ public enum ContributionKind: String, Codable, Sendable, Equatable {
   case command
   case panel
   case statusBar
+  case tabIndicator
 }
 
 /// A permission the manifest may name. Network access requires declared endpoints.

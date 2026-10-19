@@ -39,6 +39,7 @@ final class PortsTab: TabAttachment {
 
 struct PortsList: View {
   var table: PortTable
+  @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
 
   var body: some View {
     VStack(spacing: 0) {
@@ -96,7 +97,7 @@ struct PortsList: View {
     .padding(.horizontal, UIStyle.Space.group)
     .frame(height: UIStyle.controlHeight + UIStyle.Space.group)
     .frame(maxWidth: .infinity)
-    .background(Theme.sidebar)
+    .background(backgroundOpacity < 1 ? Color.clear : Theme.sidebar)
   }
 }
 

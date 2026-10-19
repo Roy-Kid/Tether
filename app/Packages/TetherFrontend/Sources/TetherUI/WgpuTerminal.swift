@@ -20,10 +20,11 @@ struct WgpuTerminal: View {
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
   @State private var problem: Dialog?
+  @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
 
   var body: some View {
     NativeTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics,
-      palette: palette, overlay: overlay, onPresented: onPresented, onScale: onScale) { error, retry, dismiss in
+      palette: palette, transparentBackground: backgroundOpacity < 1, overlay: overlay, onPresented: onPresented, onScale: onScale) { error, retry, dismiss in
       problem = Dialog(title: "Terminal Rendering Failed", message: error.localizedDescription,
         actions: [.cancel("Close") { problem = nil; dismiss() }, .init("Retry") { _ in problem = nil; retry() }])
     }
@@ -37,6 +38,7 @@ private struct NativeTerminal {
   let damageEpoch: Int
   let metrics: FontMetrics
   let palette: Palette
+  let transparentBackground: Bool
   let overlay: RenderOverlay?
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
@@ -46,7 +48,7 @@ private struct NativeTerminal {
     view.onFailure = failure
     view.onPresented = onPresented
     view.onScale = onScale
-    view.update(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay)
+    view.update(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay, transparentBackground: transparentBackground)
   }
 }
 #if os(macOS)
@@ -72,6 +74,7 @@ final class TerminalGPUView: NativeTerminalView {
     var damageEpoch: Int
     var metrics: FontMetrics
     var palette: Palette
+    var transparentBackground: Bool
     var overlay: RenderOverlay?
   }
   private var pending: Pending?
@@ -149,14 +152,14 @@ final class TerminalGPUView: NativeTerminalView {
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("not from a nib") }
 
-  func update(frame: ScreenFrame, dirtyRows: Set<Int>?, damageEpoch: Int, metrics: FontMetrics, palette: Palette, overlay: RenderOverlay?) {
+  func update(frame: ScreenFrame, dirtyRows: Set<Int>?, damageEpoch: Int, metrics: FontMetrics, palette: Palette, overlay: RenderOverlay?, transparentBackground: Bool = false) {
     // Close holds until Retry. A newer frame must not clear that latch.
     if quietDismissal { return }
     let dirty: Set<Int>?
     if let pending {
       dirty = pending.dirty.flatMap { old in dirtyRows.map { old.union($0) } }
     } else { dirty = dirtyRows }
-    pending = Pending(frame: frame, dirty: dirty, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay)
+    pending = Pending(frame: frame, dirty: dirty, damageEpoch: damageEpoch, metrics: metrics, palette: palette, transparentBackground: transparentBackground, overlay: overlay)
     noteScale()
     schedule()
   }
@@ -191,6 +194,7 @@ final class TerminalGPUView: NativeTerminalView {
     let width = UInt32(max(1, (bounds.width * scale).rounded()))
     let height = UInt32(max(1, (bounds.height * scale).rounded()))
     if metalLayer.contentsScale != scale { metalLayer.contentsScale = scale }
+    metalLayer.isOpaque = !pending.transparentBackground
     let drawableSize = CGSize(width: Int(width), height: Int(height))
     if metalLayer.drawableSize != drawableSize { metalLayer.drawableSize = drawableSize }
     guard let renderer else {
@@ -234,7 +238,10 @@ final class TerminalGPUView: NativeTerminalView {
       let fontSize = Float(pending.metrics.size * scale)
       _ = try renderer.measure(size: fontSize)
       let epoch = pending.damageEpoch
-      let presented = try renderer.draw(frame: pending.frame, palette: pending.palette.renderPalette, overlay: pending.overlay,
+      // The host supplies the shared workspace backdrop behind grid and padding.
+      // Only default terminal backgrounds become clear; explicit cell colors stay solid.
+      let palette = pending.palette.renderPalette(backgroundOpacity: pending.transparentBackground ? 0 : 1)
+      let presented = try renderer.draw(frame: pending.frame, palette: palette, overlay: pending.overlay,
         fontSize: fontSize, dirtyRows: pending.dirty.map { $0.sorted().map(UInt32.init) })
       if !notePresent(presented, epoch: epoch) { schedule() }
     } catch {
@@ -298,9 +305,11 @@ final class TerminalGPUView: NativeTerminalView {
 }
 
 extension Palette {
-  var renderPalette: RenderPalette {
-    RenderPalette(background: background.renderColor, foreground: foreground.renderColor,
-      cursor: cursor.renderColor, ansi: (normal + bright).map(\.renderColor))
+  func renderPalette(backgroundOpacity: Double = 1) -> RenderPalette {
+    let color = background.renderColor
+    return RenderPalette(
+      background: RenderColor(red: color.red, green: color.green, blue: color.blue, alpha: Float(backgroundOpacity)),
+      foreground: foreground.renderColor, cursor: cursor.renderColor, ansi: (normal + bright).map(\.renderColor))
   }
 }
 extension Color {

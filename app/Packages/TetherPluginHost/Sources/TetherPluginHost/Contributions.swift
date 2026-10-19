@@ -15,6 +15,7 @@ public struct ContributionIndex: Sendable, Equatable {
   public private(set) var commands: [ContributionMatch] = []
   public private(set) var statusBars: [ContributionMatch] = []
   public private(set) var panels: [ContributionMatch] = []
+  public private(set) var tabIndicators: [ContributionMatch] = []
 
   public func matches(suffix: String) -> [ContributionMatch] {
     let key = Self.normalize(suffix)
@@ -32,6 +33,7 @@ public struct ContributionIndex: Sendable, Equatable {
       case .command: commands.append(match)
       case .panel: panels.append(match)
       case .statusBar: statusBars.append(match)
+      case .tabIndicator: tabIndicators.append(match)
       }
     }
   }

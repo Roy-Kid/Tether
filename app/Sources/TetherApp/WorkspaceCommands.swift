@@ -51,6 +51,12 @@ struct WorkspaceCommands: Commands {
       #endif
     }
     CommandGroup(after: .windowArrangement) {
+      #if os(macOS)
+        command(.quickTerminal)
+        command(.restoreWindow)
+        command(.alwaysOnTop)
+        Divider()
+      #endif
       command(.previousTab)
       command(.nextTab)
     }
@@ -65,7 +71,10 @@ struct WorkspaceCommands: Commands {
       Divider()
       command(.previousTerminal)
       command(.nextTerminal)
+      Divider()
+      command(.splitLeft)
       command(.splitRight)
+      command(.splitUp)
       command(.splitDown)
       command(.joinGroups)
     }

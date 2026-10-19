@@ -7,6 +7,61 @@ import TetherUI
   import UIKit
 #endif
 
+/// Window preferences belong to the app; plugins receive only the resolved opacity.
+enum WorkspaceAppearance {
+  static let opacityKey = "window.backgroundOpacity"
+  static let defaultOpacity = 0.6
+
+  static func opacity(theme: String, stored: Double, reduceTransparency: Bool, contrast: ColorSchemeContrast) -> Double {
+    guard theme == "frosted", !reduceTransparency, contrast != .increased else { return 1 }
+    return stored.isFinite ? min(1, max(0.5, stored)) : defaultOpacity
+  }
+}
+
+/// Opaque chrome has a native fill; glass regions expose the one shared backdrop.
+struct WorkspaceMaterial: View {
+  @Environment(\.workspaceBackgroundOpacity) private var opacity
+
+  var body: some View {
+    (opacity < 1 ? Color.clear : Theme.window)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+  }
+}
+
+#if os(macOS)
+  /// One material and one terminal-palette tint across the entire workspace.
+  struct WorkspaceBackdrop: View {
+    @Environment(\.workspaceBackgroundOpacity) private var opacity
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+      Group {
+        if opacity < 1 {
+          ZStack {
+            FrostedGlass()
+            TetherUI.Palette.chosen(setting: "system", scheme: scheme, style: "frosted")
+              .background.opacity(opacity)
+          }
+        } else {
+          Theme.window
+        }
+      }
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+    }
+
+    private struct FrostedGlass: NSViewRepresentable {
+      func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.style = .regular
+        return view
+      }
+      func updateNSView(_ view: NSGlassEffectView, context: Context) {}
+    }
+  }
+#endif
+
 // The shared vocabulary — `Theme`, `UIStyle`, `ChromeButtonStyle` — lives in
 // TetherUI, where a plugin's chrome can reach it too. What is left here
 // belongs to this window alone.
@@ -105,9 +160,6 @@ enum Chrome {
   static let trafficLights: CGFloat = 76
   static let margin: CGFloat = 12
   static let tabTitleWidth: CGFloat = 144
-  /// Top corners of a titlebar tab. The bottom stays square so the open
-  /// terminal continues into the grid instead of sitting under a card.
-  static let tabRadius: CGFloat = 16
   /// The close mark. The control that holds it stays `UIStyle.Mark.icon` wide.
   static let tabClose: CGFloat = 9
   static let tabSidebarMin: CGFloat = 180

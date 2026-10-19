@@ -335,7 +335,12 @@ struct AppSettings: View {
       if section == .keyBindings {
         KeyBindingSettings(
           store: connections?.keyBindings ?? fallbackKeyBindings,
-          commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
+          commands: KeyBindingCatalog.commands(registry: registry, tabs: connections),
+          onRecordingChange: { recording in
+            #if os(macOS)
+              connections?.quickTerminal.recordingShortcut = recording
+            #endif
+          })
       } else {
         form(section)
       }
@@ -355,7 +360,7 @@ struct AppSettings: View {
         IdentitySettings(store: store, connections: connections)
         DeviceSettings(store: store, known: known)
         SyncSettings(store: store)
-      case .general: GeneralSettings()
+      case .general: GeneralSettings(connections: connections)
       case .appearance: AppearanceSettings()
       case .history: HistorySettings()
       case .keyBindings:
@@ -442,6 +447,7 @@ private struct PreferenceToggleRow: View {
 /// Emits form sections only — the caller owns the `Form`, so a Mac's one
 /// scrolling sheet and a phone's pushed pane share the same rows.
 private struct GeneralSettings: View {
+  var connections: TabSet?
   @AppStorage(LaunchPreference.key) private var openLocalAtLaunch = LaunchPreference.default
   @AppStorage(LastTabPreference.key) private var closeLastTab = LastTabPreference.default
 
@@ -452,6 +458,12 @@ private struct GeneralSettings: View {
         description: "Open a local shell instead of the host list.",
         isOn: $openLocalAtLaunch)
     }
+
+    #if os(macOS)
+      if let controller = connections?.quickTerminal {
+        QuickTerminalSettings(controller: controller, bindings: connections?.keyBindings)
+      }
+    #endif
 
     SwiftUI.Section("When the Last Tab Closes") {
       Picker("After the Last Tab", selection: $closeLastTab) {
@@ -466,9 +478,16 @@ private struct GeneralSettings: View {
 
 private struct AppearanceSettings: View {
   @AppStorage("appearance") private var appearance = "system"
-  @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
+  @AppStorage(TetherUI.Palette.colorStyleKey) private var colorStyle = TetherUI.Palette.defaultColorStyle
+  @AppStorage(TerminalSurface.insetPreferenceKey) private var terminalInset = TerminalSurface.defaultInset
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
+
+  #if os(macOS)
+    @AppStorage(WorkspaceAppearance.opacityKey) private var backgroundOpacity = WorkspaceAppearance.defaultOpacity
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+  #endif
 
   var body: some View {
     SwiftUI.Section("Window") {
@@ -477,6 +496,34 @@ private struct AppearanceSettings: View {
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
+      Picker("Theme", selection: $colorStyle) {
+        Text("Soft").tag("soft")
+        Text("Classic").tag("classic")
+        #if os(macOS)
+          Text("Frosted Glass").tag("frosted")
+        #endif
+      }
+      #if os(macOS)
+        if colorStyle == "frosted" {
+          LabeledContent("Background Opacity") {
+            HStack {
+              Slider(value: $backgroundOpacity, in: 0.5...1, step: 0.05)
+                .frame(width: 140)
+                .accessibilityLabel("Background Opacity")
+                .accessibilityValue(backgroundOpacity.formatted(.percent.precision(.fractionLength(0))))
+              Text(backgroundOpacity, format: .percent.precision(.fractionLength(0)))
+                .monospacedDigit()
+                .frame(width: 40, alignment: .trailing)
+            }
+          }
+          .disabled(reduceTransparency || contrast == .increased)
+          if reduceTransparency || contrast == .increased {
+            Text("System accessibility settings require an opaque background.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+      #endif
       #if os(macOS)
         Picker("Tab Layout", selection: $tabLayout) {
           Text("Horizontal").tag(TabLayout.horizontal)
@@ -486,12 +533,8 @@ private struct AppearanceSettings: View {
     }
 
     SwiftUI.Section("Terminal") {
-      Picker("Theme", selection: $terminalAppearance) {
-        Text("System").tag("system")
-        Text("Light").tag("light")
-        Text("Dark").tag("dark")
-      }
       Stepper("Font Size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
+      Stepper("Padding: \(Int(terminalInset)) pt", value: $terminalInset, in: 0...40, step: 2)
       TerminalFontSettings()
     }
   }
