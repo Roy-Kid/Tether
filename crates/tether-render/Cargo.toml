@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Terminal state → GPU draw: grid layout, cursor, damage, theming over wgpu + glyphon."
 
+[features]
+# Evaluation only; no SDK/binding API and no diagnostics in ordinary builds.
+diagnostics = []
+
 # NOTE: this crate must never depend on tether-ssh, russh, or alacritty_terminal
 # types in its public surface. It consumes the frontend contract (semantic
 # state), not a backend's grid (spec §8, §14). `cargo tree` is the test.
@@ -23,3 +27,6 @@ tracing = { workspace = true }
 raw-window-handle = "0.6"
 
 unicode-segmentation = "1.12"
+sha2 = "0.11"
+ttf-parser = "0.25"
+write-fonts = { version = "0.50", default-features = false }

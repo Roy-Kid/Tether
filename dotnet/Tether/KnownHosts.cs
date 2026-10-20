@@ -46,6 +46,9 @@ public abstract record TrustQuestion
     public sealed record Revoked(string Algorithm, string Fingerprint) : TrustQuestion;
 }
 
+/// <summary>One trusted host key, shown in Settings so a person can reverse an earlier accept.</summary>
+public sealed record TrustedHost(string Endpoint, string Algorithm, string Fingerprint, string KeyBlob);
+
 /// <summary>The keys a person has accepted, across launches, in <c>known_hosts</c>.</summary>
 public sealed class KnownHosts
 {
@@ -122,6 +125,48 @@ public sealed class KnownHosts
             var pattern = HostPattern(host, port);
             entries.RemoveAll(e => e.Patterns.Any(p => p == pattern));
             Save(entries);
+        }
+    }
+
+    /// <summary>Trusted (non-marker) host keys a person can review and forget.</summary>
+    public IReadOnlyList<TrustedHost> Trusted()
+    {
+        lock (_gate)
+        {
+            return Load()
+                .Where(e => e.Marker.Length == 0)
+                .SelectMany(e => e.Patterns.Select(pattern => new TrustedHost(
+                    pattern,
+                    e.KeyType,
+                    FingerprintOf(e.KeyBlob),
+                    e.KeyBlob)))
+                .OrderBy(e => e.Endpoint, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
+    /// <summary>Drops every line carrying this exact host pattern.</summary>
+    public void ForgetEndpoint(string endpoint)
+    {
+        lock (_gate)
+        {
+            var entries = Load();
+            entries.RemoveAll(e => e.Marker.Length == 0 && e.Patterns.Any(p => p == endpoint));
+            Save(entries);
+        }
+    }
+
+    /// <summary>OpenSSH <c>SHA256:…</c> fingerprint of a known_hosts key blob.</summary>
+    public static string FingerprintOf(string keyBlob)
+    {
+        try
+        {
+            var hash = SHA256.HashData(Convert.FromBase64String(keyBlob.Trim()));
+            return "SHA256:" + Convert.ToBase64String(hash).TrimEnd('=');
+        }
+        catch (FormatException)
+        {
+            return keyBlob;
         }
     }
 

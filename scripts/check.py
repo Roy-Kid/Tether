@@ -39,7 +39,29 @@ def staged_clean():
     return run("git", "write-tree", capture=True).strip()
 
 
+def renderer_boundaries(root=ROOT):
+    # Native hosts may attach a layer/window, never implement a second terminal
+    # atlas, shader or grid painter. Keep this executable beside other seams.
+    swift_sources = [root / "app/Sources", root / "swift/Sources/Tether"]
+    swift_sources += list((root / "app/Packages").glob("*/Sources"))
+    swift_sources += list((root / "app/Plugins").glob("*/Sources"))
+    bases = [(base, "swift") for base in swift_sources]
+    bases += [(root / "app-win", "cs"), (root / "dotnet/Tether", "cs")]
+    for base, suffix in bases:
+        for path in base.rglob("*." + suffix):
+            if "Generated" in path.parts:
+                continue
+            source = path.read_text(encoding="utf-8")
+            forbidden = r"\b(?:GlyphAtlas|RowPictureCache|MTLRenderPipelineDescriptor|MTLRenderCommandEncoder|MTLCommandQueue|CTLineDraw|CreateShaderModule|CreateRenderPipeline|CreateGraphicsPipelineState)\b"
+            require(not re.search(forbidden, source), f"Renderer boundary violation: {path}")
+            if suffix == "swift":
+                require(not re.search(r"^\s*import Metal(?:Kit)?\s*$", source, re.M),
+                        f"Renderer boundary violation: {path}")
+                require(not re.search(r"\bCanvas\s*[{(]", source), f"Independent terminal painter: {path}")
+
+
 def source_checks():
+    renderer_boundaries(ROOT)
     try:
         import yaml
     except ImportError as error:
@@ -66,8 +88,8 @@ def source_checks():
     ET.parse(ROOT / "app-win/TetherApp.Windows.csproj")
     for path in (ROOT / "app/Sources").rglob("*.swift"):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r"tmux|FilesPlugin|FilesTab", line, re.I):
-                require(bool(re.search(r"import (Tmux|Files)Plugin$|registry\.register\((Tmux|Files)Plugin\(\)\)", line)),
+            if re.search(r"tmux|FilesPlugin|FilesTab|PortsPlugin|PortsTab", line, re.I):
+                require(bool(re.search(r"import (Tmux|Files|Ports)Plugin$|registry\.register\((Tmux|Files|Ports)Plugin\(\)\)", line)),
                         f"Plugin boundary violation: {path}:{number}")
     sources = [ROOT / "app/Sources", ROOT / "app/Packages/TetherFrontend/Sources",
                ROOT / "app/Packages/TetherPluginHost/Sources"]
@@ -82,6 +104,7 @@ def source_checks():
 
 def common():
     run(sys.executable, "scripts/test-check.py")
+    run(sys.executable, "scripts/test-render-evaluation.py")
     source_checks()
     if sys.platform.startswith("linux"):
         languages = run("fc-match", "--format=%{lang}", ":lang=zh-cn", capture=True)
@@ -126,6 +149,10 @@ def windows():
         "[Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$problems) | Out-Null; "
         "if($problems.Count) { throw ($problems | Out-String) } }")
     verify_bindings(stage_native())
+    run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
+        "--all-targets", "--", "-D", "warnings")
+    run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
+    run("dotnet", "run", "--project", "tests/render-evaluation", "-c", "Release", "--no-build", "--", "--validate-fixtures")
     run("dotnet", "build", "app-win/TetherApp.Windows.csproj", "-c", "Debug",
         "-p:Platform=x64", "-warnaserror")
     for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):
@@ -140,12 +167,13 @@ def apple(build=True):
     if build:
         run("bash", "scripts/build-xcframework.sh")
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
-                    "app/Plugins/Tmux", "app/Plugins/Files", "app"):
+                    "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
         run("swift", "test", "--package-path", package)
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build", cwd=ROOT / "app")
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
+        run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "BrowserUITests")
         run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession")
         run("swift", "test", "--package-path", "app", "--filter", "ShellActivityTests")
 

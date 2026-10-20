@@ -20,6 +20,10 @@ pub enum Error {
     PermissionDenied { path: String },
     #[error("{path} is not empty")]
     NotEmpty { path: String },
+    /// The far side's file is no longer the one a change was made to: it was
+    /// written, replaced or removed there since.
+    #[error("{path} changed on the server")]
+    Changed { path: String },
     /// The caller asked for it to stop, and what it had started was undone.
     #[error("cancelled")]
     Cancelled,

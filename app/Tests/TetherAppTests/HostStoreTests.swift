@@ -279,4 +279,119 @@ struct HostStoreTests {
     #expect(store.hosts.first?.otpSecretID != nil, "the seed followed the new name")
     #expect(try credentials.saved().count == 1)
   }
+
+  /// A seed is a credential like a key or a password, not a policy: keeping
+  /// one does not start asking for approval before every login.
+  @Test func aCodeSeedLeavesConfirmationAlone() throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    let store = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    #expect(store.hosts.first?.profile?.authentication.confirmation == .automatic)
+
+    store.setOTP("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", for: try #require(store.hosts.first))
+    #expect(store.hosts.first?.otpSecretID != nil)
+    #expect(store.hosts.first?.profile?.authentication.confirmation == .automatic)
+  }
+
+  /// A library a version before that fix wrote: a host with a seed, asking
+  /// before every login, last edited before the fix existed.
+  static func libraryWithForcedConfirmation(modified: Date) throws -> (URL, HostStore) {
+    let location = temporaryFile("config")
+    let store = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    store.setOTP("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", for: try #require(store.hosts.first))
+    let id = try #require(store.hosts.first?.id)
+    try store.update { state in
+      state.records[id]?.profile.authentication.confirmation = .confirmAuthentication
+      state.records[id]?.profile.modified = modified
+      state.records[id]?.dirty = false
+    }
+    return (location, store)
+  }
+
+  /// What that version set behind someone's back is undone once, on the
+  /// next launch, and the change travels to their other devices.
+  @Test func aConfirmationTheSeedForcedIsUndone() throws {
+    let (location, _) = try Self.libraryWithForcedConfirmation(
+      modified: HostStore.seedStoppedForcingConfirmation.addingTimeInterval(-86_400))
+    defer { removeDirectory(of: location) }
+
+    let reopened = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    let host = try #require(reopened.hosts.first)
+    #expect(host.profile?.authentication.confirmation == .automatic)
+    #expect(reopened.snapshot.records[host.id]?.dirty == true)
+    #expect((host.profile?.modified ?? .distantPast) > HostStore.seedStoppedForcingConfirmation)
+    #expect(reopened.snapshot.approvals[host.id] == host.profile?.securityDigest)
+  }
+
+  /// One chosen since is a choice, and stays.
+  @Test func aConfirmationChosenSinceTheFixStays() throws {
+    let (location, _) = try Self.libraryWithForcedConfirmation(modified: Date())
+    defer { removeDirectory(of: location) }
+
+    let reopened = HostStore(location: location, secrets: MemorySecrets(), credentials: Self.credentials())
+    #expect(reopened.hosts.first?.profile?.authentication.confirmation == .confirmAuthentication)
+  }
+
+  /// The SSH file and the keychain are read by `refresh`, off the main
+  /// actor, not by opening the store. A password kept or let go of here is
+  /// known at once, without listing the keychain again.
+  @Test func refreshReadsWhatOpeningDoesNot() async throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    try "Host lab\n  HostName login.example.org\n".write(to: location, atomically: true, encoding: .utf8)
+    let secrets = MemorySecrets()
+    let first = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(first.save(Self.host(), password: "saved"))
+    #expect(first.hosts.first?.remembersPassword == true)
+
+    let store = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(store.config.entries.isEmpty, "opening reads neither the file nor the keychain")
+    #expect(store.hosts.first?.remembersPassword == true, "the library's word, until the keychain is listed")
+    try secrets.forget(#require(store.hosts.first).passwordID)
+    await store.refresh()
+    #expect(store.config.entries.map(\.alias) == ["lab"])
+    #expect(store.hosts.first?.remembersPassword == false, "the listing found no password")
+
+    #expect(try store.save(#require(store.hosts.first), password: "again"))
+    #expect(store.hosts.first?.remembersPassword == true)
+    let id = try #require(store.hosts.first).passwordID
+    try secrets.forget(id)
+    store.passwordForgotten(id)
+    #expect(store.hosts.first?.remembersPassword == false)
+  }
+
+  /// A password kept while the keychain is still being listed is not lost
+  /// when the older listing lands.
+  @Test func aListingInFlightDoesNotUndoAChange() async throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    let secrets = GatedSecrets()
+    let store = HostStore(location: location, secrets: secrets, credentials: Self.credentials())
+    #expect(store.save(Self.host()))
+    async let refreshed: Void = store.refresh()
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try store.save(#require(store.hosts.first), password: "kept"))
+    secrets.open()
+    await refreshed
+    #expect(store.hosts.first?.remembersPassword == true)
+  }
+}
+
+/// A keychain whose listing waits until the test lets it answer — with what
+/// it held when it was asked.
+final class GatedSecrets: SecretStore, @unchecked Sendable {
+  private let gate = DispatchSemaphore(value: 0)
+  private let inner = MemorySecrets()
+  func open() { gate.signal() }
+  func password(for host: UUID) throws -> String? { try inner.password(for: host) }
+  func remember(_ password: String, for host: Host) throws { try inner.remember(password, for: host) }
+  func forget(_ host: UUID) throws { try inner.forget(host) }
+  func saved() throws -> [SavedSecret] {
+    let listed = try inner.saved()
+    gate.wait()
+    gate.signal()
+    return listed
+  }
 }

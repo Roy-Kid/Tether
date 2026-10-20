@@ -1,0 +1,33 @@
+memory_phase start resident_bytes 7651328
+memory_phase fonts-ready resident_bytes 22478848
+memory_phase surface-ready-80x24 resident_bytes 30851072
+memory_phase draws-complete-80x24 resident_bytes 35897344
+memory_phase surface-closed-80x24 resident_bytes 35504128
+memory_phase surface-ready-120x40 resident_bytes 35586048
+memory_phase draws-complete-120x40 resident_bytes 38977536
+memory_phase surface-closed-120x40 resident_bytes 38420480
+memory_phase surface-ready-200x60 resident_bytes 38420480
+memory_phase draws-complete-200x60 resident_bytes 44138496
+memory_phase surface-closed-200x60 resident_bytes 43384832
+memory_phase surface-ready-120x40 resident_bytes 43368448
+memory_phase draws-complete-120x40 resident_bytes 64667648
+memory_phase surface-closed-120x40 resident_bytes 63717376
+memory_phase font-grid-complete resident_bytes 65748992
+        0.56 real         0.13 user         0.18 sys
+            66682880  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               17389  page reclaims
+                  39  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 274  voluntary context switches
+                 874  involuntary context switches
+          4228522706  instructions retired
+          1164697054  cycles elapsed
+           152847128  peak memory footprint

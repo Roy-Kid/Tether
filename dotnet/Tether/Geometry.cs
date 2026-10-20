@@ -1,11 +1,9 @@
 // One measurement of the monospaced font, reused for every cell.
 //
-// Ported from `TetherUI.FontMetrics`. The cell is a whole number of DIPs wide
-// so that a column lands on the same place every time, and the font is then
-// *spaced into* that cell rather than trusted to fill it. Those are two
-// different numbers: a face can advance 8.04 at 13pt, and a grid built on 8
-// that draws text at 8.04 is a grid whose eightieth column is three
-// characters out.
+// The live grid uses the renderer's cell width in physical pixels
+// (`TerminalSurface.Measure`). `FromAdvances` remains for a placeholder and
+// for tests: it rounds the narrow advance to a whole number. A column is
+// that cell, and the font is spaced into it rather than trusted to fill it.
 
 namespace Tether;
 

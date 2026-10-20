@@ -86,14 +86,15 @@ final class StubWorkspace: PluginWorkspace {
   let title: String
   let subtitle = ""
   let symbol = "puzzlepiece.extension"
-  var commands: [PluginCommand] { [] }
+  /// What the attachment offers the menu bar, the palette and the keyboard.
+  var offered: [PluginCommand] = []
+  var commands: [PluginCommand] { offered }
   private(set) var closed = false
 
   init(title: String) { self.title = title }
 
   func content() -> AnyView { AnyView(EmptyView()) }
   func inspector() -> AnyView { AnyView(EmptyView()) }
-  func restore(from state: Data) { restorationState = state }
   func close() { closed = true }
 }
 
@@ -110,7 +111,9 @@ final class StubAttachment: TabAttachment {
   var closeNote: String?
   var requiresCloseConfirmation = false
   var restorationState: Data?
-  var commands: [PluginCommand] { [] }
+  /// What the attachment offers the menu bar, the palette and the keyboard.
+  var offered: [PluginCommand] = []
+  var commands: [PluginCommand] { offered }
   private(set) var closed = false
 
   init(subtitle: String = "", closeNote: String? = nil) {

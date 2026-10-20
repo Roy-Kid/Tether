@@ -182,12 +182,17 @@ struct KeyBindingSyncTests {
       let command = WorkspaceAction.newTerminal.command
       var custom = change("n")
       custom.bindings = [KeyBinding("n"), nil]
-      try a.receive(custom, for: "plugin.absent.command.run", systemFields: nil)
+      try a.receive(custom, for: "plugin.absent.launch", systemFields: nil)
       #expect(a.bindings(for: command)[0] == nil)
       #expect(a.conflict(for: command, slot: 0) != nil)
       #expect(a.command(for: KeyBinding("n"), in: [command]) == nil)
-      a.removeCloudRecords(["plugin.absent.command.run"])
+      a.removeCloudRecords(["plugin.absent.launch"])
       #expect(a.bindings(for: command) == command.defaults)
+      // A plugin command's chord only overlays the window's while the plugin
+      // offers it, so an absent plugin's command takes nothing from it.
+      try a.receive(custom, for: "plugin.absent.command.run", systemFields: nil)
+      #expect(a.bindings(for: command) == command.defaults)
+      #expect(a.command(for: KeyBinding("n"), in: [command]) == command.id)
     }
   }
 

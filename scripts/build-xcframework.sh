@@ -40,7 +40,7 @@ STAGE=target/xcframework
 
 for target in "${TARGETS[@]}"; do
   echo "building $target"
-  cargo build --release -p tether-ffi --target "$target"
+  cargo build --locked --release --lib -p tether-ffi --features render --target "$target"
 done
 
 # Headers and the module map are generated, not hand-written, so the C module
@@ -63,13 +63,19 @@ for target in "${TARGETS[@]}"; do
   args+=(-library "$slice/$LIB" -headers "$slice/include")
 done
 
-rm -rf "$OUT/TetherFFI.xcframework"
 mkdir -p "$OUT"
-xcodebuild -create-xcframework "${args[@]}" -output "$OUT/TetherFFI.xcframework" >/dev/null
+xcodebuild -create-xcframework "${args[@]}" -output "$STAGE/TetherFFI.xcframework" >/dev/null
+rm -rf "$OUT/TetherFFI.xcframework"
+mv "$STAGE/TetherFFI.xcframework" "$OUT/TetherFFI.xcframework"
 
 # The generated Swift is checked in so a consumer needs no Rust to build.
-# CI re-runs this and fails on a diff; it is never hand-edited.
+# CI compares it and does not replace the file under test. A local run refreshes it.
 mkdir -p swift/Sources/TetherFFIBindings
-cp "$STAGE/gen/TetherFFIBindings.swift" swift/Sources/TetherFFIBindings/TetherFFIBindings.swift
+bindings=swift/Sources/TetherFFIBindings/TetherFFIBindings.swift
+if [[ -n "${CI:-}" ]]; then
+  diff -u "$bindings" "$STAGE/gen/TetherFFIBindings.swift"
+else
+  cp "$STAGE/gen/TetherFFIBindings.swift" "$bindings"
+fi
 
 echo "wrote $OUT/TetherFFI.xcframework and swift/Sources/TetherFFIBindings/TetherFFIBindings.swift"

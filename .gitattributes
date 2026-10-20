@@ -29,3 +29,8 @@
 *.a    binary
 *.pdb  binary
 *.xcframework/** binary
+
+# Preserve upstream binding templates verbatim, including indented empty lines.
+# Human-authored source still uses the normal whitespace gate.
+swift/Sources/TetherFFIBindings/TetherFFIBindings.swift whitespace=-blank-at-eol
+dotnet/Tether/Generated/tether_ffi.cs whitespace=-blank-at-eol

@@ -28,7 +28,7 @@ extension FilesTab {
     ]
     #if os(macOS)
       commands.append(
-        PluginCommand(id: "open", title: "Open", symbol: "arrow.up.forward.app") { [weak self] in
+        PluginCommand(id: "edit", title: "Edit", symbol: "square.and.pencil") { [weak self] in
           Task { await self?.withResolved(printed) { self?.openExternally([$0]) } }
         })
     #endif
@@ -113,7 +113,9 @@ extension FilesTab {
   /// gets: the shell's directory, then the browser's, then home. Found, the
   /// field gives its slot back. Not found, it stays, and the tree stays.
   func revealQuery(_ text: String, commit: Int) async {
-    let printed = Printed.at(text, in: tab.workingDirectory())
+    let directory = await tab.resolveWorkingDirectory(nil)
+    guard commit == findCommit, !Task.isCancelled else { return }
+    let printed = Printed.at(text, in: directory)
     guard await resolve(printed) != nil else {
       guard commit == findCommit else { return }
       return missing()
@@ -146,6 +148,10 @@ extension FilesTab {
 
   private func withResolved(_ printed: Printed, _ body: (FileEntry) -> Void) async {
     guard let entry = await resolve(printed), entry.kind == .file else { return missing() }
+    // Downloads and large edits present their picker/confirmation through
+    // the browser, even when the action started in the terminal's menu.
+    tab.focus()
+    tab.showAccessory()
     body(entry)
   }
 

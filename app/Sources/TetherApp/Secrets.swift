@@ -48,8 +48,9 @@ protocol SecretStore: Sendable {
 /// time, because it looks like security to the person trusting it.
 ///
 /// Items are `WhenUnlockedThisDeviceOnly` and not synchronizable: a password
-/// saved here does not reach iCloud, another Mac, or a backup that a person
-/// did not think of as holding their server passwords.
+/// saved here is not in iCloud Keychain, or in a backup that a person did
+/// not think of as holding their server passwords. It reaches this Apple ID's
+/// other devices one way, with its host (`HostStore+SharedSecrets`).
 struct Keychain: SecretStore {
   /// One service for the whole app, so `saved()` can enumerate what it owns
   /// without walking a person's entire keychain.

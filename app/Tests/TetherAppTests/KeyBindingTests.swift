@@ -10,6 +10,15 @@ import AppKit
 @MainActor
 @Suite("Key bindings")
 struct KeyBindingTests {
+  @Test("shared SwiftUI shortcuts keep their key and modifiers on either platform")
+  func sharedShortcut() {
+    let shortcut = KeyBinding("p", [.command, .shift]).keyboardShortcut
+    #expect(shortcut?.key == KeyEquivalent("p"))
+    #expect(shortcut?.modifiers == [.command, .shift])
+    #expect(KeyBinding("left", [.command, .option]).keyboardShortcut?.key == .leftArrow)
+    #expect(KeyBinding("f1", []).keyboardShortcut?.key == KeyEquivalent(Character("\u{f704}")))
+  }
+
   private var commands: [KeyBindingCommand] { WorkspaceAction.allCases.map(\.command) }
 
   private func isolated(_ body: (KeyBindingStore, UserDefaults) throws -> Void) rethrows {
@@ -25,11 +34,17 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == "commandMenu")
       #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
-      #expect(store.command(for: KeyBinding("s"), in: commands) == "toggleTabBar")
+      #expect(store.command(for: KeyBinding("s"), in: commands) == nil, "⌘S is Save on a Mac")
+      #expect(WorkspaceAction.toggleTabBar.command.defaults == [nil, nil])
+      #expect(store.command(for: KeyBinding("w"), in: commands) == "closeTerminal")
+      #expect(store.command(for: KeyBinding("w", [.command, .option]), in: commands) == "closeTab")
+      #expect(store.command(for: KeyBinding("w", [.command, .shift]), in: commands) == "closeWindow")
+      #expect(store.command(for: KeyBinding("[", [.command, .shift]), in: commands) == "previousTab")
+      #expect(store.command(for: KeyBinding("]", [.command, .shift]), in: commands) == "nextTab")
       #expect(store.command(for: KeyBinding("r"), in: commands) == "renameTerminal")
-      #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), KeyBinding("t")])
+      #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), nil])
       #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
-      #expect(store.command(for: KeyBinding("t"), in: commands) == "newTerminal")
+      #expect(store.command(for: KeyBinding("t"), in: commands) == "newTab")
       #expect(store.command(for: KeyBinding("t", [.command, .shift]), in: commands) == "restoreTab")
       #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
       let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }
@@ -38,19 +53,17 @@ struct KeyBindingTests {
     }
   }
 
-  @Test("an existing explicit Cmd-S assignment wins over the new tab-bar default")
-  func tabBarDefaultRespectsExistingBindings() throws {
+  @Test("a person's own Cmd-S for the tab bar outlives the default it no longer has")
+  func tabBarKeepsAssignedShortcut() throws {
     try isolated { _, defaults in
-      defaults.set(try JSONEncoder().encode([
-        "renameTerminal": [KeyBinding("s"), nil]
-      ]), forKey: KeyBindingStore.preferenceKey)
-      let loaded = KeyBindingStore(defaults: defaults)
-      #expect(loaded.command(for: KeyBinding("s"), in: commands) == "renameTerminal")
       let toggle = WorkspaceAction.toggleTabBar.command
-      #expect(loaded.conflict(for: toggle, slot: 0) != nil)
-      try loaded.set(KeyBinding("s", [.command, .shift]), for: toggle, slot: 0, commands: commands)
-      #expect(KeyBindingStore(defaults: defaults).command(
-        for: KeyBinding("s", [.command, .shift]), in: commands) == toggle.id)
+      defaults.set(try JSONEncoder().encode([toggle.id: [KeyBinding("s"), nil]]),
+                   forKey: KeyBindingStore.preferenceKey)
+      let loaded = KeyBindingStore(defaults: defaults)
+      #expect(loaded.command(for: KeyBinding("s"), in: commands) == toggle.id)
+      #expect(loaded.conflict(for: toggle, slot: 0) == nil)
+      try loaded.reset(toggle, commands: commands)
+      #expect(KeyBindingStore(defaults: defaults).command(for: KeyBinding("s"), in: commands) == nil)
     }
   }
 
@@ -174,7 +187,8 @@ struct KeyBindingTests {
       #if os(macOS)
         #expect(store.filtered(commands, query: "⌃⌥⇧⌘R", boundOnly: true) == [rename])
       #endif
-      #expect(store.filtered(commands, query: "window", boundOnly: false).count == 2)
+      #expect(Set(store.filtered(commands, query: "window", boundOnly: false).map(\.id)) ==
+        Set([WorkspaceAction.previousTab, .nextTab, .closeWindow, .quickTerminal, .restoreWindow, .alwaysOnTop].map(\.rawValue)))
       #expect(store.filtered(commands, query: "nothing matches", boundOnly: false).isEmpty)
     }
   }
@@ -197,13 +211,23 @@ struct KeyBindingTests {
   @Test("command dispatch respects availability and close dismisses overlays first")
   func dispatch() {
     let tabs = TabSet()
-    #expect(!tabs.canPerform(.closeTab))
+    // On a Mac an empty window still has ⌘W: it closes the window.
+    #if os(macOS)
+      #expect(tabs.canPerform(.closeTerminal))
+    #else
+      #expect(!tabs.canPerform(.closeTerminal))
+    #endif
+    #expect(!tabs.canPerform(.closeTab), "with no tab, ⌥⌘W has nothing to close")
     #expect(!tabs.canPerform(.renameTerminal))
     #expect(!tabs.canPerform(.restoreTab))
     tabs.perform(.restoreTab)
     #expect(tabs.intent == nil)
     tabs.perform(.commandMenu)
     #expect(tabs.palette == .command)
+    tabs.perform(.closeTerminal)
+    #expect(tabs.palette == nil)
+    #expect(tabs.windowCloseRequests == 0, "the palette goes first")
+    tabs.perform(.commandMenu)
     tabs.perform(.closeTab)
     #expect(tabs.palette == nil)
     tabs.perform(.zen)
@@ -229,7 +253,7 @@ struct KeyBindingTests {
       let command = WorkspaceAction.newTerminal.command
       try store.set(KeyBinding("b", .control), for: command, slot: 1, commands: commands)
       view.enabled = true
-      view.handle = { binding, repeated in
+      view.handle = { binding, repeated, _ in
         guard store.command(for: binding, in: commands) != nil else { return false }
         if !repeated { activations += 1 }
         return true

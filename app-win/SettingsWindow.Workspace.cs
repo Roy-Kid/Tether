@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace TetherApp;
 
@@ -18,7 +19,14 @@ public sealed partial class SettingsWindow
         }
         var search = new TextBox { PlaceholderText = "Find a command or shortcut…" };
         KeysPane.Children.Add(search);
+        KeysPane.Children.Add(new TextBlock
+        {
+            Text = "Each command has a primary and optional secondary shortcut. Leave a field blank to clear that slot.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+        });
         var fields = new Dictionary<string, TextBox>();
+        var rows = new List<(WorkspaceCommand Command, FrameworkElement Row)>();
         var catalog = WorkspaceCommands.All.ToList();
         foreach (var plugin in _plugins?.Plugins ?? [])
         {
@@ -27,14 +35,27 @@ public sealed partial class SettingsWindow
         }
         foreach (var command in catalog)
         {
-            var field = new TextBox { Header = command.Title, Text = WorkspaceCommands.Binding(command, AppSettings.Current) };
-            fields[command.Id] = field;
-            KeysPane.Children.Add(field);
+            var primary = new TextBox { Header = "Primary", Text = WorkspaceCommands.Binding(command, AppSettings.Current), MinWidth = 140 };
+            var secondary = new TextBox { Header = "Secondary", Text = WorkspaceCommands.SecondaryBinding(command, AppSettings.Current), MinWidth = 140 };
+            fields[command.Id] = primary;
+            fields[WorkspaceCommands.SecondaryKey(command.Id)] = secondary;
+            var pair = new Grid { ColumnSpacing = 8 };
+            pair.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pair.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pair.Children.Add(primary); Grid.SetColumn(secondary, 1); pair.Children.Add(secondary);
+            var row = new StackPanel { Spacing = 4 };
+            row.Children.Add(new TextBlock { Text = command.Title, Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"] });
+            row.Children.Add(pair);
+            rows.Add((command, row));
+            KeysPane.Children.Add(row);
         }
         search.TextChanged += (_, _) =>
         {
-            foreach (var field in fields.Values)
-                field.Visibility = (field.Header + " " + field.Text).Contains(search.Text, StringComparison.OrdinalIgnoreCase) ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var (command, row) in rows)
+            {
+                var haystack = command.Title + " " + fields[command.Id].Text + " " + fields[WorkspaceCommands.SecondaryKey(command.Id)].Text;
+                row.Visibility = haystack.Contains(search.Text, StringComparison.OrdinalIgnoreCase) ? Visibility.Visible : Visibility.Collapsed;
+            }
         };
         var problem = new TextBlock { TextWrapping = TextWrapping.Wrap };
         var apply = new Button { Content = "Apply" };

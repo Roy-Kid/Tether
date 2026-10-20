@@ -110,3 +110,112 @@ struct ShellActivityTests {
     try await waitFor(.idle, phase: "reaped background job")
   }
 }
+
+@MainActor
+@Suite("Checking ahead of a close")
+struct CloseCheckTests {
+  /// A check that counts how often it ran and answers what it is told.
+  final class Probe {
+    var answer: ShellActivity = .idle
+    var runs = 0
+  }
+
+  private func settle(_ check: CloseCheck, until done: () -> Bool) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    while !done() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+  }
+
+  @Test("an idle answer taken after the last activity closes without another check")
+  func idleIsReused() async throws {
+    let probe = Probe()
+    let check = CloseCheck(quiet: .milliseconds(20)) { probe.runs += 1; return probe.answer }
+    check.noteActivity()
+    try await settle(check) { probe.runs == 1 }
+    #expect(probe.runs == 1, "checked ahead once the terminal was quiet")
+    #expect(await check.activity() == .idle)
+    #expect(probe.runs == 1, "the close used the answer it already had")
+  }
+
+  @Test("activity after the answer, or an answer other than idle, is checked again")
+  func staleOrBusyIsCheckedAgain() async throws {
+    let probe = Probe()
+    let check = CloseCheck(quiet: .seconds(60)) { probe.runs += 1; return probe.answer }
+    #expect(await check.activity() == .idle)
+    #expect(probe.runs == 1)
+    check.noteActivity()
+    probe.answer = .running(["sleep"])
+    #expect(await check.activity() == .running(["sleep"]), "typing since the answer can start work")
+    #expect(probe.runs == 2)
+    probe.answer = .idle
+    #expect(await check.activity() == .idle, "work can finish silently, so running is never kept")
+    #expect(probe.runs == 3)
+    probe.answer = .unknown
+    check.reset()
+    #expect(await check.activity() == .unknown)
+    #expect(await check.activity() == .unknown)
+    #expect(probe.runs == 5, "an unknown answer is never kept")
+  }
+
+  @Test("a close during a check ahead waits for that check rather than starting another")
+  func inFlightIsShared() async throws {
+    let probe = Probe()
+    var release: CheckedContinuation<Void, Never>?
+    let check = CloseCheck(quiet: .milliseconds(10)) {
+      probe.runs += 1
+      await withCheckedContinuation { release = $0 }
+      return .idle
+    }
+    check.noteActivity()
+    try await settle(check) { release != nil }
+    async let closing = check.activity()
+    try await Task.sleep(for: .milliseconds(20))
+    release?.resume()
+    #expect(await closing == .idle)
+    #expect(probe.runs == 1)
+  }
+
+  @Test("an idle local tab closes without waiting for a process listing",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func localTabClosesFromTheAnswerAhead() async throws {
+    let session = try await TerminalSession.local()
+    defer { session.close() }
+    let connection = try #require(session.connection)
+    let tty = try #require(session.terminalName)
+    let probe = Probe()
+    probe.answer = .unknown
+    let check = CloseCheck(quiet: .milliseconds(300)) {
+      let answer = await ShellActivity.check(on: connection, terminal: tty, columns: 80, rows: 24, matchSize: false)
+      probe.answer = answer
+      probe.runs += 1
+      return answer
+    }
+    // A waiting shell can briefly be running while ps samples it. Establish
+    // an actual idle answer ahead of the close, rather than assuming the
+    // first sample is idle because an earlier, independent listing was.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    repeat {
+      let previous = probe.runs
+      check.noteActivity()
+      try await settle(check) { probe.runs > previous }
+      try #require(probe.runs > previous, "the check ahead did not finish")
+    } while probe.answer != .idle && ContinuousClock.now < deadline
+    try #require(probe.answer == .idle, "the shell did not reach an idle answer ahead of the close")
+    let checksBeforeClose = probe.runs
+
+    #expect(await check.activity() == .idle)
+    #expect(probe.runs == checksBeforeClose, "closing listed the processes again")
+
+    try session.send(.key(.text("sleep 30")))
+    try session.send(.key(.enter))
+    check.noteActivity()
+    var running: ShellActivity = .idle
+    let busy = ContinuousClock.now.advanced(by: .seconds(10))
+    repeat {
+      running = await check.activity()
+      if running == .running(["sleep"]) { break }
+      check.noteActivity()
+      try await Task.sleep(for: .milliseconds(50))
+    } while ContinuousClock.now < busy
+    #expect(running == .running(["sleep"]), "work started after an idle answer is still found")
+  }
+}

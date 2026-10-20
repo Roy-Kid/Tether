@@ -17,10 +17,11 @@ struct Sidebar: View {
   let onNew: () -> Void
   /// Only used where there is no preferences window to link to.
   let onSettings: () -> Void
-  var onDone: (() -> Void)? = nil
 
   @State private var selection: Host.ID?
-  @State private var identityHost: Host?
+  /// A host waiting on its delete confirmation. Deleting reaches every
+  /// device through sync and takes the host's keys with it — never one tap.
+  @State private var deleting: Host.ID?
 
   var body: some View {
     List(selection: $selection) {
@@ -34,7 +35,7 @@ struct Sidebar: View {
           .textSelection(.enabled)
           .padding(.vertical, UIStyle.Space.inline)
       }
-      Section("Hosts") {
+      Section {
         ForEach(store.filtered) { host in
           Button {
             selection = host.id
@@ -43,7 +44,7 @@ struct Sidebar: View {
             HStack(spacing: UIStyle.panelRadius) {
               Image(systemName: "server.rack")
                 .font(.body.weight(.medium))
-                .foregroundStyle(Theme.tile(for: host.label))
+                .foregroundStyle(Theme.tile(for: host))
                 .frame(width: UIStyle.Mark.tileWidth, height: UIStyle.Mark.tileHeight)
               VStack(alignment: .leading, spacing: UIStyle.rowPadding) {
                 Text(host.label.isEmpty ? host.hostname : host.label).font(.body.weight(.medium))
@@ -59,7 +60,7 @@ struct Sidebar: View {
             #if os(iOS)
               .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !host.isLocal {
-                  Button("Identity…", systemImage: "person.badge.key") { identityHost = host }
+                  Button("Identity…", systemImage: "person.badge.key") { SettingsRoute.shared.show(.host(host.id)) }
                     .tint(Theme.accent)
                 }
               }
@@ -72,9 +73,9 @@ struct Sidebar: View {
               // computer out of a list they are reading on it. Not a second
               // kind of host — a host with nothing left to decide.
               if !host.isLocal {
-                Button("Identity and Authentication…") { identityHost = host }
+                Button("Identity and Authentication…") { SettingsRoute.shared.show(.host(host.id)) }
                 Button("Edit…") { onEdit(host) }
-                Button("Delete host", role: .destructive) { store.delete(host) }
+                Button("Delete Host…", role: .destructive) { deleting = host.id }
               }
             }
         }
@@ -82,11 +83,21 @@ struct Sidebar: View {
           Text("No matching hosts.")
             .font(.callout).foregroundStyle(.secondary).padding(.vertical, UIStyle.Space.group)
         }
+      } header: {
+        // An empty list is the quiet mark alone; a header over nothing
+        // would be the same word a third time under the title.
+        if !store.listed.isEmpty { Text("Hosts") }
       }
     }
-    .sheet(item: $identityHost) { host in
-      NavigationStack { HostIdentitySettings(store: store, id: host.id) }
-        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
+    .dialog(for: deleting) { id in
+      // Same question, same words, as deleting from the host's own settings.
+      Dialog.confirm(
+        "Delete \(store.hosts.first { $0.id == id }?.label ?? "Host")?", verb: "Delete", role: .destructive,
+        cancel: { deleting = nil }
+      ) {
+        if let host = store.hosts.first(where: { $0.id == id }) { store.delete(host) }
+        deleting = nil
+      }
     }
     .modifier(HostListStyle())
     // This list is also used in a sheet, where `.sidebar` search placement
@@ -102,7 +113,7 @@ struct Sidebar: View {
         if let host = store.filtered.first(where: { $0.id == selection }) { onOpen(host) }
       }
       .onPickerCancel {
-        if !store.search.isEmpty { store.search = "" } else { onDone?() }
+        if !store.search.isEmpty { store.search = "" }
       }
       .safeAreaInset(edge: .top, spacing: 0) {
         HostSearchField(text: $store.search)
@@ -120,7 +131,7 @@ struct Sidebar: View {
         QuietMark("Hosts", systemImage: "server.rack")
       }
     }
-    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings, onDone: onDone))
+    .modifier(SidebarActions(store: store, onNew: onNew, onSettings: onSettings))
     .navigationTitle("Hosts")
   }
 }
@@ -185,7 +196,6 @@ private struct SidebarActions: ViewModifier {
   let store: HostStore
   let onNew: () -> Void
   let onSettings: () -> Void
-  let onDone: (() -> Void)?
 
   func body(content: Content) -> some View {
     #if os(macOS)
@@ -198,11 +208,6 @@ private struct SidebarActions: ViewModifier {
           .help("Add host")
           SyncButton(store: store)
           Spacer()
-          if let onDone {
-            Button("Done", action: onDone)
-              .buttonStyle(.borderedProminent)
-              .keyboardShortcut(.cancelAction)
-          }
         }
         .padding(UIStyle.Space.inset)
         .background(.bar)
@@ -225,11 +230,6 @@ private struct SidebarActions: ViewModifier {
           }
           .buttonStyle(.iconOnly)
           .help("Add host")
-        }
-        if let onDone {
-          ToolbarItem(placement: .confirmationAction) {
-            Button("Done", action: onDone)
-          }
         }
       }
     #endif
@@ -260,7 +260,7 @@ struct SyncButton: View {
     .help(store.syncing ? "Syncing" : "Sync")
     .accessibilityValue(store.syncing ? "Syncing" : "Idle")
     .dialog(for: failure) { shown in
-      Dialog.notice("Could not sync", message: shown.message) { failure = nil }
+      Dialog.notice("Could Not Sync", message: shown.message) { failure = nil }
     }
   }
 }

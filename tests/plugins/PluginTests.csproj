@@ -13,6 +13,8 @@
     <Compile Include="..\..\app-win\Plugins\WebPluginPackage.cs" />
     <Compile Include="..\..\app-win\Plugins\WebPluginNetwork.cs" />
     <Compile Include="..\..\app-win\Plugins\WebPluginServices.cs" />
+    <Compile Include="..\..\app-win\Plugins\PortScan.cs" />
+    <Compile Include="..\..\app-win\Files\TextEditDocument.cs" />
   </ItemGroup>
 
   <ItemGroup>

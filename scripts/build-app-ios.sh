@@ -16,6 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 source scripts/signing.sh
+source scripts/credential-provider.sh
 
 usage() {
   cat <<'EOF'
@@ -166,6 +167,13 @@ cat > "$APP/Info.plist" <<PLIST
         </dict>
     </dict>
     <key>LSRequiresIPhoneOS</key><true/>
+    <!-- A password manager's export arrives as this activity (CredentialImport);
+         see build-app.sh for why both names. -->
+    <key>NSUserActivityTypes</key>
+    <array>
+        <string>ASCredentialExchangeActivity</string>
+        <string>ASCredentialExchangeActivityType</string>
+    </array>
     <key>MinimumOSVersion</key><string>26.0</string>
     <key>UILaunchScreen</key><dict/>
     <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -182,15 +190,33 @@ cat > "$APP/Info.plist" <<PLIST
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <!-- A path dragged out of a plugin (TetherPluginKit's DroppedPath). Undeclared,
+         SwiftUI drops it from a drop's item providers and the terminal never sees it. -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>dev.tether.app.dropped-path</string>
+            <key>UTTypeDescription</key><string>Dragged Path</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        </dict>
+    </array>
     $cloud
 </dict>
 </plist>
 PLIST
 
 if [[ -n "$PHONE" ]]; then
-  profile=$(signing_profile ios "$TEAM")
+  # The extension first: the app's signature seals what is inside it.
+  autofill=
+  if profile=$(embed_credential_provider ios "$APP" "$TEAM"); then
+    autofill=autofill
+  else
+    profile=$(signing_profile ios "$TEAM")
+    echo "no credential provider profile for $TEAM: this build cannot import from a password manager" >&2
+    echo "(./scripts/provision.sh --team $TEAM asks for one)" >&2
+  fi
   entitlements=$(mktemp)
-  signing_entitlements ios "$TEAM" "$entitlements"
+  signing_entitlements ios "$TEAM" "$entitlements" $autofill
   identity=$(signing_identity "$profile")
   cp "$profile" "$APP/embedded.mobileprovision"
   codesign --force --sign "$identity" --entitlements "$entitlements" "$APP"

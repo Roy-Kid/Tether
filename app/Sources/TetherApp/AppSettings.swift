@@ -5,6 +5,7 @@ import SwiftUI
   import UIKit
 #endif
 import Tether
+import TetherPluginHost
 import TetherPluginKit
 import TetherUI
 
@@ -63,6 +64,15 @@ enum LastTabPreference {
   }
 }
 
+/// The Settings pane on a Mac, chosen before the window opens.
+enum SettingsSectionPreference {
+  static let key = "settings.section"
+
+  static func show(_ section: AppSettings.Section, in defaults: UserDefaults = .standard) {
+    defaults.set(section.rawValue, forKey: key)
+  }
+}
+
 /// Settings, as a sidebar and a titled page.
 ///
 /// The sidebar names each section beside its tinted mark. The page title
@@ -75,16 +85,19 @@ struct AppSettings: View {
   let store: HostStore
   let secrets: any SecretStore
   var connections: TabSet? = nil
+  var installedPlugins: InstalledPlugins? = nil
 
   #if os(macOS)
-    /// Which pane the split view is showing. A phone pushes instead.
-    @State private var section: Section? = Section.available.first
+    /// Which pane the split view is showing. A phone pushes instead. Kept
+    /// in defaults so Help ▸ Keyboard Shortcuts can choose it from outside.
+    @AppStorage(SettingsSectionPreference.key) private var section: Section?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
   #endif
   @AppStorage("appearance") private var appearance = "system"
   @State private var fallbackKeyBindings = KeyBindingStore()
+  @State private var route = SettingsRoute.shared
 
-  private enum Section: String, Identifiable, CaseIterable {
+  enum Section: String, Identifiable, CaseIterable {
     case general
     case appearance
     case history
@@ -143,11 +156,13 @@ struct AppSettings: View {
       }
     }
 
-    /// Sections a platform has nothing to put in are not shown empty.
+    /// Sections a platform has nothing to put in are not shown empty. A
+    /// phone has no keyboard to bind; an iPad usually has one.
+    @MainActor
     static var available: [Self] {
       allCases.filter {
-        #if !os(macOS)
-          if $0 == .keyBindings { return false }
+        #if os(iOS)
+          if $0 == .keyBindings, UIDevice.current.userInterfaceIdiom != .pad { return false }
         #endif
         return $0 != .general || TerminalSession.isLocalAvailable
       }
@@ -176,12 +191,20 @@ struct AppSettings: View {
           settingsFooter
         }
       } detail: {
-        pane(section ?? Section.available[0])
+        pane(section.flatMap { Section.available.contains($0) ? $0 : nil } ?? Section.available[0])
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
       .navigationSplitViewStyle(.balanced)
+      // The first pane on a first open, and never one this Mac does not show.
+      .onAppear {
+        var choice = PickerSelection(id: section)
+        choice.reconcile(Section.available)
+        section = choice.id
+      }
       .toolbar(removing: .sidebarToggle)
       .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+      // Closed, it opens next time on the host list, not the page left open.
+      .onDisappear { route.pages = [] }
       .frame(minWidth: section == .keyBindings ? 820 : Chrome.settingsMinWidth, maxWidth: .infinity, minHeight: Chrome.settingsMinHeight, maxHeight: .infinity)
       .background { SettingsWindowChrome() }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
@@ -189,10 +212,14 @@ struct AppSettings: View {
       // The caller already supplies the stack and its Done button, so this
       // is the list and nothing around it.
       List(Section.available) { section in
-        NavigationLink {
-          pane(section)
-        } label: {
+        NavigationLink(value: SettingsRoute.Destination.section(section)) {
           SettingsSidebarLabel(title: section.title, systemImage: section.symbol, tint: section.tint)
+        }
+      }
+      .navigationDestination(for: SettingsRoute.Destination.self) { destination in
+        switch destination {
+        case .section(let section): pane(section)
+        case .page(let page): self.page(page)
         }
       }
       .navigationTitle("Settings")
@@ -254,20 +281,69 @@ struct AppSettings: View {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
   }
 
+  /// The host list is the one pane that pushes pages: a host, its editor, a
+  /// new host, an import. A phone pushes them on the stack it already has.
   @ViewBuilder
   private func pane(_ section: Section) -> some View {
-    SettingsPage(title: section.title, subtitle: section.subtitle) {
-      #if os(macOS)
-        if section == .keyBindings {
-          KeyBindingSettings(
-            store: connections?.keyBindings ?? fallbackKeyBindings,
-            commands: KeyBindingCatalog.commands(registry: registry, tabs: connections))
-        } else {
-          form(section)
+    #if os(macOS)
+      if section == .identities {
+        NavigationStack(path: $route.pages) {
+          sectionPage(section)
+            .navigationDestination(for: SettingsRoute.Page.self) { page($0) }
         }
-      #else
+      } else {
+        sectionPage(section)
+      }
+    #else
+      sectionPage(section)
+    #endif
+  }
+
+  @ViewBuilder
+  private func page(_ page: SettingsRoute.Page) -> some View {
+    switch page {
+    case .host(let id):
+      SettingsPage(title: store.hosts.first { $0.id == id }?.label ?? "Host", subtitle: "Identity and authentication") {
+        HostIdentitySettings(store: store, id: id, connections: connections)
+      }
+    case .edit(let id):
+      if let host = store.hosts.first(where: { $0.id == id }) {
+        SettingsPage(title: "Edit Host", subtitle: host.address) {
+          HostEditor(host: host, password: (try? secrets.password(for: host.passwordID)) ?? "",
+            onDone: { route.pop() }) { store.save($0, password: $1) }
+        }
+      }
+    case .newHost:
+      SettingsPage(title: "New Host", subtitle: "Address, account, and secret") {
+        HostEditor(host: .blank(), onDone: { route.pop() }) { store.save($0, password: $1) }
+      }
+    case .importing:
+      if let pending = CredentialImport.shared.pending {
+        SettingsPage(title: "Import from \(pending.exporter)", subtitle: "What each host keeps") {
+          CredentialImportPage(store: store, pending: pending) {
+            CredentialImport.shared.pending = nil
+            route.pop()
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func sectionPage(_ section: Section) -> some View {
+    SettingsPage(title: section.title, subtitle: section.subtitle) {
+      if section == .keyBindings {
+        KeyBindingSettings(
+          store: connections?.keyBindings ?? fallbackKeyBindings,
+          commands: KeyBindingCatalog.commands(registry: registry, tabs: connections),
+          onRecordingChange: { recording in
+            #if os(macOS)
+              connections?.quickTerminal.recordingShortcut = recording
+            #endif
+          })
+      } else {
         form(section)
-      #endif
+      }
     }
     #if os(iOS)
       // The page already shows the section title, the same as the Mac pane
@@ -284,14 +360,16 @@ struct AppSettings: View {
         IdentitySettings(store: store, connections: connections)
         DeviceSettings(store: store, known: known)
         SyncSettings(store: store)
-      case .general: GeneralSettings()
+      case .general: GeneralSettings(connections: connections)
       case .appearance: AppearanceSettings()
       case .history: HistorySettings()
       case .keyBindings:
         // This pane owns its scroll area so its search field can stay fixed.
         EmptyView()
       case .security: SecuritySettings(known: known, store: store, secrets: secrets)
-      case .extensions: ExtensionSettings(registry: registry)
+      case .extensions:
+        ExtensionSettings(registry: registry, installedIDs: installedPlugins?.pluginIDs ?? [])
+        if let installedPlugins { InstalledPluginSettings(library: installedPlugins, registry: registry) }
       }
     }
     .formStyle(.grouped)
@@ -369,6 +447,7 @@ private struct PreferenceToggleRow: View {
 /// Emits form sections only — the caller owns the `Form`, so a Mac's one
 /// scrolling sheet and a phone's pushed pane share the same rows.
 private struct GeneralSettings: View {
+  var connections: TabSet?
   @AppStorage(LaunchPreference.key) private var openLocalAtLaunch = LaunchPreference.default
   @AppStorage(LastTabPreference.key) private var closeLastTab = LastTabPreference.default
 
@@ -381,10 +460,8 @@ private struct GeneralSettings: View {
     }
 
     #if os(macOS)
-      SwiftUI.Section("Background") {
-        Text("Closing the window keeps sessions running. Open Tether again from the Dock or the menu bar. Quit Tether ends them.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+      if let controller = connections?.quickTerminal {
+        QuickTerminalSettings(controller: controller, bindings: connections?.keyBindings)
       }
     #endif
 
@@ -401,10 +478,16 @@ private struct GeneralSettings: View {
 
 private struct AppearanceSettings: View {
   @AppStorage("appearance") private var appearance = "system"
-  @AppStorage("terminalAppearance") private var terminalAppearance = "system"
   @AppStorage("terminalFontSize") private var fontSize = 13.0
-  @AppStorage("terminalDrawing") private var drawing = TerminalDrawing.platformDefault
+  @AppStorage(TetherUI.Palette.colorStyleKey) private var colorStyle = TetherUI.Palette.defaultColorStyle
+  @AppStorage(TerminalSurface.insetPreferenceKey) private var terminalInset = TerminalSurface.defaultInset
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
+
+  #if os(macOS)
+    @AppStorage(WorkspaceAppearance.opacityKey) private var backgroundOpacity = WorkspaceAppearance.defaultOpacity
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+  #endif
 
   var body: some View {
     SwiftUI.Section("Window") {
@@ -413,6 +496,34 @@ private struct AppearanceSettings: View {
         Text("Light").tag("light")
         Text("Dark").tag("dark")
       }
+      Picker("Theme", selection: $colorStyle) {
+        Text("Soft").tag("soft")
+        Text("Classic").tag("classic")
+        #if os(macOS)
+          Text("Frosted Glass").tag("frosted")
+        #endif
+      }
+      #if os(macOS)
+        if colorStyle == "frosted" {
+          LabeledContent("Background Opacity") {
+            HStack {
+              Slider(value: $backgroundOpacity, in: 0.5...1, step: 0.05)
+                .frame(width: 140)
+                .accessibilityLabel("Background Opacity")
+                .accessibilityValue(backgroundOpacity.formatted(.percent.precision(.fractionLength(0))))
+              Text(backgroundOpacity, format: .percent.precision(.fractionLength(0)))
+                .monospacedDigit()
+                .frame(width: 40, alignment: .trailing)
+            }
+          }
+          .disabled(reduceTransparency || contrast == .increased)
+          if reduceTransparency || contrast == .increased {
+            Text("System accessibility settings require an opaque background.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+      #endif
       #if os(macOS)
         Picker("Tab Layout", selection: $tabLayout) {
           Text("Horizontal").tag(TabLayout.horizontal)
@@ -422,16 +533,9 @@ private struct AppearanceSettings: View {
     }
 
     SwiftUI.Section("Terminal") {
-      Picker("Theme", selection: $terminalAppearance) {
-        Text("System").tag("system")
-        Text("Light").tag("light")
-        Text("Dark").tag("dark")
-      }
       Stepper("Font Size: \(Int(fontSize)) pt", value: $fontSize, in: 10...24)
-      Picker("Drawing", selection: $drawing) {
-        Text("Canvas").tag(TerminalDrawing.canvas.rawValue)
-        Text("Metal").tag(TerminalDrawing.metal.rawValue)
-      }
+      Stepper("Padding: \(Int(terminalInset)) pt", value: $terminalInset, in: 0...40, step: 2)
+      TerminalFontSettings()
     }
   }
 }
@@ -444,6 +548,7 @@ private struct AppearanceSettings: View {
 /// care about the plumbing every time they pick a machine.
 private struct ExtensionSettings: View {
   let registry: PluginRegistry
+  var installedIDs: Set<String> = []
 
   var body: some View {
     if registry.plugins.isEmpty {
@@ -454,7 +559,7 @@ private struct ExtensionSettings: View {
       }
     }
 
-    ForEach(registry.plugins, id: \.metadata.id) { plugin in
+    ForEach(registry.plugins.filter { !installedIDs.contains($0.metadata.id) }, id: \.metadata.id) { plugin in
       let enabled = registry.isEnabled(plugin.metadata.id)
 
       SwiftUI.Section {
@@ -518,7 +623,7 @@ private struct SecuritySettings: View {
               .textSelection(.enabled)
           }
           Spacer()
-          Button("Forget") { forgetting = entry }
+          SettingsAction("Forget", systemImage: "trash") { forgetting = entry }
             .buttonStyle(.borderless)
         }
       }
@@ -540,7 +645,7 @@ private struct SecuritySettings: View {
           // deleted is not hidden: it is the one most worth removing.
           Text(store.hosts.first { $0.id == secret.id }.map(\.address) ?? secret.label)
           Spacer()
-          Button("Delete", role: .destructive) { delete(secret) }
+          SettingsAction("Delete", systemImage: "trash", role: .destructive) { delete(secret) }
             .buttonStyle(.borderless)
         }
       }
@@ -581,6 +686,7 @@ private struct SecuritySettings: View {
   private func delete(_ secret: SavedSecret) {
     do {
       try secrets.forget(secret.id)
+      store.passwordForgotten(secret.id)
       if var host = store.hosts.first(where: { $0.id == secret.id }) {
         host.remembersPassword = false
         store.save(host)

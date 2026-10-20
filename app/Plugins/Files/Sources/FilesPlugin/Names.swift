@@ -129,6 +129,13 @@ enum Names {
 
   /// `plot.png` → (`plot`, `.png`). A leading dot is part of the stem, so
   /// `.env` has no extension.
+  /// The name an edit is kept under when the original changed on the far
+  /// side meanwhile: `notes.txt` becomes `notes (edited).txt`.
+  static func edited(_ name: String) -> String {
+    let (stem, suffix) = split(name)
+    return "\(stem) (edited)\(suffix)"
+  }
+
   private static func split(_ name: String) -> (String, String) {
     guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return (name, "") }
     return (String(name[..<dot]), String(name[dot...]))

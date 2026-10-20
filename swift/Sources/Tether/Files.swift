@@ -13,6 +13,8 @@ public enum FileError: Error, Equatable, Sendable, LocalizedError {
   case exists(path: String)
   case permissionDenied(path: String)
   case notEmpty(path: String)
+  /// The far side's file is not the one a change was made to any more.
+  case changed(path: String)
   case cancelled
   case disconnected(cause: String)
   case failed(cause: String)
@@ -23,6 +25,7 @@ public enum FileError: Error, Equatable, Sendable, LocalizedError {
     case .exists(let path): "“\(Self.name(path))” already exists."
     case .permissionDenied(let path): "Not allowed to change “\(Self.name(path))”."
     case .notEmpty(let path): "“\(Self.name(path))” is not empty."
+    case .changed(let path): "“\(Self.name(path))” changed on the server."
     case .cancelled: "Cancelled."
     case .disconnected(let cause): "The connection was lost. \(cause)"
     case .failed(let cause): cause
@@ -41,6 +44,7 @@ public enum FileError: Error, Equatable, Sendable, LocalizedError {
     case .Exists(let path): .exists(path: path)
     case .PermissionDenied(let path): .permissionDenied(path: path)
     case .NotEmpty(let path): .notEmpty(path: path)
+    case .Changed(let path): .changed(path: path)
     case .Cancelled: .cancelled
     case .Disconnected(let cause): .disconnected(cause: cause)
     case .Failed(let cause): .failed(cause: cause)
@@ -122,6 +126,22 @@ public final class RemoteFiles: Sendable {
     return try await cancellableFiled {
       try await self.inner.upload(
         source: source, path: path, replace: replacing, progress: reporter, cancellation: $0)
+    }
+  }
+
+  /// Puts `source` on this machine in place of `path`, only while `path` is
+  /// still `expected` — the same size and modification time — and
+  /// otherwise throws `changed`. Keeps the file's permissions, writes
+  /// through a link, and returns what `path` is afterwards.
+  public func writeBack(
+    _ source: String, to path: String, expected: FileEntry,
+    progress: (@Sendable (UInt64) -> Void)? = nil
+  ) async throws -> FileEntry {
+    let reporter = progress.map(Reporter.init)
+    return try await cancellableFiled {
+      try await self.inner.writeBack(
+        source: source, path: path, expectedSize: expected.size, expectedModified: expected.modified,
+        progress: reporter, cancellation: $0)
     }
   }
 

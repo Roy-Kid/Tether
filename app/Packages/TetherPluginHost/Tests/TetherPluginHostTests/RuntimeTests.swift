@@ -1,11 +1,12 @@
 import Foundation
 import Testing
+import TetherPluginKit
 
 @testable import TetherPluginHost
 
 @Test @MainActor
 func activateThenUnloadKeepsTheRecordAndDropsTheSession() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), notifying: RecordedNotifier())
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
   let record = try host.install(directory: try Fixture.make())
   let runtime = IdleRuntime()
   let session = try await host.activate(id: record.id, runtime: runtime)
@@ -37,16 +38,21 @@ func navigationStaysInsideThePackage() throws {
 @Test @MainActor
 func theBridgeScriptNamesOnlyThePluginChannel() {
   let session = UUID()
-  let source = WebKitRuntime.bridgeScript(session: session)
+  let source = WebKitRuntime.bridgeScript(
+    session: session,
+    environment: PluginEnvironment(hostID: nil, hostLabel: "lab", shellLabel: "zsh", connected: true))
   #expect(source.contains(session.uuidString))
   #expect(source.contains("webkit.messageHandlers.plugin"))
+  #expect(source.contains("host.notify"))
+  #expect(source.contains("host.reconnect"))
+  #expect(source.contains("\"hostLabel\":\"lab\""))
   #expect(!source.contains("dlopen"))
   #expect(!source.contains("spawn"))
 }
 
 @Test @MainActor
 func webKitActivateThenUnloadReleasesTheView() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), notifying: RecordedNotifier())
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
   let record = try host.install(directory: try Fixture.make(id: "fixture.webkit"))
   let runtime = WebKitRuntime()
   let session = try await host.activate(id: record.id, runtime: runtime)

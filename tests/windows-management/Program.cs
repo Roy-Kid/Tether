@@ -102,10 +102,40 @@ Reject(() => WslSession.Quote("bad\ncommand"), "tmux control characters accepted
 Reject(() => BoundedProcess.RunAsync("cmd.exe", ["/d", "/c", "echo 0123456789"], limit: 5).GetAwaiter().GetResult(), "Output bound not enforced");
 Console.WriteLine("PASS: host edits, DPAPI identities, key generation, TOTP vectors/challenge routing, credential binding, bounded command capture.");
 
+await using (var local = await TerminalSession.OpenLocalAsync(shell: "cmd"))
+{
+    using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listener.Start();
+    var port = checked((ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
+    var forwarded = await local.ForwardPortAsync(port);
+    Check(forwarded.AlreadyLocal && forwarded.LocalPort == port, "Local port forwarding must not bind over the running service");
+    await local.StopForwardAsync(port);
+    using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+    try { await local.ForwardPortAsync(port, cancelled.Token); throw new Exception("Cancelled forwarding succeeded"); }
+    catch (OperationCanceledException) { }
+    local.Close();
+    try { await local.ForwardPortAsync(port); throw new Exception("Forwarding on a closed session succeeded"); }
+    catch (IOException) { }
+}
+Console.WriteLine("PASS: native SDK forwarding, cancellation and closed-session lifecycle.");
+
 if (args.Contains("--wsl"))
 {
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
     await using var wsl = await WslSession.CreateAsync(timeout.Token);
+    var portFixture = """
+        fixture=$(mktemp -d)
+        trap 'rm -rf "$fixture"' EXIT
+        mkdir -p "$fixture/net" "$fixture/10/fd"
+        printf 'node\n' > "$fixture/10/comm"
+        ln -s 'socket:[111]' "$fixture/10/fd/3"
+        printf '%s\n' 'sl local rem st queue tr ret uid timeout inode' '0: 0100007F:1F40 00000000:0000 0A 0 0 0 1000 0 111' '1: 0100007F:0050 00000000:0000 0A 0 0 0 1000 0 222' '2: 0100007F:2328 00000000:0000 0A 0 0 0 1001 0 333' > "$fixture/net/tcp"
+        export TETHER_PROC_ROOT="$fixture"
+        export TETHER_PROC_UID=1000
+        (
+        """.Replace("\r\n", "\n", StringComparison.Ordinal);
+    var portOutput = await wsl.ExecuteAsync(portFixture + "\n" + TetherApp.Plugins.PortScan.Command + "\n)\n", timeout.Token);
+    Check(TetherApp.Plugins.PortScan.Parse(portOutput) is [{ Port: 8000, Name: "node" }], "WSL port scan: owned listener only");
     Check((await WslSession.DistributionsAsync()).Contains(wsl.Distribution), "WSL distribution enumeration/encoding");
     await using var secondWsl = await WslSession.CreateAsync(timeout.Token, wsl.Distribution);
     using var terminal = await TerminalSession.OpenLocalAsync(shell: WslSession.Program, arguments: wsl.ShellArguments(null));

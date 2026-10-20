@@ -29,6 +29,8 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     public nint WindowHandle { get; set; }
     /// <summary>Dialogs need a root even before this pane is on screen.</summary>
     public Func<XamlRoot?>? DialogRoot { get; set; }
+    /// <summary>Web plugin viewer routing. True means a viewer took the file.</summary>
+    public Func<string, byte[], string, CancellationToken, Task<bool>>? OpenWebViewer { get; set; }
     public bool HasWork => _busy;
     public event Action? HideRequested;
 
@@ -448,10 +450,71 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
 
     private async void Preview_Click(object sender, RoutedEventArgs e) => await PreviewSelectedAsync();
 
+    private async void Edit_Click(object sender, RoutedEventArgs e) => await RunAsync(async token =>
+    {
+        if (Selected() is not [var entry] || entry.Kind != FileKind.File) return;
+        if (_source is not SftpSource remote)
+        {
+            await OpenFileAsync(entry, token);
+            return;
+        }
+        var expected = await remote.StatAsync(entry.Path);
+        if (expected.Size > TextEditDocument.ByteLimit) throw new IOException("Text editing is limited to 2 MiB.");
+        var temporary = Path.Combine(Path.GetTempPath(), "tether-edit-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await remote.DownloadAsync(entry.Path, temporary, TransferProgress(entry.Name), token);
+            var current = await remote.StatAsync(entry.Path);
+            if (current.Size != expected.Size || current.Modified != expected.Modified)
+                throw new IOException("The file changed while it was downloaded. Open it again.");
+            byte[] bytes;
+            await using (var stream = File.OpenRead(temporary))
+            {
+                if (stream.Length > TextEditDocument.ByteLimit) throw new IOException("Text editing is limited to 2 MiB.");
+                bytes = new byte[(int)stream.Length];
+                await stream.ReadExactlyAsync(bytes, token);
+            }
+            var document = new TextEditDocument(bytes);
+            var edited = document.Text;
+            while (true)
+            {
+                var editor = new TextBox { Text = edited, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap,
+                    Height = 360, MinWidth = 360, FontFamily = new FontFamily("Cascadia Mono") };
+                if (await DialogAsync(entry.Name, editor, "Save") != ContentDialogResult.Primary) return;
+                edited = editor.Text;
+                token.ThrowIfCancellationRequested();
+                byte[]? changed = null;
+                try
+                {
+                    changed = document.Encode(edited);
+                    if (changed.AsSpan().SequenceEqual(bytes)) return;
+                    await File.WriteAllBytesAsync(temporary, changed, token);
+                    await remote.WriteBackAsync(temporary, expected, TransferProgress(entry.Name), token);
+                    await RefreshAsync(token);
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    // Keep the edited text available after a conflict or a failed save.
+                    var result = await DialogAsync("Save Failed", ex.Message, "Keep Editing", changed is null ? null : "Save Copy…");
+                    if (result == ContentDialogResult.Secondary && changed is not null)
+                    {
+                        var picker = new FileSavePicker { SuggestedFileName = SafeName(entry.Name) };
+                        picker.FileTypeChoices.Add("Text", [".txt"]); InitPicker(picker);
+                        if (await picker.PickSaveFileAsync() is { } copy) await File.WriteAllBytesAsync(copy.Path, changed, token);
+                    }
+                }
+            }
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    });
+
     private Task PreviewSelectedAsync() => RunAsync(async token =>
     {
         if (Selected() is not [var entry] || entry.Kind != FileKind.File) return;
         if (_source is SftpSource && !await ConfirmLargeFileAsync(entry)) return;
+        // A web viewer that claims this suffix takes the file before the text preview.
+        if (await TryOpenWebViewerAsync(entry, token)) return;
         // Inline previews are bounded; an external viewer handles larger files.
         if (entry.Size > 2_000_000) { await OpenFileAsync(entry, token); return; }
         var temporary = Path.Combine(Path.GetTempPath(), "tether-preview-" + Guid.NewGuid().ToString("N"));
@@ -493,6 +556,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     private async Task OpenFileAsync(FileEntry entry, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (await TryOpenWebViewerAsync(entry, token)) return;
         string path;
         if (_source is LocalFileSource local)
         {
@@ -526,6 +590,32 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         if (!await Launcher.LaunchFileAsync(file))
             throw new IOException($"Windows could not open {entry.Name}. Set a default application for this file type in Windows Settings.");
         // Keep remote copies after launch and pane disposal. Edits stay local.
+    }
+
+    private async Task<bool> TryOpenWebViewerAsync(FileEntry entry, CancellationToken token)
+    {
+        if (OpenWebViewer is null || entry.Kind != FileKind.File) return false;
+        var suffix = Path.GetExtension(entry.Name);
+        if (string.IsNullOrEmpty(suffix)) return false;
+        // Bound before download so a huge remote file never fills the temp disk for a plugin.
+        if (entry.Size > (ulong)Plugins.WebAttachment.DocumentByteLimit) return false;
+        var temporary = Path.Combine(Path.GetTempPath(), "tether-viewer-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string path;
+            if (_source is LocalFileSource local) path = local.NativePath(entry.Path);
+            else
+            {
+                await _source!.DownloadAsync(entry.Path, temporary, TransferProgress(entry.Name), token);
+                path = temporary;
+            }
+            token.ThrowIfCancellationRequested();
+            var info = new FileInfo(path);
+            if (info.Length > Plugins.WebAttachment.DocumentByteLimit) return false;
+            var bytes = await File.ReadAllBytesAsync(path, token);
+            return await OpenWebViewer(suffix, bytes, entry.Name, token);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
     public void Report(string message) => Problem.Text = message;
 

@@ -71,6 +71,12 @@ together. Read it before touching architecture.
   `UIAlertController` or `NSAlert`; grepping for `.alert(` is the test.
   A failure a person has to act on is one of these, naming the host and the
   reason — not a page left in a tab. Their own *no* ends quietly.
+- **Every window exists once.** A thing is managed on one page, and every
+  way to it opens that page rather than a sheet or window of its own. Hosts
+  are Settings ▸ Identities: the host picker's list and add buttons, Edit…,
+  Identity…, Manage Hosts and a password manager's import all open Settings
+  there, with the host, its editor or the import pushed over the list
+  (`SettingsRoute`).
 
 ## Working here
 
@@ -99,7 +105,10 @@ swift test --package-path app/Packages/TetherFrontend  # frontend
 swift test --package-path app/Packages/TetherPluginHost # web plugin host
 swift test --package-path app/Plugins/Tmux             # the built-in plugins, no server needed
 swift test --package-path app/Plugins/Files
+swift test --package-path app/Plugins/Ports
 swift test --package-path app                          # the app's own state
+(cd app/Packages/TetherFrontend && xcodebuild test -scheme TetherFrontend-Package \
+  -destination "platform=iOS Simulator,id=<udid>")     # the phone's frontend tests
 ```
 
 CI runs everything above. The app links nothing from outside this repository;
@@ -109,11 +118,13 @@ keychain.
 iOS targets are not installed by default:
 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
 
-iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs.
-The app is `Roy-Kid.Tether` with container `iCloud.Roy-Kid.Tether`, both
-registered to the team that ships it (`dev.tether.app` belongs to someone
-else). Profiles come from Xcode's own store, asked for once per machine and
-again when they expire:
+iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs,
+and carries no credential provider, so it cannot import from a password
+manager either. The app is `Roy-Kid.Tether` with container
+`iCloud.Roy-Kid.Tether` and extension `Roy-Kid.Tether.CredentialProvider`
+(AutoFill capability on both), all registered to the team that ships it
+(`dev.tether.app` belongs to someone else). Profiles come from Xcode's own
+store, asked for once per machine and again when they expire:
 
 ```bash
 ./scripts/tether.sh --provision --team <TEAMID>          # needs xcodegen + Xcode signed in
@@ -144,14 +155,15 @@ artifact shape are decided and exercised by CI.
 
 Phase 2's acceptance is in place — recorded §12 workloads asserted against
 screen state, and `cargo-fuzz` over everything that reads remote bytes. Phase 4
-draws with Metal on both platforms; the SwiftUI canvas stays as the fallback
-and a setting. The Metal path is tested by drawing off screen and reading the
-pixels back, since nothing else in CI would notice it drawing nothing.
+uses the shared Rust wgpu renderer on Windows and Apple, with native platform
+hosts. Apple uses the Metal backend; there is no separate terminal Canvas or
+Swift Metal painter. Pixel readback tests exercise the same shared render pass.
+Device release qualification is recorded separately (ADR 0021).
 
 A login asks through dialogs, and reads a question that comes back as the
 answer before it refused. A refused saved password is never sent again, and a
-password is only offered to be kept once it has worked. The password asked
-before dialling is a dialog too, not a sheet.
+password typed at a login is only offered to be kept once it has worked. The
+password asked before dialling is a dialog too, not a sheet.
 
 A session reads from a `Producer` rather than from SSH, so
 `tether-local` gives the same `TerminalSession` over a shell on this machine.
@@ -164,10 +176,23 @@ this machine with a second process, so tmux works on both and is written once.
 
 There is one kind of host, and one source of truth: the host library,
 synchronized through iCloud. A host that arrives from another device on the
-same Apple ID is trusted — no review. Private keys travel with that library,
-so the other device logs in with the same key; a host with none gets one
-from Create SSH Key, and that key syncs too. Passwords stay on the device
-that saved them. A deleted host takes its keys out of the keychain. On a Mac
+same Apple ID is trusted — no review. A host's private key, password and
+one-time-code seed are equals, and all three travel with that library: what
+one device keeps, the others log in with, and letting go of one here lets go
+of it everywhere. A host with no key gets one from Create SSH Key, and that
+key syncs too. Each secret stays in its device's keychain; the host's record
+carries it — the password and seed as encrypted fields — and nothing logs
+it. A deleted host takes its secrets out of the keychain.
+
+A password manager can export into the library (Credential Exchange). The
+export is started there; Tether is offered as a destination because it
+carries a credential provider extension that provides nothing, and the
+export arrives at the app as a one-time token. Only the host library
+filters it: an item that names an existing host — by its name or address,
+for that host's user — is offered for that host, keys, passwords and codes
+alike, with what the host already has left unchosen; the rest is folded
+away to be given a host by hand or left behind. An import never creates a
+host, and nothing the person did not choose is stored. On a Mac
 `~/.ssh/config` is read, never written. On launch, when the file would
 change a host, a dialog asks whether to import it; agreeing copies the file
 over the hosts it names. Declining leaves the library until the next open,
@@ -191,6 +216,24 @@ The browser is a tab plugin kept in the inspector, and a
 path printed in the terminal opens with ⌘-click, a force click or a
 long-press: the terminal finds the shape, the plugin
 checks it exists.
+
+Space previews; Download keeps a copy that is nobody's business after; on a
+Mac, opening a file edits it. The copy opens in whatever the Mac opens it
+with and stays watched: a save is written back, and a change on the far side
+is brought into the copy, as soon as either happens. A save lands only while
+the far side's file is still the one that was opened, and a far-side change
+lands only while the copy still matches it. Otherwise the person chooses
+Replace, Save as Copy or Discard My Changes; nothing is overwritten unasked.
+An edit copy
+lives under Application Support and goes once it is written back and its
+editor has quit; one with an edit not yet written back stays across launches.
+Previews and other copies that can be fetched again live in this account's
+own temporary directory, never the shared `/tmp`, closed to other accounts.
+
+A session can forward the user's own loopback ports on that machine to this
+device. The listener is on this side of the lease — a direct-tcpip channel,
+`ssh -W` through a ControlMaster, or the port itself when the shell is
+already here — and the inspector lists them.
 
 A consumer can hand its palette down, and the engine answers the far side's
 colour queries from it. Cells still report colour *names* —

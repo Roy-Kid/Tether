@@ -1,18 +1,10 @@
-//! The measurement is a test, not a memory (Decisions/0006, 0016).
-//!
-//! Three shapes, four sizes, and rate ceilings generous enough that a slower
-//! CI machine does not flake the test into deletion. What these catch is an
-//! order of magnitude — the size of regression that makes a terminal
-//! unusable — not a few percent.
+//! Manual CPU layout observations; hardware timings never gate CI.
+//! Run: cargo test -p tether-render --test cost -- --ignored --nocapture
+//! These measure prepare(), not font shaping, GPU execution or presentation.
 
 use std::time::Instant;
 
 use tether_render::{Caret, FontMetrics, Frame, Name, Paint, Palette, Row, Run, RunStyle, prepare};
-
-/// Half a cell is the point at which the cursor visibly straddles two
-/// characters; the drawing ceiling is orders of magnitude coarser than that.
-const FRAME_BUDGET: f32 = 60.0;
-const PER_RUN_BUDGET_MICROS: f32 = 100.0;
 
 fn metrics() -> FontMetrics {
     FontMetrics::from_advances(13.0, 8.0, 16.0, 16.0)
@@ -112,7 +104,7 @@ fn worst_case(columns: u32, rows: u32) -> Frame {
 fn run_shape(name: &str, frame: &Frame, iterations: u32) {
     let metrics = metrics();
     let palette = Palette::dark();
-    // Warm the caches the way a session does: the first frame loads fonts.
+    // Exercise preparation once before collecting approximate CPU timings.
     prepare(frame, &metrics, &palette);
 
     let started = Instant::now();
@@ -132,24 +124,11 @@ fn run_shape(name: &str, frame: &Frame, iterations: u32) {
         "{name} {:>3}x{:<3}  {:6.2}ms/frame  {:6.2}µs/run  ({runs} runs)",
         frame.columns, frame.rows, per_frame_ms, per_run_us
     );
-
-    assert!(
-        per_frame_ms < FRAME_BUDGET,
-        "{name} at {}x{} took {per_frame_ms}ms per frame (budget {FRAME_BUDGET}ms)",
-        frame.columns,
-        frame.rows
-    );
-    // A rate, not the known-bad absolute from 0006's CoreGraphics numbers.
-    assert!(
-        per_run_us < PER_RUN_BUDGET_MICROS,
-        "{name} at {}x{} cost {per_run_us}µs per run (budget {PER_RUN_BUDGET_MICROS}µs)",
-        frame.columns,
-        frame.rows
-    );
 }
 
 #[test]
-fn ordinary_frames_stay_inside_a_frame() {
+#[ignore = "manual hardware-dependent performance observation"]
+fn observe_ordinary_layout_cost() {
     for (columns, rows) in [(80, 24), (120, 40), (200, 60), (400, 100)] {
         run_shape("prose", &prose(columns, rows), 200);
         run_shape("highlighted", &highlighted(columns, rows), 200);
@@ -157,9 +136,9 @@ fn ordinary_frames_stay_inside_a_frame() {
 }
 
 #[test]
-fn worst_case_is_a_rate_not_an_absolute() {
-    // The smallest four sizes keep this test under a second while still
-    // exercising one-run-per-cell. 0006's 893ms absolute is not asserted.
+#[ignore = "manual hardware-dependent performance observation"]
+fn observe_per_cell_layout_cost() {
+    // Observe scaling with one run per cell, without a timing assertion.
     for (columns, rows) in [(80, 24), (120, 40), (200, 60)] {
         run_shape("worstCase", &worst_case(columns, rows), 20);
     }

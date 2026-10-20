@@ -57,12 +57,12 @@ struct PaletteOverlay: View {
       items += tabs.recentHosts(in: store.listed).prefix(5).map { hostItem($0, recent: true) }
     }
     items += store.listed.map { hostItem($0, recent: false) }
-    items += tabs.visibleTabs.map { tab in
+    items += tabs.visibleWorkspaces.map { tab in
       let host = tab.host.label.isEmpty ? tab.host.hostname : tab.host.label
       return CommandItem(
         id: "tab-\(tab.id)",
-        title: tab.title,
-        detail: tab.subtitle.isEmpty ? host : "\(host) · \(tab.subtitle)",
+        title: tab.name,
+        detail: "\(host) · \(tab.terminalIDs.count) terminals",
         enabled: true
       ) {
         tabs.select(tab.id)

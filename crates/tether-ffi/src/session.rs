@@ -438,7 +438,7 @@ impl Session {
 #[uniffi::export(async_runtime = "tokio")]
 impl Session {
     pub fn connection(&self) -> Option<Arc<crate::RemoteConnection>> {
-        self.inner.connection().map(|inner| Arc::new(crate::RemoteConnection { inner }))
+        self.inner.connection().map(crate::RemoteConnection::from_connection)
     }
 
     /// The local shell's tty path, for matching tmux clients to this tab.

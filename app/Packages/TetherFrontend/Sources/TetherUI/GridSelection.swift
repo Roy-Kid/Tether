@@ -239,23 +239,3 @@ enum Clipboard {
     #endif
   }
 }
-
-/// The selection, over the glyphs. It does not take the click: the capture
-/// view is the thing under the pointer.
-struct SelectionHighlight: View {
-  var selection: GridSelection?
-  var frame: ScreenFrame
-  var geometry: CellGeometry
-
-  var body: some View {
-    Canvas { context, _ in
-      guard let selection else { return }
-      let color = Color.accentColor.opacity(UIStyle.textSelectionOpacity)
-      for span in GridText.spans(selection, in: frame) {
-        context.fill(Path(geometry.rect(for: span)), with: .color(color))
-      }
-    }
-    .allowsHitTesting(false)
-    .accessibilityHidden(true)
-  }
-}

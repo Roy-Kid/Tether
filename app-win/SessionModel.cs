@@ -49,7 +49,7 @@ public sealed class SessionModel : IAsyncDisposable
     public RemoteBar Bar => _bar;
 
     /// <summary>A remote host is remembered and the bar is offering another dial.</summary>
-    public bool CanReconnect => RemoteHost is not null && _bar.OffersReconnect;
+    public bool CanReconnect => !IsLive && _bar.Phase is RemotePhase.Lost or RemotePhase.Failed or RemotePhase.Cancelled or RemotePhase.Ended;
 
     /// <summary>The handshake's cancel signal. Auth dialogs close when it fires.</summary>
     public CancellationToken DialToken
@@ -90,10 +90,28 @@ public sealed class SessionModel : IAsyncDisposable
     public Task<string?> TmuxSessionForClientAsync(string tty) => (!IsRemote && _wsl is not null ? _wsl.SessionForClientAsync(tty) : _session?.TmuxSessionForClientAsync(tty)) ?? Task.FromResult<string?>(null);
     public Task<RemoteFiles> OpenFilesAsync(CancellationToken token) =>
         _session?.OpenFilesAsync(token) ?? throw new InvalidOperationException("No live session.");
+    public Task<ForwardedPort> ForwardPortAsync(ushort port, CancellationToken token) =>
+        _session?.ForwardPortAsync(port, token) ?? throw new IOException("No live connection.");
+    public Task StopForwardAsync(ushort port) => _session?.StopForwardAsync(port) ?? Task.CompletedTask;
 
     public ScreenFrame? CurrentFrame
     {
         get { lock (_gate) return _frame; }
+    }
+
+    /// <summary>The frame and the generation written with it, under one lock.</summary>
+    public readonly record struct FrameSample(ScreenFrame? Frame, long Generation);
+
+    private long _contentGeneration;
+
+    public long ContentGeneration
+    {
+        get { lock (_gate) return _contentGeneration; }
+    }
+
+    public FrameSample SampleFrame()
+    {
+        lock (_gate) return new FrameSample(_frame, _contentGeneration);
     }
 
     /// <summary>
@@ -427,7 +445,11 @@ public sealed class SessionModel : IAsyncDisposable
 
     private void Publish(ScreenFrame frame)
     {
-        lock (_gate) _frame = frame;
+        lock (_gate)
+        {
+            _contentGeneration++;
+            _frame = frame;
+        }
         FrameChanged?.Invoke(frame);
     }
 

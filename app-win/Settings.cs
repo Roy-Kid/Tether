@@ -15,12 +15,17 @@ public sealed record AppSettings(string Shell = "pwsh", string Appearance = "sys
     public Dictionary<string, string> KeyBindings { get; init; } = new();
     public string TabLayout { get; init; } = "horizontal";
     public bool ShowsTabBar { get; init; } = true;
+    /// <summary><c>stay</c> keeps an empty window; <c>quit</c> closes the app when the last tab closes.</summary>
+    public string CloseLastTab { get; init; } = "stay";
+    public string[] RecentHosts { get; init; } = [];
     public ulong HistoryLines { get; init; } = 10_000;
     public bool UnlimitedHistory { get; init; }
     public ulong FilesPromptMegabytes { get; init; } = 50;
     public string DownloadDirectory { get; init; } = "";
     public string? WslDistribution { get; init; }
     public TerminalPreferences Terminal { get; init; } = new();
+    public bool PortsAutomatic { get; init; } = true;
+    public string PortsIgnored { get; init; } = "";
 
     /// <summary>
     /// The <c>ssh.exe</c> used to attach to an existing OpenSSH connection.

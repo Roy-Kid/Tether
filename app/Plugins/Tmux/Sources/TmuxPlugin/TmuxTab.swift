@@ -43,9 +43,9 @@ public final class TmuxTab: TabAttachment {
   private var shellNotches = ShellNotches()
   private var shellLookup: Task<Void, Never>?
   private var shellScrollTask: Task<Void, Never>?
-  /// The shell's client is showing its history. The next key puts it back
-  /// at the prompt before the key is delivered.
-  private var shellCopied = false
+  /// Panes whose history this wheel is showing. The next key puts each one
+  /// back at its prompt before the key is delivered.
+  private var copiedPanes: Set<String> = []
   /// Panes of the client's current window, and when they were read.
   /// A wheel over a program that asked for the mouse has to be reported;
   /// one over a shell is scrolled by the line, not by tmux's binding.
@@ -66,6 +66,8 @@ public final class TmuxTab: TabAttachment {
   /// The terminal stays the terminal. tmux, when it is there, is what that
   /// terminal is showing.
   public var isShowing: Bool { false }
+  /// While this shell is a tmux client, the tab wears the plugin's mark.
+  public var symbol: String { shellSessionID == nil ? "" : "rectangle.split.2x2" }
   public var subtitle: String {
     guard let id = shellSessionID else { return "" }
     return sessions.first { $0.id == id }?.name ?? shellSessionName
@@ -114,25 +116,51 @@ public final class TmuxTab: TabAttachment {
       PluginCommand(id: "detach", title: "Detach Session", symbol: "eject") { [weak self] in
         self?.detachSession()
       },
-      PluginCommand(id: "newWindow", title: "New window", symbol: "plus.rectangle") { [weak self] in
+      PluginCommand(id: "newWindow", title: "New Window", symbol: "plus.rectangle") { [weak self] in
         self?.newWindow()
       },
-      PluginCommand(id: "splitHorizontal", title: "Split left and right", symbol: "rectangle.split.2x1") {
+      PluginCommand(id: "previousWindow", title: "Previous Window", symbol: "chevron.left") { [weak self] in
+        self?.cycleWindow(forward: false)
+      },
+      PluginCommand(id: "nextWindow", title: "Next Window", symbol: "chevron.right") { [weak self] in
+        self?.cycleWindow(forward: true)
+      },
+      PluginCommand(id: "splitHorizontal", title: "Split Left and Right", symbol: "rectangle.split.2x1") {
         [weak self] in self?.split(horizontal: true)
       },
-      PluginCommand(id: "splitVertical", title: "Split top and bottom", symbol: "rectangle.split.1x2") {
+      PluginCommand(id: "splitVertical", title: "Split Top and Bottom", symbol: "rectangle.split.1x2") {
         [weak self] in self?.split(horizontal: false)
       },
-      PluginCommand(id: "zoom", title: "Zoom pane", symbol: "arrow.up.left.and.arrow.down.right") {
+      PluginCommand(id: "zoom", title: "Zoom Pane", symbol: "arrow.up.left.and.arrow.down.right") {
         [weak self] in self?.zoom()
       },
-    ]
+    ] + TmuxPaneDirection.allCases.map { direction in
+      PluginCommand(id: direction.commandID, title: direction.title, symbol: direction.symbol) {
+        [weak self] in self?.focusPane(direction)
+      }
+    }
   }
   public func content() -> AnyView { AnyView(EmptyView()) }
-  public func inspector() -> AnyView { AnyView(TmuxInspector(model: self)) }
+  public func inspector() -> AnyView { AnyView(TmuxPicker(model: self)) }
   public func accessoryContent() -> AnyView { AnyView(TmuxPicker(model: self)) }
+  public func workingDirectory(for link: TerminalLink?) async -> String? {
+    guard !closed, let connection, let tty = tab.terminalName() else { return nil }
+    // Ask the client again: panes and windows can change through tmux's
+    // own keys or another client, without any command passing through us.
+    guard let session = try? await connection.tmuxSession(forClientTTY: tty),
+      let command = TmuxPaneDirectories.listCommand(session: session),
+      let output = try? await connection.execute(command), output.status == 0,
+      !closed, !Task.isCancelled, self.connection?.leaseID() == connection.leaseID(),
+      tab.terminalName() == tty,
+      let text = String(data: output.stdout, encoding: .utf8),
+      let directories = TmuxPaneDirectories.parse(text)
+    else { return nil }
+    noteShellClient(tty: tty, session: session)
+    return TmuxPaneDirectories.directory(in: directories, for: link)
+  }
+
   public func connectionChanged(_ connection: RemoteConnection) {
-    guard self.connection !== connection else { return }
+    guard self.connection?.leaseID() != connection.leaseID() else { return }
     self.connection = connection
     shellLookup?.cancel()
     shellLookup = nil
@@ -147,96 +175,68 @@ public final class TmuxTab: TabAttachment {
     onClose()
   }
 
-  /// A wheel over the shell. Taken when this shell is already a client we
-  /// have named, and held while that is still being learned.
+  /// The wheel at one cell of this shell.
   ///
-  /// tmux may be drawing on the primary screen. Scrolling this terminal
-  /// then moves the status line with every pane. The wheel waits, and goes
-  /// to tmux when the answer is that this shell is the client. A shell that
-  /// is not gets the lines back.
-  public func scrollShell(_ lines: Int32, fullScreen _: Bool) -> Bool {
+  /// A known client is decided from the pane under the pointer. A program
+  /// that asked for the mouse hears the wheel. A shell pane scrolls. A
+  /// full-screen program that did not ask for the mouse keeps the wheel on
+  /// its own screen. A tty that might still be a client holds the lines
+  /// until that is known, so this terminal's history does not move the
+  /// whole window in the meantime.
+  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim {
     let tty = tab.terminalName()
-    if TmuxShellScroll.claims(
+    let known = TmuxShellScroll.claims(
       connected: connection != nil, session: shellSessionID, tty: tty, knownTTY: shellTTY)
-    {
-      guard lines != 0 else { return true }
-      shellNotches.add(lines)
-      startShellDrain()
-      return true
-    }
-    guard connection != nil else { return false }
-    lookupShellClient()
-    guard TmuxShellScroll.holds(
-      connected: true, tty: tty, knownTTY: shellTTY, session: shellSessionID,
-      lookupRunning: shellLookup != nil)
-    else { return false }
-    if lines != 0 { shellNotches.add(lines) }
-    return true
-  }
-
-  /// A wheel the program asked to hear. Taken when this shell is that
-  /// client, so the pane under the pointer moves by these lines.
-  ///
-  /// Reporting the notch instead lets tmux's own binding run: the first
-  /// one only enters copy mode, each one after scrolls five rows, and one
-  /// that lands on the status line changes window. A pane that is on the
-  /// alternate screen, or that asked for the mouse, still hears the report.
-  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool {
-    let tty = tab.terminalName()
-    if TmuxShellScroll.claims(
-      connected: connection != nil, session: shellSessionID, tty: tty, knownTTY: shellTTY),
-      let panes
-    {
-      let fresh = Date().timeIntervalSince(panesAt) < TmuxPaneLayout.ttl
-      switch TmuxPaneLayout.decide(panes, column: Int(column), row: Int(row)) {
-      case .report:
-        // A program that asked for the mouse keeps the wheel. An old
-        // answer is refreshed for the next notch, without holding this one.
-        if !fresh { schedulePaneLoad() }
-        return false
-      case .ignore where fresh:
-        return true
-      case .scroll where fresh:
-        break
-      default:
-        break
+    if known {
+      if let panes {
+        if Date().timeIntervalSince(panesAt) >= TmuxPaneLayout.ttl { schedulePaneLoad() }
+        switch TmuxPaneLayout.decide(panes, column: Int(column), row: Int(row)) {
+        case .report:
+          return .report
+        case .stop, .ignore:
+          return .taken
+        case .scroll:
+          guard lines != 0 else { return .taken }
+          shellNotches.add(lines, column: column, row: row)
+          startShellDrain()
+          return .taken
+        }
       }
-    }
-    if TmuxShellScroll.claims(
-      connected: connection != nil, session: shellSessionID, tty: tty, knownTTY: shellTTY)
-    {
-      guard lines != 0 else { return true }
-      shellNotches.add(lines, column: column, row: row, reported: true)
+      guard lines != 0 else { return .taken }
+      shellNotches.add(lines, column: column, row: row)
       startShellDrain()
-      return true
+      return .taken
     }
-    guard connection != nil else { return false }
+    guard connection != nil else { return .pass }
     lookupShellClient()
     guard TmuxShellScroll.holds(
       connected: true, tty: tty, knownTTY: shellTTY, session: shellSessionID,
       lookupRunning: shellLookup != nil)
-    else { return false }
-    if lines != 0 { shellNotches.add(lines, column: column, row: row, reported: true) }
-    return true
+    else { return .pass }
+    if lines != 0 { shellNotches.add(lines, column: column, row: row) }
+    return .taken
   }
 
-  public var shellInputWaits: Bool { shellCopied }
+  public var shellInputWaits: Bool { !copiedPanes.isEmpty }
 
   public func restoreShellForInput() async {
-    guard shellCopied else { return }
-    shellCopied = false
+    let panes = copiedPanes
+    guard !panes.isEmpty else { return }
+    copiedPanes = []
     shellNotches = ShellNotches()
     let scrolling = shellScrollTask
     scrolling?.cancel()
     await scrolling?.value
     // The command already in flight may have entered copy mode. This is
     // about to cancel that, so the next key must not wait again.
-    shellCopied = false
+    let entered = panes.union(copiedPanes)
+    copiedPanes = []
     shellNotches = ShellNotches()
-    guard !closed, let session = shellSessionID, let connection,
-      let command = TmuxShellScroll.cancel(session: session)
-    else { return }
-    _ = try? await connection.execute(command)
+    guard !closed, let connection else { return }
+    for pane in entered {
+      guard let command = TmuxShellScroll.cancel(pane: pane) else { continue }
+      _ = try? await connection.execute(command)
+    }
   }
 
   // MARK: - State
@@ -252,14 +252,22 @@ public final class TmuxTab: TabAttachment {
   /// A plain shell is given `tmux attach-session`, which is what then draws.
   public func choose(_ chosen: TmuxSessionInfo, windowID: UInt32?) {
     if shellSessionID == chosen.id, windowID == nil {
-      tab.dismissAccessory()
+      closePicker()
       return
     }
     run { [self] in
       try await open(chosen, windowID: windowID)
       guard !closed, !Task.isCancelled else { return }
-      tab.dismissAccessory()
+      closePicker()
     }
+  }
+
+  /// A phone's sheet is the choice, so it goes away. The Mac inspector stays
+  /// open so another session can be chosen without opening it again.
+  private func closePicker() {
+    #if !os(macOS)
+      tab.dismissAccessory()
+    #endif
   }
 
   /// Leaves tmux, so the shell that started it is on screen again.
@@ -390,6 +398,8 @@ public final class TmuxTab: TabAttachment {
   public func newWindow() { runOnSession { TmuxCommands.newWindow($0) } }
   public func split(horizontal: Bool) { runOnSession { TmuxCommands.split($0, horizontal: horizontal) } }
   public func zoom() { runOnSession { TmuxCommands.zoom($0) } }
+  func focusPane(_ direction: TmuxPaneDirection) { runOnSession { TmuxCommands.selectPane($0, direction) } }
+  public func cycleWindow(forward: Bool) { runOnSession { TmuxCommands.cycleWindow($0, forward: forward) } }
 
   private func runOnSession(_ command: @escaping (String) -> String?) {
     run { [self] in
@@ -490,25 +500,17 @@ public final class TmuxTab: TabAttachment {
     while !closed, !Task.isCancelled {
       let held = await nextShellLines()
       guard held.lines != 0, !closed, !Task.isCancelled else { return }
-      if held.reported {
-        await applyReported(held)
-      } else if let session = shellSessionID {
-        await apply(target: session, held: held)
-      }
+      await applyHeld(held)
     }
   }
 
-  /// A wheel that was going to be reported. The pane under the pointer
-  /// decides: a shell is scrolled by these lines, a program that asked for
-  /// the mouse hears the report, and the status line is left alone.
-  private func applyReported(_ held: HeldWheel) async {
-    let layout = await panesForWheel()
-    guard let layout else {
-      giveReported(held)
-      return
-    }
+  /// The pane under the pointer decides. A shell scrolls by these lines.
+  /// A program that asked for the mouse hears the report. A full-screen
+  /// program that did not ask, and the status line, are left alone.
+  private func applyHeld(_ held: HeldWheel) async {
+    guard let layout = await panesForWheel() else { return }
     switch TmuxPaneLayout.decide(layout, column: Int(held.column), row: Int(held.row)) {
-    case .ignore:
+    case .ignore, .stop:
       return
     case .report:
       giveReported(held)
@@ -518,15 +520,10 @@ public final class TmuxTab: TabAttachment {
   }
 
   private func giveReported(_ held: HeldWheel) {
-    let magnitude = min(Int(held.lines.magnitude), TmuxShellScroll.repeatCap)
-    guard magnitude > 0 else { return }
-    let applied: Int32 = held.lines > 0 ? Int32(magnitude) : -Int32(magnitude)
+    let count = WheelReports.count(held.lines)
+    guard count > 0 else { return }
+    let applied: Int32 = held.lines > 0 ? Int32(count) : -Int32(count)
     tab.reportWheel(applied, held.column, held.row)
-    let (rest, overflowed) = held.lines.subtractingReportingOverflow(applied)
-    if !overflowed, rest != 0 {
-      shellNotches.add(rest, column: held.column, row: held.row, reported: true)
-      startShellDrain()
-    }
   }
 
   private func apply(target: String, held: HeldWheel) async {
@@ -534,7 +531,7 @@ public final class TmuxTab: TabAttachment {
     else { return }
     let (rest, overflowed) = held.lines.subtractingReportingOverflow(built.applied)
     if !overflowed, rest != 0 {
-      shellNotches.add(rest, column: held.column, row: held.row, reported: held.reported)
+      shellNotches.add(rest, column: held.column, row: held.row)
     }
     let output: CommandOutput
     do {
@@ -550,9 +547,9 @@ public final class TmuxTab: TabAttachment {
         forgetShellClient()
         return
       }
-      shellCopied = true
+      copiedPanes.insert(target)
     } else if (output.status ?? 1) != 0 {
-      shellCopied = false
+      copiedPanes.remove(target)
     }
   }
 
@@ -588,12 +585,11 @@ public final class TmuxTab: TabAttachment {
     }
     if session == nil {
       let pending = shellNotches.take()
-      if pending.lines != 0 {
-        if pending.reported {
-          giveReported(pending)
-        } else {
-          tab.scrollBy(pending.lines)
-        }
+      guard pending.lines != 0 else { return }
+      if TmuxShellScroll.returnsToHistory(tab.mouseTracking()) {
+        tab.scrollBy(pending.lines)
+      } else {
+        giveReported(pending)
       }
       return
     }
@@ -647,7 +643,7 @@ public final class TmuxTab: TabAttachment {
 
   private func noteShellClient(tty: String?, session: String?) {
     let changed = session != shellSessionID
-    if changed { shellCopied = false }
+    if changed { copiedPanes = [] }
     shellTTY = tty
     shellSessionID = session
     if let session, let known = sessions.first(where: { $0.id == session }) {
@@ -665,7 +661,7 @@ public final class TmuxTab: TabAttachment {
     shellSessionName = ""
     shellChecked = .distantPast
     shellNotches = ShellNotches()
-    shellCopied = false
+    copiedPanes = []
     invalidatePanes()
   }
 
@@ -681,7 +677,13 @@ public final class TmuxTab: TabAttachment {
   /// as it stands. An old one is read again first: the pane may have
   /// started a program that wants the mouse since the last wheel.
   private func panesForWheel() async -> [TmuxPaneWheel]? {
-    if let panes, Date().timeIntervalSince(panesAt) < TmuxPaneLayout.ttl { return panes }
+    if let panes {
+      // A stale map still names the pane under the pointer. Waiting here
+      // for a fresh listing is a round trip in the middle of the swipe,
+      // which is the hitch. The next notch sees the refresh.
+      if Date().timeIntervalSince(panesAt) >= TmuxPaneLayout.ttl { schedulePaneLoad() }
+      return panes
+    }
     if paneTask == nil { schedulePaneLoad() }
     await paneTask?.value
     return panes
@@ -763,6 +765,16 @@ enum TmuxCommands {
     sessionID(session).map { "tmux resize-pane -Z -t \($0)" }
   }
 
+  /// Focus moves from the session's active pane to its neighbour in the
+  /// window it is showing, as tmux's own arrow bindings do.
+  static func selectPane(_ session: String, _ direction: TmuxPaneDirection) -> String? {
+    sessionID(session).map { "tmux select-pane \(direction.flag) -t \($0)" }
+  }
+
+  static func cycleWindow(_ session: String, forward: Bool) -> String? {
+    sessionID(session).map { "tmux \(forward ? "next-window" : "previous-window") -t \($0)" }
+  }
+
   static func detach(tty: String) -> String? {
     quote(tty).map { "tmux detach-client -t \($0)" }
   }
@@ -782,26 +794,21 @@ struct HeldWheel: Equatable {
   var lines: Int32
   var column: UInt16
   var row: UInt16
-  var reported: Bool
 
-  static let empty = HeldWheel(lines: 0, column: 0, row: 0, reported: false)
+  static let empty = HeldWheel(lines: 0, column: 0, row: 0)
 }
 
 struct ShellNotches: Equatable {
   private(set) var lines: Int32 = 0
   private var column: UInt16 = 0
   private var row: UInt16 = 0
-  private var reported = false
 
-  mutating func add(
-    _ lines: Int32, column: UInt16 = 0, row: UInt16 = 0, reported: Bool = false
-  ) {
+  mutating func add(_ lines: Int32, column: UInt16 = 0, row: UInt16 = 0) {
     guard lines != 0 else { return }
     let (partial, overflow) = self.lines.addingReportingOverflow(lines)
     self.lines = overflow ? (lines > 0 ? Int32.max : Int32.min) : partial
     self.column = column
     self.row = row
-    self.reported = reported
   }
 
   mutating func take() -> HeldWheel {
@@ -809,15 +816,14 @@ struct ShellNotches: Equatable {
       lines = 0
       column = 0
       row = 0
-      reported = false
     }
-    return HeldWheel(lines: lines, column: column, row: row, reported: reported)
+    return HeldWheel(lines: lines, column: column, row: row)
   }
 }
 
-/// What a wheel over the shell's own client asks for.
+/// What a wheel over one pane asks for.
 ///
-/// The session id is the only part that changes, and it is only ever `$`
+/// The pane id is the only part that changes, and it is only ever `%`
 /// and digits: that string is quoted into a shell command.
 struct TmuxShellCommand: Equatable {
   var text: String
@@ -829,14 +835,9 @@ enum TmuxShellScroll {
   /// the rest goes in the next command.
   static let repeatCap = 500
 
-  static func command(session: String, lines: Int32) -> TmuxShellCommand? {
-    guard isSessionID(session) else { return nil }
-    return command(target: session, lines: lines)
-  }
-
-  /// `target` is a session id (`$` and digits) or a pane id (`%` and digits).
+  /// `target` is a pane id: `%` and digits.
   static func command(target: String, lines: Int32) -> TmuxShellCommand? {
-    guard lines != 0, isTarget(target) else { return nil }
+    guard lines != 0, isPaneID(target) else { return nil }
     let magnitude = min(Int(lines.magnitude), repeatCap)
     guard magnitude > 0 else { return nil }
     let applied: Int32 = lines > 0 ? Int32(magnitude) : -Int32(magnitude)
@@ -851,16 +852,22 @@ enum TmuxShellScroll {
       applied: applied)
   }
 
-  static func cancel(session: String) -> String? {
-    guard isSessionID(session) else { return nil }
-    return "tmux send-keys -X -t '\(session)' cancel"
+  static func cancel(pane: String) -> String? {
+    guard isPaneID(pane) else { return nil }
+    return "tmux send-keys -X -t '\(pane)' cancel"
+  }
+
+  /// A tty that turned out not to be a client gives a held wheel back to
+  /// this terminal's history when the program has not taken the mouse.
+  static func returnsToHistory(_ mouse: MouseTracking) -> Bool {
+    mouse == .off
   }
 
   static func claims(
     connected: Bool, session: String?, tty: String?, knownTTY: String?
   ) -> Bool {
     guard connected, let session, let tty, tty == knownTTY else { return false }
-    return command(session: session, lines: 1) != nil
+    return isSessionID(session)
   }
 
   /// Whether a wheel that is not already claimed should be held. A lookup
@@ -880,8 +887,8 @@ enum TmuxShellScroll {
     isIdentifier(text, mark: "$")
   }
 
-  private static func isTarget(_ text: String) -> Bool {
-    isIdentifier(text, mark: "$") || isIdentifier(text, mark: "%")
+  private static func isPaneID(_ text: String) -> Bool {
+    isIdentifier(text, mark: "%")
   }
 
   private static func isIdentifier(_ text: String, mark: Character) -> Bool {
@@ -910,8 +917,13 @@ struct TmuxPaneWheel: Equatable {
 /// Where a reported wheel should go. The status line and the borders are
 /// not a pane: scrolling them is how a window changes under the pointer.
 enum TmuxWheelTarget: Equatable {
+  /// The program in the pane asked for the mouse.
   case report
+  /// Scroll this pane's own history.
   case scroll(String)
+  /// A full-screen program that did not ask for the mouse. The wheel stops.
+  case stop
+  /// The status line, a border, or a pane that is not showing.
   case ignore
 }
 
@@ -943,21 +955,32 @@ enum TmuxPaneLayout {
   /// The pane under a terminal cell. `row` counts from the top of the
   /// terminal, which is where the status line sits when it is on top.
   static func decide(_ panes: [TmuxPaneWheel], column: Int, row: Int) -> TmuxWheelTarget {
-    guard column >= 0, row >= 0, let sample = panes.first else { return .report }
+    guard !panes.isEmpty, column >= 0, row >= 0 else { return .report }
+    guard let pane = pane(in: panes, column: column, row: row) else { return .ignore }
+    if pane.inMode { return .scroll(pane.id) }
+    if pane.wantsMouse { return .report }
+    if pane.alternate { return .stop }
+    return .scroll(pane.id)
+  }
+
+  static func pane(in panes: [TmuxPaneWheel], column: Int, row: Int) -> TmuxPaneWheel? {
+    guard column >= 0, row >= 0, let sample = panes.first else { return nil }
     if sample.statusTop {
-      if row < sample.statusLines { return .ignore }
+      if row < sample.statusLines { return nil }
     } else if sample.statusLines > 0, row >= sample.windowHeight {
-      return .ignore
+      return nil
     }
     let paneRow = row - (sample.statusTop ? sample.statusLines : 0)
     let visible = panes.filter { !$0.zoomed || $0.active }
-    guard let pane = visible.first(where: { hit($0, column: column, row: paneRow) }) else {
-      return .ignore
+    return visible.first(where: { hit($0, column: column, row: paneRow) })
+  }
+
+  /// The claim a view makes from the pane under the pointer.
+  static func claim(_ panes: [TmuxPaneWheel], column: Int, row: Int) -> WheelClaim {
+    switch decide(panes, column: column, row: row) {
+    case .report: return .report
+    case .scroll, .stop, .ignore: return .taken
     }
-    if pane.inMode || (!pane.alternate && !pane.wantsMouse) {
-      return .scroll(pane.id)
-    }
-    return .report
   }
 
   private static func hit(_ pane: TmuxPaneWheel, column: Int, row: Int) -> Bool {
@@ -1022,6 +1045,43 @@ enum TmuxPaneLayout {
       guard let value = Int(text), (0...5).contains(value) else { return nil }
       return value
     }
+  }
+}
+
+/// A directory travels with the same geometry used to hit-test the pane.
+/// Keeping it in the final field allows spaces and `|` in directory names.
+enum TmuxPaneDirectories {
+  struct Entry {
+    let pane: TmuxPaneWheel
+    let directory: String
+  }
+
+  static func listCommand(session: String) -> String? {
+    TmuxPaneLayout.listCommand(session: session).map {
+      String($0.dropLast()) + "|#{pane_current_path}'"
+    }
+  }
+
+  static func parse(_ text: String) -> [Entry]? {
+    var entries: [Entry] = []
+    for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+      let fields = line.split(separator: "|", maxSplits: 13, omittingEmptySubsequences: false)
+      guard fields.count == 14, fields[13].hasPrefix("/"),
+        let pane = TmuxPaneLayout.parse(fields.prefix(13).joined(separator: "|"))?.first
+      else { return nil }
+      entries.append(Entry(pane: pane, directory: String(fields[13])))
+    }
+    return entries.isEmpty ? nil : entries
+  }
+
+  static func directory(in entries: [Entry], for link: TerminalLink?) -> String? {
+    if let span = link?.spans.first {
+      guard let pane = TmuxPaneLayout.pane(
+        in: entries.map(\.pane), column: Int(span.start), row: Int(span.row))
+      else { return nil }
+      return entries.first { $0.pane.id == pane.id }?.directory
+    }
+    return entries.first { $0.pane.active }?.directory
   }
 }
 

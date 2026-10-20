@@ -263,8 +263,7 @@ async fn a_key_accepted_as_a_first_factor_leads_to_a_second() {
     let (connection, _) = connect(Policy {
         accepts_key: Some(CLIENT_PUBLIC_KEY),
         key_is_only_the_first_factor: true,
-        two_factor: false,
-        announces_before_accepting: false,
+        ..Policy::default()
     })
     .await;
 

@@ -11,22 +11,21 @@ public sealed class SplitTerminalView : Grid
     private readonly Tab _group;
     private readonly Workspace _workspace;
     private SplitLayout? _layout;
-    private bool _maximized;
     private readonly Dictionary<Guid, Border> _leaves = [];
     public SplitTerminalView(Tab group, Workspace workspace) { _group = group; _workspace = workspace; Update(); }
     public void Update()
     {
-        if (_layout != _group.Layout || _maximized != _group.Maximized)
+        var effective = _group.Maximized ? SplitLayout.Leaf(_group.FocusedPane) : _group.Layout;
+        if (_layout != effective)
         {
             Children.Clear();
             foreach (var leaf in _leaves.Values) leaf.Child = null;
             _leaves.Clear();
-            _layout = _group.Layout;
-            _maximized = _group.Maximized;
-            Children.Add(Build(_maximized ? SplitLayout.Leaf(_group.FocusedPane) : _layout));
+            _layout = effective;
+            Children.Add(Build(effective));
         }
         foreach (var (id, border) in _leaves)
-            border.BorderBrush = id == _group.FocusedPane ? new SolidColorBrush(Microsoft.UI.Colors.CornflowerBlue) : (Brush)Application.Current.Resources["ChromeWindowBrush"];
+            border.BorderBrush = id == _group.FocusedPane ? (Brush)Application.Current.Resources["AccentBrush"] : (Brush)Application.Current.Resources["ChromeWindowBrush"];
     }
     private FrameworkElement Build(SplitLayout node)
     {

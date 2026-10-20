@@ -9,9 +9,11 @@ public enum ContributionKind: String, Codable, Sendable, Equatable {
   case viewer
   case command
   case panel
+  case statusBar
+  case tabIndicator
 }
 
-/// A permission the manifest may name. `network` is recognized and grants nothing.
+/// A permission the manifest may name. Network access requires declared endpoints.
 public enum Permission: String, Codable, Sendable, Equatable, CaseIterable {
   case documentRead = "document.read"
   case storagePlugin = "storage.plugin"
@@ -46,11 +48,13 @@ public struct PluginManifest: Sendable, Equatable {
   public let link: URL
   public let permissions: [Permission]
   public let contributions: [Contribution]
+  /// Exact GET endpoints approved at install; no arbitrary URLs or redirects.
+  public let networkURLs: [URL]
 
   init(
     id: String, name: String, publisher: String, version: String, api: Int,
     runtime: PluginRuntimeKind, entrypoint: String, ageRating: String, link: URL,
-    permissions: [Permission], contributions: [Contribution]
+    permissions: [Permission], contributions: [Contribution], networkURLs: [URL] = []
   ) {
     self.id = id
     self.name = name
@@ -63,6 +67,7 @@ public struct PluginManifest: Sendable, Equatable {
     self.link = link
     self.permissions = permissions
     self.contributions = contributions
+    self.networkURLs = networkURLs
   }
 
   public func allows(_ permission: Permission) -> Bool {
@@ -88,4 +93,5 @@ struct RawManifest: Decodable {
   var link: String
   var permissions: [String]
   var contributions: [RawContribution]
+  var networkURLs: [String]?
 }

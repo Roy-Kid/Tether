@@ -2,6 +2,45 @@
 
 Baseline: `origin/master` at `e7c8cb6`, merged into `windows-app`.
 
+## October 15 update
+
+Compared against `origin/master` at `5d2cb9d`. The latest shared Rust SDK and
+regressions are ported onto `windows-app`; this is a selective port rather than
+a merge of the divergent Apple workspace implementation. Existing native split
+layouts, mixed-host restoration and deferred plugin state remain in place.
+
+- **Ports:** a built-in inspector scans every three seconds, discovers up to 64
+  development listeners, forwards remote ports through the existing authenticated
+  SSH/OpenSSH lease, and offers browser, copy-address and stop actions. Automatic
+  forwarding defaults on, can be disabled, and supports an ignored-port list.
+  Listeners bind only to IPv4 loopback, try the next available port on conflict,
+  and close when their port disappears, the connection ends or the attachment
+  is disposed. Native local listeners already run on this machine. WSL rows open
+  Windows loopback addresses through the system's WSL localhost relay; enabling
+  that relay is a WSL networking preference, not a tunnel created by Tether.
+- **Files:** Edit Text opens remote UTF-8 files up to 2 MiB in a native editor.
+  Saving checks the downloaded size and modification timestamp, retains remote
+  permissions and writes a completed temporary file into place. Conflicts keep
+  the text available for editing or Save Copy. Unchanged content keeps its exact
+  bytes; edited content retains UTF-8 BOM and the original newline convention.
+  Local and WSL files continue to use the registered external editor in place.
+- **Shared core:** synchronized terminal damage, cell width, link geometry,
+  history and PTY creation fixes from the current mainline. The Windows jump-host
+  chain, per-target cryptography and mouse-wheel encoding are retained. Both
+  language bindings are regenerated for the extended file and forwarding API.
+
+This update does not port Apple's Credential Exchange UI, iCloud secret sync,
+or the newer Apple web-plugin ribbon/install lifecycle. Windows' web-panel
+preview keeps the capabilities and differences described below. Remote text
+editing uses explicit Save; watching an external remote editor and drag-out
+file promises remain Apple-specific.
+
+Validation uses `python scripts/check.py` (Rust format/Clippy/build/tests,
+native bindings, WinUI build, Windows regression executables, .NET suites and
+single-file portable publish). `dotnet run --project tests/windows-management
+-- --wsl` also covers the port scan against a real WSL process with an isolated
+socket-table fixture.
+
 Windows now provides configurable workspace and plugin shortcuts, a searchable
 command palette and quick switcher, horizontal or vertical tabs, zen mode,
 tab renaming, and restoration of closed tabs and previous-launch tabs. Terminal
@@ -52,6 +91,20 @@ previews, large-download confirmation, and download-directory preferences. Binar
 previews use the operating system's registered viewer. ConPTY exit now releases
 the master handle so the final output drains and history checkpoints complete.
 
+## UI chrome and settings alignment
+
+Windows status chrome again exposes split left/right, split top/bottom and
+maximize/restore beside plugin inspectors, matching the macOS host status bar.
+A title-bar tab-bar toggle mirrors `TabBarToggle`. Middle-click closes a tab.
+Quick Switch lists up to five recent hosts when the query is empty; the host
+picker groups currently connected hosts above idle ones. Startup settings offer
+the same last-tab stay-or-quit choice as macOS General. A Security page lists
+trusted `known_hosts` entries with Forget, and password identities with Delete.
+Key Bindings now expose primary and secondary chords per command (Command Palette
+defaults include Alt+Shift+P as the secondary chord). Web plugins install,
+update and uninstall from Settings → Extensions; a panel can open as an
+inspector beside a terminal or as a full workspace tab in the tab strip.
+
 ## Remaining platform differences
 
 - Apple's CloudKit/iCloud synchronization, Secure Enclave identity management,
@@ -59,11 +112,12 @@ the master handle so the final output drains and history checkpoints complete.
   implementation here. Windows identities and credential protection are local.
 - Native Quick Look previews and macOS file-cache/tree performance behavior are
   not fully reproduced by Windows text/external-viewer previews.
-- Windows now loads API 1 web panels dynamically through WebView2, with package
-  validation, exact-origin read-only network access, SSE subscriptions and
-  enable/disable lifecycle. Nerve's independent web package is installed and
-  exercised against the live hub. This preview does not implement viewer routing,
-  storage/document capabilities, package updates or an uninstall UI; Apple's
+- Windows loads API 1 web panels dynamically through WebView2, with package
+  validation, exact-origin read-only network access, SSE subscriptions,
+  enable/disable lifecycle, Settings install/update/uninstall, full-page
+  extension tabs, viewer routing by file suffix (Files → Allow → grant →
+  `document.read`), and `storage.plugin` / `host.notify`. Nerve's independent
+  web package is installed and exercised against the live hub. Apple's
   WebPluginHost still has no application window integration.
 
 Windows compilation and shared/native regression tests are exercised locally.

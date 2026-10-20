@@ -1,4 +1,5 @@
 import Foundation
+import TetherPluginKit
 import WebKit
 
 /// Which URLs a plugin page may navigate to: its own package, and the empty document WebKit starts on.
@@ -34,7 +35,7 @@ public final class WebKitRuntime: PluginRuntime {
     func userContentController(
       _ controller: WKUserContentController, didReceive message: WKScriptMessage
     ) {
-      guard message.name == "plugin", let body = message.body as? String else { return }
+      guard message.frameInfo.isMainFrame, message.name == "plugin", let body = message.body as? String else { return }
       let session = session
       Task { @MainActor [weak self] in
         await self?.runtime?.reply(body, session: session)
@@ -44,8 +45,14 @@ public final class WebKitRuntime: PluginRuntime {
 
   private var pages: [UUID: Page] = [:]
   private weak var bridge: (any PluginBridge)?
+  private var environment = PluginEnvironment.none
 
-  public init() {}
+  private let background: Bool
+  public init(background: Bool = false) { self.background = background }
+
+  public func bind(_ environment: PluginEnvironment) {
+    self.environment = environment
+  }
 
   func webView(for session: UUID) -> WKWebView? {
     pages[session]?.webView
@@ -57,8 +64,16 @@ public final class WebKitRuntime: PluginRuntime {
     content.add(Bridge(session: session, runtime: self), name: "plugin")
     content.addUserScript(
       WKUserScript(
-        source: Self.bridgeScript(session: session), injectionTime: .atDocumentStart,
+        source: Self.bridgeScript(session: session, background: background, environment: environment),
+        injectionTime: .atDocumentStart,
         forMainFrameOnly: true))
+    // Page network traffic cannot bypass the permission gateway, including
+    // subresources and fetch, which navigation delegates do not intercept.
+    let rules = try await WKContentRuleListStore.default().compileContentRuleList(
+      forIdentifier: "TetherPluginNetworkIsolation-v1",
+      encodedContentRuleList: #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}},{"trigger":{"url-filter":"^wss?://"},"action":{"type":"block"}},{"trigger":{"url-filter":"^ftp://"},"action":{"type":"block"}}]"#)
+    try Task.checkCancellation()
+    if let rules { content.add(rules) }
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
     configuration.userContentController = content
@@ -81,6 +96,8 @@ public final class WebKitRuntime: PluginRuntime {
 
   public func unload(session: UUID) {
     guard let page = pages.removeValue(forKey: session) else { return }
+    page.navigation.cancel()
+    page.webView.configuration.userContentController.removeScriptMessageHandler(forName: "plugin")
     page.webView.stopLoading()
     page.webView.navigationDelegate = nil
     page.webView.uiDelegate = nil
@@ -89,19 +106,33 @@ public final class WebKitRuntime: PluginRuntime {
   fileprivate func reply(_ body: String, session: UUID) async {
     guard let bridge, let page = pages[session] else { return }
     let reply = await bridge.deliver(body, from: session)
+    guard pages[session] === page else { return }
     let encoded = Data(reply.utf8).base64EncodedString()
     _ = try? await page.webView.evaluateJavaScript(
-      "window.tether && window.tether._reply(JSON.parse(atob('\(encoded)')))")
+      "window.tether && window.tether._reply(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('\(encoded)'), c => c.charCodeAt(0)))))")
   }
 
-  static func bridgeScript(session: UUID) -> String {
-    """
+  public func receive(event: JSONValue, session: UUID) async {
+    guard let page = pages[session], let encoded = try? JSONEncoder().encode(event).base64EncodedString() else { return }
+    _ = try? await page.webView.evaluateJavaScript(
+      "window.tether && window.tether._event(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('\(encoded)'), c => c.charCodeAt(0)))))")
+  }
+
+  static func bridgeScript(session: UUID, background: Bool = false, environment: PluginEnvironment = .none) -> String {
+    let context = Self.contextLiteral(environment)
+    return """
     (function () {
       var session = "\(session.uuidString)";
       var api = \(PluginManifest.api);
       var pending = {};
       var seq = 0;
       window.tether = {
+        background: \(background ? "true" : "false"),
+        context: \(context),
+        onEvent: null,
+        _event: function (message) {
+          if (typeof this.onEvent === "function") this.onEvent(message);
+        },
         _reply: function (message) {
           var item = pending[message.id];
           if (!item) return;
@@ -119,10 +150,39 @@ public final class WebKitRuntime: PluginRuntime {
             pending[id] = { resolve: resolve, reject: reject };
             window.webkit.messageHandlers.plugin.postMessage(body);
           });
+        },
+        notify: function (title, body) {
+          return window.tether.call("host.notify", { title: title, body: body || "" });
+        },
+        ask: function (prompt) { return window.tether.call("host.ask", prompt); },
+        storage: {
+          get: function (key) {
+            return window.tether.call("storage.plugin.get", { key: key }).then(function (payload) { return payload.value; });
+          },
+          set: function (key, value) {
+            return window.tether.call("storage.plugin.set", { key: key, value: value });
+          }
+        },
+        readDocument: function (handle) { return window.tether.call("document.read", { handle: handle }); },
+        stream: function (url) { return window.tether.call("network.stream", { url: url }); },
+        closeStream: function (stream) { return window.tether.call("network.closeStream", { stream: stream }); },
+        status: function (item) { return window.tether.call("host.status", item); },
+        reconnect: function () {
+          return window.tether.call("host.reconnect", {}).then(function (payload) {
+            window.tether.context = payload;
+            return payload;
+          });
         }
       };
     })();
     """
+  }
+
+  private static func contextLiteral(_ environment: PluginEnvironment) -> String {
+    guard let data = try? JSONEncoder().encode(environment),
+      var text = String(data: data, encoding: .utf8) else { return "null" }
+    text = text.replacingOccurrences(of: "<", with: "\\u003c")
+    return text
   }
 }
 
@@ -142,6 +202,8 @@ final class PageNavigation: NSObject, WKNavigationDelegate, WKUIDelegate {
       webView.loadFileURL(entrypoint, allowingReadAccessTo: root)
     }
   }
+
+  func cancel() { finish(.failure(CancellationError())) }
 
   private func finish(_ result: Result<Void, Error>) {
     guard !finished else { return }

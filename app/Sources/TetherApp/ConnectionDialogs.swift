@@ -21,8 +21,14 @@ enum ConnectionDialog {
   }
 
   /// What went wrong, and the two things to do about it.
+  ///
+  /// Escape never costs anything: when the tab still holds a screen — a
+  /// connection that was lost, or a reconnect that failed — the way out is
+  /// "Not Now", which leaves the tab as it is. Only a tab that never showed
+  /// anything closes on the way out.
   static func problem(
-    _ report: TabProblem, close: @escaping @MainActor () -> Void, again: @escaping @MainActor () -> Void
+    _ report: TabProblem, close: @escaping @MainActor () -> Void,
+    setAside: @escaping @MainActor () -> Void = {}, again: @escaping @MainActor () -> Void
   ) -> Dialog {
     let name = report.host.displayName
     let title: String
@@ -38,9 +44,11 @@ enum ConnectionDialog {
       title = "Connection to \(name) Lost"
       verb = report.host.isLocal ? "Restart" : "Reconnect"
     }
+    let keeps = report.keepsScreen || report.problem.kind == .lost
     return Dialog(
       title: title, message: report.problem.reason,
-      actions: [.cancel("Close", perform: close), Dialog.Action(verb) { _ in again() }])
+      actions: [keeps ? .cancel("Not Now", perform: setAside) : .cancel("Close", perform: close),
+                Dialog.Action(verb) { _ in again() }])
   }
 
   /// A password that just worked, offered to be kept — or to replace the
@@ -78,7 +86,10 @@ struct ConnectionDialogs: ViewModifier {
           Dialog(title: "Could Not Save Session History", message: report.problem.reason,
             actions: [Dialog.Action("OK") { _ in tabs.tabs.first { $0.id == report.tab }?.acknowledge() }])
         } else {
-          ConnectionDialog.problem(report, close: { tabs.close(report.tab) }, again: { retry(report) })
+          ConnectionDialog.problem(
+            report, close: { tabs.close(report.tab) },
+            setAside: { tabs.tabs.first { $0.id == report.tab }?.setProblemAside() },
+            again: { retry(report) })
         }
       }
       .dialog(for: tabs.historyProblem) { problem in

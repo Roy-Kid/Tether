@@ -7,34 +7,27 @@ import Tether
 /// Keyed by the far side's path, size and modification time, so a file that
 /// has not changed is not fetched again and one that has is. The time is the
 /// one the caller just read — a listing from before the write still names the
-/// old copy. Per host,
-/// because `/home/ada/plot.png` on two machines is two files. On a Mac the
-/// copies sit in `/tmp`, which the system may empty: everything here can be
+/// old copy. Per host, because `/home/ada/plot.png` on two machines is two
+/// files. Under the disposable root (`LocalCopies`): everything here can be
 /// fetched again, and a download moves the copy out rather than fetching it
-/// twice. A phone uses its own temporary directory, the sandbox's `/tmp`.
+/// twice.
 struct FileCache: Sendable {
+  /// This host's previews.
   let root: URL
+  /// Every host's, which one limit and one age apply to.
+  let previews: URL
 
-  /// Where preview copies go when nobody hands the cache a directory.
-  static var previewRoot: URL {
-    #if os(macOS)
-      URL(fileURLWithPath: "/tmp", isDirectory: true)
-    #else
-      FileManager.default.temporaryDirectory
-    #endif
-  }
-
+  /// `base` is the disposable root; a test hands in a folder of its own.
   init(host: UUID, base: URL? = nil) {
-    let caches = base ?? Self.previewRoot
-    root = caches.appendingPathComponent("Tether Files", isDirectory: true)
-      .appendingPathComponent(host.uuidString, isDirectory: true)
+    previews = LocalCopies.previews(in: base ?? LocalCopies.disposable)
+    root = previews.appendingPathComponent(host.uuidString, isDirectory: true)
   }
 
   /// Where `entry` is kept, whether or not it is there yet. The directory is
-  /// made; the file is not.
+  /// made, closed to other accounts; the file is not.
   func location(for entry: FileEntry) -> URL {
     let folder = root.appendingPathComponent(key(for: entry), isDirectory: true)
-    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try? LocalCopies.privateDirectory(folder)
     return folder.appendingPathComponent(Names.local(entry.name))
   }
 
@@ -67,39 +60,24 @@ struct FileCache: Sendable {
     return url
   }
 
-  /// Removes the least recently used copies until what is left fits `limit`.
-  func trim(to limit: Int64) {
-    let manager = FileManager.default
-    let keys: [URLResourceKey] = [.contentModificationDateKey]
-    guard
-      let folders = try? manager.contentsOfDirectory(
-        at: root, includingPropertiesForKeys: keys)
-    else { return }
-    let sized = folders.map { folder -> (URL, Date, Int64) in
-      let date =
-        (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?
-        .contentModificationDate ?? .distantPast
-      return (folder, date, size(of: folder))
-    }
-    var total = sized.reduce(0) { $0 + $1.2 }
-    for (folder, _, bytes) in sized.sorted(by: { $0.1 < $1.1 }) where total > limit {
-      try? manager.removeItem(at: folder)
-      total -= bytes
-    }
+  /// A copy that has just arrived: closed to other accounts, and the cache
+  /// trimmed around it.
+  @discardableResult
+  func keep(_ copy: URL) -> URL {
+    LocalCopies.seal(copy)
+    trim(to: LocalCopies.previewLimit)
+    return copy
+  }
+
+  /// Removes previews nobody has looked at for a day, then the least
+  /// recently looked at — any host's — until what is left fits `limit`.
+  func trim(to limit: Int64, maxAge: TimeInterval = LocalCopies.previewAge, now: Date = Date()) {
+    LocalCopies.trimPreviews(in: previews, limit: limit, maxAge: maxAge, now: now)
   }
 
   private func key(for entry: FileEntry) -> String {
     let digest = SHA256.hash(data: Data(entry.path.utf8))
     let hex = digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     return "\(hex)-\(entry.size)-\(entry.modified ?? 0)"
-  }
-
-  private func size(of folder: URL) -> Int64 {
-    let files =
-      (try? FileManager.default.contentsOfDirectory(
-        at: folder, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-    return files.reduce(0) { total, file in
-      total + Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-    }
   }
 }

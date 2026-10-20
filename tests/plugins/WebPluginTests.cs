@@ -50,6 +50,59 @@ public sealed class WebPluginTests : IDisposable
         Assert.Equal("test.web", result.Manifest.Id); Assert.True(File.Exists(result.EntryPath));
         Assert.Throws<IOException>(() => WebPluginPackage.Install(source, install));
     }
+    [Fact] public void ViewerContributionsNeedDocumentReadAndNormalizedSuffixes()
+    {
+        Assert.Throws<IOException>(() => WebPluginPackage.Read(Package(Manifest() with
+        {
+            Permissions = ["document.read"], NetworkOrigins = null,
+            Contributions = [new("viewer", "viewer/fixture")],
+        })));
+        Assert.Throws<IOException>(() => WebPluginPackage.Read(Package(Manifest() with
+        {
+            Permissions = ["network"],
+            Contributions = [new("viewer", "viewer/fixture", Suffixes: ["fixture"])],
+        })));
+        var package = WebPluginPackage.Read(Package(Manifest() with
+        {
+            Permissions = ["document.read"], NetworkOrigins = null,
+            Contributions = [new("viewer", "viewer/fixture", Suffixes: [".FIXTURE", "fixture"])],
+        }));
+        Assert.Equal(["fixture"], package.Manifest.Contributions.Single().Suffixes!);
+        Assert.Equal("fixture", WebPluginPackage.NormalizeSuffix(".Fixture"));
+    }
+    [Fact] public void ReplaceUpdatesPackageBytesAndUninstallRemovesTheDirectory()
+    {
+        var install = Path.Combine(_root, "installed");
+        var first = Package(Manifest() with { Version = "1.0" });
+        WebPluginPackage.Install(first, install);
+        File.WriteAllText(Path.Combine(first, "web", "index.html"), "<!doctype html><title>v2</title>");
+        var second = Package(Manifest() with { Version = "2.0" });
+        File.WriteAllText(Path.Combine(second, "web", "index.html"), "<!doctype html><title>v2</title>");
+        var updated = WebPluginPackage.Install(second, install, replace: true);
+        Assert.Equal("2.0", updated.Manifest.Version);
+        Assert.Contains("v2", File.ReadAllText(updated.EntryPath));
+        WebPluginPackage.RemoveInstalled(install, "test.web");
+        Assert.False(Directory.Exists(Path.Combine(install, "test.web")));
+    }
+    [Fact] public void RegistryUnregisterRemovesARegisteredPlugin()
+    {
+        var registry = new PluginRegistry();
+        var plugin = new StubPlugin("test.web");
+        registry.Register(plugin);
+        Assert.True(registry.IsEnabled("test.web"));
+        Assert.True(registry.Unregister("test.web"));
+        Assert.Empty(registry.Plugins);
+        Assert.False(registry.Unregister("test.web"));
+        Assert.True(plugin.Deactivated);
+    }
+
+    private sealed class StubPlugin(string id) : ITetherPlugin
+    {
+        public PluginMetadata Metadata { get; } = new(id, id, "W", "stub");
+        public bool Deactivated { get; private set; }
+        public void Activate() { }
+        public void Deactivate() => Deactivated = true;
+    }
     [Theory]
     [InlineData("../outside.html")][InlineData("/outside.html")][InlineData("web/../index.html")]
     [InlineData("C:/outside.html")][InlineData("web\\index.html")]

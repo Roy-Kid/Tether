@@ -1,6 +1,6 @@
 # 0016 — The GPU text stack is glyphon
 
-Status: accepted
+Status: accepted. Superseded in part by ADR 0021 (2026-10-16): the Apple Canvas/CoreGraphics retention, the public draw-list surface, and the CI frame-time ceilings below. The glyphon choice stands. Do not add a CI frame-time gate.
 Date: 2026-09-23
 Phase: 4 (Windows rendering)
 
@@ -79,6 +79,8 @@ in an ADR — not by reaching for whatever is adjacent.
 
 ## The measurement stays a test
 
+> Superseded by ADR 0021. The ceilings below are the 2026-09-23 measurement record. They are not a CI gate.
+
 0006's third decision transfers in full: *the measurement is a test, not a
 memory*. `tether-render` carries the same three shapes and four sizes, and
 the same rate ceilings:
@@ -120,6 +122,8 @@ drawing; until then these numbers are the layout half and are labelled as
 such in the test's stdout.
 
 ## Consequences
+
+> Superseded by ADR 0021. Apple no longer keeps a Canvas or CoreGraphics painter. The public surface is the screen frame and the shared GPU renderer, not a draw list a consumer paints itself. The glyphon choice in the Decision section stands.
 
 - `cargo run --release -p tether-ffi --bin frame-cost` stays as the
   frame-production half. `tether-render`'s cost test is the drawing half,

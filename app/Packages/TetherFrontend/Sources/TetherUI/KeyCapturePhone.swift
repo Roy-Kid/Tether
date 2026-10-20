@@ -7,10 +7,11 @@
   /// The same job as the AppKit capture, against a different set of facts.
   ///
   /// A phone has two keyboards and they arrive by different routes. The
-  /// software one comes through `UIKeyInput` as text and a backspace, already
-  /// composed by whatever input method is on screen. A hardware one comes
+  /// software one comes through `UITextInput` as text and a backspace.
+  /// Composing characters arrive as marked text and are drawn at the caret;
+  /// only the chosen candidate is sent on. A hardware one comes
   /// through `pressesBegan` as a `UIKey`, which is where arrows, Escape and
-  /// control chords live — none of which `UIKeyInput` can express.
+  /// control chords live — none of which marked text can express.
   ///
   /// Which is why there is a row of keys above the software keyboard. A
   /// terminal without Escape, Tab, the arrows and a Control chord is a
@@ -29,11 +30,14 @@
     var onFocus: () -> Void = {}
     /// Lines to move the viewport; positive goes back into history.
     var onScroll: (Int32) -> Void = { _ in }
-    var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
+    var claimsWheel: (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass }
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
+    var cursorRect: CGRect = .zero
     var latch = Latch()
     var mouse: MouseTracking = .off
+    var onSelection: (SelectionUpdate) -> Void = { _ in }
+    var selection: GridSelection?
 
     func makeUIView(context: Context) -> KeyCaptureView {
       let view = KeyCaptureView()
@@ -62,26 +66,48 @@
       view.wantsFocus = active
       view.links = links
       view.geometry = geometry
+      view.cursorRect = cursorRect
       view.latch = latch
       view.mouse = mouse
+      view.onSelection = onSelection
+      view.selection = selection
     }
   }
 
-  final class KeyCaptureView: UIView, UIKeyInput, UITextInputTraits {
+  final class KeyCaptureView: UIView, UITextInput, UITextInputTraits {
     var wantsFocus = false
     var onFocus: (() -> Void)?
     var onInput: ((TerminalInput) -> Void)?
     var onScroll: ((Int32) -> Void)?
-    var claimsWheel: (Int32, UInt16, UInt16) -> Bool = { _, _, _ in false }
+    var claimsWheel: (Int32, UInt16, UInt16) -> WheelClaim = { _, _, _ in .pass }
     var lineHeight: CGFloat = 17
     var links: TerminalLinks = .none
     var geometry: CellGeometry = .empty
     var latch = Latch()
     var mouse: MouseTracking = .off
+    var onSelection: (SelectionUpdate) -> Void = { _ in }
+    var selection: GridSelection?
     /// The cell a drag last reported, so a finger that stays put is quiet.
     private var reported: (row: UInt16, column: UInt16)?
-    /// Lines already sent for a two-finger wheel.
-    private var wheeled: Int32 = 0
+    /// The caret, in this view's top-left coordinates, so composing text
+    /// and the candidate window sit on the cell the terminal is drawing.
+    var cursorRect: CGRect = .zero {
+      didSet {
+        guard cursorRect != oldValue, !marked.isEmpty else { return }
+        setNeedsDisplay()
+      }
+    }
+    /// Pinyin (or whatever the input method has not committed). Empty once
+    /// a candidate is chosen and `insertText` sends the word.
+    private var marked = ""
+    var composing: String { marked }
+    var selectedTextRange: UITextRange?
+    var markedTextStyle: [NSAttributedString.Key: Any]?
+    weak var inputDelegate: UITextInputDelegate?
+    private var storedTokenizer: UITextInputStringTokenizer?
+    /// How many fingers this drag has seen. A second one makes it a wheel
+    /// even after the first has already moved.
+    private var touchPeak = 0
     /// A terminal is not prose. The software keyboard's replacements —
     /// capitals, smart quotes, the predictive bar — rewrite what was typed
     /// and change the keyboard's height while they do it.
@@ -97,25 +123,28 @@
     /// Lines already sent for the drag in progress, so each update asks for
     /// the difference rather than the total.
     private var carried: Int32 = 0
+    private var selectionAnchor: GridPoint?
 
     override init(frame: CGRect) {
       super.init(frame: frame)
       isUserInteractionEnabled = true
+      // Drawing the preedit must not paint an opaque plate over the grid.
+      isOpaque = false
+      backgroundColor = .clear
       // The drag belongs to this view rather than to a transparent layer
       // over it: a SwiftUI gesture above a `UIView` takes the touches the
       // view needs to become first responder, and a terminal you cannot
       // focus is a terminal you cannot type into.
+      // One recognizer for one and two fingers. A separate two-finger pan
+      // never begins: the one-finger pan has already claimed the first touch.
       let pan = UIPanGestureRecognizer(target: self, action: #selector(dragged))
-      pan.maximumNumberOfTouches = 1
+      pan.maximumNumberOfTouches = 2
+      pan.delegate = self
       addGestureRecognizer(pan)
       // A tap waits out the drag, so a click is not also the start of a scroll.
       let tap = UITapGestureRecognizer(target: self, action: #selector(takeFocus(_:)))
       tap.require(toFail: pan)
       addGestureRecognizer(tap)
-      let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled(_:)))
-      wheel.minimumNumberOfTouches = 2
-      wheel.maximumNumberOfTouches = 2
-      addGestureRecognizer(wheel)
       // A long-press on a path is a context menu with the file above it —
       // the gesture the rest of the system uses for "show me this".
       addInteraction(UIContextMenuInteraction(delegate: self))
@@ -145,6 +174,12 @@
     }
 
     @objc private func takeFocus(_ gesture: UITapGestureRecognizer) {
+      guard wantsFocus else { return }
+      if selection != nil {
+        onSelection(.clear)
+        selection = nil
+        return
+      }
       becomeFirstResponder()
       onFocus?()
       guard mouse != .off, gesture.state == .ended else { return }
@@ -154,70 +189,132 @@
     }
 
     @objc private func dragged(_ gesture: UIPanGestureRecognizer) {
-      if mouse != .off {
-        dragPointer(gesture)
+      guard wantsFocus else { return }
+      if gesture.state == .began { touchPeak = gesture.numberOfTouches }
+      if gesture.state == .changed || gesture.state == .ended {
+        touchPeak = max(touchPeak, gesture.numberOfTouches)
+      }
+      defer {
+        if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+          touchPeak = 0
+          carried = 0
+          if reported != nil { endPointer(at: gesture.location(in: self)) }
+        }
+      }
+      if selection != nil || selectionAnchor != nil {
+        dragSelection(gesture)
         return
       }
-      switch gesture.state {
-      case .changed:
-        // Whole lines only: a terminal's history has no half-rows to stop
-        // between, and each update asks for the difference rather than the
-        // total so the two do not compound.
-        let lines = Int32((gesture.translation(in: self).y / lineHeight).rounded())
-        guard lines != carried else { return }
-        onScroll?(lines - carried)
-        carried = lines
-      case .ended, .cancelled, .failed:
-        carried = 0
-      default:
-        break
+      let kind = PhoneDrag.kind(
+        touches: max(touchPeak, gesture.numberOfTouches), mouse: mouse, selecting: false,
+        translation: gesture.translation(in: self))
+      switch kind {
+      case .selection:
+        dragSelection(gesture)
+      case .scroll:
+        if reported != nil { endPointer(at: gesture.location(in: self)) }
+        scrollDrag(gesture)
+      case .pointer:
+        // A vertical swipe declares itself after a few points. Pressing on
+        // the first movement would click the pane and then scroll it.
+        let translation = gesture.translation(in: self)
+        guard hypot(translation.x, translation.y) >= PhoneDrag.slop else { return }
+        dragPointer(gesture)
       }
     }
 
-    /// One finger is the mouse a program asked for. Two fingers are its wheel.
+    /// Whole lines only: a terminal's history has no half-rows to stop
+    /// between, and each update asks for the difference rather than the total.
+    private func scrollDrag(_ gesture: UIPanGestureRecognizer) {
+      guard gesture.state == .changed || gesture.state == .ended else { return }
+      let lines = Int32((gesture.translation(in: self).y / max(lineHeight, 1)).rounded())
+      let step = lines - carried
+      guard step != 0 else { return }
+      carried = lines
+      let cell = geometry.clampedCell(at: gesture.location(in: self))
+      let claim = cell.map { claimsWheel(step, $0.column, $0.row) } ?? .pass
+      WheelDispatch.route(
+        lines: step, shift: false, mouse: mouse, hasCell: cell != nil, claim: claim,
+        report: { button in
+          guard let cell else { return }
+          self.point(.press, button: button, cell: cell)
+        },
+        scroll: { self.onScroll?($0) })
+    }
+
+    private func dragSelection(_ gesture: UIPanGestureRecognizer) {
+      guard let cell = geometry.clampedCell(at: gesture.location(in: self)) else { return }
+      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
+      switch gesture.state {
+      case .began:
+        selectionAnchor = selection?.anchor ?? point
+      case .changed, .ended:
+        if let anchor = selectionAnchor {
+          onSelection(.highlight(.character, anchor, point))
+        }
+        if gesture.state == .ended { selectionAnchor = nil }
+      case .cancelled, .failed:
+        selectionAnchor = nil
+      default: break
+      }
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+      if action == #selector(copy(_:)) { return wantsFocus && selection != nil }
+      if action == #selector(paste(_:)) { return wantsFocus && UIPasteboard.general.hasStrings }
+      // Marked text makes this view a text input. Select and Select All
+      // would offer to edit a document it does not have.
+      if action == #selector(select(_:)) || action == #selector(selectAll(_:)) { return false }
+      return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func copy(_ sender: Any?) {
+      guard wantsFocus, let selection else { return }
+      onSelection(.copyExisting(selection))
+    }
+
+    override func paste(_ sender: Any?) {
+      guard wantsFocus, let text = UIPasteboard.general.string else { return }
+      pasteText(text)
+    }
+
+    func pasteText(_ text: String) {
+      guard wantsFocus, !text.isEmpty else { return }
+      onSelection(.clear)
+      selection = nil
+      onInput?(.paste(text))
+    }
+
+    /// A sideways drag is the mouse a program asked for. A vertical one, and
+    /// every two-finger drag, scrolls: tmux with mouse mode otherwise keeps
+    /// the only finger and the history never moves.
     private func dragPointer(_ gesture: UIPanGestureRecognizer) {
       let point = gesture.location(in: self)
       switch gesture.state {
-      case .began:
-        becomeFirstResponder()
-        reported = nil
-        guard let cell = geometry.cell(at: point) else { return }
-        self.point(.press, button: .left, cell: cell)
-        reported = cell
-      case .changed:
-        guard mouse == .drag || mouse == .any, let cell = geometry.clampedCell(at: point) else { return }
+      case .began, .changed:
+        guard let cell = geometry.clampedCell(at: point) else { return }
+        if reported == nil {
+          becomeFirstResponder()
+          self.point(.press, button: .left, cell: cell)
+          reported = cell
+          return
+        }
+        guard mouse == .drag || mouse == .any else { return }
         guard reported?.row != cell.row || reported?.column != cell.column else { return }
         reported = cell
         self.point(.move, button: .left, cell: cell)
       case .ended, .cancelled, .failed:
-        if reported != nil, let cell = geometry.clampedCell(at: point) {
-          self.point(.release, button: .left, cell: cell)
-        }
-        reported = nil
+        endPointer(at: point)
       default:
         break
       }
     }
 
-    @objc private func wheeled(_ gesture: UIPanGestureRecognizer) {
-      guard mouse != .off else { return }
-      switch gesture.state {
-      case .changed:
-        let lines = Int32((gesture.translation(in: self).y / lineHeight).rounded())
-        guard lines != wheeled else { return }
-        let step = lines - wheeled
-        wheeled = lines
-        guard let cell = geometry.clampedCell(at: gesture.location(in: self)) else { return }
-        if claimsWheel(step, cell.column, cell.row) { return }
-        let button: PointerButton = step > 0 ? .wheelUp : .wheelDown
-        for _ in 0..<Int(abs(step)) {
-          point(.press, button: button, cell: cell)
-        }
-      case .ended, .cancelled, .failed:
-        wheeled = 0
-      default:
-        break
+    private func endPointer(at point: CGPoint) {
+      if reported != nil, let cell = geometry.clampedCell(at: point) {
+        self.point(.release, button: .left, cell: cell)
       }
+      reported = nil
     }
 
     private func point(_ phase: PointerPhase, button: PointerButton, cell: (row: UInt16, column: UInt16)) {
@@ -231,10 +328,15 @@
     /// `false` makes the keyboard suppress its delete key.
     var hasText: Bool { true }
 
-    /// Already composed: an input method resolves marked text before it
-    /// reaches this, which is why there is no `setMarkedText` dance here as
-    /// there is on the Mac.
+    /// A candidate, or a key the input method did not keep for itself.
+    /// Composing text is drawn here and is not sent until this is called.
     func insertText(_ text: String) {
+      if !marked.isEmpty {
+        inputDelegate?.textWillChange(self)
+        marked = ""
+        inputDelegate?.textDidChange(self)
+        setNeedsDisplay()
+      }
       // The return key arrives as a newline rather than as a key press, and a
       // terminal wants the carriage return its line editor is waiting for.
       if text == "\n" {
@@ -248,12 +350,48 @@
     }
 
     func deleteBackward() {
+      // Backspace while a word is still being chosen edits that word.
+      // Sending it would delete whatever cell the caret is sitting on.
+      if !marked.isEmpty {
+        inputDelegate?.textWillChange(self)
+        marked.removeLast()
+        inputDelegate?.textDidChange(self)
+        setNeedsDisplay()
+        return
+      }
       onInput?(.key(.backspace, latch.spend()))
+    }
+
+    override func draw(_ rect: CGRect) {
+      guard !marked.isEmpty else { return }
+      let text = marked as NSString
+      let font = UIFont.monospacedSystemFont(ofSize: max(8, lineHeight * 0.8), weight: .regular)
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: UIColor.label,
+        .underlineStyle: NSUnderlineStyle.single.rawValue,
+      ]
+      let measured = text.size(withAttributes: attributes)
+      let height = cursorRect.height > 0 ? cursorRect.height : lineHeight
+      let originY = cursorRect == .zero ? bounds.height - height : cursorRect.minY
+      var chip = CGRect(
+        x: cursorRect.minX, y: originY, width: measured.width + 6, height: height)
+      if chip.maxX > bounds.width { chip.origin.x = max(0, bounds.width - chip.width) }
+      UIColor.systemBackground.setFill()
+      UIBezierPath(roundedRect: chip, cornerRadius: 2).fill()
+      let baseline = chip.minY + max(0, (height - measured.height) / 2)
+      text.draw(at: CGPoint(x: chip.minX + 3, y: baseline), withAttributes: attributes)
     }
 
     // MARK: - A hardware keyboard
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+      // Letters of a word still being chosen belong to the input method.
+      // Sending them here as well would type the pinyin into the shell.
+      if markedTextRange != nil {
+        super.pressesBegan(presses, with: event)
+        return
+      }
       var handled = false
 
       for press in presses {
@@ -333,6 +471,179 @@
     }
   }
 
+  /// Where a finger goes. Two fingers are a wheel. One finger scrolls when
+  /// nothing has taken the mouse, and also when the drag is vertical: tmux
+  /// with mouse mode would otherwise turn that finger into a selection and
+  /// the pane would not move. A sideways drag stays a pointer.
+  enum PhoneDrag: Equatable {
+    case scroll
+    case pointer
+    case selection
+
+    static let slop: CGFloat = 8
+
+    static func kind(
+      touches: Int, mouse: MouseTracking, selecting: Bool, translation: CGPoint
+    ) -> PhoneDrag {
+      if selecting { return .selection }
+      if touches >= 2 || mouse == .off { return .scroll }
+      if abs(translation.y) >= abs(translation.x), abs(translation.y) >= slop { return .scroll }
+      return .pointer
+    }
+  }
+
+  extension KeyCaptureView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { false }
+  }
+
+  extension KeyCaptureView {
+    private var markedEnd: Int { marked.utf16.count }
+
+    private func positionOffset(_ position: UITextPosition) -> Int {
+      (position as? InputPosition)?.offset ?? 0
+    }
+
+    private func replaceMarked(_ text: String?) {
+      inputDelegate?.textWillChange(self)
+      marked = text ?? ""
+      let end = markedEnd
+      selectedTextRange = InputRange(end, end)
+      inputDelegate?.textDidChange(self)
+      setNeedsDisplay()
+    }
+  }
+
+  extension KeyCaptureView {
+    var markedTextRange: UITextRange? {
+      marked.isEmpty ? nil : InputRange(0, markedEnd)
+    }
+
+    var beginningOfDocument: UITextPosition { InputPosition(0) }
+    var endOfDocument: UITextPosition { InputPosition(markedEnd) }
+
+    var tokenizer: UITextInputTokenizer {
+      if let storedTokenizer { return storedTokenizer }
+      let made = UITextInputStringTokenizer(textInput: self)
+      storedTokenizer = made
+      return made
+    }
+
+    func text(in range: UITextRange) -> String? {
+      let utf16 = marked.utf16
+      let start = min(max(0, positionOffset(range.start)), utf16.count)
+      let end = min(max(start, positionOffset(range.end)), utf16.count)
+      let from = utf16.index(utf16.startIndex, offsetBy: start)
+      let to = utf16.index(from, offsetBy: end - start)
+      return String(utf16[from..<to])
+    }
+
+    func replace(_ range: UITextRange, withText text: String) {
+      let current = self.text(in: range) ?? ""
+      guard let span = marked.range(of: current) else {
+        replaceMarked(text)
+        return
+      }
+      var next = marked
+      next.replaceSubrange(span, with: text)
+      replaceMarked(next)
+    }
+
+    func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+      replaceMarked(markedText)
+    }
+
+    func unmarkText() { replaceMarked("") }
+
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+      InputRange(positionOffset(fromPosition), positionOffset(toPosition))
+    }
+
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+      let next = positionOffset(position) + offset
+      guard next >= 0, next <= markedEnd else { return nil }
+      return InputPosition(next)
+    }
+
+    func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int)
+      -> UITextPosition?
+    {
+      let delta = direction == .left || direction == .up ? -offset : offset
+      return self.position(from: position, offset: delta)
+    }
+
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+      let left = positionOffset(position)
+      let right = positionOffset(other)
+      if left < right { return .orderedAscending }
+      if left > right { return .orderedDescending }
+      return .orderedSame
+    }
+
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int {
+      positionOffset(toPosition) - positionOffset(from)
+    }
+
+    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+      direction == .left || direction == .up ? range.start : range.end
+    }
+
+    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection)
+      -> UITextRange?
+    {
+      let start = positionOffset(position)
+      let end = direction == .left || direction == .up ? max(0, start - 1) : min(markedEnd, start + 1)
+      return InputRange(start, end)
+    }
+
+    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection)
+      -> NSWritingDirection
+    { .leftToRight }
+
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+
+    func firstRect(for range: UITextRange) -> CGRect { caretRect(for: range.start) }
+
+    func caretRect(for position: UITextPosition) -> CGRect {
+      if cursorRect.isEmpty {
+        return CGRect(x: 0, y: max(0, bounds.height - lineHeight), width: 2, height: lineHeight)
+      }
+      return cursorRect
+    }
+
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
+
+    func closestPosition(to point: CGPoint) -> UITextPosition? { endOfDocument }
+
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
+      range.end
+    }
+
+    func characterRange(at point: CGPoint) -> UITextRange? { markedTextRange }
+  }
+
+  private final class InputPosition: UITextPosition {
+    let offset: Int
+    init(_ offset: Int) {
+      self.offset = max(0, offset)
+      super.init()
+    }
+  }
+
+  private final class InputRange: UITextRange {
+    let startOffset: Int
+    let endOffset: Int
+    init(_ start: Int, _ end: Int) {
+      startOffset = min(start, end)
+      endOffset = max(start, end)
+      super.init()
+    }
+    override var start: UITextPosition { InputPosition(startOffset) }
+    override var end: UITextPosition { InputPosition(endOffset) }
+    override var isEmpty: Bool { startOffset == endOffset }
+  }
 
   /// The shortcut row, in the layout under the terminal rather than floating
   /// over its last line. An input accessory is positioned by the keyboard,
@@ -569,23 +880,40 @@
       _ interaction: UIContextMenuInteraction,
       configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-      guard let cell = geometry.cell(at: location), let link = links.find(cell.row, cell.column),
-        let menu = links.menu(link), !menu.items.isEmpty
-      else { return nil }
+      guard wantsFocus, let cell = geometry.cell(at: location) else { return nil }
+      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
+      let link = links.find(cell.row, cell.column)
+      let menu = link.flatMap { links.menu($0) }
       pressed = link
-      let preview = menu.preview.map { make in
+      let preview = menu?.preview.map { make in
         { () -> UIViewController? in UIHostingController(rootView: make()) }
       }
       return UIContextMenuConfiguration(
         identifier: nil, previewProvider: preview,
-        actionProvider: { _ in
-          UIMenu(
-            children: menu.items.map { item in
-              UIAction(
-                title: item.title, image: UIImage(systemName: item.symbol),
-                attributes: item.destructive ? .destructive : []
-              ) { _ in item.action() }
-            })
+        actionProvider: { [weak self] _ in
+          guard let self else { return nil }
+          let editing = UIMenu(options: .displayInline, children: [
+            UIAction(title: "Select Text", image: UIImage(systemName: "text.cursor")) { [weak self] _ in
+              self?.onSelection(.highlight(.word, point, point))
+            },
+            UIAction(title: "Select Line", image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
+              self?.onSelection(.highlight(.line, point, point))
+            },
+            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+              guard let self else { return }
+              if let selected = self.selection { self.onSelection(.copyExisting(selected)) }
+              else { self.onSelection(.copy(.word, point, point)) }
+            },
+            UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard"),
+              attributes: UIPasteboard.general.hasStrings ? [] : [.disabled]) { [weak self] _ in
+              self?.paste(nil)
+            },
+          ])
+          let actions = menu?.items.map { item in
+            UIAction(title: item.title, image: UIImage(systemName: item.symbol),
+              attributes: item.destructive ? .destructive : []) { _ in item.action() }
+          } ?? []
+          return UIMenu(children: actions + [editing])
         })
     }
 

@@ -120,7 +120,7 @@ struct FieldConflict: Codable, Hashable, Sendable {
 
 /// Each top-level field has a three-way merge. Authentication is deliberately one
 /// atomic field: merging half of two policies could authorize an unintended login.
-struct SharedHostRecord: Codable, Sendable {
+struct SharedHostRecord: Codable, Equatable, Sendable {
   var profile: HostProfile
   var base: HostProfile?
   var deleted = false
@@ -137,6 +137,12 @@ struct SharedHostRecord: Codable, Sendable {
   var syncedKeyDigest: String?
   /// The next sync withdraws the shared private key.
   var forgetSharedKey: Bool?
+  /// The same, for the password and the one-time-code seed: each travels
+  /// with the host as its key does (`HostStore+SharedSecrets`).
+  var syncedPasswordDigest: String?
+  var forgetSharedPassword: Bool?
+  var syncedCodeDigest: String?
+  var forgetSharedCode: Bool?
 
   mutating func merge(_ remote: HostProfile, deleted remoteDeleted: Bool, systemFields: Data?) throws {
     guard remote.id == profile.id else { throw IdentityError.invalidConfiguration }

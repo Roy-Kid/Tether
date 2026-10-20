@@ -4,7 +4,7 @@
 
 ## 1. 窗口结构与对象关系
 
-窗口顶部仅一条 36pt tab，与原生红绿灯同排，空白区域可拖动窗口。无第二层 tab、独立标题行、常驻 host 侧栏或操作工具栏。底部仅 24pt host 切换与连接状态。新建、分屏、放大、搜索、禅模式等操作放在 macOS 原生菜单栏和命令菜单中。
+窗口顶部仅一条 32pt tab（即系统标题栏高度，原生红绿灯在其中居中），与原生红绿灯同排，空白区域可拖动窗口。无第二层 tab、独立标题行、常驻 host 侧栏或操作工具栏。底部仅 24pt host 切换与连接状态。新建、分屏、放大、搜索、禅模式等操作放在 macOS 原生菜单栏和命令菜单中。
 
 对象层级：Host → Terminal tab（稳定工作位置）→ 原始 shell 或 tmux session → window → pane。顶层 tab 不枚举 tmux windows，pane 只在内容区中展示。tab 主标签为可重命名的 Terminal 1 等，次标签展示当前 session/window。使用稳定 ID，不以显示名称作为身份。
 
@@ -40,24 +40,27 @@ host picker 从左下角向上展开，包含搜索、已连接/其他主机。A
 
 ## 4. 原生菜单与键盘
 
-所有入口调用同一命令分发器、共享可用状态，macOS 菜单不是应用窗口内的一排仿制按钮。
+所有入口调用同一命令分发器、共享可用状态，macOS 菜单不是应用窗口内的一排仿制按钮。tmux 的命令在插件自己的 Plugins ▸ tmux 子菜单中：应用不认识任何插件的名字（law），菜单栏不能为某个插件单独开一个顶层菜单。
 
 | 位置 | 操作与快捷键 |
 |---|---|
-| File | New terminal ⌘N；Change host ⌘⇧H；Close tab ⌘W |
+| File | New tab ⌘T；Close terminal ⌘W；Close tab ⌘⌥W；Close window ⌘⇧W；Reopen closed tab ⌘⇧T |
 | Edit | 平台原生复制、粘贴、撤销、重做 |
-| View | Command menu Ctrl⇧P（兼容 ⌘⇧P）；Quick switch ⌘P；Inspector；Zen ⌘⇧Z |
-| Terminal | Rename terminal；Reconnect（new shell）／New terminal，依状态可用 |
-| tmux | Attach/Create/Detach session；New window ⌘⇧N；Split left/right ⌘\；Split top/bottom ⌘⇧\；Zoom/Restore pane ⌘⇧Return |
-| tmux | Focus pane ⌘⌥H/J/K/L；Previous/next window；Rename；End pane/window/session |
-| Window | Previous/next 顶层 tab ⌘⌥←/→；All workspaces；平台窗口操作 |
-| Help | Keyboard shortcuts 与帮助 |
+| View | Command menu Ctrl⇧P（兼容 ⌘⇧P）；Quick switch ⌘P；Show/Hide tab bar（无默认快捷键，⌘S 留给保存）；Inspector；Zen ⌘⇧Z |
+| Host | Change host ⌘⇧H；Manage hosts |
+| Terminal | New terminal ⌘N；Rename terminal ⌘R；Reconnect（new shell），依状态可用；Previous/next terminal ⌘⌥↑/↓；Split right ⌘\；Split down ⌘⇧\ |
+| Plugins ▸ tmux | Attach/Create/Detach session；New window ⌘⇧N；Split left/right ⌘\；Split top/bottom ⌘⇧\；Zoom/Restore pane ⌘⇧Return |
+| Plugins ▸ tmux | Focus pane ⌘⌥H/J/K/L；Previous/next window ⌘⌥[ / ⌘⌥]；Rename；End pane/window/session |
+| Window | Previous/next 顶层 tab ⌘⌥←/→（别名 ⌘⇧[ / ⌘⇧]）；All workspaces；平台窗口操作 |
+| Help | Keyboard Shortcuts：打开设置的 Key Bindings |
+
+同一组合键可以同时属于应用和插件，两层之间不算冲突：当前 tab 的附件此刻提供的插件命令先响应，否则执行应用自己的命令。例如 shell 正是 tmux client 时 ⌘\ 分割 tmux pane，否则分割应用自己的 terminal；附件不提供的插件快捷键不吞键，留给菜单和终端。插件只在 TetherPluginKit 的命令描述里提出默认组合键，应用不认识插件名。同一层内的重复仍是冲突，在 Key Bindings 中标出。tmux 附着时 ⌘⌥H 盖过系统的 Hide Others（应用菜单里仍可点），其余时候不受影响。
 
 Ctrl⇧P 打开可搜索的命令菜单，不是把焦点移到系统菜单栏。这是明确保留的 Control 快捷键，必须在终端编码前拦截且不发送终端字节；⌘⇧P 是额外别名。其余未声明的终端按键继续透传。
 
 ⌘P 搜索已知 host、tab、session/window、独立插件，结果展示完整路径和类型；空搜索显示最近使用项目。选择 window 一次跳转到对应 owner tab 和 window。搜索不连接所有保存的主机来遍历 sessions。
 
-菜单打开时只移动高亮，Enter 才执行，Esc 取消并恢复原焦点。模态弹窗、文本编辑和 IME 优先；例如输入框中 ⌘⇧Z 仍为重做。Vim hjkl、Esc、Ctrl-W 等不被全局 Vim 模式接管。选择器按键不泄漏给终端。macOS ⌘Q、⌘, 等保留平台语义。
+菜单打开时只移动高亮，Enter 才执行，Esc 取消并恢复原焦点。模态弹窗、文本编辑和 IME 优先；例如输入框中 ⌘⇧Z 仍为重做。输入框里只有命令菜单、快速切换和三个关闭命令保留快捷键，其余组合键按普通 Mac 输入框处理。Vim hjkl、Esc、Ctrl-W 等不被全局 Vim 模式接管。选择器按键不泄漏给终端。macOS ⌘Q、⌘, 等保留平台语义。
 
 ## 5. Pane、禅模式与恢复
 
@@ -71,17 +74,17 @@ tmux 重新附加同一 session ID；消失时明确让用户另选或显式创�
 
 ## 6. 关闭与危险操作
 
-⌘W 关闭整个 terminal tab；若选择器打开则仅先关闭选择器。关闭 tab 时：结束其原始 shell，detach 其 owned tmux sessions，远端 tmux 任务继续。原始 shell 仍存活时用系统确认框，标题为动作（Close Terminal N?），按钮为 Cancel / Close，默认 Cancel；仅在该 tab 仍挂着 tmux 时加一行 “tmux stays on the host.”。已结束的 shell 无需重复确认。不能可靠判断是否还有后台任务，因此不宣称检测到空闲 shell。对话框不解释菜单、不对比 Detach/End。
+⌘W 关闭当前 terminal，tab 只剩这一个 terminal 时即关闭该 tab；⌘⌥W 关闭整个 tab 及其全部 terminal；⌘⇧W 收起窗口。若选择器打开，⌘W 仅先关闭选择器；窗口里没有可关闭的内容时，⌘W 收起窗口。确认框里再按一次同一组合键即确认。关闭 tab 时：结束其原始 shell，detach 其 owned tmux sessions，远端 tmux 任务继续。原始 shell 仍存活时用系统确认框，标题为动作（Close Terminal N?），按钮为 Cancel / Close，默认 Cancel；仅在该 tab 仍挂着 tmux 时加一行 “tmux stays on the host.”。已结束的 shell 无需重复确认。不能可靠判断是否还有后台任务，因此不宣称检测到空闲 shell。对话框不解释菜单、不对比 Detach/End。
 
 显式 Detach session 只脱离指定 attachment，返回原始 shell；若原始 shell 已结束则显示该状态，不偷偷新建。End pane/window/session 是独立的远端破坏操作，系统确认标题为 End this window/pane/session?，按钮为 End。普通 tab 关闭不等于 kill tmux window。
 
-关闭后选择同 host 最近使用 tab；没有则保留该 host 的空状态，不写教程句、不放操作按钮。原生窗口关闭与应用退出不能绕过 live-shell 确认；OS 无法取消的终止按现有生命周期尽力清理。
+关闭后选择同 host 最近使用 tab；没有则保留该 host 的空状态，不写教程句、不放操作按钮。原生窗口关闭与应用退出不能绕过 live-shell 确认；OS 无法取消的终止按现有生命周期尽力清理。窗口关闭只是收起，会话都在，无需确认。有 live terminal 时退出（⌘Q、Dock、注销或关机）先问：标题 Quit Tether?，按钮 Cancel / Quit，一行 “N terminals will stop.”；Return 不退出，再按一次 ⌘Q 即确认。没有 live terminal 时直接退出。
 
 ## 7. 配套界面与外观
 
 Manage hosts、连接认证、Create tmux session 以独立 sheet 呈现；Settings 使用 macOS Settings 窗口；Inspector 从 View 菜单按需打开。修改主机仍遵守原有 ~/.ssh/config 保留未知配置、localhost 不可删除等规则。密码/密钥与 host-key trust 仍遵循现有安全语义，不因视觉设计改变认证逻辑。
 
-窗口内 chrome（tab 附件、状态栏、选择器、浮层）只使用图标，名称放在 hover tooltip；不在窗口里写句子。原生菜单和命令菜单仍用文字。Alert、confirmation 与 sheet：标题是动作，按钮是动词；只有按钮说不清的后果才加一行。禁止说明书、菜单路径、替代操作教学。布局保持 compact：36pt tab、24pt host bar，无第二工具栏。
+窗口内 chrome（tab 附件、状态栏、选择器、浮层）只使用图标，名称放在 hover tooltip；不在窗口里写句子。原生菜单和命令菜单仍用文字。Alert、confirmation 与 sheet：标题是动作，按钮是动词；只有按钮说不清的后果才加一行。禁止说明书、菜单路径、替代操作教学。布局保持 compact：32pt tab、24pt host bar，无第二工具栏。
 
 UI 使用系统语义颜色和原生字体，浅色/深色、增大对比度随系统变化；终端字号不因 compact 缩小。Figma 是深色静态状态稿，使用 Inter / JetBrains Mono 作为导入渲染替代字体；这些不是应用字体配置。草稿中的主机、代码与终端输出均为示例，不是实际连接或测试结果。无可点击原型或 Auto Layout 完成度承诺。
 

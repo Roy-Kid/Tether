@@ -60,7 +60,7 @@ Swift source API, not a binary ABI or a permission sandbox.
 Settings → Appearance → Tab Layout switches between the horizontal titlebar
 and a vertical tab list on the left. The layout is saved across launches.
 Cmd+S shows or hides the entire tab bar in either layout, without closing any
-sessions. The titlebar button and View → Show/Hide Tab Bar do the same thing.
+sessions. View → Show/Hide Tab Bar does the same thing.
 Visibility is saved locally and restored on the next launch in either layout.
 Zen temporarily hides the bar without changing this preference.
 Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
@@ -205,13 +205,54 @@ configures workspace commands; context-specific editing/list keys are defaults.
 plugins. A package is a manifest plus HTML, CSS, and JavaScript. Install
 registers contributions and does not run the page. Activation loads the
 page in an isolated WebKit view. The page reaches the app through the
-capability API (`document.read`, `storage.plugin`, `host.notify`). The host
-rejects native binaries, dynamic libraries, and install scripts. The
+capability API (`document.read`, `storage.plugin`, `host.notify`, `host.ask`,
+`host.context`, `host.reconnect`). A compiled plugin calls the same methods on
+`PluginContext.services`. The host posts the notification and shows the dialog.
+The host rejects native binaries, dynamic libraries, and install scripts. The
 canonical note is `.claude/notes/web-plugin-host.md`.
 
 Built-in plugins do not go through this host, and this host does not name
-them. The Apple host is not wired into the window yet. Windows now has a
-runtime WebView2 panel adapter; see below.
+them. Settings → Extensions → Install accepts a package directory on Mac and
+iOS and copies it into the app's Application Support at `Tether/Plugins`.
+The same section accepts a GitHub repository address and installs that
+repository's latest release after the archive passes the same validation.
+Installed manifests are discovered at launch. Their panels use the existing
+workspace and command palette; enable/disable uses the same toggle as built-in
+extensions. Uninstall closes every page and stream before removing the package.
+A terminal connection is not required. On Mac,
+`Tether.app --install-plugin /absolute/package/directory` is the same
+installation path for development.
+
+A `statusBar` contribution starts one background page while the plugin is enabled.
+That page can call `host.status` with `{label, segments: [{color, weight}]}`.
+Colours are `0xRRGGBB` integers; weights are finite nonnegative numbers. Tether
+paints the ribbon and opens the plugin panel when it is clicked. Background pages
+have `tether.background === true`; visible panels have it false.
+
+A plugin declaring `network` can also declare `networkURLs`: an exact list of
+GET endpoints. `network.stream` takes `{url}` and returns `{stream}` after consent.
+`tether.onEvent` receives `{stream, type: "data", payload: {event, data}}`, or
+`type: "end" | "error"`. `network.closeStream` takes `{stream}`. There is one
+stream per activation, bounded to 2 MiB per event; HTTP redirects, cookies,
+credentials and direct page network traffic are blocked. HTTPS is supported;
+plain HTTP is limited to literal loopback. Disabling the plugin, closing its
+panel, or uninstalling cancels its subscriptions. Network parsing runs off the
+main actor. Plugins own reconnection policy.
+
+Network access is confirmed once during installation, with the exact endpoint
+addresses and a distinction between services on this device and external services.
+Approved endpoints are persisted in the managed plugin library and shared by all
+background pages and panels. Reconnection, disabling and re-enabling, and app
+relaunch never prompt. Runtime requests outside the approved declared scope are
+rejected without opening a dialog. Uninstall removes the grant; reinstalling asks
+again. Existing installations migrate their declared scope once on upgrade.
+Cancellation leaves the plugin uninstalled.
+
+Nerve is a complete example in its repository at `surfaces/tether-web`: a jobs
+panel plus a persistent ribbon. Install that directory, then allow its network
+permission. It reads `http://127.0.0.1:17890/v1/stream?surface=tether`. Run
+`nerve-hub` separately; the web host neither installs nor launches executables.
+Reinstalling a changed package requires uninstalling the previous copy first.
 
 ## Windows runtime web panels (preview)
 
@@ -219,18 +260,26 @@ Settings → Extensions has an icon-only **Install web plugin** action. Choose
 a directory containing `manifest.json` and its web assets. The installer
 shows the plugin name and declared network origins, validates the package,
 and copies it into `%LOCALAPPDATA%\Tether\Plugins\<id>`. The manifest is
-discovered at startup without running the page. The inspector opens it on
-demand, and the existing extension toggle unloads every attachment when disabled.
-No project reference or product registration line is needed.
+discovered at startup without running the page. Each installed web plugin
+also offers **Update…** (same id, replace package) and **Uninstall** (delete
+package, unregister, close its workspace tabs). The inspector opens a panel
+beside a terminal; **Open … Tab** / Command Palette open the same panel as a
+full workspace tab (the Windows shape of macOS `PluginWorkspace`). Disabling
+an extension unloads attachments and closes its tabs. No project reference or
+product registration line is needed.
 
-This Windows preview supports API 1, runtime `web`, a `panel` contribution,
-optional `command` contributions, and the `network` permission. The optional
-`networkOrigins` field is a list of exact origins, including ports; HTTP is
-accepted only for literal loopback IPs, otherwise HTTPS is required. Optional
-`glyph`, `summary` and contribution `title` fields supply Windows chrome and
-command metadata. Other capabilities, viewer routing, package updates and
-uninstall UI are not implemented in this preview. The Apple manifest reader
-ignores these extra fields but has no network gateway yet.
+This Windows preview supports API 1, runtime `web`, a `panel` and/or `viewer`
+contribution, optional `command` contributions, and the permissions
+`network`, `service.local`, `document.read` and `storage.plugin`. A `viewer`
+contribution lists file suffixes (no leading dot); Files open/preview routes
+matching files to that plugin after a one-shot Allow consent, grants the
+bytes to the session, and posts `{api:1,type:"document",handle}`. The page
+reads them with `document.read`. `storage.plugin.get` / `set` ask once per
+activation. `host.notify` shows a dialog titled with the plugin name. The
+optional `networkOrigins` field is a list of exact origins, including ports;
+HTTP is accepted only for literal loopback IPs, otherwise HTTPS is required.
+Optional `glyph`, `summary` and contribution `title` fields supply Windows
+chrome and command metadata. Apple's runtime integration is described above.
 
 Each activation uses an isolated InPrivate WebView2 profile and a private
 virtual asset origin. The page has no native host objects, direct network,
@@ -249,6 +298,10 @@ requests to that view. Supported methods:
 | `network.get` | `{url}` | `{text}` |
 | `network.subscribe` | `{url}` | `{subscription}` |
 | `network.unsubscribe` | `{subscription}` | null |
+| `document.read` | `{handle}` | `{bytes}` (base64) |
+| `storage.plugin.get` | `{key}` | `{value}` or null |
+| `storage.plugin.set` | `{key,value}` | null |
+| `host.notify` | `{title}` | null |
 
 All network operations are GET-only, with no cookies, credentials, proxies
 or redirects, and only declared origins. SSE `data:` frames arrive as
@@ -282,7 +335,7 @@ dotnet test tests/plugins/PluginTests.csproj --filter FullyQualifiedName~RealHub
 
 # Using tmux
 
-Open a local shell or connect to a host, then right-click the terminal's tab and choose tmux sessions. Clicking the selected tab opens the same picker.
+Open a local shell or connect to a host. On a Mac, the tmux button at the bottom right, beside Files, opens the session list in the inspector. Choosing a session leaves that list open. On a phone the list is inside the Shell button and closes after a choice.
 The machine running that shell must have `tmux` on its command path. Select an existing
 session or name a new one. The session is attached in that same terminal: tmux draws
 its own windows, panes and status line. The plugin does not replace the terminal.
@@ -308,8 +361,42 @@ swift test --package-path swift
 swift test --package-path app/Packages/TetherFrontend
 swift test --package-path app/Packages/TetherPluginHost
 swift test --package-path app/Plugins/Tmux
+swift test --package-path app/Plugins/Files
+swift test --package-path app/Plugins/Ports
 ./scripts/tether.sh --build-app
 ```
 
 Debug builds support `TETHER_HOSTS_FILE=/absolute/path/hosts.json` for isolated UI
 fixtures. This does not change the normal host store and is absent from release builds.
+
+## Tab indicators
+
+A native `TetherPlugin` can expose `tabIndicators: [PluginTabIndicator]`. An installed
+web plugin declares a `tabIndicator` contribution, which gives it a background page
+while enabled, and calls `tether.call('host.tabIndicators', items)` with a complete
+replacement array:
+
+```js
+[{target: {host: 'studio.local', terminal: '/dev/ttys001'},
+  color: 0x0A84FF, label: 'Building'}]
+```
+
+`host` is the actual machine's lowercase hostname, not a saved-host label or SSH
+alias. `terminal` is the shell's controlling TTY device path. The app reuses its
+local producer's TTY or its existing remote TTY discovery, and reads the remote
+hostname over the same authenticated lease. If identity cannot be established,
+no mark is shown; task titles and working directories are never used for matching.
+
+The host draws one 6pt solid circle before the tab name in horizontal and vertical
+tab bars; the label is a tooltip/accessibility description. A split workspace shows
+the mark for its focused terminal. Disabled plugins contribute nothing. Between
+plugins, registration order wins; each plugin must resolve its own domain priority
+before reporting. An empty array clears that session's marks. Unloading a session
+clears only its own marks; closing a panel does not erase a background page's set.
+
+The RPC requires the contribution and accepts at most 512 unique terminal targets,
+24-bit integer colors and nonempty labels of at most 256 characters. Invalid updates
+are rejected atomically. Connection loss is the plugin's responsibility: clear its
+marks rather than leaving an apparently live indicator. No shell input, task
+control or arbitrary native code is exposed by this capability. Existing running
+shells need no restart: producers can report hostname and TTY with their next event.

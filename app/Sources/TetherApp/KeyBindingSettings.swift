@@ -1,13 +1,12 @@
-#if os(macOS)
 import SwiftUI
 import TetherUI
 
 struct KeyBindingSettings: View {
   let store: KeyBindingStore
   let commands: [KeyBindingCommand]
+  var onRecordingChange: (Bool) -> Void = { _ in }
   @State private var query = ""
   @State private var grouped = true
-  @State private var showingHelp = false
   @State private var recording: Slot?
   @State private var problem: String?
 
@@ -32,6 +31,8 @@ struct KeyBindingSettings: View {
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
     }
+    .onChange(of: recording != nil) { _, recording in onRecordingChange(recording) }
+    .onDisappear { onRecordingChange(false) }
     .onChange(of: commands, initial: true) { _, commands in store.register(commands) }
   }
 
@@ -50,33 +51,12 @@ struct KeyBindingSettings: View {
           .foregroundStyle(grouped ? Color.accentColor : Color.secondary)
           .frame(width: 28, height: 24)
           .contentShape(Rectangle())
-          .help(grouped
-            ? "Group by feature: On\nClick to show all commands in a flat list."
-            : "Group by feature: Off\nClick to group commands by feature.")
+          .help("Group by Feature")
       }
       .buttonStyle(ChromeButtonStyle(selected: grouped))
       .accessibilityLabel("Group by feature")
       .accessibilityValue(grouped ? "On" : "Off")
       .accessibilityAddTraits(grouped ? .isSelected : [])
-
-      Button {
-        showingHelp.toggle()
-      } label: {
-        Image(systemName: "questionmark.circle")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(.secondary)
-          .frame(width: 28, height: 24)
-          .contentShape(Rectangle())
-          .help("Key binding help\nLearn how to record, clear, and reset shortcuts.")
-      }
-      .buttonStyle(ChromeButtonStyle(selected: showingHelp))
-      .accessibilityLabel("Key binding help")
-      .popover(isPresented: $showingHelp) {
-        Text("Click a shortcut and press a key combination using ⌃, ⌥, ⇧ or ⌘. Esc cancels recording. Use × to clear a shortcut or the reset arrow to restore a command’s defaults. Assigned shortcuts take priority over terminal input. Custom bindings, clears and resets sync through iCloud when available. Orange shortcuts are inactive because another command has the same binding; hover for details.")
-          .font(.callout)
-          .padding(12)
-          .frame(width: 280)
-      }
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 8)
@@ -85,12 +65,12 @@ struct KeyBindingSettings: View {
   @ViewBuilder
   private var commandList: some View {
     if let problem {
-      Section { Text(problem).foregroundStyle(.red).accessibilityLabel("Shortcut error: \(problem)") }
+      Section { Text(problem).foregroundStyle(Theme.danger).accessibilityLabel("Shortcut error: \(problem)") }
     }
     if commands.contains(where: { command in (0..<2).contains { store.conflict(for: command, slot: $0) != nil } }) {
       Section {
-        Text("Some shortcuts conflict after syncing. Shortcuts marked in orange are inactive. Reassign or clear them to resolve the conflict.")
-          .foregroundStyle(.orange)
+        Text("Shortcuts in orange conflict and are inactive.")
+          .foregroundStyle(Theme.warning)
       }
     }
     if filtered.isEmpty {
@@ -169,17 +149,17 @@ struct KeyBindingSettings: View {
       } label: {
         Text(active ? "Press keys…" : binding?.label ?? "Not set")
           .font(.system(size: 11, design: .monospaced))
-          .foregroundStyle(conflict != nil ? Color.orange : modified ? Color.accentColor : Color.primary)
+          .foregroundStyle(conflict != nil ? Theme.warning : modified ? Color.accentColor : Color.primary)
           .lineLimit(1)
           .minimumScaleFactor(0.75)
           .frame(maxWidth: .infinity, minHeight: 22)
       }
       .buttonStyle(.bordered)
-      .tint(conflict != nil ? .orange : active || modified ? .accentColor : .secondary)
+      .tint(conflict != nil ? Theme.warning : active || modified ? .accentColor : .secondary)
       .overlay {
         if modified {
           RoundedRectangle(cornerRadius: 6)
-            .strokeBorder((conflict != nil ? Color.orange : Color.accentColor).opacity(0.7), lineWidth: 1)
+            .strokeBorder((conflict != nil ? Theme.warning : Color.accentColor).opacity(0.7), lineWidth: 1)
             .allowsHitTesting(false)
         }
       }
@@ -226,4 +206,3 @@ struct KeyBindingSettings: View {
     }
   }
 }
-#endif

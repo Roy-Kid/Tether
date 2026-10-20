@@ -15,6 +15,29 @@ import struct TetherApp.Host
 struct ConnectionReportTests {
   private let host = Host(label: "Arrhenius", hostname: "login.example.org", port: 22, username: "ada")
 
+  @Test("a cancelled reader cannot end the replacement shell",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func redialKeepsReplacementLive() async throws {
+    let tabs = TabSet()
+    let tab = SessionTab(host: .local, password: "", known: tabs.known, name: "Terminal 1")
+    tabs.adopt(tab)
+    defer { tabs.closeAll() }
+    var lease = try await tab.connectionReady()
+    for _ in 0..<3 {
+      // Let the reader wait on the old shell before redial closes it.
+      try await Task.sleep(for: .milliseconds(50))
+      tab.redial(host: .local, password: "", typedNow: false)
+      lease = try await tab.connectionReady()
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(tab.isLive)
+      #expect(tab.connection != nil)
+      #expect(!tabs.isDisconnected(try #require(tabs.currentWorkspace)))
+      #expect(tab.problem == nil)
+      let output = try await lease.execute("printf reconnected")
+      #expect(String(data: output.stdout, encoding: .utf8) == "reconnected")
+    }
+  }
+
   private func tab(in tabs: TabSet) -> SessionTab {
     let tab = SessionTab(
       preview: host, known: KnownHosts(location: URL(fileURLWithPath: "/dev/null")), name: "Terminal 1",
@@ -55,6 +78,52 @@ struct ConnectionReportTests {
     tab.fail(CancellationError())
     #expect(tabs.tabs.isEmpty)
     #expect(tabs.problem == nil)
+  }
+
+  @Test("a lost connection is a state: kept in the tab, asked about only when acted on")
+  func lostIsQuiet() throws {
+    let tabs = TabSet()
+    let tab = tab(in: tabs)
+    tab.finish(.lost(cause: "reset by peer"))
+    if case .lost = tab.stage {} else { Issue.record("a dropped connection is lost, not ended") }
+    #expect(tab.stateName == "Disconnected")
+    #expect(tab.isDisconnected && tab.canReconnect)
+    #expect(tabs.problem == nil, "no dialog of its own accord")
+    #expect(tabs.isDisconnected(try #require(tabs.currentWorkspace)), "marked on its tab instead")
+    #expect(tabs.canPerform(.reconnect))
+
+    tab.raiseProblem()
+    let report = try #require(tabs.problem)
+    let dialog = ConnectionDialog.problem(report, close: { Issue.record("Escape must not close") }, again: {})
+    #expect(dialog.actions.map(\.title) == ["Not Now", "Reconnect"])
+    #expect(dialog.cancelAction == 0)
+
+    tab.setProblemAside()
+    #expect(tabs.problem == nil, "not now leaves the tab as it is")
+    #expect(tabs.tabs.count == 1)
+    #expect(tabs.reconnectReport(for: tab.id)?.problem.kind == .lost, "and it can still be reconnected")
+  }
+
+  @Test("a failure in a terminal not being looked at waits for it")
+  func backgroundFailureWaits() throws {
+    let tabs = TabSet()
+    let behind = tab(in: tabs)
+    let front = tab(in: tabs)
+    #expect(tabs.current?.id == front.id)
+    behind.fail(TetherError.unreachable(endpoint: "login.example.org:22", cause: "Connection refused"))
+    #expect(tabs.problem == nil)
+    tabs.select(behind.id)
+    #expect(tabs.problem?.tab == behind.id, "told once it is the one on screen")
+  }
+
+  @Test("a reconnect that fails keeps what was on screen")
+  func failedReconnectKeepsScreen() {
+    let kept = TabProblem(
+      tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"), keepsScreen: true)
+    #expect(ConnectionDialog.problem(kept, close: {}, again: {}).actions.first?.title == "Not Now")
+    let empty = TabProblem(tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"))
+    #expect(ConnectionDialog.problem(empty, close: {}, again: {}).actions.first?.title == "Close",
+      "a tab that never showed anything has nothing to keep")
   }
 
   @Test("a lost connection offers to reconnect; this machine restarts")
@@ -101,5 +170,24 @@ struct ConnectionReportTests {
     let dialog = ConnectionDialog.keep(offer, replacing: true, keep: {}, decline: {})
     #expect(dialog.title == "Update the saved password for Arrhenius?")
     #expect(dialog.actions.map(\.title) == ["Not Now", "Update"])
+  }
+}
+
+extension ConnectionReportTests {
+  @Test("plugin terminal identity is the local shell's TTY and vanishes on close",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func pluginIdentityFollowsTerminalLifetime() async throws {
+    let tabs = TabSet()
+    let shell = SessionTab(host: .local, password: "", known: tabs.known, name: "Terminal 1")
+    tabs.adopt(shell)
+    defer { tabs.closeAll() }
+    _ = try await shell.connectionReady()
+    let identity = try #require(shell.pluginTerminalIdentity)
+    #expect(identity.host == ProcessInfo.processInfo.hostName.lowercased())
+    #expect(identity.terminal == shell.terminalName)
+    shell.name = "renamed"
+    #expect(shell.pluginTerminalIdentity == identity, "display names cannot change task association")
+    shell.close()
+    #expect(shell.pluginTerminalIdentity == nil)
   }
 }

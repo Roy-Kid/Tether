@@ -28,6 +28,35 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 {
     private readonly Gen.Session _inner;
     private bool _disposed;
+    private volatile bool _closed;
+    private Gen.RemoteConnection? _forwardConnection;
+    private readonly SemaphoreSlim _forwardGate = new(1, 1);
+
+    /// <summary>Forwards a remote loopback port through this session, with no second login.</summary>
+    public async Task<ForwardedPort> ForwardPortAsync(ushort port, CancellationToken token = default)
+    {
+        await _forwardGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_closed) throw new IOException("The session has ended.");
+            _forwardConnection ??= _inner.Connection() ?? throw new IOException("No live connection.");
+            token.ThrowIfCancellationRequested();
+            var result = await _forwardConnection.ForwardPort(port).ConfigureAwait(false);
+            if (_closed) { _forwardConnection.StopForward(port); throw new IOException("The session has ended."); }
+            if (token.IsCancellationRequested) { _forwardConnection.StopForward(port); token.ThrowIfCancellationRequested(); }
+            return new(result.LocalPort, result.AlreadyLocal);
+        }
+        catch (Gen.TetherException ex) { throw LiftError(ex); }
+        finally { _forwardGate.Release(); }
+    }
+
+    public async Task StopForwardAsync(ushort port)
+    {
+        await _forwardGate.WaitAsync().ConfigureAwait(false);
+        try { _forwardConnection?.StopForward(port); }
+        finally { _forwardGate.Release(); }
+    }
 
     private TerminalSession(Gen.Session inner) => _inner = inner;
 
@@ -196,20 +225,33 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
     public TerminalLink? LinkAt(ushort row, ushort column) => Lift(_inner.LinkAt(row, column));
 
     /// <summary>Ends the session. Idempotent.</summary>
-    public void Close() => _inner.Close();
+    public void Close()
+    {
+        if (_closed) return;
+        _closed = true;
+        _inner.Close();
+        _ = DisposeForwardsAsync();
+    }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _inner.Close();
+        Close();
         _inner.Dispose();
     }
 
-    public ValueTask DisposeAsync()
+    private async Task DisposeForwardsAsync()
+    {
+        await _forwardGate.WaitAsync().ConfigureAwait(false);
+        try { _forwardConnection?.Dispose(); _forwardConnection = null; }
+        finally { _forwardGate.Release(); }
+    }
+
+    public async ValueTask DisposeAsync()
     {
         Dispose();
-        return ValueTask.CompletedTask;
+        await DisposeForwardsAsync().ConfigureAwait(false);
     }
 
     // ---- lowering: public contract → generated types ----

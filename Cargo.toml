@@ -48,11 +48,8 @@ tokio-util = "0.7"
 # Presentation stack, composed (spec §4, Decisions/0016). cosmic-text is
 # reached through glyphon's re-export — one copy in the graph.
 #
-# `dx12` is off on purpose: `gpu-allocator 0.28` (the only release) still
-# speaks `windows 0.58` while `wgpu-hal 30` speaks `windows 0.62`, and the
-# two cannot share a `ID3D12Heap`. Vulkan + GLES cover Win11 and Linux today;
-# turn `dx12` back on when `gpu-allocator` moves. Recorded as debt (§22).
-wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles", "metal"] }
+# DX12 is on: gpu-allocator 0.28 shares windows 0.62 with wgpu-hal.
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "gles", "metal"] }
 glyphon = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
 

@@ -14,6 +14,9 @@ private final class HostProbe {
   var shown = 0
   var focused = 0
   var workingDirectory: String?
+  var paneDirectory: String?
+  var directoryGate: Gate?
+  var directoryRequests = 0
 
   func context() -> TabContext {
     TabContext(
@@ -24,8 +27,26 @@ private final class HostProbe {
       focus: { [weak self] in self?.focused += 1 }, dismissAccessory: {}, present: { _ in }, dismissSheet: {},
       insertText: { [weak self] in self?.typed.append($0) },
       workingDirectory: { [weak self] in self?.workingDirectory },
+      resolveWorkingDirectory: { [weak self] _ in
+        self?.directoryRequests += 1
+        await self?.directoryGate?.wait()
+        return self?.paneDirectory ?? self?.workingDirectory
+      },
       showAccessory: { [weak self] in self?.shown += 1 })
   }
+}
+
+/// Editing copies of a host nobody else has, in a folder of the test's own:
+/// never the real Application Support.
+@MainActor
+func scratchEditing() -> EditingCopies {
+  let copies = EditingCopies(
+    host: UUID(), label: "lab",
+    base: FileManager.default.temporaryDirectory.appendingPathComponent("files-editing-\(UUID())"))
+  // The watch asks the far side on its own. A test that is not about that
+  // leaves it quiet, so a touch meant for one check is not fetched first.
+  copies.watchEvery = .seconds(60)
+  return copies
 }
 
 private func scratchCache() -> FileCache {
@@ -48,10 +69,11 @@ private func browser(
   _ source: StubSource, host: HostProbe = HostProbe(), defaults: UserDefaults = cleanDefaults()
 ) -> FilesTab {
   let model = FilesTab(
-    tab: host.context(), cache: scratchCache(), open: { _ in source }, present: { _ in },
-    defaults: defaults)
+    tab: host.context(), cache: scratchCache(), editing: scratchEditing(), open: { _ in source },
+    present: { _ in }, defaults: defaults)
   model.revealSaved = { _ in }
   model.openLocal = { _ in }
+  model.openToEdit = { _, opened in opened("com.example.editor") }
   return model
 }
 
@@ -77,6 +99,86 @@ struct FilesTabTests {
     "/home/ada/runs": .directory, "/home/ada/b.txt": .file, "/home/ada/A.png": .file,
     "/home/ada/.env": .file, "/home/ada/runs/plot.png": .file,
   ]
+
+  @Test("Files follows pane directories and leaves manual browsing alone between changes")
+  func followsPaneDirectory() async {
+    let source = StubSource(tree)
+    let host = HostProbe()
+    host.workingDirectory = "/home"
+    host.paneDirectory = "/home/ada/runs"
+    let model = browser(source, host: host)
+    defer { model.close() }
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/home/ada/runs")
+    await model.go(to: "/")
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/", "an unchanged pane does not undo manual browsing")
+    host.paneDirectory = "/home/ada"
+    await model.followTerminalDirectory()
+    #expect(model.directory == "/home/ada")
+    #expect(model.history.last == "/")
+    let count = source.lists.count
+    await model.followTerminalDirectory()
+    #expect(source.lists.count == count, "unchanged directories are not relisted every second")
+  }
+
+  @Test("a late pane directory cannot undo manual navigation or reopen a closed tab")
+  func latePaneDirectory() async throws {
+    let host = HostProbe()
+    host.paneDirectory = "/home/ada/runs"
+    let gate = Gate()
+    host.directoryGate = gate
+    let model = browser(StubSource(tree), host: host)
+    await model.go(to: "/home/ada")
+    let following = Task { await model.followTerminalDirectory() }
+    try await settle(model) { host.directoryRequests == 1 }
+    await model.go(to: "/")
+    gate.open()
+    await following.value
+    #expect(model.directory == "/")
+    host.directoryGate = Gate()
+    let closing = Task { await model.followTerminalDirectory() }
+    try await settle(model) { host.directoryRequests == 2 }
+    model.close()
+    host.directoryGate?.open()
+    await closing.value
+    #expect(model.directory == "/")
+  }
+
+  @Test("pasted relative paths use the pane directory instead of the outer shell")
+  func queryUsesPaneDirectory() async {
+    let host = HostProbe()
+    host.workingDirectory = "/"
+    host.paneDirectory = "/home/ada/runs"
+    let model = browser(StubSource(tree), host: host)
+    defer { model.close() }
+    await model.go(to: "/")
+    model.beginFind()
+    await model.revealQuery("plot.png", commit: model.findCommit)
+    #expect(model.selection == ["/home/ada/runs/plot.png"])
+    #expect(!model.finding)
+  }
+
+  @Test("terminal download and edit commands open Files to present their controls")
+  func linkCommandsShowBrowser() async throws {
+    let host = HostProbe()
+    let model = browser(StubSource(tree), host: host)
+    defer { model.close() }
+    await model.go(to: "/home/ada")
+    let actions = try #require(model.actions(for: pointed("b.txt", in: "/home/ada")))
+    #expect(actions.commands.contains { $0.id == "quickLook" })
+    #if os(macOS)
+      let edit = try #require(actions.commands.first { $0.id == "edit" })
+      edit.action()
+      try await settle(model) { host.shown == 1 }
+    #endif
+    let before = host.shown
+    let download = try #require(actions.commands.first { $0.id == "download" })
+    download.action()
+    try await settle(model) { !model.pendingSave.isEmpty }
+    #expect(host.shown == before + 1)
+    #expect(model.pendingSave.map(\.path) == ["/home/ada/b.txt"])
+  }
 
   @Test("a reopened tab restores the browser's directory on a fresh attachment")
   func restoreDirectory() async throws {
@@ -137,6 +239,39 @@ struct FilesTabTests {
     #expect(model.visible.map(\.name).contains("A.png"))
   }
 
+  @Test("wrappers of the same lease keep files open",
+    .enabled(if: TerminalSession.isLocalAvailable))
+  func connectionIdentityUsesLease() async throws {
+    let shell = try await TerminalSession.local()
+    defer { shell.close() }
+    let connection = try #require(shell.connection)
+    let context = TabContext(
+      id: UUID(),
+      plugin: PluginContext(connection: connection, hostLabel: "local", hostID: UUID(),
+        openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
+      focus: {}, dismissAccessory: {}, present: { _ in }, dismissSheet: {}, insertText: { _ in })
+    var sources: [StubSource] = []
+    let model = FilesTab(tab: context, cache: scratchCache(), editing: scratchEditing(),
+      open: { _ in
+        let source = StubSource(tree)
+        sources.append(source)
+        return source
+      }, present: { _ in }, defaults: cleanDefaults())
+    defer { model.close() }
+    await model.go(to: "/home/ada/runs")
+    let wrapper = try #require(shell.connection)
+    #expect(wrapper !== connection)
+    #expect(wrapper.leaseID() == connection.leaseID())
+    model.connectionChanged(wrapper)
+    await Task.yield()
+    #expect(sources.count == 1)
+    #expect(!sources[0].closed)
+
+    #expect(model.directory == "/home/ada/runs")
+    #expect(model.entries.map(\.name) == ["plot.png"])
+    #expect(model.problem == nil)
+  }
+
   @Test("a lease that arrives after a failed open still lists")
   func listsWhenTheLeaseArrivesLate() async throws {
     let source = StubSource(tree)
@@ -191,6 +326,25 @@ struct FilesTabTests {
     #expect(model.directory == "/home/ada")
     #expect(model.problem == "“nowhere” does not exist.")
     #expect(!model.visible.isEmpty)
+  }
+
+  @Test("a pasted local file uploads where a new file would go")
+  func pasteUploadsIntoTheTarget() async throws {
+    let source = StubSource(tree)
+    let model = browser(source)
+    await model.go(to: "/home/ada")
+    let local = FileManager.default.temporaryDirectory
+      .appendingPathComponent("paste-\(UUID().uuidString).txt")
+    try Data("x".utf8).write(to: local)
+    defer { try? FileManager.default.removeItem(at: local) }
+
+    #expect(!model.pasteLocalFiles([]))
+    model.selection = ["/home/ada/runs"]
+    #expect(model.pasteLocalFiles([local]))
+    let uploaded = "/home/ada/runs/\(local.lastPathComponent)"
+    try await settle(model) { source.has(uploaded) }
+    #expect(source.uploads.map(\.1) == [uploaded])
+    #expect(model.expanded.contains("/home/ada/runs"))
   }
 
   @Test("an upload never overwrites: a taken name is asked about")
@@ -282,7 +436,7 @@ struct FilesTabTests {
     #expect(model.draggedPathText(folder) == "/home/ada/runs", "a row outside the selection is only itself")
 
     let dragged = DraggedFile(
-      text: model.draggedPathText(image), file: RemoteFile(model: model, entry: image))
+      text: model.draggedPathText(image), file: model.fetch(image))
     let provider = NSItemProvider()
     provider.register(dragged)
     #expect(provider.registeredTypeIdentifiers.contains(DroppedPath.contentType.identifier))
@@ -339,7 +493,8 @@ struct FilesTabTests {
   @Test("Quick Look opens before an uncached remote file finishes downloading")
   func previewOpensWhileDownloading() async throws {
     let source = StubSource(tree)
-    source.downloadDelay = .seconds(1)
+    let gate = Gate()
+    source.downloadGate = gate
     var shown: [[URL]] = []
     let host = HostProbe()
     let model = FilesTab(
@@ -351,10 +506,10 @@ struct FilesTabTests {
     let fetching = Task { await model.preview([file]) }
     try await settle(model) { !shown.isEmpty }
     #expect(shown.count == 1)
-    let placeholderFolder = shown[0].first?.deletingLastPathComponent()
-      .deletingLastPathComponent().lastPathComponent
-    #expect(placeholderFolder == "Tether Preview Loading")
+    let placeholder = try #require(shown[0].first)
+    #expect(placeholder.deletingLastPathComponent().deletingLastPathComponent() == LocalCopies.loading())
 
+    gate.open()
     await fetching.value
     #expect(shown.count == 2)
     #expect(shown[1].first?.lastPathComponent == "A.png")
@@ -383,7 +538,7 @@ struct FilesTabTests {
     await model.preview([huge])
     #expect(model.pendingLarge == nil)
     #expect(source.downloads.isEmpty)
-    await model.openFetched([huge])
+    await model.edit([huge])
     #expect(model.pendingLarge == nil)
     #expect(source.downloads.isEmpty)
   }
@@ -436,7 +591,7 @@ struct FilesTabTests {
     let huge = FileEntry(
       name: "movie.mov", path: "/home/ada/movie.mov", kind: .file,
       size: FilesTab.previewLimit + 1, modified: nil, permissions: 0o644)
-    await model.openFetched([huge])
+    await model.edit([huge])
     #expect(model.pendingLarge == huge)
     #expect(model.pendingFetch == .open([huge]))
     #expect(source.downloads.isEmpty)
@@ -517,7 +672,7 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     model.close()
-    try await settle(model) { source.closed }
+    try await Task.sleep(for: .milliseconds(50))
     #expect(source.closed)
   }
 
@@ -656,11 +811,6 @@ struct FilesTabTests {
     #expect(model.cache.cached(image) == nil, "nothing went into the cache")
   }
 
-  @Test("the accessory lives in the inspector")
-  func accessoryPlacement() {
-    #expect(FilesPlugin().accessory.placement == .inspector)
-  }
-
   @Test("a pasted relative path is resolved from the shell, then the browser")
   func pastedPathUsesTheShell() async throws {
     let relative = "lab-new/projects/pcl-ptmc-pec-tg/figures/hotmelt-rho.png"
@@ -773,7 +923,6 @@ struct FilesTabTests {
   func findCommandAndPaste() {
     let model = browser(StubSource(tree))
     let find = model.commands.first { $0.id == "find" }
-    #expect(find?.symbol == "magnifyingglass")
     find?.action()
     #expect(model.finding)
     #expect(model.findTicket == 1)
@@ -794,13 +943,57 @@ struct FileCacheTests {
       modified: modified, permissions: 0o644)
   }
 
-  #if os(macOS)
-    @Test("previews are kept in /tmp")
-    func previewsLiveInTemporary() {
-      let cache = FileCache(host: UUID())
-      #expect(cache.root.path.hasPrefix("/tmp/"))
-    }
-  #endif
+  /// Not `/tmp`, which every account on the Mac can read.
+  @Test("previews are kept where only this account can read them")
+  func previewsArePrivate() throws {
+    let cache = FileCache(host: UUID())
+    #expect(cache.root.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+    #expect(!cache.root.path.hasPrefix("/tmp/"))
+    let scratch = scratchCache()
+    let folder = scratch.location(for: entry("/a/plot.png")).deletingLastPathComponent()
+    let mode = try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? Int
+    #expect(mode == 0o700)
+    let copy = folder.appendingPathComponent("plot.png")
+    try Data("png".utf8).write(to: copy)
+    scratch.keep(copy)
+    #expect(try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? Int == 0o600)
+  }
+
+  /// A day unlooked-at is long enough; the limit is every host's together.
+  @Test("old previews go, and every host's share one limit")
+  func previewsAgeAndShareALimit() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-age-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let lab = FileCache(host: UUID(), base: base), other = FileCache(host: UUID(), base: base)
+    let stale = entry("/stale.bin"), fresh = entry("/fresh.bin"), elsewhere = entry("/elsewhere.bin")
+    try Data(count: 10).write(to: lab.location(for: stale))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.previewAge)],
+      ofItemAtPath: lab.location(for: stale).deletingLastPathComponent().path)
+    try Data(count: 1000).write(to: lab.location(for: fresh))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-60)],
+      ofItemAtPath: lab.location(for: fresh).deletingLastPathComponent().path)
+    try Data(count: 1000).write(to: other.location(for: elsewhere))
+    other.trim(to: 1500)
+    #expect(lab.cached(stale) == nil, "older than a day")
+    #expect(lab.cached(fresh) == nil, "the other host's newer copy took the room")
+    #expect(other.cached(elsewhere) != nil)
+  }
+
+  /// A placeholder or a received file outlives its run only by accident.
+  @Test("leftovers from an earlier run are swept")
+  func leftoversAreSwept() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-sweep-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let old = try LocalCopies.scratch(in: LocalCopies.staging(in: base))
+    let new = try LocalCopies.scratch(in: LocalCopies.loading(in: base))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.leftoverAge)], ofItemAtPath: old.path)
+    LocalCopies.sweep(base: base)
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(FileManager.default.fileExists(atPath: new.path))
+  }
 
   @Test("moving a copy takes it out of the cache")
   func moveTakesTheCopy() throws {

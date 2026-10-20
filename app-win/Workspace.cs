@@ -1,215 +1,194 @@
-// Workspaces own split trees; every terminal pane owns an independent session.
-//
-// A new tab starts the local profile selected in Settings.
-
 using Tether;
-using TetherApp.Plugins;
 
 namespace TetherApp;
 
-/// <summary>One terminal pane: a session and the surface that draws it.</summary>
-public sealed class TerminalPane : IAsyncDisposable
-{
-    public Guid Id { get; }
-    public string? StartingDirectory { get; set; }
-    public string? HistoryProblem { get; private set; }
-    private SessionHistory? _history;
-    public SessionModel Model { get; } = new();
-    public TerminalControl Surface { get; }
-    public string Title { get; set; } = "localhost";
-    /// <summary>Which inspector plugin this tab has open. Each tab keeps its own; a cluster's files are not another's.</summary>
-    public string? OpenInspector { get; set; }
-    public Dictionary<string, string> PendingAttachments { get; } = new();
-    private readonly Dictionary<string, ITabAttachment> _attached = new();
-
-    public TerminalPane(Guid? id = null, bool restoring = false)
-    {
-        Id = id ?? Guid.NewGuid();
-        try
-        {
-            Directory.CreateDirectory(SessionHistoryStore.Root);
-            _history = new SessionHistory(SessionHistoryStore.Location(Id),
-                AppSettings.Current.UnlimitedHistory ? null : Math.Max(1UL, AppSettings.Current.HistoryLines), restoring);
-            Model.History = _history;
-        }
-        catch (Exception ex) { HistoryProblem = ex.Message; }
-        Surface = new TerminalControl();
-    }
-
-    /// <summary>The plugin's attachment for this tab, created the first time it is needed.</summary>
-    public ITabAttachment Attach(ITabPlugin plugin, TabContext context)
-    {
-        if (_attached.TryGetValue(plugin.Metadata.Id, out var existing)) return existing;
-        var created = plugin.Attach(context);
-        _attached[plugin.Metadata.Id] = created;
-        if (PendingAttachments.Remove(plugin.Metadata.Id, out var saved)) _ = created.RestoreAsync(saved);
-        return created;
-    }
-
-    public async Task DetachAsync(string id)
-    {
-        if (!_attached.Remove(id, out var attachment)) return;
-        await attachment.DisposeAsync();
-    }
-
-    public Dictionary<string, string> AttachmentStates
-    {
-        get
-        {
-            var states = new Dictionary<string, string>(PendingAttachments);
-            foreach (var (id, attachment) in _attached)
-                if (attachment.RestorationState is { } state) states[id] = state;
-            return states;
-        }
-    }
-    public IEnumerable<ITabAttachment> Attachments => _attached.Values;
-
-    public async Task BindAsync(string? profile = null, string? directory = null, bool startShell = true, string? wslDistribution = null, bool requireShell = false)
-    {
-        StartingDirectory = directory;
-        await Surface.BindAsync(Model);
-        // Every other terminal on this machine opens a local shell first and
-        // offers SSH as the other thing it can do. So does this one.
-        var shell = profile ?? AppSettings.Current.Shell;
-        Title = AppSettings.KnownShells.FirstOrDefault(profile => profile.Program == shell).Name ?? shell;
-        if (startShell && !await Model.OpenLocalAsync(shell, directory: directory, wslDistribution: wslDistribution) && requireShell) throw new IOException(Model.LastError ?? Model.Status);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        foreach (var attachment in _attached.Values) await attachment.DisposeAsync();
-        _attached.Clear();
-        Surface.DisposeSurface();
-        await Model.DisposeAsync();
-        _history?.Dispose();
-        _history = null;
-    }
-}
-
-/// <summary>A named workspace. Session ownership belongs to its panes.</summary>
-public sealed class Tab
-{
-    public Guid Id { get; }
-    public string Title { get; set; }
-    public SplitLayout Layout { get; set; }
-    public List<TerminalPane> Panes { get; } = [];
-    public Guid FocusedPane { get; set; }
-    public bool Maximized { get; set; }
-    public TerminalPane Focused => Panes.FirstOrDefault(p => p.Id == FocusedPane) ?? Panes[0];
-    public Tab(TerminalPane pane, Guid? id = null)
-    {
-        Id = id ?? Guid.NewGuid();
-        Title = pane.Title;
-        Panes.Add(pane);
-        Layout = SplitLayout.Leaf(pane.Id);
-        FocusedPane = pane.Id;
-    }
-}
-
 /// <summary>The tab set a window owns.</summary>
-public sealed class Workspace : IAsyncDisposable
+public sealed partial class Workspace : IAsyncDisposable
 {
     private readonly List<Tab> _tabs = [];
+    private readonly List<ExtensionTab> _extensions = [];
     private int _active;
-    private readonly SessionHistoryStore _historyStore = new();
+    private ExtensionTab? _activeExtension;
+    private readonly SessionHistoryStore _historyStore;
+    private readonly Func<IReadOnlyList<HostEntry>> _hosts;
     private readonly List<ClosedTerminal> _closed;
     private bool _restoring;
-    public Workspace() => _closed = _historyStore.Load().ToList();
+    private readonly Dictionary<string, Guid> _lastHostTab = [];
+    public HostEntry? CurrentHost { get; private set; }
+    public string CurrentHostLabel => CurrentHost?.Label ?? "localhost";
+    public long SelectionVersion { get; private set; }
+    private static string HostKey(HostEntry? host) => host is null ? "local" : host.Alias + ":" + Fingerprint(host);
+    public IReadOnlyList<Tab> VisibleTabs => _tabs.Where(t => HostKey(t.Host) == HostKey(CurrentHost)).ToArray();
+    public IReadOnlyList<ExtensionTab> Extensions => _extensions;
+    public IReadOnlyList<ExtensionTab> VisibleExtensions => _extensions
+        .Where(e => e.Host is null || HostKey(e.Host) == HostKey(CurrentHost)).ToArray();
+    public ExtensionTab? ActiveExtension =>
+        _activeExtension is { } extension && VisibleExtensions.Contains(extension) ? extension : null;
+    public Workspace(SessionHistoryStore? historyStore = null, Func<IReadOnlyList<HostEntry>>? hosts = null)
+    {
+        _historyStore = historyStore ?? new SessionHistoryStore();
+        _hosts = hosts ?? (() => SshConfig.Load());
+        _closed = _historyStore.Load().ToList();
+    }
     public bool CanRestore => _closed.Count > 0 && !_restoring;
     public string? HistoryProblem => _historyStore.Problem ?? AllPanes.Select(t => t.HistoryProblem).FirstOrDefault(p => p is not null);
-    private ClosedTerminal RecordPane(TerminalPane tab, int index) => new(tab.Id, tab.Title, tab.Model.LocalProfile,
-        tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost), tab.Model.WslDistribution);
-    private ClosedTerminal Record(Tab group, int index) => RecordPane(group.Focused, index) with
-    {
-        Id = group.Id, Title = group.Title, Layout = group.Layout,
-        Panes = group.Panes.Select(p => RecordPane(p, index)).ToArray(), FocusedPane = group.FocusedPane
-    };
-    private static string? Fingerprint(HostEntry? host) => host is null ? null :
-        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(host))));
-    public void Persist() => _historyStore.Save(_tabs.Select((tab, index) => Record(tab, index)), _closed);
     public void Rename(Tab tab, string title) { tab.Title = title; Persist(); Changed?.Invoke(); }
-    public void Rename(TerminalPane pane, string title) { if (_tabs.FirstOrDefault(t => t.Panes.Contains(pane)) is { } tab) Rename(tab, title); }
-
-    public async Task<(Tab Tab, HostEntry? Host)?> RestoreAsync(Func<TerminalPane, HostEntry, Task<bool>>? connect = null)
+    public void Rename(TerminalPane pane, string title)
     {
-        if (!CanRestore) return null;
-        _restoring = true;
-        try
+        pane.Title = title;
+        Persist();
+        Changed?.Invoke();
+    }
+
+    public void SelectHost(HostEntry? host)
+    {
+        SelectionVersion++;
+        RememberSelection();
+        CurrentHost = host;
+        _activeExtension = VisibleExtensions.FirstOrDefault(e => e.Id == _activeExtension?.Id);
+        var visible = VisibleTabs;
+        var remembered = _lastHostTab.GetValueOrDefault(HostKey(host));
+        var next = visible.FirstOrDefault(t => t.Id == remembered) ?? visible.LastOrDefault();
+        _active = next is null ? -1 : _tabs.IndexOf(next);
+        Changed?.Invoke();
+    }
+
+    private void RememberSelection()
+    {
+        if (ActiveGroup is { } group) _lastHostTab[HostKey(group.Host)] = group.Id;
+    }
+
+    public void Activate(Tab group)
+    {
+        if (!_tabs.Contains(group)) return;
+        SelectionVersion++;
+        RememberSelection();
+        CurrentHost = group.Host;
+        _active = _tabs.IndexOf(group);
+        _activeExtension = null;
+        RememberSelection();
+        Changed?.Invoke();
+    }
+
+    public void Activate(ExtensionTab extension)
+    {
+        if (!_extensions.Contains(extension)) return;
+        SelectionVersion++;
+        RememberSelection();
+        if (extension.Host is not null) CurrentHost = extension.Host;
+        _activeExtension = extension;
+        Changed?.Invoke();
+    }
+
+    public ExtensionTab OpenExtension(Plugins.ITabPlugin plugin, Plugins.ITabAttachment attachment, HostEntry? host = null)
+    {
+        var existing = _extensions.FirstOrDefault(e => e.PluginId == plugin.Metadata.Id && HostKey(e.Host) == HostKey(host ?? CurrentHost));
+        if (existing is not null)
         {
-        var record = _closed[^1];
-        var records = record.Panes ?? [record];
-        var prepared = new List<TerminalPane>();
-        try
-        {
-            foreach (var saved in records)
-            {
-                HostEntry? host = null;
-                if (saved.HostAlias is not null)
-                {
-                    host = SshConfig.Load().FirstOrDefault(h => h.Alias == saved.HostAlias && h.Target == saved.Target &&
-                        (saved.Configuration is null || Fingerprint(h) == saved.Configuration));
-                    if (host is null) throw new IOException("The saved host was removed or changed.");
-                }
-                var pane = new TerminalPane(saved.Id, restoring: true);
-                prepared.Add(pane);
-                pane.Model.SetPalette(CurrentPalette);
-                foreach (var (id, state) in saved.Attachments ?? []) pane.PendingAttachments[id] = state;
-                await pane.BindAsync(saved.Profile, saved.Directory, startShell: host is null, wslDistribution: saved.WslDistribution, requireShell: host is null);
-                if (host is not null)
-                {
-                    pane.Model.Keep(host);
-                    if (connect is null || !await connect(pane, host)) throw new OperationCanceledException("Session restoration was cancelled.");
-                }
-                pane.Title = saved.Title;
-                pane.OpenInspector = saved.Inspector;
-            }
+            _ = attachment.DisposeAsync();
+            Activate(existing);
+            return existing;
         }
-        catch { foreach (var pane in prepared) await pane.DisposeAsync(); throw; }
-        var group = new Tab(prepared[0], record.Id);
-        var parent = _tabs.FirstOrDefault(t => t.Id == record.ParentId);
-        if (parent is not null)
-        {
-            var restored = prepared[0];
-            var neighbor = parent.Layout.Leaves.Contains(record.Neighbor ?? Guid.Empty) ? record.Neighbor!.Value : parent.FocusedPane;
-            parent.Panes.Add(restored);
-            var neighbors = (record.NeighborPanes ?? [neighbor]).Where(parent.Layout.Leaves.Contains).ToHashSet();
-            if (neighbors.Count == 0) neighbors.Add(parent.FocusedPane);
-            parent.Layout = parent.Layout.RestoreBeside(neighbors, restored.Id, record.SplitVertical, record.SplitBefore, record.SplitRatio);
-            parent.FocusedPane = restored.Id;
-            group = parent;
-            _active = _tabs.IndexOf(parent);
-        }
-        else
-        {
-            group.Panes.AddRange(prepared.Skip(1));
-            group.Layout = record.Layout ?? SplitLayout.Leaf(prepared[0].Id);
-            group.FocusedPane = record.FocusedPane ?? prepared[0].Id;
-            group.Title = record.Title;
-            _tabs.Insert(Math.Clamp(record.Index, 0, _tabs.Count), group);
-            _active = _tabs.IndexOf(group);
-        }
-        foreach (var pane in prepared) pane.Model.SessionChanged += NotifySessionChanged;
-        _closed.Remove(record);
-        Persist(); Changed?.Invoke();
-        return (group, null);
-        }
-        finally { _restoring = false; Changed?.Invoke(); }
+        var extension = new ExtensionTab(plugin, attachment, host ?? CurrentHost);
+        _extensions.Add(extension);
+        Activate(extension);
+        return extension;
+    }
+
+    public async Task CloseExtensionAsync(ExtensionTab extension)
+    {
+        if (!_extensions.Remove(extension)) return;
+        if (_activeExtension == extension) _activeExtension = null;
+        await extension.DisposeAsync();
+        Changed?.Invoke();
+    }
+
+    public async Task CloseExtensionsForPluginAsync(string pluginId)
+    {
+        foreach (var extension in _extensions.Where(e => e.PluginId == pluginId).ToArray())
+            await CloseExtensionAsync(extension);
     }
 
     public IReadOnlyList<Tab> Tabs => _tabs;
     public Palette CurrentPalette { get; set; } = Palette.Dark;
-    public int ActiveIndex => _active;
-    public Tab? ActiveGroup => _tabs.Count == 0 ? null : _tabs[Math.Clamp(_active, 0, _tabs.Count - 1)];
+    public int ActiveIndex => ActiveExtension is not null ? -1
+        : ActiveGroup is { } group ? VisibleTabs.ToList().IndexOf(group) : -1;
+    public Tab? ActiveGroup => ActiveExtension is not null ? null
+        : _active >= 0 && _active < _tabs.Count && HostKey(_tabs[_active].Host) == HostKey(CurrentHost) ? _tabs[_active] : null;
     public TerminalPane? Active => ActiveGroup?.Focused;
     public IEnumerable<TerminalPane> AllPanes => _tabs.SelectMany(t => t.Panes);
     public bool Contains(TerminalPane pane) => AllPanes.Contains(pane);
     public void Focus(TerminalPane pane)
     {
         var group = _tabs.FirstOrDefault(t => t.Panes.Contains(pane));
-        if (group is null || group.FocusedPane == pane.Id) return;
+        if (group is null) return;
+        if (group.FocusedPane == pane.Id && ActiveGroup == group) return;
+        if (!group.Layout.Leaves.Contains(pane.Id))
+            group.Layout = group.Layout.ReplacePane(group.FocusedPane, pane.Id);
         pane.OpenInspector = group.Focused.OpenInspector;
         group.FocusedPane = pane.Id;
+        group.Maximized = false;
+        Activate(group);
+        Persist();
+    }
+
+    public void JoinSplits()
+    {
+        if (ActiveGroup is not { } group) return;
+        group.Layout = SplitLayout.Leaf(group.FocusedPane);
+        group.Maximized = false;
+        Persist();
         Changed?.Invoke();
+    }
+
+    public void CycleTerminal(bool forward)
+    {
+        if (ActiveGroup is not { } group) return;
+        var index = group.Panes.FindIndex(p => p.Id == group.FocusedPane);
+        Focus(group.Panes[(index + (forward ? 1 : -1) + group.Panes.Count) % group.Panes.Count]);
+    }
+
+    public async Task<TerminalPane?> AddTerminalAsync(Func<TerminalPane, HostEntry, Task<bool>> connect)
+    {
+        if (ActiveGroup is not { } group) return await AddAsync(connect);
+        var version = SelectionVersion;
+        var source = group.Focused;
+        var pane = await PrepareAsync(group.Host, connect, source);
+        if (pane is null) return null;
+        if (!_tabs.Contains(group)) { await pane.DisposeAsync(); return null; }
+        pane.Model.SessionChanged += NotifySessionChanged;
+        group.Panes.Add(pane);
+        pane.OpenInspector = source.OpenInspector;
+        // Replace only the visible terminal; all other shells stay owned.
+        if (version == SelectionVersion)
+        {
+            group.Layout = group.Layout.ReplacePane(group.FocusedPane, pane.Id);
+            group.FocusedPane = pane.Id;
+            group.Maximized = false;
+        }
+        Persist(); Changed?.Invoke();
+        return pane;
+    }
+
+    private async Task<TerminalPane?> PrepareAsync(HostEntry? host,
+        Func<TerminalPane, HostEntry, Task<bool>>? connect, TerminalPane? source = null)
+    {
+        var pane = new TerminalPane();
+        pane.Model.SetPalette(CurrentPalette);
+        try
+        {
+            var directory = source is null ? null : await source.Model.ResolveWorkingDirectoryAsync(CancellationToken.None);
+            await pane.BindAsync(source?.Model.LocalProfile, directory, startShell: host is null,
+                wslDistribution: source?.Model.WslDistribution, requireShell: host is null);
+            if (host is not null && (connect is null || !await connect(pane, host)))
+            {
+                await pane.DisposeAsync();
+                return null;
+            }
+            pane.Title = $"Terminal {AllPanes.Count() + 1}";
+            return pane;
+        }
+        catch { await pane.DisposeAsync(); throw; }
     }
     public async Task<TerminalPane?> SplitAsync(bool vertical)
     {
@@ -237,29 +216,35 @@ public sealed class Workspace : IAsyncDisposable
     /// <summary>Raised when the tab list or the active tab changes.</summary>
     public event Action? Changed;
 
-    public async Task<TerminalPane> AddAsync()
+    public async Task<TerminalPane?> AddAsync(Func<TerminalPane, HostEntry, Task<bool>>? connect = null)
     {
-        var pane = new TerminalPane();
-        pane.Model.SetPalette(CurrentPalette);
-        try { await pane.BindAsync(); }
-        catch { await pane.DisposeAsync(); throw; }
+        var host = CurrentHost;
+        var version = SelectionVersion;
+        var pane = await PrepareAsync(host, connect);
+        if (pane is null) return null;
         pane.Model.SessionChanged += NotifySessionChanged;
         _tabs.Add(new Tab(pane));
-        _active = _tabs.Count - 1;
+        if (version == SelectionVersion) _active = _tabs.Count - 1;
+        RememberSelection();
         Persist(); Changed?.Invoke();
         return pane;
     }
 
     public async Task CloseAsync(int index, bool remember = true)
     {
-        if (index < 0 || index >= _tabs.Count) return;
-        var tab = _tabs[index];
+        var visible = VisibleTabs;
+        if (index < 0 || index >= visible.Count) return;
+        var tab = visible[index];
+        var actualIndex = _tabs.IndexOf(tab);
         foreach (var pane in tab.Panes) pane.Model.CheckpointHistory();
-        if (remember) _closed.Add(Record(tab, index));
+        if (remember) _closed.Add(Record(tab, actualIndex));
         if (_closed.Count > 20) _closed.RemoveAt(0);
-        _tabs.RemoveAt(index);
-        if (index < _active) _active--;
-        if (_active >= _tabs.Count) _active = _tabs.Count - 1;
+        var selected = ActiveGroup;
+        _tabs.RemoveAt(actualIndex);
+        var remaining = VisibleTabs;
+        var next = selected != tab && selected is not null ? selected
+            : remaining.ElementAtOrDefault(Math.Min(index, remaining.Count - 1));
+        _active = next is null ? -1 : _tabs.IndexOf(next);
         foreach (var pane in tab.Panes) { pane.Model.SessionChanged -= NotifySessionChanged; await pane.DisposeAsync(); }
         Persist();
         Changed?.Invoke();
@@ -269,18 +254,23 @@ public sealed class Workspace : IAsyncDisposable
     {
         var group = _tabs.FirstOrDefault(t => t.Panes.Contains(pane));
         if (group is null) return;
-        if (group.Layout.Leaves.Count() == 1) { await CloseAsync(_tabs.IndexOf(group), remember); return; }
-        var parent = FindParent(group.Layout, pane.Id)!;
-        var neighbor = (parent.First!.Leaves.Contains(pane.Id) ? parent.Second! : parent.First!).Leaves.First();
+        if (group.Panes.Count == 1) { await CloseAsync(VisibleTabs.ToList().IndexOf(group), remember); return; }
+        var parent = FindParent(group.Layout, pane.Id);
+        var neighbor = parent is null ? group.Panes.First(p => p != pane).Id
+            : (parent.First!.Leaves.Contains(pane.Id) ? parent.Second! : parent.First!).Leaves.First();
         if (remember)
         {
             pane.Model.CheckpointHistory();
-            _closed.Add(RecordPane(pane, _tabs.IndexOf(group)) with { ParentId = group.Id, Neighbor = neighbor, SplitVertical = parent.Vertical, SplitBefore = parent.First!.Pane == pane.Id, SplitRatio = parent.Ratio, NeighborPanes = (parent.First!.Pane == pane.Id ? parent.Second! : parent.First!).Leaves.ToArray() });
+            _closed.Add(RecordPane(pane, _tabs.IndexOf(group)) with { ParentId = group.Id, Neighbor = neighbor,
+                SplitVertical = parent?.Vertical ?? false, SplitBefore = parent?.First?.Pane == pane.Id,
+                SplitRatio = parent?.Ratio ?? .5,
+                NeighborPanes = parent is null ? [neighbor] : (parent.First!.Pane == pane.Id ? parent.Second! : parent.First!).Leaves.ToArray(),
+                WasSplit = parent is not null });
             if (_closed.Count > 20) _closed.RemoveAt(0);
         }
         group.Panes.First(p => p.Id == neighbor).OpenInspector = pane.OpenInspector;
-        group.Layout = group.Layout.Remove(pane.Id)!;
-        group.FocusedPane = neighbor;
+        group.Layout = group.Layout.Remove(pane.Id) ?? SplitLayout.Leaf(neighbor);
+        if (group.FocusedPane == pane.Id) group.FocusedPane = group.Layout.Leaves.Contains(neighbor) ? neighbor : group.Layout.Leaves.First();
         group.Maximized = false;
         pane.Model.SessionChanged -= NotifySessionChanged;
         await pane.DisposeAsync();
@@ -310,14 +300,15 @@ public sealed class Workspace : IAsyncDisposable
 
     public void Select(int index)
     {
-        if (index < 0 || index >= _tabs.Count) return;
-        _active = index;
-        Changed?.Invoke();
+        if (index < 0 || index >= VisibleTabs.Count) return;
+        Activate(VisibleTabs[index]);
     }
 
     public async ValueTask DisposeAsync()
     {
         Persist();
+        foreach (var extension in _extensions.ToArray()) await extension.DisposeAsync();
+        _extensions.Clear();
         foreach (var tab in AllPanes) await tab.DisposeAsync();
         _tabs.Clear();
     }

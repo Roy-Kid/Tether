@@ -33,6 +33,8 @@ struct TabProblem: Hashable {
   let tab: SessionTab.ID
   let host: Host
   let problem: SessionProblem
+  /// The tab still shows its last screen: closing it would lose something.
+  var keepsScreen = false
 }
 
 /// A tab's password offer, with what the dialog needs to name it.
@@ -47,6 +49,7 @@ struct TabPasswordOffer: Hashable {
 struct ConnectRequest: Hashable {
   let id = UUID()
   let host: Host
+  var workspaceID: UUID? = nil
   var retrying: SessionTab.ID?
   var restoring: UUID?
 }

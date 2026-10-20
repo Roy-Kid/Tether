@@ -1,5 +1,6 @@
 import SwiftUI
 import Tether
+import TetherUI
 
 /// A plugin that works inside a terminal tab rather than beside it.
 ///
@@ -100,6 +101,10 @@ public struct TabContext {
   /// The directory the tab's shell last reported, if it reports one. What
   /// a relative path printed in the terminal is most likely relative to.
   public let workingDirectory: () -> String?
+  /// The directory of the terminal's active program, or of the pane that
+  /// contains a printed link. Attachments can supply it when the outer
+  /// shell's reported directory no longer describes what is on screen.
+  public let resolveWorkingDirectory: (TerminalLink?) async -> String?
   /// Brings this plugin's accessory up on this tab, if it is not already —
   /// to show something the person asked for from the terminal.
   public let showAccessory: () -> Void
@@ -120,6 +125,10 @@ public struct TabContext {
   /// while it learns which pane is under the pointer, and gives the lines
   /// back when that program asked to hear them. Positive goes back.
   public let reportWheel: (Int32, UInt16, UInt16) -> Void
+  /// Whether the program in this terminal asked to hear the pointer.
+  /// A wheel held while a client is being identified is reported when this
+  /// is on, and returned to the terminal's history when it is off.
+  public let mouseTracking: () -> MouseTracking
 
   public init(
     id: UUID, plugin: PluginContext, terminalName: @escaping () -> String? = { nil },
@@ -128,13 +137,15 @@ public struct TabContext {
     insertText: @escaping (String) -> Void = { _ in },
     runInTerminal: @escaping (String) -> Void = { _ in },
     workingDirectory: @escaping () -> String? = { nil },
+    resolveWorkingDirectory: ((TerminalLink?) async -> String?)? = nil,
     showAccessory: @escaping () -> Void = {},
     linkActions: @escaping (PointedLink) -> LinkActions? = { _ in nil },
     shells: @escaping () -> [ShellChoice] = { [] },
     openShell: @escaping (UUID) -> Void = { _ in },
     newShell: @escaping () -> Void = {},
     scrollBy: @escaping (Int32) -> Void = { _ in },
-    reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in }
+    reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in },
+    mouseTracking: (() -> MouseTracking)? = nil
   ) {
     self.id = id
     self.plugin = plugin
@@ -146,6 +157,7 @@ public struct TabContext {
     self.insertText = insertText
     self.runInTerminal = runInTerminal
     self.workingDirectory = workingDirectory
+    self.resolveWorkingDirectory = resolveWorkingDirectory ?? { _ in workingDirectory() }
     self.showAccessory = showAccessory
     self.linkActions = linkActions
     self.shells = shells
@@ -153,6 +165,7 @@ public struct TabContext {
     self.newShell = newShell
     self.scrollBy = scrollBy
     self.reportWheel = reportWheel
+    self.mouseTracking = mouseTracking ?? { .off }
   }
 }
 
@@ -206,6 +219,9 @@ public protocol TabAttachment: AnyObject {
   var isShowing: Bool { get }
   /// Beside the tab's name while showing.
   var subtitle: String { get }
+  /// SF Symbol in front of the tab's name while this stands in for the shell.
+  /// Empty leaves the host's terminal mark, or a `tabSymbols` entry.
+  var symbol: String { get }
   /// What is showing lost its connection. The host words it, once, in its
   /// own status bar.
   var isDisconnected: Bool { get }
@@ -238,19 +254,16 @@ public protocol TabAttachment: AnyObject {
   /// for nothing. Asked when a person points, and answered at once: anything
   /// slow — checking the path exists — happens inside the actions.
   func actions(for pointed: PointedLink) -> LinkActions?
-  /// A wheel over the shell, in lines. Positive goes back.
+  /// Where the active program is, or the pane containing `link`. `nil`
+  /// leaves directory resolution to another attachment or the shell.
+  func workingDirectory(for link: TerminalLink?) async -> String?
+  /// A wheel at the cell under the pointer, in lines. Positive goes back.
   ///
-  /// `true` takes the lines, and the shell's own history is left where it
-  /// is. A full-screen program can be keeping that history on its side,
-  /// where this terminal has none to move. `fullScreen` is that case.
-  func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool
-  /// A wheel the program asked to hear, in lines. Positive goes back.
-  /// `column` and `row` are the cell under the pointer, on the live grid.
-  ///
-  /// `true` takes the lines, and the caller does not also report them as
-  /// pointer events. A pane that is keeping its own history is left to
-  /// hear the wheel.
-  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool
+  /// `column` and `row` are that cell on the live grid. `.pass` leaves the
+  /// wheel with the terminal. `.report` belongs to a program that asked for
+  /// the mouse. `.taken` means this attachment scrolled, or the wheel stops
+  /// on the thing under the pointer.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim
   /// The shell is showing another program's history, so a key has to wait
   /// until that program is back at its prompt. Otherwise the key lands in
   /// the history and reads as if it was ignored.
@@ -260,13 +273,14 @@ public protocol TabAttachment: AnyObject {
 }
 
 extension TabAttachment {
+  public var symbol: String { "" }
   public var requiresCloseConfirmation: Bool { false }
   public var restorationState: Data? { nil }
   public func restore(from state: Data) {}
   public func receive(files: [URL]) -> Bool { false }
   public func actions(for pointed: PointedLink) -> LinkActions? { nil }
-  public func scrollShell(_ lines: Int32, fullScreen: Bool) -> Bool { false }
-  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool { false }
+  public func workingDirectory(for link: TerminalLink?) async -> String? { nil }
+  public func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim { .pass }
   public var shellInputWaits: Bool { false }
   public func restoreShellForInput() async {}
 }

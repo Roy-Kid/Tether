@@ -22,7 +22,10 @@ let package = Package(
         ),
 
         // The surface consumers see: Swift 6, no generated symbols.
-        .target(name: "Tether", dependencies: ["TetherFFIBindings"]),
+        .target(name: "Tether", dependencies: ["TetherFFIBindings"], linkerSettings: [
+            .linkedFramework("Metal"), .linkedFramework("QuartzCore"),
+            .linkedFramework("CoreGraphics"),
+        ]),
 
         .testTarget(name: "TetherTests", dependencies: ["Tether"]),
     ]

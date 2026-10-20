@@ -245,8 +245,10 @@ struct HandshakeTests {
   @Test("each question reads as a title and a verb")
   func dialogs() {
     let trust = HandshakeQuestion.trust(key).dialog
-    #expect(trust.title == "Unrecognised host")
-    #expect(trust.message == key.fingerprint)
+    #expect(trust.title == "Trust login.example.org?", "names what is being trusted")
+    #expect(trust.message == "ssh-ed25519\nSHA256:fixture")
+    let elsewhere = HostIdentity(host: "login.example.org", port: 2222, algorithm: "ssh-ed25519", fingerprint: "SHA256:fixture")
+    #expect(HandshakeQuestion.trust(elsewhere).dialog.title == "Trust login.example.org:2222?")
     #expect(trust.actions.map(\.title) == ["Reject", "Trust"])
     #expect(trust.defaultAction == 1)
 

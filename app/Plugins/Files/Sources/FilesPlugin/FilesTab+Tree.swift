@@ -153,6 +153,14 @@ extension FilesTab {
     selection = selection.filter { entry($0) != nil }
   }
 
+  /// Lists again after a change, and keeps the change's failure on screen.
+  /// The listing succeeds and clears the line; without this, a failed
+  /// upload, move or delete showed nothing at all.
+  func relist(_ directories: Set<String>, keeping failure: String?) async {
+    await relist(directories)
+    if let failure { problem = failure }
+  }
+
   /// Drops a folder, and everything open under it, from the tree.
   func forget(_ path: String) {
     openingRequests = openingRequests.filter { key, _ in key != path && !key.hasPrefix(path + "/") }

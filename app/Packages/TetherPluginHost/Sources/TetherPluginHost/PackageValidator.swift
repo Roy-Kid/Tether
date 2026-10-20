@@ -2,6 +2,8 @@ import Foundation
 
 public enum PackageFailure: Error, Equatable {
   case unreadable
+  case manifestMissing(String)
+  case manifestUnreadable(String, String)
   case malformed
   case unsupportedRuntime(String)
   case unsupportedAPI(Int)
@@ -14,6 +16,7 @@ public enum PackageFailure: Error, Equatable {
   case unknownPermission(String)
   case unknownContribution(String)
   case duplicateContribution(String)
+  case invalidNetworkURL(String)
 }
 
 enum PackagePaths {
@@ -52,8 +55,8 @@ enum PackageValidator {
       isDirectory.boolValue
     else { throw PackageFailure.unreadable }
 
-    try rejectForbiddenPayload(in: root)
     let manifest = try readManifest(in: root)
+    try rejectForbiddenPayload(in: root)
     let entry = try entrypoint(manifest.entrypoint, in: root)
     guard FileManager.default.fileExists(atPath: entry.path) else {
       throw PackageFailure.entrypointMissing
@@ -65,7 +68,16 @@ enum PackageValidator {
 
   private static func readManifest(in root: URL) throws -> PluginManifest {
     let url = root.appending(path: "manifest.json")
-    guard let data = try? Data(contentsOf: url) else { throw PackageFailure.unreadable }
+    let data: Data
+    do { data = try Data(contentsOf: url) }
+    catch {
+      let failure = error as NSError
+      if failure.domain == NSCocoaErrorDomain,
+        failure.code == NSFileReadNoSuchFileError || failure.code == NSFileNoSuchFileError {
+        throw PackageFailure.manifestMissing(root.path)
+      }
+      throw PackageFailure.manifestUnreadable(url.path, error.localizedDescription)
+    }
     let raw: RawManifest
     do {
       raw = try JSONDecoder().decode(RawManifest.self, from: data)
@@ -105,10 +117,20 @@ enum PackageValidator {
       contributions.append(Contribution(id: rawContribution.id, kind: kind, suffixes: suffixes))
     }
 
+    guard (raw.networkURLs ?? []).count <= 16 else { throw PackageFailure.malformed }
+    let endpoints = try (raw.networkURLs ?? []).map { text -> URL in
+      guard text.utf8.count <= 2048, let url = URL(string: text), NetworkEndpoint.valid(url) else {
+        throw PackageFailure.invalidNetworkURL(text)
+      }
+      return url
+    }
+    guard endpoints.isEmpty || permissions.contains(.network) else {
+      throw PackageFailure.unknownPermission("network")
+    }
     return PluginManifest(
       id: raw.id, name: raw.name, publisher: raw.publisher, version: raw.version, api: raw.api,
       runtime: .web, entrypoint: raw.entrypoint, ageRating: raw.ageRating, link: link,
-      permissions: permissions, contributions: contributions)
+      permissions: permissions, contributions: contributions, networkURLs: endpoints)
   }
 
   private static func entrypoint(_ relative: String, in root: URL) throws -> URL {

@@ -5,6 +5,12 @@ import Testing
 import TetherUI
 @testable import TetherApp
 
+// SwiftUI windows share AppKit focus and keyboard shortcuts. Tests that host
+// real windows run one at a time, so none takes focus from another.
+@MainActor
+@Suite("macOS UI", .serialized)
+struct MacUITests {}
+
 extension MacUITests {
 @MainActor
 @Suite("Unix picker navigation", .serialized)
@@ -26,7 +32,7 @@ struct PaletteNavigationTests {
     window.contentView!.addSubview(monitor)
     monitor.enabled = true
     var workspaceActions = 0
-    monitor.handle = { _, _ in workspaceActions += 1; return true }
+    monitor.handle = { _, _, _ in workspaceActions += 1; return true }
     window.orderFrontRegardless()
     defer { monitor.stop(); window.orderOut(nil) }
     try await Task.sleep(for: .milliseconds(300))

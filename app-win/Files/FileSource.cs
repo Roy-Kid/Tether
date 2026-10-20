@@ -24,6 +24,8 @@ internal interface IFileSource : IAsyncDisposable
 
 internal sealed class SftpSource(RemoteFiles files) : IFileSource
 {
+    public Task<FileEntry> WriteBackAsync(string source, FileEntry expected, IProgress<ulong> progress, CancellationToken token) =>
+        files.WriteBackAsync(source, expected, progress, token);
     public string Combine(string directory, string name) => directory.TrimEnd('/') + "/" + name;
     public string Parent(string path) { var i = path.TrimEnd('/').LastIndexOf('/'); return i <= 0 ? "/" : path[..i]; }
     public string ShellPath(string path) => path;

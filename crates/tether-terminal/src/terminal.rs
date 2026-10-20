@@ -16,8 +16,10 @@ use crate::link::{self, Glyph, Link, LinkTarget};
 use crate::palette::Palette;
 use crate::screen::{Cell, Cursor, CursorShape, Modes, MouseEncoding, MouseMotion, Screen};
 use crate::scroll::{Scroll, Viewport};
+use crate::shadow::Shadow;
 use crate::size::{Position, ScreenSize};
 use crate::style::{Color, NamedColor, Style, Underline};
+use crate::wide;
 
 /// Things the engine wants to tell someone, collected until asked for.
 #[derive(Debug, Default)]
@@ -186,6 +188,9 @@ pub struct Terminal {
     /// many lines went past.
     last_history: usize,
     pending_full_damage: bool,
+    /// What the consumer was last given, so what the engine's damage
+    /// missed is found by comparing.
+    shadow: Shadow,
     /// Where the far side's shell last said it was.
     directory: DirectoryScanner,
     /// Whether anything has reached the engine since the last
@@ -228,6 +233,7 @@ impl Terminal {
             title_changed: false,
             last_history: 0,
             pending_full_damage: false,
+            shadow: Shadow::default(),
             directory: DirectoryScanner::default(),
             // A terminal nobody has drawn yet needs a first full paint.
             dirty: true,
@@ -386,14 +392,17 @@ impl Terminal {
             let cells = &grid[Line(row as i32 - offset)];
             for column in 0..columns {
                 let cell = &cells[Column(column)];
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                // A wrap placeholder is where a wide character did not fit;
+                // the line goes on at the start of the next row.
+                if cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                    || wide::is_right_half(cells, column)
                 {
                     continue;
                 }
                 if glyphs.len() >= link::LINE_LIMIT {
                     break;
                 }
-                let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                let width = u16::from(wide::width(cells, column));
                 if row == position.row
                     && (column..column + width as usize).contains(&(position.column as usize))
                 {
@@ -591,6 +600,12 @@ impl Terminal {
         Some(event.repeat(lines.unsigned_abs().min(120) as usize))
     }
 
+    /// The modes the remote program has set, as input would be encoded
+    /// against them now.
+    pub fn modes(&self) -> Modes {
+        self.read_modes()
+    }
+
     /// Where the viewport is, and how much history is behind it.
     pub fn viewport(&self) -> Viewport {
         Viewport { offset: self.inner.grid().display_offset(), history: self.history_lines() }
@@ -644,17 +659,15 @@ impl Terminal {
         let grid = self.inner.grid();
         let line = row as i32 - grid.display_offset() as i32;
         let mut cells = Vec::with_capacity(self.size.columns as usize);
+        let row = &grid[Line(line)];
         for column in 0..self.size.columns as usize {
-            let cell = &grid[Line(line)][Column(column)];
+            let cell = &row[Column(column)];
 
             // The engine marks the right half of a wide character with a
             // spacer. That is its bookkeeping, not a cell a consumer
             // should have to skip.
             if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                    && column > 0
-                    && grid[Line(line)][Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
-                {
+                if wide::is_right_half(row, column) {
                     continue;
                 }
                 // A wrap placeholder or an orphaned spacer still occupies
@@ -669,21 +682,7 @@ impl Terminal {
                 text.extend(zerowidth);
             }
 
-            // A wide character reports two columns only when the engine
-            // really did reserve the column to its right for it.
-            //
-            // Asking whether a column *index* remains is not the same
-            // question, and getting them confused overflows the row:
-            // reflow onto a narrower screen can leave a `WIDE_CHAR` whose
-            // spacer is gone, with an ordinary cell beside it — measured
-            // by the fuzzer, a two-column row then claimed three. The
-            // spacer is the engine's own record of the reservation, so it
-            // is what gets asked.
-            let wide = cell.flags.contains(Flags::WIDE_CHAR)
-                && (column + 1 < self.size.columns as usize)
-                && grid[Line(line)][Column(column + 1)].flags.contains(Flags::WIDE_CHAR_SPACER);
-
-            cells.push(Cell { text, width: if wide { 2 } else { 1 }, style: style_of(cell) });
+            cells.push(Cell { text, width: wide::width(row, column), style: style_of(cell) });
         }
         cells
     }
@@ -809,6 +808,10 @@ impl Terminal {
             return ScreenDamage::None;
         }
 
+        // Compared on every frame, full ones included, so the next one
+        // compares against what the consumer was last given.
+        let missed = self.shadow.changed(self.inner.grid());
+
         let damage = match self.inner.damage() {
             TermDamage::Full => ScreenDamage::Full,
             TermDamage::Partial(lines) => {
@@ -821,7 +824,7 @@ impl Terminal {
                 // being narrowed from 39. A renderer that indexed by that
                 // would run off the end of its own row, so the bound stops
                 // here rather than reaching a consumer (spec §8).
-                let spans: Vec<RowSpan> = lines
+                let mut spans: Vec<RowSpan> = lines
                     .filter_map(|line| {
                         let row = u16::try_from(line.line).ok()?;
                         if row >= rows {
@@ -832,6 +835,9 @@ impl Terminal {
                         Some(RowSpan { row, first_column: first.min(last), last_column: last })
                     })
                     .collect();
+                for span in missed {
+                    include(&mut spans, span);
+                }
 
                 if spans.is_empty() { ScreenDamage::None } else { ScreenDamage::Rows(spans) }
             }
@@ -899,6 +905,17 @@ impl Terminal {
         }
 
         RowSpan { row: span.row, first_column: first, last_column: last }
+    }
+}
+
+/// Adds `span` to the damage, widening the row's span when it already has one.
+fn include(spans: &mut Vec<RowSpan>, span: RowSpan) {
+    match spans.iter_mut().find(|existing| existing.row == span.row) {
+        Some(existing) => {
+            existing.first_column = existing.first_column.min(span.first_column);
+            existing.last_column = existing.last_column.max(span.last_column);
+        }
+        None => spans.push(span),
     }
 }
 

@@ -13,6 +13,11 @@ public enum JSONValue: Sendable, Equatable {
     return nil
   }
 
+  public var bool: Bool? {
+    if case .bool(let value) = self { return value }
+    return nil
+  }
+
   public func key(_ name: String) -> JSONValue? {
     if case .object(let fields) = self { return fields[name] }
     return nil
@@ -56,6 +61,13 @@ public enum PluginMethod: String, Sendable, Equatable, CaseIterable {
   case storageGet = "storage.plugin.get"
   case storageSet = "storage.plugin.set"
   case notify = "host.notify"
+  case ask = "host.ask"
+  case context = "host.context"
+  case reconnect = "host.reconnect"
+  case stream = "network.stream"
+  case closeStream = "network.closeStream"
+  case status = "host.status"
+  case tabIndicators = "host.tabIndicators"
 }
 
 public struct RPCRequest: Sendable, Equatable, Codable {
@@ -123,4 +135,5 @@ enum RPCError {
   static let consentDenied = "consentDenied"
   static let invalidHandle = "invalidHandle"
   static let noGrant = "noGrant"
+  static let unavailable = "unavailable"
 }

@@ -1344,6 +1344,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
+ "windows",
 ]
 
 [[package]]
@@ -2341,6 +2342,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "range-alloc"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
+
+[[package]]
 name = "rangemap"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3172,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "tether-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3191,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "tether-ffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "tether-core",
@@ -3202,12 +3209,11 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uniffi",
- "wgpu",
 ]
 
 [[package]]
 name = "tether-files"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "russh-sftp",
@@ -3219,7 +3225,7 @@ dependencies = [
 
 [[package]]
 name = "tether-local"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "libc",
  "portable-pty",
@@ -3230,20 +3236,23 @@ dependencies = [
 
 [[package]]
 name = "tether-render"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glyphon",
  "raw-window-handle",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
+ "ttf-parser",
  "unicode-segmentation",
  "wgpu",
+ "write-fonts",
 ]
 
 [[package]]
 name = "tether-ssh"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3255,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "tether-terminal"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "cursor-icon",
@@ -3266,7 +3275,7 @@ dependencies = [
 
 [[package]]
 name = "tether-tmux"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "tether-terminal",
@@ -3862,6 +3871,7 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
+ "bit-set",
  "bitflags 2.13.2",
  "block2",
  "bytemuck",
@@ -3885,11 +3895,13 @@ dependencies = [
  "objc2-foundation",
  "objc2-metal",
  "objc2-quartz-core",
+ "once_cell",
  "ordered-float",
  "parking_lot",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
+ "range-alloc",
  "raw-window-handle",
  "raw-window-metal",
  "renderdoc-sys",
@@ -3902,6 +3914,7 @@ dependencies = [
  "wgpu-naga-bridge",
  "wgpu-types",
  "windows",
+ "windows-core",
  "windows-result",
 ]
 
@@ -4188,6 +4201,17 @@ dependencies = [
  "group",
  "hybrid-array",
  "primefield",
+]
+
+[[package]]
+name = "write-fonts"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cae90d1d9f6d1d36ef116b0b1e651a6d7c12ba925439d4d06ff9adc94662a3d8"
+dependencies = [
+ "font-types 0.12.6",
+ "log",
+ "read-fonts 0.41.0",
 ]
 
 [[package]]

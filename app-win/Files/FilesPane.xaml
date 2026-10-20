@@ -1,7 +1,7 @@
 <UserControl x:Class="TetherApp.Files.FilesPane"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
- <Grid Background="{ThemeResource ChromeSidebarBrush}" Padding="{StaticResource ContentInset}" RowSpacing="{StaticResource SpaceGroup}">
+ <Grid Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" Padding="{StaticResource ContentInset}" RowSpacing="{StaticResource SpaceGroup}">
   <Grid.RowDefinitions>
    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
@@ -22,6 +22,7 @@
     </DataTemplate></ListView.ItemTemplate>
     <ListView.ContextFlyout><MenuFlyout>
      <MenuFlyoutItem Text="Open" Click="Open_Click"/>
+     <MenuFlyoutItem Text="Edit Text…" Click="Edit_Click"/>
      <MenuFlyoutItem Text="Preview" Click="Preview_Click"/>
      <MenuFlyoutItem Text="Save As…" Click="Download_Click"/>
      <MenuFlyoutItem Text="Copy Path" Click="CopyPath_Click"/>

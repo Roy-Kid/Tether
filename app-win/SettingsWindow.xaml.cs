@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -9,7 +10,21 @@ namespace TetherApp;
 
 public sealed partial class SettingsWindow : Window
 {
+    private static SettingsWindow? _current;
+    public static void ShowFor(PluginRegistry plugins, string? section = null)
+    {
+        if (_current is null)
+        {
+            _current = new SettingsWindow(plugins);
+            _current.Closed += (_, _) => _current = null;
+        }
+        if (section is not null)
+            _current.SettingsRoot.SelectedItem = _current.SettingsRoot.MenuItems.OfType<NavigationViewItem>()
+                .FirstOrDefault(item => item.Tag as string == section);
+        _current.Activate();
+    }
     private bool _loading = true;
+    private Action? _closeFontPreview;
     private readonly PluginRegistry? _plugins;
 
     public SettingsWindow() : this(null) { }
@@ -21,9 +36,11 @@ public sealed partial class SettingsWindow : Window
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         VersionLabel.Text = version is null ? "v0.1.0" : $"v{version.Major}.{version.Minor}.{version.Build}";
         AppBranding.Apply(this);
+        SystemBackdrop = new MicaBackdrop();
         BuildExtensions();
         BuildTerminal();
         BuildWorkspaceSettings();
+        BuildSecurity();
         IdentitiesPane.Children.Add(new TextBlock { Text = "Manage account identities, SSH keys, passwords, TOTP and authentication confirmation policies.", TextWrapping = TextWrapping.Wrap });
         var identities = new Button { Content = "Manage Identities" };
         identities.Click += async (_, _) => { try { await IdentityManager.ShowAsync(SettingsRoot.ActualTheme); } catch (Exception ex) { SaveProblem.Text = ex.Message; } };
@@ -37,11 +54,13 @@ public sealed partial class SettingsWindow : Window
             ShellPicker.Items.Add(new ComboBoxItem { Content = AppSettings.Current.Shell, Tag = AppSettings.Current.Shell });
         ShellPicker.SelectedItem = ShellPicker.Items.Cast<ComboBoxItem>()
             .First(item => (string)item.Tag == AppSettings.Current.Shell);
+        LastTabPicker.SelectedItem = LastTabPicker.Items.Cast<ComboBoxItem>()
+            .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.CloseLastTab) ?? LastTabPicker.Items[0];
         _loading = false;
         AppSettings.Changed += ApplyAppearance;
         SettingsRoot.ActualThemeChanged += (_, _) => UpdateTitleBar();
         SettingsRoot.Loaded += (_, _) => UpdateTitleBar();
-        Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
+        Closed += (_, _) => { AppSettings.Changed -= ApplyAppearance; _closeFontPreview?.Invoke(); _closeFontPreview = null; };
         ApplyAppearance();
         Activate();
     }
@@ -58,7 +77,7 @@ public sealed partial class SettingsWindow : Window
 
     private void UpdateTitleBar()
     {
-        var background = ((SolidColorBrush)SettingsRoot.Background).Color;
+        var background = Microsoft.UI.Colors.Transparent;
         var foreground = ((SolidColorBrush)PageHeading.Foreground).Color;
         var titleBar = AppWindow.TitleBar;
         titleBar.BackgroundColor = titleBar.InactiveBackgroundColor = background;
@@ -72,19 +91,127 @@ public sealed partial class SettingsWindow : Window
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
         var tag = (e.SelectedItem as NavigationViewItem)?.Tag as string;
-        PageHeading.Text = tag switch { "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions", "keys" => "Key Bindings", "history" => "Session History", "files" => "Files", "identities" => "Identities", _ => "General" };
+        PageHeading.Text = tag switch
+        {
+            "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions",
+            "keys" => "Key Bindings", "history" => "Session History", "security" => "Security",
+            "files" => "Files", "identities" => "Identities", _ => "General",
+        };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
+        SshPane.Visibility = StartupPane.Visibility;
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;
         ExtensionsPane.Visibility = tag == "extensions" ? Visibility.Visible : Visibility.Collapsed;
         KeysPane.Visibility = tag == "keys" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPane.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
+        SecurityPane.Visibility = tag == "security" ? Visibility.Visible : Visibility.Collapsed;
         FilesPane.Visibility = tag == "files" ? Visibility.Visible : Visibility.Collapsed;
         IdentitiesPane.Visibility = tag == "identities" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag == "security") BuildSecurity();
+    }
+
+    private void LastTab_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || LastTabPicker.SelectedItem is not ComboBoxItem { Tag: string value }) return;
+        ShowSaveResult((AppSettings.Current with { CloseLastTab = value }).Save());
+    }
+
+    private void BuildSecurity()
+    {
+        SecurityPane.Children.Clear();
+        var known = new Tether.KnownHosts();
+        SecurityPane.Children.Add(new TextBlock { Text = "Trusted host keys", Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"] });
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Keys accepted when connecting. Forgetting one asks again on the next connection.",
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var trusted = known.Trusted();
+        if (trusted.Count == 0)
+            SecurityPane.Children.Add(new TextBlock { Text = "None", Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+        foreach (var entry in trusted)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var labels = new StackPanel { Spacing = 2 };
+            labels.Children.Add(new TextBlock { Text = entry.Endpoint, TextWrapping = TextWrapping.Wrap });
+            labels.Children.Add(new TextBlock
+            {
+                Text = entry.Algorithm + " " + entry.Fingerprint,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            });
+            row.Children.Add(labels);
+            var forget = new Button { Content = "Forget", Tag = entry.Endpoint };
+            forget.Click += async (_, _) =>
+            {
+                if (await Alerts.ContentAsync("Forget " + entry.Endpoint + "?",
+                    "You’ll be asked to trust this host again when connecting.", "Forget", null,
+                    SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                known.ForgetEndpoint(entry.Endpoint);
+                BuildSecurity();
+            };
+            Grid.SetColumn(forget, 1);
+            row.Children.Add(forget);
+            SecurityPane.Children.Add(row);
+        }
+
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Saved passwords",
+            Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+        SecurityPane.Children.Add(new TextBlock
+        {
+            Text = "Password identities stored for this Windows account. Delete removes the identity and its encrypted secret.",
+            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        try
+        {
+            var passwords = IdentityStore.Current.Identities.Where(i => i.Method == AuthenticationMethod.Password).ToArray();
+            if (passwords.Length == 0)
+                SecurityPane.Children.Add(new TextBlock { Text = "None", Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+            foreach (var identity in passwords)
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.Children.Add(new TextBlock { Text = identity.Name, VerticalAlignment = VerticalAlignment.Center });
+                var delete = new Button { Content = "Delete" };
+                delete.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await Alerts.ContentAsync("Delete " + identity.Name + "?",
+                            "This removes the saved password identity.", "Delete", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        IdentityStore.Current.Delete(identity.Id);
+                        BuildSecurity();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                Grid.SetColumn(delete, 1);
+                row.Children.Add(delete);
+                SecurityPane.Children.Add(row);
+            }
+        }
+        catch (Exception ex)
+        {
+            SecurityPane.Children.Add(new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"] });
+        }
     }
 
     private async void BuildTerminal()
     {
+        _closeFontPreview?.Invoke();
         TerminalPane.Children.Clear();
         var preferences = AppSettings.Current.Terminal;
         var scheme = new ComboBox { Header = "Color scheme", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -92,18 +219,77 @@ public sealed partial class SettingsWindow : Window
         scheme.Items.Add(new ComboBoxItem { Content = "Classic", Tag = "classic" });
         scheme.SelectedIndex = preferences.ColorScheme == "classic" ? 1 : 0;
         TerminalPane.Children.Add(scheme);
-        var family = new ComboBox { Header = "Terminal font", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var wideFamily = new ComboBox { Header = "CJK / wide-character font", HorizontalAlignment = HorizontalAlignment.Stretch };
-        family.Items.Add(preferences.FontFamily);
-        wideFamily.Items.Add(preferences.WideFontFamily);
-        family.SelectedItem = preferences.FontFamily;
-        wideFamily.SelectedItem = preferences.WideFontFamily;
+        var family = new ComboBox { Header = "Terminal font", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name", SelectedValuePath = "Id" };
+        var wideFamily = new ComboBox { Header = "CJK / wide-character font", HorizontalAlignment = HorizontalAlignment.Stretch, DisplayMemberPath = "Name", SelectedValuePath = "Id" };
+        family.Items.Add(new Tether.FontFace(preferences.FontFamily, preferences.FontFamily, preferences.FontFamily));
+        wideFamily.Items.Add(new Tether.FontFace(preferences.WideFontFamily, preferences.WideFontFamily, preferences.WideFontFamily));
+        family.SelectedValue = preferences.FontFamily;
+        wideFamily.SelectedValue = preferences.WideFontFamily;
         TerminalPane.Children.Add(family);
         TerminalPane.Children.Add(wideFamily);
-        var preview = new TextBlock { Text = "AaBb 0123  → ┌─┐  中文测试 日本語 한글", FontSize = preferences.FontSize, TextWrapping = TextWrapping.Wrap };
-        void Preview()
+        var preview = new Image { Height = 40, Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
+        var previewFontSize = preferences.FontSize;
+        var previewVersion = 0;
+        var previewClosed = false;
+        var previewScaleHooked = false;
+        var previewQueue = DispatcherQueue.GetForCurrentThread();
+        var previewTarget = Tether.TerminalSurface.OffscreenAsync(600, 40);
+        _closeFontPreview = async () =>
         {
-            preview.FontFamily = new FontFamily($"{family.SelectedItem}, {wideFamily.SelectedItem}");
+            previewClosed = true;
+            try { (await previewTarget).Dispose(); } catch { /* Reported by Preview. */ }
+        };
+        void ShowPreviewProblem(string message)
+        {
+            if (previewQueue.HasThreadAccess) SaveProblem.Text = message;
+            else previewQueue.TryEnqueue(() => SaveProblem.Text = message);
+        }
+        async void Preview()
+        {
+            var version = ++previewVersion;
+            try
+            {
+                var surface = await previewTarget.ConfigureAwait(false);
+                var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!previewQueue.TryEnqueue(() => done.TrySetResult())) return;
+                await done.Task;
+                if (previewClosed || version != previewVersion) return;
+                if (SettingsRoot.XamlRoot is null)
+                {
+                    if (!previewScaleHooked)
+                    {
+                        previewScaleHooked = true;
+                        SettingsRoot.Loaded += (_, _) => Preview();
+                    }
+                    return;
+                }
+                if (!previewScaleHooked)
+                {
+                    previewScaleHooked = true;
+                    SettingsRoot.XamlRoot.Changed += (_, _) => Preview();
+                }
+                var scale = SettingsRoot.XamlRoot.RasterizationScale;
+                if (scale <= 0) return;
+                var width = (uint)(600 * scale); var height = (uint)(40 * scale);
+                surface.Resize(width, height);
+                surface.SetFonts((string)family.SelectedValue, (string)wideFamily.SelectedValue);
+                surface.Measure((float)(previewFontSize * scale));
+                const string latin = "AaBb 0123 → ┌─┐ ";
+                var style = Tether.RunStyle.Default;
+                var frame = new Tether.ScreenFrame(80, 1, 0, 0, Tether.CaretShape.Hidden, false, false, 0, 0, "",
+                    [new Tether.ScreenRow([new(latin, (uint)latin.Length, style), new("中文测试", 8, style),
+                        new(" ", 1, style), new("日本語", 6, style), new(" ", 1, style), new("한글", 4, style)])]);
+                if (!surface.Draw(frame, Tether.Palette.Dark)) return;
+                var pixels = surface.ReadPixels();
+                // WriteableBitmap is BGRA; the renderer's portable readback is RGBA.
+                for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 2]) = (pixels[i + 2], pixels[i]);
+                var bitmap = new Microsoft.UI.Xaml.Media.Imaging.WriteableBitmap((int)width, (int)height);
+                using (var stream = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsStream(bitmap.PixelBuffer))
+                    stream.Write(pixels);
+                bitmap.Invalidate();
+                preview.Source = bitmap;
+            }
+            catch (Exception ex) { ShowPreviewProblem("Couldn't preview font: " + ex.Message); }
         }
         Preview();
         TerminalPane.Children.Add(preview);
@@ -112,7 +298,7 @@ public sealed partial class SettingsWindow : Window
         var size = new NumberBox { Header = "Font size", Minimum = 10, Maximum = 32, Value = preferences.FontSize, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
         size.ValueChanged += (_, _) =>
         {
-            if (double.IsFinite(size.Value) && size.Value is >= 10 and <= 32) preview.FontSize = size.Value;
+            if (double.IsFinite(size.Value) && size.Value is >= 10 and <= 32) { previewFontSize = size.Value; Preview(); }
         };
         var threshold = new NumberBox { Header = "Confirm paste at character count", Minimum = 1, Maximum = 1000000, Value = preferences.PasteThreshold };
         TerminalPane.Children.Add(size);
@@ -133,7 +319,7 @@ public sealed partial class SettingsWindow : Window
         {
             var updated = new TerminalPreferences
             {
-                FontFamily = (string)family.SelectedItem, WideFontFamily = (string)wideFamily.SelectedItem,
+                FontFamily = (string)family.SelectedValue, WideFontFamily = (string)wideFamily.SelectedValue,
                 FontSize = size.Value,
                 Inset = inset.Value, ColorScheme = (string)((ComboBoxItem)scheme.SelectedItem).Tag,
                 PasteThreshold = double.IsFinite(threshold.Value) ? (int)threshold.Value : 0,
@@ -154,22 +340,46 @@ public sealed partial class SettingsWindow : Window
         TerminalPane.Children.Add(reset);
         void SaveFonts()
         {
-            if (family.SelectedItem is not string primary || wideFamily.SelectedItem is not string wide) return;
+            if (family.SelectedValue is not string primary || wideFamily.SelectedValue is not string wide) return;
             ShowSaveResult((AppSettings.Current with { Terminal = AppSettings.Current.Terminal with
                 { FontFamily = primary, WideFontFamily = wide } }).Save());
         }
         try
         {
-            var fonts = await Task.Run(Tether.TerminalSurface.FontFamilies);
+            var fonts = await Task.Run(TerminalFontStore.Faces);
+            problem.Text = TerminalFontStore.LoadProblem;
             foreach (var name in fonts)
             {
-                if (!family.Items.Contains(name)) family.Items.Add(name);
-                if (!wideFamily.Items.Contains(name)) wideFamily.Items.Add(name);
+                if (!family.Items.Cast<Tether.FontFace>().Any(face => face.Id == name.Id)) family.Items.Add(name);
+                if (!wideFamily.Items.Cast<Tether.FontFace>().Any(face => face.Id == name.Id)) wideFamily.Items.Add(name);
             }
+            Preview();
             family.SelectionChanged += (_, _) => SaveFonts();
             wideFamily.SelectionChanged += (_, _) => SaveFonts();
         }
         catch (Exception ex) { problem.Text = "Couldn't list installed fonts: " + ex.Message; }
+
+        var import = new Button { Content = "Import Font" };
+        import.Click += async (_, _) =>
+        {
+            try
+            {
+                var picker = new Windows.Storage.Pickers.FileOpenPicker();
+                foreach (var extension in new[] { ".ttf", ".otf", ".ttc" }) picker.FileTypeFilter.Add(extension);
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+                if (await picker.PickSingleFileAsync() is not { } file) return;
+                var imported = await TerminalFontStore.ImportAsync(file.Path);
+                foreach (var face in imported)
+                {
+                    if (!family.Items.Cast<Tether.FontFace>().Any(item => item.Id == face.Id)) family.Items.Add(face);
+                    if (!wideFamily.Items.Cast<Tether.FontFace>().Any(item => item.Id == face.Id)) wideFamily.Items.Add(face);
+                }
+                family.SelectedValue = imported[0].Id;
+                SaveFonts();
+            }
+            catch (Exception ex) { problem.Text = "Couldn't import font: " + ex.Message; }
+        };
+        TerminalPane.Children.Add(import);
 
     }
 
@@ -182,16 +392,14 @@ public sealed partial class SettingsWindow : Window
             {
                 try
                 {
-                    var picker = new Windows.Storage.Pickers.FolderPicker(); picker.FileTypeFilter.Add("*");
-                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-                    if (await picker.PickSingleFolderAsync() is not { } folder) return;
-                    var package = WebPluginPackage.Read(folder.Path);
+                    if (await PickPluginFolderAsync() is not { } folder) return;
+                    var package = WebPluginPackage.Read(folder);
                     var access = string.Join("\n", package.Manifest.NetworkOrigins ?? []);
                     if (await Alerts.ContentAsync("Install " + package.Manifest.Name + "?", access, "Install", null,
                         SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
-                    WebPluginCatalog.Install(folder.Path, _plugins); BuildExtensions();
+                    WebPluginCatalog.Install(folder, _plugins); BuildExtensions();
                 }
-                catch (Exception ex) { SaveProblem.Text = ex.Message; }
+                catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
             });
             ExtensionsPane.Children.Add(install);
             foreach (var problem in WebPluginCatalog.Problems)
@@ -209,6 +417,8 @@ public sealed partial class SettingsWindow : Window
         }
         foreach (var plugin in _plugins.Plugins)
         {
+            var web = plugin as WebPlugin;
+            var installed = web is not null ? WebPluginCatalog.Installed(plugin.Metadata.Id) : null;
             var toggle = new ToggleSwitch
             {
                 Header = plugin.Metadata.Name,
@@ -230,16 +440,65 @@ public sealed partial class SettingsWindow : Window
                 Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
                 TextWrapping = TextWrapping.Wrap,
             });
+            if (installed is not null)
+            {
+                card.Children.Add(new TextBlock
+                {
+                    Text = installed.Manifest.Publisher + " · " + installed.Manifest.Version,
+                    Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+                    TextWrapping = TextWrapping.Wrap,
+                });
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                var update = new Button { Content = "Update…" };
+                update.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await PickPluginFolderAsync() is not { } folder) return;
+                        var package = WebPluginPackage.Read(folder);
+                        if (package.Manifest.Id != id)
+                        {
+                            SaveProblem.Text = "That package’s id does not match " + id + ".";
+                            SaveProblem.Visibility = Visibility.Visible;
+                            return;
+                        }
+                        var detail = installed.Manifest.Version + " → " + package.Manifest.Version;
+                        if (await Alerts.ContentAsync("Update " + package.Manifest.Name + "?", detail, "Update", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        WebPluginCatalog.Update(folder, _plugins); BuildExtensions();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                var uninstall = new Button { Content = "Uninstall" };
+                uninstall.Click += async (_, _) =>
+                {
+                    try
+                    {
+                        if (await Alerts.ContentAsync("Uninstall " + plugin.Metadata.Name + "?",
+                            "Removes the package from this device and closes its tabs.", "Uninstall", null,
+                            SettingsRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+                        WebPluginCatalog.Uninstall(id, _plugins); BuildExtensions();
+                    }
+                    catch (Exception ex) { SaveProblem.Text = ex.Message; SaveProblem.Visibility = Visibility.Visible; }
+                };
+                actions.Children.Add(update);
+                actions.Children.Add(uninstall);
+                card.Children.Add(actions);
+            }
             ExtensionsPane.Children.Add(new Border
             {
-                Background = (Brush)Application.Current.Resources["ChromeRaisedBrush"],
-                CornerRadius = (CornerRadius)Application.Current.Resources["RowRadius"],
-                Padding = (Thickness)Application.Current.Resources["SettingsCardInset"],
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)Application.Current.Resources["ChromeStrokeBrush"],
+                Style = (Style)Application.Current.Resources["SettingsCardStyle"],
                 Child = card,
             });
         }
+    }
+
+    private async Task<string?> PickPluginFolderAsync()
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        return (await picker.PickSingleFolderAsync())?.Path;
     }
 
     private void Theme_Changed(object sender, SelectionChangedEventArgs e)

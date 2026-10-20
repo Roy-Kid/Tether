@@ -7,13 +7,16 @@ enum ShellActivity: Equatable, Sendable {
   case running([String])
   case unknown
 
+  /// The one line a close confirmation adds: what may stop. "May", because
+  /// a process can outlive its terminal; and when nothing could be checked,
+  /// nothing is claimed about what is running.
   var closeMessage: String? {
     switch self {
     case .idle: nil
     case .running(let names):
-      "Processes are still running in this tab: \(names.joined(separator: ", ")). Closing the tab may terminate them and lose unsaved work."
+      "\(ListFormatter.localizedString(byJoining: names)) may stop."
     case .unknown:
-      "Unable to check for running processes in this tab. Closing it may terminate processes and lose unsaved work."
+      "Anything running here may stop."
     }
   }
 
@@ -110,5 +113,88 @@ enum ShellActivity: Equatable, Sendable {
       return !waitingShell
     }
     return running.isEmpty ? .idle : .running(Array(Set(running.map(\.name))).sorted())
+  }
+}
+
+/// Keeps the close check ahead of the close gesture.
+///
+/// What runs on a shell's terminal changes only through that terminal:
+/// something typed, something printed, a resize. A check begun after the
+/// last of those still describes the shell, so once the terminal has been
+/// quiet for a moment the check runs ahead, and ⌘W on an idle tab need not
+/// wait for a process listing — two seconds when the network is slow.
+///
+/// Only *idle* is kept. Work can finish without a word (a background job
+/// prints nothing until the next prompt), so a remembered "running" could be
+/// stale; it cannot start without one, so a remembered "idle" cannot. Any
+/// other answer, or one begun before the latest activity, is checked again
+/// at the close, as before.
+@MainActor
+final class CloseCheck {
+  /// How long the terminal stays quiet before the check runs ahead.
+  static let quiet: Duration = .seconds(2)
+
+  private let check: @MainActor () async -> ShellActivity
+  private let quiet: Duration
+  /// Bumped by every typed key, printed byte and resize.
+  private(set) var epoch = 0
+  private var answer: (epoch: Int, task: Task<ShellActivity, Never>, result: ShellActivity?)?
+  private var waiting: Task<Void, Never>?
+
+  init(quiet: Duration = CloseCheck.quiet, check: @escaping @MainActor () async -> ShellActivity) {
+    self.quiet = quiet
+    self.check = check
+  }
+
+  /// Something was typed, printed or resized. Earlier answers no longer
+  /// hold, and a new one is taken once the terminal is quiet again.
+  func noteActivity() {
+    epoch += 1
+    guard waiting == nil else { return }
+    let quiet = quiet
+    waiting = Task { [weak self] in
+      while true {
+        guard let seen = self?.epoch else { return }
+        do { try await Task.sleep(for: quiet) } catch { return }
+        guard let self else { return }
+        if self.epoch == seen { break }
+      }
+      self?.waiting = nil
+      self?.start()
+    }
+  }
+
+  /// What closing could interrupt now.
+  func activity() async -> ShellActivity {
+    if let answer, answer.epoch == epoch {
+      // Still running: begun after the latest activity, it is as good as
+      // one begun now.
+      guard let result = answer.result else { return await answer.task.value }
+      if result == .idle { return .idle }
+    }
+    return await start(fresh: true).value
+  }
+
+  /// A new session, or none: nothing known about the old one holds.
+  func reset() {
+    epoch += 1
+    answer = nil
+    waiting?.cancel()
+    waiting = nil
+  }
+
+  @discardableResult
+  private func start(fresh: Bool = false) -> Task<ShellActivity, Never> {
+    if !fresh, let answer, answer.epoch == epoch { return answer.task }
+    let epoch = epoch
+    let check = check
+    let task = Task { await check() }
+    answer = (epoch, task, nil)
+    Task { [weak self] in
+      let result = await task.value
+      guard let self, self.answer?.epoch == epoch, self.answer?.task == task else { return }
+      self.answer?.result = result
+    }
+    return task
   }
 }

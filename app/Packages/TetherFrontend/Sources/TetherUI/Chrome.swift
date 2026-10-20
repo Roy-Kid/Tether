@@ -6,6 +6,12 @@ import SwiftUI
   import UIKit
 #endif
 
+extension EnvironmentValues {
+  /// Opacity of workspace backgrounds over the host's native backdrop.
+  /// The host supplies 0.5...1; 1 preserves opaque rendering by default.
+  @Entry public var workspaceBackgroundOpacity: Double = 1
+}
+
 /// The visual vocabulary, in one place.
 ///
 /// Here rather than in the app because a plugin draws chrome in the same
@@ -158,12 +164,15 @@ public struct ChromeButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var hovering = false
+    #if os(macOS)
+      @Environment(\.controlActiveState) private var activeState
+    #endif
 
     var body: some View {
       configuration.label
         .background {
           RoundedRectangle(cornerRadius: UIStyle.rowRadius)
-            .fill(Theme.accent.opacity(opacity))
+            .fill(stateColor.opacity(opacity))
         }
         .overlay {
           if selected && contrast == .increased {
@@ -173,6 +182,13 @@ public struct ChromeButtonStyle: ButtonStyle {
         }
         .opacity(enabled ? 1 : UIStyle.disabledOpacity)
         .onHover { hovering = $0 }
+    }
+
+    private var stateColor: Color {
+      #if os(macOS)
+        if activeState == .inactive { return Theme.text }
+      #endif
+      return selected ? Theme.accent : Theme.text
     }
 
     private var opacity: Double {
@@ -188,20 +204,24 @@ private struct FloatingPanel: ViewModifier {
   @Environment(\.colorSchemeContrast) private var contrast
 
   func body(content: Content) -> some View {
+    let solid = reduceTransparency || contrast == .increased
     content
       .background {
-        if reduceTransparency {
+        if solid {
           RoundedRectangle(cornerRadius: UIStyle.panelRadius).fill(Theme.raised)
-        } else {
-          RoundedRectangle(cornerRadius: UIStyle.panelRadius).fill(.regularMaterial)
         }
       }
+      // Let the system own refraction, lighting and inactive appearance.
+      // A panel gets one material, rather than a material plus a drawn rim.
+      .glassEffect(solid ? .identity : .regular, in: .rect(cornerRadius: UIStyle.panelRadius))
       .overlay {
-        RoundedRectangle(cornerRadius: UIStyle.panelRadius)
-          .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: UIStyle.Mark.hairline)
-          .allowsHitTesting(false)
+        if solid {
+          RoundedRectangle(cornerRadius: UIStyle.panelRadius)
+            .strokeBorder(contrast == .increased ? Theme.text : Theme.stroke, lineWidth: UIStyle.Mark.hairline)
+            .allowsHitTesting(false)
+        }
       }
-      .shadow(color: .black.opacity(UIStyle.shadowOpacity),
+      .shadow(color: .black.opacity(solid ? UIStyle.shadowOpacity : 0),
               radius: UIStyle.shadowRadius, y: UIStyle.shadowOffset)
   }
 }

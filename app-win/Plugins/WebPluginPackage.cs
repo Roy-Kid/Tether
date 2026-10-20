@@ -4,10 +4,12 @@ using System.Text.RegularExpressions;
 
 namespace TetherApp.Plugins;
 
-public sealed record WebContribution(string Kind, string Id, string? Title = null);
+public sealed record WebContribution(string Kind, string Id, string? Title = null, string[]? Suffixes = null);
 public sealed record WebPluginManifest(string Id, string Name, string Publisher, string Version, int Api,
     string Runtime, string Entrypoint, string AgeRating, string Link, string[] Permissions,
     WebContribution[] Contributions, string[]? NetworkOrigins = null, string? Glyph = null, string? Summary = null, string[]? Services = null);
+
+public sealed record WebViewerMatch(string PluginId, string ContributionId, string[] Suffixes);
 
 /// <summary>Static package inspection. Loading metadata never executes the page.</summary>
 public sealed record WebPluginPackage(string Root, WebPluginManifest Manifest)
@@ -82,12 +84,21 @@ public sealed record WebPluginPackage(string Root, WebPluginManifest Manifest)
             throw new IOException("Plugin identity is incomplete.");
         if (!Uri.TryCreate(manifest.Link, UriKind.Absolute, out var link) || link.Scheme is not ("https" or "http"))
             throw new IOException("Invalid plugin link.");
-        if (manifest.Permissions is null || manifest.Permissions.Any(p => p is not ("network" or "service.local")))
+        var allowed = new HashSet<string> { "network", "service.local", "document.read", "storage.plugin" };
+        if (manifest.Permissions is null || manifest.Permissions.Any(p => !allowed.Contains(p)))
             throw new IOException("Unsupported plugin capability.");
-        if (manifest.Contributions is null || !manifest.Contributions.Any(c => c.Kind == "panel") ||
-            manifest.Contributions.Any(c => c.Kind is not ("panel" or "command") || string.IsNullOrWhiteSpace(c.Id)) ||
+        if (manifest.Contributions is null ||
+            !manifest.Contributions.Any(c => c.Kind is "panel" or "viewer") ||
+            manifest.Contributions.Any(c => c.Kind is not ("panel" or "command" or "viewer") || string.IsNullOrWhiteSpace(c.Id)) ||
             manifest.Contributions.Select(c => c.Id).Distinct(StringComparer.Ordinal).Count() != manifest.Contributions.Length)
-            throw new IOException("Plugin must declare a panel and unique panel/command contributions.");
+            throw new IOException("Plugin must declare a panel or viewer, and unique contributions.");
+        foreach (var contribution in manifest.Contributions.Where(c => c.Kind == "viewer"))
+        {
+            var suffixes = (contribution.Suffixes ?? []).Select(NormalizeSuffix).Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+            if (suffixes.Length == 0) throw new IOException("A viewer contribution needs at least one file suffix.");
+            if (!manifest.Permissions.Contains("document.read"))
+                throw new IOException("Viewer contributions require the document.read permission.");
+        }
         foreach (var origin in manifest.NetworkOrigins ?? [])
         {
             if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || uri.GetLeftPart(UriPartial.Authority) != origin ||
@@ -99,8 +110,16 @@ public sealed record WebPluginPackage(string Root, WebPluginManifest Manifest)
             throw new IOException("Network origins require the network permission.");
         if ((manifest.Services?.Length ?? 0) > 0 && !manifest.Permissions.Contains("service.local"))
             throw new IOException("Local services require the service.local permission.");
-        return manifest;
+        return manifest with
+        {
+            Contributions = manifest.Contributions.Select(c => c.Kind == "viewer"
+                ? c with { Suffixes = (c.Suffixes ?? []).Select(NormalizeSuffix).Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).ToArray() }
+                : c).ToArray(),
+        };
     }
+
+    public static string NormalizeSuffix(string suffix) =>
+        suffix.Trim().TrimStart('.').ToLowerInvariant();
 
     public Uri NetworkUri(string value)
     {
@@ -111,13 +130,14 @@ public sealed record WebPluginPackage(string Root, WebPluginManifest Manifest)
         return uri;
     }
 
-    public static WebPluginPackage Install(string source, string installedRoot)
+    public static WebPluginPackage Install(string source, string installedRoot, bool replace = false)
     {
         var package = Read(source);
         Directory.CreateDirectory(installedRoot);
         var destination = Path.Combine(Path.GetFullPath(installedRoot), package.Manifest.Id);
-        if (Directory.Exists(destination)) throw new IOException("This plugin is already installed.");
+        if (Directory.Exists(destination) && !replace) throw new IOException("This plugin is already installed.");
         var stage = Path.Combine(Path.GetFullPath(installedRoot), ".install-" + Guid.NewGuid().ToString("N"));
+        string? backup = null;
         try
         {
             foreach (var file in Directory.EnumerateFiles(package.Root, "*", SearchOption.AllDirectories))
@@ -126,9 +146,35 @@ public sealed record WebPluginPackage(string Root, WebPluginManifest Manifest)
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file, target);
             }
             Read(stage);
+            if (Directory.Exists(destination))
+            {
+                backup = Path.Combine(Path.GetFullPath(installedRoot), ".replace-" + Guid.NewGuid().ToString("N"));
+                Directory.Move(destination, backup);
+            }
             Directory.Move(stage, destination);
+            if (backup is not null) Directory.Delete(backup, true);
             return Read(destination);
         }
-        finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+        catch
+        {
+            if (backup is not null && !Directory.Exists(destination) && Directory.Exists(backup))
+                Directory.Move(backup, destination);
+            throw;
+        }
+        finally
+        {
+            if (Directory.Exists(stage)) Directory.Delete(stage, true);
+            if (backup is not null && Directory.Exists(backup)) Directory.Delete(backup, true);
+        }
+    }
+
+    public static void RemoveInstalled(string installedRoot, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || id.Contains('/') || id.Contains('\\') || id is "." or "..")
+            throw new IOException("Invalid plugin id.");
+        var destination = Path.Combine(Path.GetFullPath(installedRoot), id);
+        if (!destination.StartsWith(Path.GetFullPath(installedRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Plugin directory leaves the install root.");
+        if (Directory.Exists(destination)) Directory.Delete(destination, true);
     }
 }

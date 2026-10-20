@@ -22,12 +22,21 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         AppBranding.Initialize();
+#if DEBUG
+        if (CommandLineValue("--render-evaluation-output") is { } evaluationOutput)
+        {
+            _window = RenderEvaluationWindow.Create(evaluationOutput);
+            _window.Activate();
+            return;
+        }
+#endif
         AppSettings.Load();
         Plugins = new Plugins.PluginRegistry(
             AppSettings.Current.DisabledPlugins,
             disabled => (AppSettings.Current with { DisabledPlugins = disabled.ToArray() }).Save());
         Plugins.Register(new Plugins.FilesPlugin());
         Plugins.Register(new Plugins.TmuxPlugin());
+        Plugins.Register(new Plugins.PortsPlugin());
         TetherApp.Plugins.WebPluginServices.Register("app.nerve.hub", "app.nerve.tether.web", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Nerve", "nerve-hub.exe"), new Uri("http://127.0.0.1:17890/v1/health"));
         string? installProblem = null;
         if (CommandLineValue("--install-plugin") is { } source)

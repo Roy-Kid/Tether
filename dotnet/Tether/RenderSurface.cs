@@ -2,14 +2,42 @@
 //
 // Toolkit-free at the boundary (spec §8): a window handle and a `ScreenFrame`.
 // `wgpu`, `glyphon` and `cosmic-text` stay inside the generated binding and
-// `tether-render` (backend confinement). A consumer that wants to draw
-// differently takes `prepare` through its own path.
+// `tether-render` (backend confinement).
 //
 // `Gen` is uniffi-bindgen-cs output and stays `internal` (Decisions/0004).
 
 using Gen = global::uniffi.tether_ffi;
 
 namespace Tether;
+
+/// <summary>A renderer failure with the kind the host shows in a dialog.</summary>
+public abstract class RenderException : Exception
+{
+    protected RenderException(string message) : base(message) { }
+
+    public sealed class NoAdapter : RenderException
+    {
+        public NoAdapter() : base("No suitable GPU adapter") { }
+    }
+
+    public sealed class NoDevice : RenderException
+    {
+        public NoDevice(string cause) : base("No suitable GPU device: " + cause) => Cause = cause;
+        public string Cause { get; }
+    }
+
+    public sealed class Surface : RenderException
+    {
+        public Surface(string cause) : base("Surface: " + cause) => Cause = cause;
+        public string Cause { get; }
+    }
+
+    public sealed class Font : RenderException
+    {
+        public Font(string cause) : base("Font: " + cause) => Cause = cause;
+        public string Cause { get; }
+    }
+}
 
 /// <summary>A GPU terminal surface.</summary>
 public sealed class TerminalSurface : IAsyncDisposable, IDisposable
@@ -27,33 +55,64 @@ public sealed class TerminalSurface : IAsyncDisposable, IDisposable
     public static async Task<TerminalSurface> FromHwndAsync(
         nint hwnd, uint width, uint height)
     {
-        var inner = await Gen.RenderSurface.FromHwnd(
-            (ulong)hwnd, width, height).ConfigureAwait(false);
-        return new TerminalSurface(inner);
+        try
+        {
+            var inner = await Gen.RenderSurface.FromHwnd(
+                (ulong)hwnd, width, height).ConfigureAwait(false);
+            return new TerminalSurface(inner);
+        }
+        catch (Gen.RenderFailure failure) { throw PublicFailure(failure); }
     }
+
+    /// <summary>An offscreen target using the same drawing path as a window.</summary>
+    public static async Task<TerminalSurface> OffscreenAsync(uint width, uint height)
+    {
+        try { return new(await Gen.RenderSurface.Offscreen(width, height).ConfigureAwait(false)); }
+        catch (Gen.RenderFailure failure) { throw PublicFailure(failure); }
+    }
+
+    /// <summary>Explicit RGBA8 readback, for previews and pixel tests.</summary>
+    public byte[] ReadPixels() => Guard(_inner.ReadPixels);
+
+    /// <summary>Explicit GPU completion for evaluation; not used by window drawing.</summary>
+    public void WaitIdle() => Guard(_inner.WaitIdle);
 
     /// <summary>Measures the monospaced face this surface will draw with.</summary>
     public FontMetrics Measure(float size)
     {
-        var dto = _inner.Measure(size);
-        return FontMetrics.FromAdvances(
-            dto.Size, dto.NarrowAdvance, dto.WideAdvance, dto.LineHeight);
+        var dto = Guard(() => _inner.Measure(size));
+        // CellWidth is already rounded in the renderer. Rounding again is
+        // midpoint-to-even and drifts from the grid the GPU draws.
+        return new FontMetrics(dto.Size, dto.CellWidth, dto.LineHeight, dto.NarrowAdvance, dto.WideAdvance);
     }
 
     public static string[] FontFamilies() => Gen.TetherFfiMethods.RenderFontFamilies();
+
+    public static FontFace[] FontFaces() => Gen.TetherFfiMethods.RenderFontFaces()
+        .Select(face => new FontFace(face.Id, face.Family, face.Name)).ToArray();
+
+    public static FontFace[] RegisterFont(byte[] data) => Guard(() => Gen.TetherFfiMethods.RenderRegisterFont(data)
+        .Select(face => new FontFace(face.Id, face.Family, face.Name)).ToArray());
 
     public void SetFonts(string primary, string wide) => _inner.SetFonts(primary, wide);
 
     public void Resize(uint width, uint height) => _inner.Resize(width, height);
 
-    /// <summary>Draws one frame with the consumer's palette and pointer marks.</summary>
-    public void Draw(ScreenFrame frame, Palette palette, Overlay? overlay = null) =>
-        _inner.Draw(Lower(frame), Lower(palette), overlay is null ? null : Lower(overlay));
+    /// <summary>
+    /// Draws one frame. <c>true</c> means the frame was presented, including an
+    /// offscreen target. <c>false</c> means the compositor skipped the acquire.
+    /// </summary>
+    public bool Draw(ScreenFrame frame, Palette palette, Overlay? overlay = null) =>
+        Guard(() => _inner.Draw(Lower(frame), Lower(palette), overlay is null ? null : Lower(overlay)));
+
+    public bool DrawUpdate(ScreenFrame frame, Palette palette, Overlay? overlay, float fontSize, uint[]? dirtyRows) =>
+        Guard(() => _inner.DrawUpdate(Lower(frame), Lower(palette), overlay is null ? null : Lower(overlay), fontSize, dirtyRows));
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _inner.Close();
         _inner.Dispose();
     }
 
@@ -62,6 +121,27 @@ public sealed class TerminalSurface : IAsyncDisposable, IDisposable
         Dispose();
         return ValueTask.CompletedTask;
     }
+
+    private static T Guard<T>(Func<T> body)
+    {
+        try { return body(); }
+        catch (Gen.RenderFailure failure) { throw PublicFailure(failure); }
+    }
+
+    private static void Guard(Action body)
+    {
+        try { body(); }
+        catch (Gen.RenderFailure failure) { throw PublicFailure(failure); }
+    }
+
+    private static RenderException PublicFailure(Gen.RenderFailure failure) => failure switch
+    {
+        Gen.RenderFailure.NoAdapter => new RenderException.NoAdapter(),
+        Gen.RenderFailure.NoDevice device => new RenderException.NoDevice(device.cause),
+        Gen.RenderFailure.Surface surface => new RenderException.Surface(surface.cause),
+        Gen.RenderFailure.Font font => new RenderException.Font(font.cause),
+        _ => new RenderException.Surface(failure.Message),
+    };
 
     // ---- lowering: public contract → generated types ----
 
@@ -157,3 +237,6 @@ public sealed class TerminalSurface : IAsyncDisposable, IDisposable
         new Gen.RgbaDto(o.SelectionColor.Red, o.SelectionColor.Green, o.SelectionColor.Blue, o.SelectionColor.Alpha),
         new Gen.RgbaDto(o.LinkColor.Red, o.LinkColor.Green, o.LinkColor.Blue, o.LinkColor.Alpha));
 }
+
+/// <summary>A face known to the shared shaper. Id is stable across restarts.</summary>
+public sealed record FontFace(string Id, string Family, string Name);

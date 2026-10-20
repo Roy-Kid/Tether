@@ -11,8 +11,10 @@ let package = Package(
     dependencies: [
         .package(path: "../swift"),
         .package(path: "Packages/TetherFrontend"),
+        .package(path: "Packages/TetherPluginHost"),
         .package(path: "Plugins/Tmux"),
         .package(path: "Plugins/Files"),
+        .package(path: "Plugins/Ports"),
     ],
     targets: [
         .executableTarget(
@@ -20,9 +22,11 @@ let package = Package(
             dependencies: [
                 .product(name: "Tether", package: "swift"),
                 .product(name: "TetherUI", package: "TetherFrontend"),
+                .product(name: "TetherPluginHost", package: "TetherPluginHost"),
                 .product(name: "TetherPluginKit", package: "TetherFrontend"),
                 .product(name: "TmuxPlugin", package: "Tmux"),
                 .product(name: "FilesPlugin", package: "Files"),
+                .product(name: "PortsPlugin", package: "Ports"),
             ]
         ),
         .testTarget(name: "TetherAppTests", dependencies: ["TetherApp"])

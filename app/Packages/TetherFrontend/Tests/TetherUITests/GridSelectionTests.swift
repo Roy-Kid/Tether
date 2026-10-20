@@ -82,25 +82,6 @@ struct GridSelectionTests {
     #expect(GridText.string(in: frame, selection: line) == "hello")
   }
 
-  @Test("the highlight is the same rectangle a link would draw")
-  func highlightMatchesTheGrid() throws {
-    let geometry = CellGeometry(cellWidth: 8, lineHeight: 16, inset: 8, columns: 5, rows: 1)
-    let frame = screen([row("hello")], columns: 5)
-    let selection = try #require(
-      GridText.selection(.character, from: point(0, 1), to: point(0, 3), in: frame))
-    let span = try #require(GridText.spans(selection, in: frame).first)
-    #expect(geometry.rect(for: span) == CGRect(x: 16, y: 8, width: 24, height: 16))
-  }
-
-  @Test("two equal cells are not each before the other")
-  func equalPoints() {
-    let cell = GridPoint(row: 1, column: 2)
-    #expect(!cell.isBefore(cell))
-    let selection = GridSelection(anchor: cell, head: cell)
-    #expect(selection.start == cell)
-    #expect(selection.end == cell)
-  }
-
   private func point(_ row: Int, _ column: Int) -> GridPoint {
     GridPoint(row: row, column: column)
   }

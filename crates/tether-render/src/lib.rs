@@ -14,20 +14,30 @@
 //! link no UI framework and no GPU (spec §8, §15).
 
 mod draw;
+mod fonts;
 mod frame;
 mod layout;
 mod metrics;
 mod palette;
+mod platform;
 mod renderer;
+
+#[cfg(feature = "diagnostics")]
+#[doc(hidden)]
+pub mod diagnostics;
 
 pub use draw::{
     BgRect, Cell, CellSpan, CursorQuad, DrawList, LinkUnderline, Overlay, Rgba, TextRun,
+};
+pub use fonts::{
+    FontFace, font_faces, measure_fonts, register_font, register_font_file, register_font_tables,
 };
 pub use frame::{Caret, Frame, Name, Paint, Row, Run, RunStyle, Underline};
 pub use layout::{prepare, prepare_with_overlay};
 pub use metrics::FontMetrics;
 pub use palette::Palette;
-pub use renderer::{RenderError, SurfaceSize, TerminalRenderer, font_families, measure_monospace};
+pub use platform::NativeAttachment;
+pub use renderer::{RenderError, SurfaceSize, TerminalRenderer, font_families};
 
 /// The byte-stream boundary in executable form, restated for the
 /// presentation layer.

@@ -1,0 +1,21 @@
+memory_phase start resident_bytes 7651328
+memory_phase fonts-ready resident_bytes 19529728
+memory_phase font-grid-complete resident_bytes 94552064
+        1.76 real         1.17 user         0.03 sys
+            94633984  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               12406  page reclaims
+                 134  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 150  voluntary context switches
+                1087  involuntary context switches
+         23567241673  instructions retired
+          4395341738  cycles elapsed
+           158974792  peak memory footprint

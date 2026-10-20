@@ -1,17 +1,25 @@
 import SwiftUI
 import TetherUI
 
-/// Security details live in settings and sheets, not in the terminal chrome.
+/// The host list Settings ▸ Identities opens on. Each host, a new one and a
+/// waiting import are pages pushed over it (`SettingsRoute`), in this window.
 struct IdentitySettings: View {
   @Bindable var store: HostStore
   var connections: TabSet? = nil
-  @State private var selected: Host?
+  @State private var imports = CredentialImport.shared
 
   var body: some View {
+    if let pending = imports.pending {
+      Section {
+        NavigationLink(value: SettingsRoute.Page.importing) {
+          Label("Import from \(pending.exporter)", systemImage: "square.and.arrow.down")
+        }
+      }
+    }
     Section {
       ForEach(store.hosts) { host in
         let problem = host.connectionProblem ?? host.routeProblem
-        Button { selected = host } label: {
+        NavigationLink(value: SettingsRoute.Page.host(host.id)) {
           HStack(spacing: UIStyle.Space.group) {
             Text(host.label)
               .foregroundStyle(Theme.text)
@@ -22,16 +30,14 @@ struct IdentitySettings: View {
               .foregroundStyle(problem == nil ? Theme.success : Theme.warning)
           }
         }
-        .buttonStyle(.borderless)
         .help(problem ?? "Ready")
         .accessibilityLabel(host.label)
         .accessibilityValue(problem ?? "Ready")
       }
-      if let problem = store.problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
-    }
-    .sheet(item: $selected) { host in
-      NavigationStack { HostIdentitySettings(store: store, id: host.id, connections: connections) }
-        .frame(minWidth: UIStyle.sheetWidth, minHeight: UIStyle.sheetHeight)
+      NavigationLink(value: SettingsRoute.Page.newHost) {
+        Label("Add Host", systemImage: "plus")
+      }
+      if let problem = store.problem { Text(problem).foregroundStyle(Theme.danger).textSelection(.enabled) }
     }
   }
 }
@@ -42,7 +48,6 @@ struct HostIdentitySettings: View {
   var connections: TabSet? = nil
   @State private var seed = ""
   @State private var confirmingDelete = false
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     Form {
@@ -51,7 +56,10 @@ struct HostIdentitySettings: View {
           LabeledContent("Host", value: host.hostname)
           LabeledContent("User", value: host.username)
           LabeledContent("Port", value: String(host.port))
-          if let issue = host.connectionProblem { Text(issue).foregroundStyle(.orange) }
+          if let issue = host.connectionProblem { Text(issue).foregroundStyle(Theme.warning) }
+          if host.isManaged {
+            NavigationLink(value: SettingsRoute.Page.edit(host.id)) { Text("Edit Host") }
+          }
         }
         if let profile = host.profile {
           Section("Authentication") {
@@ -101,31 +109,28 @@ struct HostIdentitySettings: View {
                 LabeledContent("SSH Key", value: "Synced")
               }
             } else {
-              Button("Create SSH Key") { store.generateKey(for: host) }
+              SettingsAction("Create SSH Key", systemImage: "key") { store.generateKey(for: host) }
                 .help("The server has to authorize this public key before it can connect. The same key syncs to your other devices.")
             }
           }
           AuthorizationSettings(store: store, host: host, connections: connections)
           Section("MFA on This Device") {
             SecureField("TOTP secret or otpauth URI", text: $seed)
-            Button("Save MFA Credential") {
+            SettingsAction("Save MFA Credential", systemImage: "checkmark") {
               store.setOTP(seed, for: host)
               seed = ""
             }.disabled(seed.isEmpty)
           }
         }
-        if let problem = store.problem { Text(problem).foregroundStyle(.red) }
+        if let problem = store.problem { Text(problem).foregroundStyle(Theme.danger) }
+        if host.isManaged {
+          Section {
+            Button("Delete Host…", role: .destructive) { confirmingDelete = true }
+          }
+        }
       }
     }
     .formStyle(.grouped)
-    .navigationTitle("Identity and Authentication")
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        Button("Delete", role: .destructive) { confirmingDelete = true }
-          .disabled(store.hosts.first { $0.id == id }?.isManaged != true)
-      }
-      ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-    }
     .dialog(for: confirmingDelete ? id : nil) { id in
       let name = store.hosts.first { $0.id == id }?.label ?? "Host"
       return Dialog.confirm(
@@ -134,7 +139,7 @@ struct HostIdentitySettings: View {
       ) {
         if let host = store.hosts.first(where: { $0.id == id }) { store.delete(host) }
         confirmingDelete = false
-        dismiss()
+        SettingsRoute.shared.pop()
       }
     }
   }
@@ -156,18 +161,18 @@ struct DeviceSettings: View {
           ShareLink("Share Pairing Code", item: local.pairingCode)
           Text(local.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
           TextField("Other device’s pairing code", text: $code)
-          Button("Review Device") {
+          SettingsAction("Review Device", systemImage: "magnifyingglass") {
             do { candidate = try DeviceCard.parse(code); parseProblem = nil }
             catch { parseProblem = error.localizedDescription }
           }.disabled(code.isEmpty)
           if let candidate {
             LabeledContent("Device", value: candidate.name)
             Text(candidate.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
-            Button("Trust This Device") { center.pair(candidate); self.candidate = nil; code = "" }
+            SettingsAction("Trust This Device", systemImage: "checkmark.shield") { center.pair(candidate); self.candidate = nil; code = "" }
               .help("Compare this fingerprint with the other device before trusting it. Exchange codes on both devices.")
           }
           if store.snapshot.trust.localRevoked {
-            Text("This device’s approval authority has been revoked.").foregroundStyle(.red)
+            Text("This device’s approval authority has been revoked.").foregroundStyle(Theme.danger)
           }
           ForEach(center.discovered.filter { card in !center.peers.contains { $0.id == card.id } }) { card in
             LabeledContent(card.name, value: "Discovered — not trusted")
@@ -178,32 +183,32 @@ struct DeviceSettings: View {
               Spacer()
               if peer.revoked { Text("Revoked").foregroundStyle(.secondary) }
               else {
-                Button("Revoke", role: .destructive) { center.revoke(peer.id) }
+                SettingsAction("Revoke", systemImage: "person.badge.minus", role: .destructive) { center.revoke(peer.id) }
                   .help("Revoking a device stops its approvals. A key already on a server stays until that authorization is removed.")
               }
             }
           }
-          Button("Check Approval Requests") { Task { await center.refresh() } }
+          SettingsAction("Check Approval Requests", systemImage: "arrow.clockwise") { Task { await center.refresh() } }
           ForEach(center.requests) { request in
             VStack(alignment: .leading, spacing: UIStyle.Space.group) {
               Text(center.peers.first(where: { $0.id == request.sender })?.card.name ?? "Unknown device").bold()
               Text("\(request.username)@\(request.hostname):\(request.port)")
               Text(request.hostFingerprint).font(.caption.monospaced()).textSelection(.enabled)
               HStack {
-                Button("Approve") { Task { await center.respond(request, approve: true, known: known) } }
-                Button("Reject", role: .destructive) { Task { await center.respond(request, approve: false, known: known) } }
+                SettingsAction("Approve", systemImage: "checkmark") { Task { await center.respond(request, approve: true, known: known) } }
+                SettingsAction("Reject", systemImage: "xmark", role: .destructive) { Task { await center.respond(request, approve: false, known: known) } }
               }
             }
           }
         } else {
           TextField("Device Name", text: $name)
-          Button("Enable Device Approval") { center.enable(name: name) }.disabled(name.isEmpty)
+          SettingsAction("Enable Device Approval", systemImage: "checkmark.shield") { center.enable(name: name) }.disabled(name.isEmpty)
         }
-        if let problem = center.problem { Text(problem).foregroundStyle(.red) }
+        if let problem = center.problem { Text(problem).foregroundStyle(Theme.danger) }
       } else {
-        Button("Set Up Device Approval") { Task { await store.startSync() } }
+        SettingsAction("Set Up Device Approval", systemImage: "shield.lefthalf.filled") { Task { await store.startSync() } }
       }
-      if let parseProblem { Text(parseProblem).foregroundStyle(.red) }
+      if let parseProblem { Text(parseProblem).foregroundStyle(Theme.danger) }
     }
     .task {
       while !Task.isCancelled {
@@ -226,7 +231,7 @@ struct AuthorizationSettings: View {
     Section("Remote Authorization") {
       TextField("Device Name", text: $deviceLabel)
       TextField("SSH Public Key", text: $publicKey)
-      Button("Prepare Administrator Request") {
+      SettingsAction("Prepare Administrator Request", systemImage: "doc.badge.plus") {
         do {
           let key = try AuthorizedKeysProvider.keyMaterial(publicKey)
           let record = RemoteAuthorization(hostID: host.id, publicKey: key, deviceLabel: deviceLabel,
@@ -234,7 +239,7 @@ struct AuthorizationSettings: View {
           try store.update { $0.authorizations[record.id] = record }
         } catch { store.recordProblem(error) }
       }.disabled(publicKey.isEmpty || deviceLabel.isEmpty)
-      Button("Install Public Key on This Host") {
+      SettingsAction("Install Public Key on This Host", systemImage: "key.horizontal") {
         Task { await install() }
       }
       .disabled(applying || publicKey.isEmpty || deviceLabel.isEmpty || connections == nil)
@@ -245,7 +250,7 @@ struct AuthorizationSettings: View {
           ShareLink("Export Public Key", item: record.publicKey)
           if let detail = record.detail { Text(detail).font(.caption) }
           if record.provider == "authorized_keys", record.state != .revoked {
-            Button("Remove This Authorization", role: .destructive) { Task { await revoke(record) } }.disabled(applying)
+            SettingsAction("Remove This Authorization", systemImage: "trash", role: .destructive) { Task { await revoke(record) } }.disabled(applying)
           }
         }
       }

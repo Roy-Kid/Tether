@@ -179,12 +179,12 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.pendingClose == nil)
 
     tabs.perform(.previousTab)
-    #expect(tabs.selected == ids.first)
+    #expect(tabs.selectedWorkspaceID == ids.first)
     #expect(!tabs.showsTabBar)
     tabs.perform(.toggleTabBar)
     #expect(tabs.showsTabBar)
     #expect(tabs.title(for: .toggleTabBar) == "Hide Tab Bar")
-    #expect(tabs.selected == ids.first)
+    #expect(tabs.selectedWorkspaceID == ids.first)
   }
 
   #if os(macOS)
@@ -259,7 +259,7 @@ struct WorkspaceOwnershipTests {
   }
 
   @Test("what a plugin shows stands in for the shell, and names itself")
-  func attachmentStandsInForShell() {
+  func attachmentStandsInForShell() throws {
     let tabs = makeTabs()
     let first = tab(.local, name: "Terminal 1")
     tabs.adopt(first)
@@ -271,6 +271,7 @@ struct WorkspaceOwnershipTests {
     attached.isShowing = true
     #expect(first.shown === attached)
     #expect(first.subtitle == "dev / editor")
+    #expect(tabs.caption(for: try #require(tabs.currentWorkspace)) == "dev / editor", "the tab's caption")
     #expect(tabs.workspaceCaption(for: .local) == "Local machine · Terminal 1 / dev / editor")
     #expect(tabs.statusLine().isEmpty)
 
@@ -341,6 +342,23 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.closeNote == ShellActivity.unknown.closeMessage! + "\n\nKept on the host.")
   }
 
+  @Test("clicking another tab, or cycling, switches to it")
+  func clickAndCycleSwitchTabs() {
+    let tabs = makeTabs()
+    tabs.adopt(tab(.local, name: "Terminal 1"))
+    tabs.adopt(tab(.local, name: "Terminal 2"))
+    let ids = tabs.visibleIDs
+    #expect(ids.count == 2)
+    #expect(tabs.selectedWorkspaceID == ids[1])
+
+    tabs.handleTabClick(ids[0])
+    #expect(tabs.selectedWorkspaceID == ids[0])
+    tabs.perform(.nextTab)
+    #expect(tabs.selectedWorkspaceID == ids[1])
+    tabs.perform(.previousTab)
+    #expect(tabs.selectedWorkspaceID == ids[0])
+  }
+
   @Test("clicking the selected tab opens the first accessory")
   func selectedTabClickOpensAccessory() {
     let tabs = makeTabs()
@@ -394,6 +412,26 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.accessory == nil)
     #expect(!tabs.inspector)
   }
+
+  #if os(macOS)
+    @Test("dismissing the accessory that owns the inspector closes that column")
+    func dismissClosesTheInspector() {
+      let tabs = makeTabs()
+      tabs.adopt(tab(.local, name: "Terminal 1"))
+      let id = tabs.selected!
+      tabs.accessories = [
+        PluginAccessory(
+          id: "test.files", title: "Files",
+          accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
+      ]
+      tabs.toggleAccessory("test.files", on: id)
+      tabs.dismissAccessory("test.other", on: id)
+      #expect(tabs.isShowingInspector(of: "test.files"))
+      tabs.dismissAccessory("test.files", on: id)
+      #expect(!tabs.inspector)
+      #expect(tabs.inspectorPlugin == nil)
+    }
+  #endif
 
   @Test("an accessory kept beside the terminal opens the inspector, not a popover")
   func inspectorAccessoryTogglesTheInspector() {

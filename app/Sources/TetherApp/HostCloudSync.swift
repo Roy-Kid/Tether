@@ -8,8 +8,9 @@ import Security
 let syncLog = Logger(subsystem: "Tether", category: "sync")
 
 /// CloudKit carries the library for this Apple ID: the host, and the private
-/// key that logs into it. Passwords, one-time-code seeds and keychain
-/// identifiers stay out of the record. The key field is bytes, never logged.
+/// key, password and one-time-code seed that log into it. Keychain
+/// identifiers stay out of the record. The password and seed are encrypted
+/// fields; none of the three is ever logged.
 @MainActor
 final class HostCloudSync: CKSyncEngineDelegate {
   private weak var store: HostStore?
@@ -204,6 +205,8 @@ final class HostCloudSync: CKSyncEngineDelegate {
           let deleted = (record["deleted"] as? Int64 ?? 0) != 0
           let fields = archive(record)
           let digest = store.sharedPrivateKey(for: sent).map(HostStore.keyDigest)
+          let password = Self.secret("password", in: record)
+          let code = Self.secret("code", in: record)
           try store.update { state in
             guard var current = state.records[id] else { return }
             current.base = sent
@@ -215,6 +218,7 @@ final class HostCloudSync: CKSyncEngineDelegate {
             } else if let digest {
               current.syncedKeyDigest = digest
             }
+            HostStore.didSendSecrets(&current, password: password, code: code)
             state.records[id] = current
           }
         }
@@ -305,7 +309,14 @@ final class HostCloudSync: CKSyncEngineDelegate {
       privateKey = nil
     }
     try store?.receive(profile, deleted: (record["deleted"] as? Int64 ?? 0) != 0, systemFields: archive(record),
-      privateKey: privateKey)
+      privateKey: privateKey, password: Self.secret("password", in: record), code: Self.secret("code", in: record))
+  }
+
+  /// An encrypted field as text: `nil` when the record does not carry it,
+  /// `""` when it withdraws it.
+  private static func secret(_ key: String, in record: CKRecord) -> String? {
+    guard let data = record.encryptedValues[key] as? Data else { return nil }
+    return String(data: data, encoding: .utf8) ?? ""
   }
 
   nonisolated func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext,
@@ -333,6 +344,16 @@ final class HostCloudSync: CKSyncEngineDelegate {
           record["privateKey"] = Data()
         } else if let pem = store.sharedPrivateKey(for: entry.profile) {
           record["privateKey"] = Data(pem.utf8)
+        }
+        if entry.forgetSharedPassword == true {
+          record.encryptedValues["password"] = Data()
+        } else if let password = store.sharedPassword(for: entry.profile) {
+          record.encryptedValues["password"] = Data(password.utf8)
+        }
+        if entry.forgetSharedCode == true {
+          record.encryptedValues["code"] = Data()
+        } else if let code = store.sharedCode(for: entry.profile) {
+          record.encryptedValues["code"] = Data(code.utf8)
         }
         return record
       }

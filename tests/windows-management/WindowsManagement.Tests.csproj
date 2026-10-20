@@ -17,5 +17,6 @@
     <Compile Include="../../app-win/BoundedProcess.cs" Link="BoundedProcess.cs" />
     <Compile Include="../../app-win/WslSession.cs" Link="WslSession.cs" />
     <Compile Include="../../app-win/ProcessTable.cs" Link="ProcessTable.cs" />
+    <Compile Include="../../app-win/Plugins/PortScan.cs" Link="PortScan.cs" />
   </ItemGroup>
 </Project>

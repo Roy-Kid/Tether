@@ -50,31 +50,26 @@ struct UnixTextEditingTests {
     #expect(editor.string == "beta")
   }
 
+  /// What the text system already does, Tether leaves to it: these keys
+  /// pass through untouched. Only ⌃_ is Tether's, and it undoes.
   @Test("native delete, kill, yank, transpose and undo remain available")
   func nativeEditing() throws {
     let (window, editor) = fixture("abc def")
-    editor.setSelectedRange(NSRange(location: 3, length: 0))
-    for letter in ["h", "d"] {
-      let event = try key(letter, .control, in: window)
-      #expect(UnixTextEditing.route(event) === event)
-      editor.keyDown(with: event)
+    let native: [(String, NSEvent.ModifierFlags)] = [
+      ("h", .control), ("d", .control), ("k", .control), ("y", .control), ("t", .control),
+      ("F", [.control, .shift]),
+    ]
+    for (letter, flags) in native {
+      let event = try key(letter, flags, in: window)
+      #expect(UnixTextEditing.route(event) === event, "⌃\(letter) is the text field's own")
     }
-    #expect(editor.string == "abdef")
-    editor.keyDown(with: try key("k", .control, in: window))
-    #expect(editor.string == "ab")
-    editor.keyDown(with: try key("y", .control, in: window))
-    #expect(editor.string == "abdef")
-    editor.keyDown(with: try key("t", .control, in: window))
-    #expect(editor.string == "abdfe")
+    editor.setSelectedRange(NSRange(location: 7, length: 0))
     editor.breakUndoCoalescing()
     editor.undoManager?.removeAllActions()
     editor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
-    #expect(editor.string == "abdfe!")
+    #expect(editor.string == "abc def!")
     #expect(UnixTextEditing.route(try key("_", [.control, .shift], in: window)) == nil)
-    #expect(editor.string == "abdfe")
-    editor.setSelectedRange(NSRange(location: 0, length: 0))
-    editor.keyDown(with: try key("F", [.control, .shift], in: window))
-    #expect(editor.selectedRange() == NSRange(location: 0, length: 1))
+    #expect(editor.string == "abc def")
     for letter in ["a", "x", "c", "v", "z"] {
       let event = try key(letter, .command, in: window)
       #expect(UnixTextEditing.route(event) === event, "native clipboard and undo keys remain native")
@@ -114,7 +109,7 @@ struct UnixTextEditingTests {
     defer { monitor.stop() }
     monitor.enabled = true
     monitor.textEditingEnabled = true
-    monitor.handle = { _, _ in true }
+    monitor.handle = { _, _, _ in true }
     let event = try key("w", .control, in: window)
     #expect(monitor.route(event) == nil)
     #expect(editor.string == "alpha beta")

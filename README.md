@@ -35,6 +35,10 @@ document.
 
 ## Building
 
+For repository development, install the commit gate once per clone with
+`python3 scripts/install-hooks.py`. See [commit checks](docs/commit-checks.md)
+for platform coverage and required tools.
+
 Build with the latest stable Rust (`rustup update stable`); the current minimum is 1.98.1.
 
 ```bash
@@ -50,5 +54,22 @@ byte-for-byte in `molab-apple`, a consumer.
 
 The native macOS app now includes a modular frontend and an optional tmux workspace.
 See [frontend extensions and tmux](docs/plugins.md) for building, extending and using it.
+
+### Quick Terminal (macOS)
+
+Press **Control + `** or click the terminal icon in the macOS menu bar to show
+or hide the current workspace at the top of the display under the pointer.
+Hiding keeps terminals and splits running. The shortcut works while another app
+is active and can be changed under **Settings → Key Bindings → Toggle Quick
+Terminal** (two bindings are supported). Right-click the menu-bar icon for Show/Hide Quick Terminal,
+Restore Window, Close Window, and Quit Tether. Closing the window keeps its
+sessions; Quit uses the normal live-terminal confirmation.
+
+**Settings → General → Quick Terminal** controls the menu-bar button and global
+hotkey, plus automatic hiding when switching apps. Turn off **Hide When
+Switching Apps** to keep the floating terminal visible. **Keep Window on Top**
+also applies to the ordinary window. **Window → Return to Normal Window** restores
+its previous size and position. Shortcut registration conflicts appear in General
+settings; choose another combination there rather than changing another app.
 
 MIT licensed.

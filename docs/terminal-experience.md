@@ -34,6 +34,18 @@ The status bar distinguishes `Exited (0)`, other exit codes, `Closed`, and
 `Connection lost`. Hovering a connection failure exposes its cause. Final output
 remains visible and copyable after exit.
 
+On macOS and iOS, Files follows the active tmux pane's working directory while
+the browser is visible, checking once per second. Pane and window switches made
+through tmux's own controls are included. Manual browsing stays put until the
+terminal reports a different directory; the Shell control returns to the current
+pane immediately.
+
+Printed file paths resolve relative to the pane containing the link, including
+inactive panes. Cmd-click on macOS previews the file; its context menu offers
+Quick Look, Show in Files, Edit, and Download. Edit opens a local copy with the
+default app and writes saved changes back to the host. On iOS, long-press offers
+the preview, Show in Files, and Download.
+
 ## Verification
 
 On Windows:
@@ -62,3 +74,20 @@ Manual checks: remap and restore each shortcut; zoom without inserting a stray
 character at the prompt; copy forward and backward selections including CJK and
 combining characters; cancel and accept a multi-line paste; switch tabs while a
 paste confirmation is open; run `exit 0` and `exit 7`; disconnect an SSH transport.
+
+### Native terminal presentation
+
+Apple's Appearance settings now separate terminal light/dark appearance from
+ANSI color style. Soft is the app default, matching the Windows frontend's
+existing softer palette; Classic preserves the original colors. Named ANSI
+slots keep their meaning, and explicit RGB output is untouched. The palette
+used for the selected tab, terminal background and remote color-query responses
+is the same. Both soft variants participate in the existing contrast checks;
+Soft Light's dim gray was adjusted on both platforms to meet the text floor.
+
+Terminal padding is adjustable from 0 to 40 points and defaults to 16 on Mac,
+12 on iPhone/iPad. Changing it refits the PTY and updates input/selection geometry.
+A consumer's explicit TerminalSurface inset still takes precedence. Font choices
+and sizes remain the person's own preferences, with native system monospace as
+the existing default. SDK callers of Palette.chosen that omit the new style
+argument keep the original classic-palette contract.

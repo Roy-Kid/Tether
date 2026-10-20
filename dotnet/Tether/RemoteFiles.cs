@@ -4,7 +4,7 @@ namespace Tether;
 
 public enum FileKind { File, Directory, Link, Other }
 public sealed record FileEntry(string Name, string Path, FileKind Kind, ulong Size, ulong? Modified, uint Permissions);
-public enum FileFailure { NotFound, Exists, PermissionDenied, NotEmpty, Disconnected, Failed }
+public enum FileFailure { NotFound, Exists, PermissionDenied, NotEmpty, Disconnected, Failed, Changed }
 public sealed class FileOperationException(FileFailure failure, string message) : IOException(message)
 {
     public FileFailure Failure { get; } = failure;
@@ -41,6 +41,13 @@ public sealed class RemoteFiles : IAsyncDisposable
         using var c = new Cancellation(token);
         await Call(() => _inner.Upload(source, path, replace, progress is null ? null : new Progress(progress), c.Ffi)).ConfigureAwait(false);
     }
+    /// <summary>Saves an edited copy only while the original still matches its downloaded version.</summary>
+    public async Task<FileEntry> WriteBackAsync(string source, FileEntry expected, IProgress<ulong>? progress = null, CancellationToken token = default)
+    {
+        using var c = new Cancellation(token);
+        return Lift(await Call(() => _inner.WriteBack(source, expected.Path, expected.Size, expected.Modified,
+            progress is null ? null : new Progress(progress), c.Ffi)).ConfigureAwait(false));
+    }
     public async ValueTask DisposeAsync()
     {
         try { await _inner.Close().ConfigureAwait(false); }
@@ -60,6 +67,7 @@ public sealed class RemoteFiles : IAsyncDisposable
     }
     private static Exception Map(Gen.FileException e) => e switch
     {
+        Gen.FileException.Changed x => new FileOperationException(FileFailure.Changed, $"{x.path} changed since it was opened. Reopen it before saving."),
         Gen.FileException.NotFound x => new FileOperationException(FileFailure.NotFound, $"{x.path} does not exist."),
         Gen.FileException.Exists x => new FileOperationException(FileFailure.Exists, $"{x.path} already exists."),
         Gen.FileException.PermissionDenied x => new FileOperationException(FileFailure.PermissionDenied, $"Access denied: {x.path}"),

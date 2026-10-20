@@ -12,6 +12,9 @@ enum Stage {
   case asking
   case connected
   case failed(String)
+  /// It was up, and the connection went away. The last screen stays, read
+  /// only, until the person reconnects or closes the tab.
+  case lost(String)
   case ended(String?)
 }
 
@@ -21,7 +24,7 @@ struct TabAttachmentEntry {
   let attachment: any TabAttachment
 }
 
-/// One open session — one tab.
+/// One shell session, owned by a workspace tab.
 @MainActor
 @Observable
 final class SessionTab: Identifiable {
@@ -29,10 +32,9 @@ final class SessionTab: Identifiable {
   /// The host as it was when this tab last dialled.
   private(set) var host: Host
   /// Stable work-position name (`Terminal 1`), not the remote title.
-  var name: String { didSet { onNameChanged?(); onHistoryChanged?() } }
+  var name: String { didSet { onHistoryChanged?() } }
   var historyID: UUID?
   var history: SessionHistory?
-  var onNameChanged: (() -> Void)?
   var onHistoryChanged: (() -> Void)?
   private var reportedHistoryError = false
   private var lastHistoryUpdate = Date.distantPast
@@ -40,7 +42,9 @@ final class SessionTab: Identifiable {
   private(set) var stage: Stage = .connecting
   private(set) var frame: ScreenFrame?
   /// `nil` means every row is new. An empty set means only the cursor moved.
+  /// Damage accumulates until the draw that sampled it succeeds.
   private(set) var dirtyRows: Set<Int>?
+  private(set) var damageEpoch = 0
   private(set) var remoteTitle: String = ""
 
   /// Primary tab label. Identity is `id`, never this string.
@@ -53,10 +57,12 @@ final class SessionTab: Identifiable {
 
   /// What tab plugins keep on this tab, in the order they first opened here.
   private(set) var attachments: [TabAttachmentEntry] = []
-  var pendingAttachments: [String: Data] = [:]
 
   /// Something the person has to be told, until they have been.
   private(set) var problem: SessionProblem?
+  /// Whether the problem is put to the person now. A lost connection is a
+  /// state, not an event: it waits in the tab until someone acts on it.
+  private(set) var problemRaised = false
   /// A password that has just worked and could be kept, until answered.
   private(set) var passwordOffer: PasswordOffer?
   /// Whether a working password may be offered to be kept. Off once the
@@ -76,6 +82,33 @@ final class SessionTab: Identifiable {
   var isLive: Bool {
     if case .connected = stage { return true }
     return false
+  }
+
+  /// Down, and able to come back: the connection went away or never came up.
+  var isDisconnected: Bool {
+    switch stage {
+    case .failed, .lost: true
+    default: false
+    }
+  }
+
+  /// Can be dialled again in place: down, or a shell that ended.
+  var canReconnect: Bool {
+    switch stage {
+    case .failed, .lost, .ended: true
+    default: false
+    }
+  }
+
+  /// The state a person reads: the five words of the status bar.
+  var stateName: String {
+    switch stage {
+    case .connecting: "Connecting"
+    case .asking: "Needs authentication"
+    case .connected: "Connected"
+    case .failed, .lost: "Disconnected"
+    case .ended: "Ended"
+    }
   }
 
   /// The handshake is still in flight: waiting on the network, or on a person.
@@ -100,6 +133,12 @@ final class SessionTab: Identifiable {
   /// The far-side tty, once a listing has named it. A local shell already
   /// has one on the session; this is only for a connection that does not.
   private var shellTTY: String?
+  private var terminalHost: String?
+  private var identityTask: Task<Void, Never>?
+  var pluginTerminalIdentity: PluginTerminalIdentity? {
+    guard isLive, let terminalHost, let terminalName else { return nil }
+    return PluginTerminalIdentity(host: terminalHost, terminal: terminalName)
+  }
   private var ttySearch: Task<Void, Never>?
   /// Set when the view has reported a size. Until then the pty is still the
   /// 80×24 it was opened at, which cannot pick this shell out of several.
@@ -112,6 +151,10 @@ final class SessionTab: Identifiable {
   /// and how many have been queued. Later keys stay in order behind them.
   private var keyQueue: Task<Void, Never>?
   private var keySerial = 0
+  /// The close check, run ahead while the terminal is quiet.
+  @ObservationIgnored private lazy var closeCheck = CloseCheck { [weak self] in
+    await self?.checkActivity() ?? .unknown
+  }
   /// What the window draws with, held so a session that opens later is told
   /// the same thing the one before it was.
   private var palette: TerminalPalette?
@@ -137,8 +180,18 @@ final class SessionTab: Identifiable {
     self.known = known
     self.name = name
     self.startingDirectory = directory
+    dialTask = Task { await attach(connection) }
+  }
+
+  /// Restoring several shells spends one authentication exchange when policy permits reuse.
+  init(host: Host, waitingFor source: SessionTab, known: KnownHosts, name: String, directory: String? = nil) {
+    self.host = host
+    self.known = known
+    self.name = name
+    self.startingDirectory = directory
     dialTask = Task {
-      if host.isLocal { await open() } else { await attach(connection) }
+      do { await attach(try await source.connectionReady()) }
+      catch { fail(error) }
     }
   }
 
@@ -189,10 +242,15 @@ final class SessionTab: Identifiable {
     pump = nil
     session?.close()
     session = nil
+    closeCheck.reset()
     ttySearch?.cancel()
     shellTTY = nil
-    frame = nil
-    dirtyRows = nil
+    identityTask?.cancel()
+    terminalHost = nil
+    // The last screen stays until the new shell draws one: a reconnect
+    // that fails again must not take what the person was reading with it.
+    noteDamage(nil)
+    problemRaised = false
     stage = .connecting
     self.typedNow = typedNow
     dialTask = Task { await dial(password) }
@@ -201,6 +259,17 @@ final class SessionTab: Identifiable {
   /// The person has read the problem.
   func acknowledge() {
     problem = nil
+    problemRaised = false
+  }
+
+  /// The person acted on a tab that is down: now is when to ask.
+  func raiseProblem() {
+    if problem != nil { problemRaised = true }
+  }
+
+  /// "Not now": the problem stays with the tab, unasked.
+  func setProblemAside() {
+    problemRaised = false
   }
 
   /// A password that worked, offered to be kept.
@@ -255,11 +324,18 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
-    if !host.isLocal, let directory = startingDirectory, !directory.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
-      let quoted = "'" + directory.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-      try? session.send(.key(.text("cd -- " + quoted + "\r")))
-      startingDirectory = nil
+    identityTask?.cancel()
+    terminalHost = host.isLocal ? ProcessInfo.processInfo.hostName : nil
+    if !host.isLocal, let connection = session.connection {
+      identityTask = Task { [weak self] in
+        guard let output = try? await connection.execute("hostname"), output.status == 0,
+          let value = String(data: output.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty, value.count <= 255, !value.contains(where: { $0.isWhitespace }),
+          !Task.isCancelled, let self, self.session === session else { return }
+        self.terminalHost = value
+      }
     }
+    closeCheck.reset()
     reportHistoryError()
     // Before the first byte where possible: a program can ask what the
     // background is in its first breath, and an unanswered question is
@@ -297,6 +373,7 @@ final class SessionTab: Identifiable {
     }
     problem = SessionProblem(
       kind: .couldNotConnect, reason: message(for: error), refusedLogin: Self.refusesLogin(error))
+    problemRaised = true
   }
 
   /// The server turned down what it was offered, as opposed to never being
@@ -322,7 +399,8 @@ final class SessionTab: Identifiable {
   private func startPumping(_ session: TerminalSession) {
     pump = Task { [weak self] in
       while await session.awaitChange() {
-        guard let self, !Task.isCancelled else { return }
+        guard let self, !Task.isCancelled, self.session === session else { return }
+        self.closeCheck.noteActivity()
         let pause = ProcessInfo.processInfo.isLowPowerModeEnabled ? 33 : 8
         do { try await Task.sleep(for: .milliseconds(pause)) } catch { return }
         guard !Task.isCancelled else { return }
@@ -334,20 +412,23 @@ final class SessionTab: Identifiable {
         // A program's copy (`OSC 52`) is delivered on the same wake as the
         // bytes that carried it. Taken even when this tab is hidden, so a
         // later show does not dump a stale copy onto the pasteboard. Written
-        // only while this tab is the one on screen.
-        let copied = await Self.takeClipboard(session)
+        // only while this tab is the one on screen. The engine moves a copy
+        // aside as it parses, so taking it here never waits on the grid —
+        // a hidden tab's wake takes a lock of its own, not the terminal's.
+        let copied = session.takeClipboard()
         if self.publishesFrames, let copied { copyToPasteboard(copied) }
         // The wake is consumed either way. Showing the tab later copies
         // whatever the screen is then, rather than every intermediate one.
         guard self.publishesFrames else { continue }
         let epoch = self.resizeEpoch
         let update = await Self.copyUpdate(session)
-        guard !Task.isCancelled, self.publishesFrames else { continue }
+        guard !Task.isCancelled, self.session === session else { return }
+        guard self.publishesFrames else { continue }
         // A resize landed while this copy was in flight. The copy may be
         // the grid from before it; the screen now is the one to draw.
         if self.resizeEpoch != epoch {
           self.frame = session.frame()
-          self.dirtyRows = nil
+          self.noteDamage(nil)
           continue
         }
         self.publish(update, session: session)
@@ -355,11 +436,14 @@ final class SessionTab: Identifiable {
 
       // One last repaint. The final frame is announced before the
       // ending is, so stopping here would leave a program's last line
-      // undrawn.
-      guard let self else { return }
-      let copied = await Self.takeClipboard(session)
+      // undrawn. A cancelled reader may wake here after redial; only the
+      // current session can publish its final frame or end this tab.
+      guard let self, !Task.isCancelled, self.session === session else { return }
+      let copied = session.takeClipboard()
       if self.publishesFrames, let copied { copyToPasteboard(copied) }
-      self.publish(await Self.copyUpdate(session), session: session)
+      let update = await Self.copyUpdate(session)
+      guard !Task.isCancelled, self.session === session else { return }
+      self.publish(update, session: session)
       self.finish(session.ending())
     }
   }
@@ -370,12 +454,6 @@ final class SessionTab: Identifiable {
     await Task.detached(priority: .userInitiated) { session.update() }.value
   }
 
-  /// A remote copy, off the main actor. Same lock as the grid, taken
-  /// separately so a clipboard request is not dropped with the damage.
-  private nonisolated static func takeClipboard(_ session: TerminalSession) async -> String? {
-    await Task.detached(priority: .userInitiated) { session.takeClipboard() }.value
-  }
-
   /// Applies a partial update onto the frame already on screen. A full
   /// update replaces it. With no frame yet, the whole screen is taken,
   /// because a list of dirty rows has nothing to patch.
@@ -383,12 +461,12 @@ final class SessionTab: Identifiable {
     switch update {
     case .full(let frame):
       self.frame = frame
-      dirtyRows = nil
+      noteDamage(nil)
       remoteTitle = frame.title
     case .rows(let rows, let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else {
         self.frame = session.frame()
-        dirtyRows = nil
+        noteDamage(nil)
         remoteTitle = self.frame?.title ?? title
         return
       }
@@ -396,7 +474,7 @@ final class SessionTab: Identifiable {
         current, rows: rows, cursorRow: cursorRow, cursorColumn: cursorColumn,
         cursorShape: cursorShape, cursorVisible: cursorVisible, title: title,
         viewportOffset: viewportOffset, historyLines: historyLines, mouse: mouse)
-      dirtyRows = Set(rows.map { Int($0.row) })
+      noteDamage(Set(rows.map { Int($0.row) }))
       remoteTitle = title
     case .idle(let cursorRow, let cursorColumn, let cursorShape, let cursorVisible, let title, let viewportOffset, let historyLines, let mouse):
       guard let current = frame else { return }
@@ -405,9 +483,25 @@ final class SessionTab: Identifiable {
         cursorColumn: cursorColumn, cursorShape: cursorShape, cursorVisible: cursorVisible,
         alternateScreen: current.alternateScreen, mouse: mouse, viewportOffset: viewportOffset,
         historyLines: historyLines, title: title, lines: current.lines)
-      dirtyRows = []
+      noteDamage([])
       remoteTitle = title
     }
+  }
+
+  /// Unions row damage. `nil` stays a full rebuild. An empty update does not
+  /// drop rows the GPU has not drawn yet.
+  private func noteDamage(_ next: Set<Int>?) {
+    damageEpoch += 1
+    switch (dirtyRows, next) {
+    case (nil, _), (_, nil): dirtyRows = nil
+    case (let old?, let new?): dirtyRows = old.union(new)
+    }
+  }
+
+  /// Clears damage only when nothing newer arrived while that frame was drawing.
+  func acknowledgeDamage(epoch: Int) {
+    guard epoch == damageEpoch else { return }
+    dirtyRows = []
   }
 
   /// Turns copying on for the tab someone is looking at, and pulls the
@@ -418,7 +512,7 @@ final class SessionTab: Identifiable {
     guard publishing, let session, !closed else { return }
     Task { [weak self] in
       let update = await Self.copyUpdate(session)
-      guard let self, self.publishesFrames, !self.closed else { return }
+      guard let self, self.publishesFrames, !self.closed, self.session === session else { return }
       self.publish(update, session: session)
     }
   }
@@ -454,21 +548,27 @@ final class SessionTab: Identifiable {
     session?.resume()
   }
 
-  private func finish(_ ending: SessionEnding?) {
+  func finish(_ ending: SessionEnding?) {
+    session = nil
+    closeCheck.reset()
+    if case .lost(let cause) = ending {
+      // Kept, not announced: the frame stays on screen and the problem
+      // waits for the person to act on the tab.
+      stage = .lost(cause)
+      guard !closed else { return }
+      problem = SessionProblem(kind: .lost, reason: cause)
+      return
+    }
     let reason: String? =
       switch ending {
-      case .lost(let cause): cause
-      case .exited(let status) where status != 0:
-        "The shell exited with status \(status)."
+      case .exited(let status) where status != 0: "The shell exited with status \(status)."
       default: nil
       }
     stage = .ended(reason)
-    session = nil
-    guard case .lost(let cause) = ending, !closed else { return }
-    problem = SessionProblem(kind: .lost, reason: cause)
   }
 
   func send(_ input: TerminalInput) {
+    closeCheck.noteActivity()
     // Shift-Page Up reads the history; Page Up on its own goes to the far
     // side, because a pager expects it. This is the split every terminal
     // makes, and making it here keeps the engine free of a keyboard
@@ -516,8 +616,14 @@ final class SessionTab: Identifiable {
   var workingDirectory: String? { session?.workingDirectory }
   var terminalName: String? { session?.terminalName ?? shellTTY }
 
-  /// Checks this session at the close gesture, without writing into its input.
+  /// Checks this session at the close gesture, without writing into its
+  /// input. Usually answered already: see `CloseCheck`.
   func activityForClose() async -> ShellActivity {
+    guard isLive else { return .idle }
+    return await closeCheck.activity()
+  }
+
+  private func checkActivity() async -> ShellActivity {
     guard isLive else { return .idle }
     guard let session, let connection = session.connection else { return .unknown }
     let activity = await ShellActivity.check(
@@ -532,23 +638,20 @@ final class SessionTab: Identifiable {
   ///
   /// The repaint loop wakes on the same change and publishes on the next
   /// refresh. Pulling a second copy here made a drag cost two grids per line.
-  /// A wheel can belong to whatever is standing on this shell instead: a
-  /// full-screen program keeps its own history, and the alternate screen
-  /// here has none.
+  /// A wheel at a cell is decided in `claimWheel` before this is asked, so
+  /// the lines that arrive here belong to this terminal's own history.
   func scroll(_ to: ScrollTo) {
-    if case .lines(let lines) = to {
-      let fullScreen = frame?.alternateScreen == true
-      if attachments.contains(where: { $0.attachment.scrollShell(lines, fullScreen: fullScreen) }) {
-        return
-      }
-    }
     session?.scroll(to)
   }
 
-  /// A wheel the program asked to hear. `true` means an attachment took the
-  /// lines, so the view does not also report them as pointer events.
-  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> Bool {
-    attachments.contains { $0.attachment.claimWheel(lines, column: column, row: row) }
+  /// A wheel at the cell under the pointer. The first attachment with an
+  /// answer takes it. `.pass` leaves the wheel with this terminal.
+  func claimWheel(_ lines: Int32, column: UInt16, row: UInt16) -> WheelClaim {
+    for item in attachments {
+      let claim = item.attachment.claimWheel(lines, column: column, row: row)
+      if claim != .pass { return claim }
+    }
+    return .pass
   }
 
   /// Moves this shell's own history, without offering the lines to a plugin
@@ -579,6 +682,7 @@ final class SessionTab: Identifiable {
     sized = true
     identifyShellTTY()
     guard columns != self.columns || rows != self.rows else { return }
+    closeCheck.noteActivity()
     self.columns = columns
     self.rows = rows
     resizeEpoch += 1
@@ -587,7 +691,7 @@ final class SessionTab: Identifiable {
     // the next byte left the old grid up until something else was printed.
     guard publishesFrames, let session else { return }
     frame = session.frame()
-    dirtyRows = nil
+    noteDamage(nil)
   }
 
   /// Names this shell's far-side tty, when the session itself has none.
@@ -613,7 +717,7 @@ final class SessionTab: Identifiable {
   func connectionReady() async throws -> RemoteConnection {
     if let connection { return connection }
     switch stage {
-    case .failed(let reason):
+    case .failed(let reason), .lost(let reason):
       throw NSError(domain: "Tether", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
     case .ended:
       throw CancellationError()
@@ -636,6 +740,8 @@ final class SessionTab: Identifiable {
   }
 
   func close() {
+    identityTask?.cancel()
+    terminalHost = nil
     closed = true
     problem = nil
     passwordOffer = nil
@@ -653,6 +759,7 @@ final class SessionTab: Identifiable {
     attachments.removeAll()
     session?.close()
     session = nil
+    closeCheck.reset()
   }
 
   /// Whether a plugin's accessory has anything to open here: a lease to
@@ -669,7 +776,6 @@ final class SessionTab: Identifiable {
   func attach(_ attachment: any TabAttachment, for pluginID: String) {
     precondition(self.attachment(for: pluginID) == nil, "One attachment per plugin per tab")
     attachments.append(TabAttachmentEntry(pluginID: pluginID, attachment: attachment))
-    if let saved = pendingAttachments.removeValue(forKey: pluginID) { attachment.restore(from: saved) }
     onHistoryChanged?()
   }
 
