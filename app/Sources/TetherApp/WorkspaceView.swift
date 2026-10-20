@@ -53,7 +53,13 @@ struct RootView: View {
   #if os(macOS)
     @Environment(\.openSettings) private var openSettings
   #endif
-  @Environment(\.scenePhase) private var phase
+  #if os(macOS)
+    /// On screen and key, as the window reports them; a scene would have said.
+    @State private var windowShown = true
+    @State private var windowKey = false
+  #else
+    @Environment(\.scenePhase) private var phase
+  #endif
   #if os(iOS)
     /// Whether there is room for two columns. A phone in portrait is compact;
     /// an iPad, and a large phone turned sideways, are not.
@@ -953,6 +959,17 @@ extension RootView {
     container
       .terminalInputEnabled(terminalInputAllowed)
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
+      #if os(macOS)
+        .background {
+          WindowState(scheme: appearance == "system" ? nil : (appearance == "dark" ? .dark : .light)) {
+            windowShown = $0.shown
+            windowKey = $0.key
+          }
+          .allowsHitTesting(false)
+        }
+        .onChange(of: windowKey, initial: true) { _, _ in tabs.menuShortcuts = windowKey ? shortcutsAllowed : nil }
+        .onChange(of: shortcutsAllowed) { _, _ in tabs.menuShortcuts = windowKey ? shortcutsAllowed : nil }
+      #endif
       .overlay {
         PaletteOverlay(
           tabs: tabs, store: store, commands: commandItems, onPickHost: { open($0) })
@@ -973,7 +990,9 @@ extension RootView {
           .allowsHitTesting(false)
         }
       #endif
-      .focusedSceneValue(\.workspaceShortcutsEnabled, shortcutsAllowed)
+      #if os(iOS)
+        .focusedSceneValue(\.workspaceShortcutsEnabled, shortcutsAllowed)
+      #endif
       .onChange(of: tabs.accessory) { _, open in
         guard let open, let tab = tabs.tabs.first(where: { $0.id == open.tab }) else { return }
         prepareAttachment(open.plugin, on: tab)
@@ -986,7 +1005,11 @@ extension RootView {
       }
       .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
       .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
-      .onChange(of: phase) { _, _ in refreshFramePublishing() }
+      #if os(macOS)
+        .onChange(of: windowShown) { _, _ in refreshFramePublishing() }
+      #else
+        .onChange(of: phase) { _, _ in refreshFramePublishing() }
+      #endif
       .onChange(of: registry.disabled, initial: true) { _, _ in
         tabs.accessories = registry.plugins.compactMap { plugin in
           guard let plugin = plugin as? any TabPlugin, registry.isEnabled(plugin.metadata.id)
@@ -1134,16 +1157,17 @@ extension RootView {
 
   /// Only the tab in front copies a frame, and only while the app is in
   /// front. The others stay subscribed, so the next time they are shown
-  /// the screen they copy is the current one.
+  /// the screen they copy is the current one. Every tab keeps reading:
+  /// a session left unread backs up to its far side, and a server drops
+  /// a client that has stopped answering (`TerminalSession.pause`).
   private func refreshFramePublishing() {
-    let foreground = phase != .background
+    #if os(macOS)
+      let foreground = windowShown
+    #else
+      let foreground = phase != .background
+    #endif
     for tab in tabs.tabs {
       tab.setPublishesFrames(foreground && (tab.id == tabs.selected || tabs.workspaceSplit?.ids.contains(tab.id) == true))
-      if foreground {
-        tab.resumeReading()
-      } else {
-        tab.pauseReading()
-      }
     }
   }
 

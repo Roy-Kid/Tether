@@ -17,21 +17,37 @@ import TmuxPlugin
   /// One window is the whole app. Closing it must not quit: the icon stays
   /// in the Dock, the window is put away with every tab in it, and a click on
   /// the icon brings it back (`HideInsteadOfClose`).
+  ///
+  /// The window is made here, not by a scene: SwiftUI's own window cannot
+  /// be the panel the quick terminal is shown as (`WorkspaceWindow`).
+  @MainActor
   final class TetherAppDelegate: NSObject, NSApplicationDelegate {
-    /// The sessions a quit would end. Handed over once the window exists.
-    weak var tabs: TabSet?
+    let model = AppModel()
+    private(set) var window: WorkspaceWindow?
     private lazy var quitGate = QuitGate()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+      let window = WorkspaceWindow(hosting: RootHost(model: model))
+      self.window = window
+      model.tabs.quickTerminal.attach(to: window)
+      model.tabs.quickTerminal.useBindings(model.tabs.keyBindings)
+      window.makeKeyAndOrderFront(nil)
+      // Launch activated the app before it had a window, which brings no
+      // Space forward. Now that it has one, once more — measured: launched
+      // behind another app's full-screen Space, the window stayed behind it.
+      NSApp.activate(ignoringOtherApps: true)
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
       false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-      MainActor.assumeIsolated { quitGate.shouldTerminate(sender, tabs: tabs) }
+      quitGate.shouldTerminate(sender, tabs: model.tabs)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-      tabs?.quickTerminal.stop()
+      model.tabs.quickTerminal.stop()
     }
 
     /// The main window, not just any: with Settings open and the main
@@ -51,7 +67,7 @@ import TmuxPlugin
 
     func application(_ application: NSApplication, continue activity: NSUserActivity,
       restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
-      MainActor.assumeIsolated { CredentialImport.shared.receive(activity) }
+      CredentialImport.shared.receive(activity)
     }
   }
 #endif
@@ -60,72 +76,19 @@ import TmuxPlugin
 struct TetherApp: App {
   #if os(macOS)
     @NSApplicationDelegateAdaptor(TetherAppDelegate.self) private var appDelegate
+    private var model: AppModel { appDelegate.model }
+  #else
+    @State private var model = AppModel()
   #endif
-  @State private var store: HostStore = {
-    #if DEBUG
-      if let directory = Bundle.main.object(forInfoDictionaryKey: "TetherUITestDirectory") as? String {
-        return HostStore(location: URL(fileURLWithPath: directory).appending(path: "hosts.json"))
-      }
-      if let path = ProcessInfo.processInfo.environment["TETHER_HOSTS_FILE"] {
-        return HostStore(location: URL(fileURLWithPath: path))
-      }
-    #endif
-    return HostStore()
-  }()
-  @State private var tabs: TabSet = {
-    #if DEBUG
-      if let directory = Bundle.main.object(forInfoDictionaryKey: "TetherUITestDirectory") as? String {
-        return TabSet(historyStore: SessionHistoryStore(directory: URL(fileURLWithPath: directory).appending(path: "history")))
-      }
-    #endif
-    return TabSet(historyStore: SessionHistoryStore())
-  }()
-  /// One keychain for the process. Passwords are read at the moment of
-  /// connecting and never held here (spec §18).
-  private let secrets: any SecretStore = Keychain()
-  @Environment(\.scenePhase) private var phase
-  @State private var registry: PluginRegistry = {
-    let registry = PluginRegistry()
-    registry.register(TmuxPlugin())
-    registry.register(FilesPlugin())
-    registry.register(PortsPlugin())
-    return registry
-  }()
-
-  @State private var plugins = PluginAPI(consent: DialogConsent())
-  @State private var imports = CredentialImport.shared
-  @State private var installedPlugins: InstalledPlugins?
 
   var body: some Scene {
     #if os(macOS)
-      // A single window, not a `WindowGroup`: the sidebar is the document
-      // picker, so a second empty window would be a second copy of the same
-      // host list with nothing open in it.
-      Window("Tether", id: "main") {
-        root
-          .containerBackground(.clear, for: .window)
-          .frame(minWidth: Chrome.windowMinWidth, minHeight: Chrome.windowMinHeight)
-          .onAppear { appDelegate.tabs = tabs }
-          .background {
-            QuickTerminalHost(controller: tabs.quickTerminal,
-              bindings: tabs.keyBindings)
-              .frame(width: 0, height: 0)
-          }
-      }
-      // `.contentSize` would bind the window to the content's *ideal* size,
-      // and a terminal has no ideal size — measured: the window opened
-      // 44×89 points, off the bottom-left corner of the screen.
-      .defaultSize(width: Chrome.windowWidth, height: Chrome.windowHeight)
-      .windowResizability(.contentMinSize)
-      .windowStyle(.hiddenTitleBar)
-      .commands {
-        WorkspaceCommands(tabs: tabs)
-      }
-
-      // A separate scene, because that is where a Mac keeps preferences and
-      // where ⌘, already goes.
+      // The workspace window is the delegate's, not a scene's. Settings
+      // stays one, because that is where a Mac keeps preferences and where
+      // ⌘, already goes; the menus hang off it.
       Settings {
-        AppSettings(registry: registry, known: tabs.known, store: store, secrets: secrets, connections: tabs, installedPlugins: installedPlugins)
+        AppSettings(registry: model.registry, known: model.tabs.known, store: model.store, secrets: model.secrets,
+          connections: model.tabs, installedPlugins: model.installedPlugins)
           .background {
             WorkspaceKeyBindingMonitor(enabled: false, textEditingEnabled: true) { _, _, _ in false }
               .allowsHitTesting(false)
@@ -133,29 +96,43 @@ struct TetherApp: App {
       }
       .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
       .windowResizability(.contentMinSize)
+      .commands {
+        WorkspaceCommands(tabs: model.tabs)
+      }
     #else
       // A phone has no preferences window and no menu bar; settings are
       // reached from the sidebar and presented over the app.
       WindowGroup {
-        root
+        RootHost(model: model)
       }
-      .commands { WorkspaceCommands(tabs: tabs) }
+      .commands { WorkspaceCommands(tabs: model.tabs) }
     #endif
   }
+}
 
-  private var root: some View {
-    RootView(store: store, tabs: tabs, registry: registry, secrets: secrets, plugins: plugins, installedPlugins: $installedPlugins)
+/// The whole app's view, with what happens around it as it comes up, as the
+/// library changes and as attention comes and goes. The same everywhere;
+/// only the window or scene around it differs.
+struct RootHost: View {
+  @Bindable var model: AppModel
+  #if os(iOS)
+    @Environment(\.scenePhase) private var phase
+  #endif
+
+  var body: some View {
+    RootView(store: model.store, tabs: model.tabs, registry: model.registry, secrets: model.secrets,
+      plugins: model.plugins, installedPlugins: $model.installedPlugins)
       .task {
         // First, so the keychain is listed before anything on screen could
         // be holding a key it has not saved yet.
-        Task { await store.sweepCredentials() }
-        if installedPlugins == nil {
+        Task { await model.store.sweepCredentials() }
+        if model.installedPlugins == nil {
           let library = InstalledPlugins(
-            directory: InstalledPlugins.defaultDirectory, registry: registry, host: PluginHost(api: plugins))
-          plugins.onStatus = { [registry] id, item in
+            directory: InstalledPlugins.defaultDirectory, registry: model.registry, host: PluginHost(api: model.plugins))
+          model.plugins.onStatus = { [registry = model.registry] id, item in
             registry.plugins.first { $0.metadata.id == id }?.receiveStatus(item)
           }
-          installedPlugins = library
+          model.installedPlugins = library
           library.discover()
           #if os(macOS)
             if let flag = CommandLine.arguments.firstIndex(of: "--install-plugin"),
@@ -163,65 +140,72 @@ struct TetherApp: App {
               do { try await library.install(directory: URL(fileURLWithPath: CommandLine.arguments[flag + 1])) }
               catch PluginHostError.consentDenied { }
               catch {
-                await plugins.notify(title: "Could Not Install Plugin", body: error.localizedDescription)
+                await model.plugins.notify(title: "Could Not Install Plugin", body: error.localizedDescription)
               }
             }
           #endif
         }
-        tabs.reconcileClosedTabs(with: store.hosts)
-        tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
-        store.useKeyBindings(tabs.keyBindings)
+        model.tabs.reconcileClosedTabs(with: model.store.hosts)
+        model.tabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
+        model.store.useKeyBindings(model.tabs.keyBindings)
         await Task.yield()
         // The first terminal waits for nothing slow: the library on this
         // device is already read, and a shell here needs nothing else.
         await openAtLaunch()
         // Then the SSH file and the keychain, off the main actor. Ask before
         // copying ~/.ssh/config over the library. The file is not written.
-        await store.refresh()
-        store.offerConfigurationImport()
+        await model.store.refresh()
+        model.store.offerConfigurationImport()
         // iCloud last: account status, the user record and a full fetch can
         // take seconds on a slow network, and nothing above needs them.
-        await store.startSync()
+        await model.store.startSync()
       }
-      .onChange(of: registry.plugins.map(\.metadata.id)) { _, _ in
-        tabs.keyBindings.register(KeyBindingCatalog.commands(registry: registry))
+      .onChange(of: model.registry.plugins.map(\.metadata.id)) { _, _ in
+        model.tabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
       }
-      .onChange(of: store.hosts) { _, hosts in
-        tabs.reconcileClosedTabs(with: hosts)
+      .onChange(of: model.store.hosts) { _, hosts in
+        model.tabs.reconcileClosedTabs(with: hosts)
         // A synchronized endpoint or policy change invalidates an in-flight
         // attempt and its old lease. Stale tabs cannot keep granting channels.
-        for tab in tabs.tabs where tab.host.isManaged {
+        for tab in model.tabs.tabs where tab.host.isManaged {
           let current = hosts.first { $0.id == tab.host.id }
-          if current?.sameSessionTarget(as: tab.host) != true { tabs.close(tab.id, remember: false) }
+          if current?.sameSessionTarget(as: tab.host) != true { model.tabs.close(tab.id, remember: false) }
         }
       }
-      .onChange(of: store.accountGeneration) { _, _ in tabs.closeAccountSessions() }
-      .dialog(for: imports.notice) { notice in
-        Dialog.notice(notice.title, message: notice.message) { imports.notice = nil }
+      .onChange(of: model.store.accountGeneration) { _, _ in model.tabs.closeAccountSessions() }
+      .dialog(for: model.imports.notice) { notice in
+        Dialog.notice(notice.title, message: notice.message) { model.imports.notice = nil }
       }
-      // Coming forward reads the library through iCloud again. The SSH
-      // file is imported only from the question at open, or from Settings.
-      .onChange(of: phase) { _, phase in
-        plugins.deliversSystemNotes = phase != .active
-        if phase != .active { tabs.checkpointHistory() }
-        if phase == .active {
-          Task {
-            await store.refresh()
-            await store.startSync()
-            await store.syncNow()
-          }
-        }
-      }
-      #if os(iOS)
-        .onContinueUserActivity(ASCredentialExchangeActivity) { imports.receive($0) }
+      #if os(macOS)
+        // Attention is the window being key. The overlay is worked in
+        // without the app ever becoming active, so the app's state says nothing.
+        .background { WindowState { attend($0.key) }.allowsHitTesting(false) }
+      #else
+        .onChange(of: phase) { _, phase in attend(phase == .active) }
+        .onContinueUserActivity(ASCredentialExchangeActivity) { model.imports.receive($0) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-          for tab in tabs.tabs { tab.releaseHistory() }
+          for tab in model.tabs.tabs { tab.releaseHistory() }
         }
       #endif
   }
+
+  /// Coming forward reads the library through iCloud again. The SSH file
+  /// is imported only from the question at open, or from Settings. Going
+  /// away, the histories are written and notes go to the system.
+  private func attend(_ attentive: Bool) {
+    model.plugins.deliversSystemNotes = !attentive
+    if !attentive { model.tabs.checkpointHistory() }
+    if attentive {
+      Task {
+        await model.store.refresh()
+        await model.store.startSync()
+        await model.store.syncNow()
+      }
+    }
+  }
 }
 
-extension TetherApp {
+extension RootHost {
   /// The host named on the command line, or else this machine.
   ///
   /// The command line wins. Someone who typed `--open lab` asked for a
@@ -233,7 +217,7 @@ extension TetherApp {
   func openAtLaunch() async {
     if openHostNamedOnCommandLine() { return }
     if CommandLine.arguments.contains("--open") {
-      await store.startSync()
+      await model.store.startSync()
       if openHostNamedOnCommandLine() { return }
     }
     openLocalAtLaunch()
@@ -258,12 +242,12 @@ extension TetherApp {
     // `listed` rather than `hosts`, so `--open localhost` reaches the machine
     // this is running on like any other name in the sidebar does.
     guard
-      let host = store.listed.first(where: {
+      let host = model.store.listed.first(where: {
         $0.label.lowercased() == wanted || $0.hostname.lowercased() == wanted
       })
     else { return false }
 
-    tabs.intent = .connect(host)
+    model.tabs.intent = .connect(host)
     return true
   }
 
@@ -278,9 +262,9 @@ extension TetherApp {
     guard TerminalSession.isLocalAvailable,
       UserDefaults.standard.object(forKey: LaunchPreference.key) as? Bool
         ?? LaunchPreference.default,
-      tabs.tabs.isEmpty
+      model.tabs.tabs.isEmpty
     else { return }
 
-    tabs.open(.local, password: "")
+    model.tabs.open(.local, password: "")
   }
 }

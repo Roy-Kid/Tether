@@ -42,9 +42,10 @@ pane immediately.
 
 Printed file paths resolve relative to the pane containing the link, including
 inactive panes. Cmd-click on macOS previews the file; its context menu offers
-Quick Look, Show in Files, Edit, and Download. Edit opens a local copy with the
-default app and writes saved changes back to the host. On iOS, long-press offers
-the preview, Show in Files, and Download.
+Quick Look, Show in Files, Edit, and Download…. A folder downloads with its
+contents. Edit opens a local copy with the default app and writes saved changes
+back to the host. On iOS, long-press offers the preview, Show in Files, and
+Download….
 
 ## Verification
 

@@ -531,6 +531,10 @@ public final class TerminalSession: Sendable {
   }
 
   /// Stops reading the far side until `resume`. Closing still ends the session.
+  ///
+  /// Output backs up at the far side meanwhile, and an SSH server whose
+  /// writes stall drops the client. Pause for moments, not while a window
+  /// is hidden.
   public func pause() {
     inner.pause()
   }

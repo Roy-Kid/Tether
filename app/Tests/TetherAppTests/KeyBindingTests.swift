@@ -28,11 +28,12 @@ struct KeyBindingTests {
     try body(KeyBindingStore(defaults: defaults), defaults)
   }
 
-  @Test("existing command-menu bindings both dispatch by default")
+  @Test("the command menu has one chord and it is not shared")
   func defaultBindings() {
     isolated { store, _ in
-      #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == "commandMenu")
-      #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == "commandMenu")
+      #expect(store.command(for: KeyBinding("o", [.command, .shift]), in: commands) == "commandMenu")
+      #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == nil)
+      #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == nil)
       #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
       #expect(store.command(for: KeyBinding("s"), in: commands) == nil, "⌘S is Save on a Mac")
       #expect(WorkspaceAction.toggleTabBar.command.defaults == [nil, nil])
@@ -44,6 +45,8 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("r"), in: commands) == "renameTerminal")
       #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), nil])
       #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
+      #expect(store.command(for: KeyBinding("`", .control), in: commands) == "quickTerminal")
+      #expect(store.command(for: KeyBinding("`", [.control, .shift]), in: commands) == nil)
       #expect(store.command(for: KeyBinding("t"), in: commands) == "newTab")
       #expect(store.command(for: KeyBinding("t", [.command, .shift]), in: commands) == "restoreTab")
       #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
@@ -107,7 +110,7 @@ struct KeyBindingTests {
     try isolated { store, _ in
       let command = WorkspaceAction.newTerminal.command
       #expect(throws: KeyBindingStore.BindingError.self) {
-        try store.set(KeyBinding("p", [.control, .shift]), for: command, slot: 1, commands: commands)
+        try store.set(KeyBinding("o", [.command, .shift]), for: command, slot: 1, commands: commands)
       }
       #expect(throws: KeyBindingStore.BindingError.self) {
         try store.set(KeyBinding("n"), for: command, slot: 1, commands: commands)

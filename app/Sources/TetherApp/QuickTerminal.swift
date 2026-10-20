@@ -5,8 +5,12 @@ import Observation
 import SwiftUI
 import TetherUI
 
-/// Presents the existing workspace as a hotkey terminal. Hiding the window
-/// never closes a session; leaving this mode restores its ordinary geometry.
+/// Presents the existing workspace as a hotkey terminal: the same window,
+/// shown as an overlay. A non-activating panel is key without making this
+/// the active app, so the app in front stays there and the window can join
+/// any Space — another app's full-screen one on another display included —
+/// which no activating window can (`WorkspaceWindow`). Hiding it never
+/// closes a session; leaving this mode restores its ordinary geometry.
 @MainActor @Observable
 final class QuickTerminalController: NSObject {
   var enabled: Bool {
@@ -44,10 +48,20 @@ final class QuickTerminalController: NSObject {
   @ObservationIgnored private var normalFrame: NSRect?
   @ObservationIgnored private var normalBehavior: NSWindow.CollectionBehavior?
   @ObservationIgnored private var previousApp: NSRunningApplication?
+  /// What the window animated with before quick mode. Ordering out with the
+  /// default animation and ordering forward before it finishes waits on the
+  /// window server, which is waiting for this thread.
+  @ObservationIgnored private var normalAnimation: NSWindow.AnimationBehavior?
+  /// Where the window remembers its frame. Not while quick: the overlay's
+  /// frame is a display's top half, not what the next launch should open at.
+  @ObservationIgnored private var normalAutosaveName: NSWindow.FrameAutosaveName?
   @ObservationIgnored private var pendingShow = false
   @ObservationIgnored private var bindingsStore: KeyBindingStore?
   @ObservationIgnored private var bindings: [KeyBinding] = []
-  @ObservationIgnored private var hotKeys: [EventHotKeyRef] = []
+  @ObservationIgnored private(set) var hotKeys: [EventHotKeyRef] = []
+  /// The key codes `hotKeys` were registered for, read from the
+  /// ASCII-capable layout that an input source change may replace.
+  @ObservationIgnored private var registeredCodes: [UInt16?] = []
   @ObservationIgnored private var eventHandler: EventHandlerRef?
   @ObservationIgnored private var statusItem: NSStatusItem?
   @ObservationIgnored private var showingStatusMenu = false
@@ -71,6 +85,8 @@ final class QuickTerminalController: NSObject {
       name: NSWindow.didResignKeyNotification, object: window)
     NotificationCenter.default.addObserver(self, selector: #selector(exitedFullScreen),
       name: NSWindow.didExitFullScreenNotification, object: window)
+    NotificationCenter.default.addObserver(self, selector: #selector(screenChanged),
+      name: NSWindow.didChangeScreenNotification, object: window)
     NotificationCenter.default.addObserver(self, selector: #selector(resignedKey),
       name: NSApplication.didResignActiveNotification, object: NSApp)
     DistributedNotificationCenter.default().addObserver(self, selector: #selector(keyboardChanged),
@@ -105,16 +121,46 @@ final class QuickTerminalController: NSObject {
     refreshStatusItem()
   }
 
+  /// The Carbon hotkey runs inside the window server's event. Show and hide
+  /// on the next turn, after that event has returned.
+  fileprivate func scheduleToggleFromHotKey() {
+    DispatchQueue.main.async { [weak self] in
+      self?.toggle()
+    }
+  }
+
   func toggle() {
     guard enabled, let window else { return }
     if window.styleMask.contains(.fullScreen) {
       pendingShow = true
       window.toggleFullScreen(nil)
-    } else if isQuick && window.isVisible && window.isKeyWindow {
+    } else if isQuick && window.isVisible && window.isKeyWindow && window.isOnActiveSpace {
       hide()
     } else {
       show()
     }
+  }
+
+  /// Shown on every Space, a full-screen one included. An overlay is not
+  /// a full-screen window of its own.
+  private static let quickSpaces: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+  private func applyQuickBehavior(to window: NSWindow) {
+    var behavior = window.collectionBehavior
+    behavior.remove([.moveToActiveSpace, .fullScreenPrimary, .fullScreenNone, .primary, .auxiliary])
+    behavior.formUnion(Self.quickSpaces)
+    window.collectionBehavior = behavior
+  }
+
+  private func removeQuickBehavior(from window: NSWindow) {
+    var behavior = window.collectionBehavior
+    behavior.remove(Self.quickSpaces)
+    window.collectionBehavior = behavior
+  }
+
+  private func suspendAnimation(on window: NSWindow) {
+    if normalAnimation == nil { normalAnimation = window.animationBehavior }
+    window.animationBehavior = .none
   }
 
   private func show() {
@@ -122,48 +168,110 @@ final class QuickTerminalController: NSObject {
     if !isQuick {
       normalFrame = window.frame
       normalBehavior = window.collectionBehavior
+      normalAutosaveName = window.frameAutosaveName
+      window.setFrameAutosaveName("")
       isQuick = true
     }
     let front = NSWorkspace.shared.frontmostApplication
     if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-    // The pointer chooses the display, including screens to the left or
-    // above the primary display. visibleFrame respects the menu bar/notch.
-    let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+    // The display being worked on: the one holding the frontmost app's
+    // window. The pointer can rest on another display for hours, and is
+    // only asked when no window says. visibleFrame respects the menu bar.
+    let screen = Self.focusedScreen()
+      ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
       ?? window.screen ?? NSScreen.main
-    if let screen {
-      window.setFrame(Self.frame(in: screen.visibleFrame, minimumHeight: window.minSize.height), display: true)
-    }
-    window.level = .floating
-    var behavior = window.collectionBehavior
-    behavior.remove([.moveToActiveSpace, .fullScreenPrimary, .fullScreenNone, .primary, .auxiliary])
-    behavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications])
-    window.collectionBehavior = behavior
+    suspendAnimation(on: window)
     if window.isMiniaturized { window.deminiaturize(nil) }
-    NSApp.activate()
-    window.makeKeyAndOrderFront(nil)
+    // Showing on a Space that is no longer in front: come here rather than
+    // send the person back there. Re-framed while still there, a window is
+    // put on the pointer's display instead of the one asked for.
+    if window.isVisible && !window.isOnActiveSpace { window.orderOut(nil) }
+    // Key without activating: the app in front keeps its place and its
+    // menu bar, and the overlay comes up wherever it is asked to.
+    (window as? NSPanel)?.styleMask.insert(.nonactivatingPanel)
+    window.level = .floating
+    applyQuickBehavior(to: window)
+    if let screen {
+      window.setFrame(Self.frame(in: screen.visibleFrame, minimumHeight: window.minSize.height), display: window.isVisible)
+    }
+    window.orderFrontRegardless()
+    window.makeKey()
+  }
+
+  /// Dragged to another display: it takes that display's top half, as it
+  /// would have been shown there.
+  @objc private func screenChanged() {
+    guard isQuick, let window, window.isVisible, let screen = window.screen else { return }
+    let frame = Self.frame(in: screen.visibleFrame, minimumHeight: window.minSize.height)
+    guard window.frame != frame else { return }
+    window.setFrame(frame, display: true)
   }
 
   /// Kept separate from toggle so focus changes cannot accidentally reopen it.
   func hide() {
     guard isQuick, let window else { return }
     let returnsFocus = window.isKeyWindow && NSApp.isActive
+    suspendAnimation(on: window)
+    removeQuickBehavior(from: window)
     window.orderOut(nil)
-    if returnsFocus { previousApp?.activate() }
+    let previous = returnsFocus ? previousApp : nil
     previousApp = nil
+    if let previous {
+      RunLoop.main.perform {
+        _ = MainActor.assumeIsolated { previous.activate() }
+      }
+    }
   }
 
   @objc func restore() {
     pendingShow = false
     guard isQuick, let window else { return }
     isQuick = false
+    let hidden = !window.isVisible
+    (window as? NSPanel)?.styleMask.remove(.nonactivatingPanel)
     if let normalBehavior { window.collectionBehavior = normalBehavior }
-    if let normalFrame { window.setFrame(normalFrame, display: true) }
+    if let normalFrame { window.setFrame(normalFrame, display: !hidden) }
     window.level = alwaysOnTop ? .floating : .normal
+    if let normalAnimation { window.animationBehavior = normalAnimation }
+    if let normalAutosaveName, !normalAutosaveName.isEmpty { window.setFrameAutosaveName(normalAutosaveName) }
     self.normalFrame = nil
     self.normalBehavior = nil
+    self.normalAnimation = nil
+    self.normalAutosaveName = nil
     previousApp = nil
-    NSApp.activate()
+    if hidden { window.orderFrontRegardless() }
+    // An ordinary window again, and asked for by the person: in front
+    // regardless. `activate()` only asks, and the app in front keeps it.
+    NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
+  }
+
+  /// The display holding the frontmost app's front window. Another app's
+  /// windows are not ours to ask, so the window server's list answers.
+  private static func focusedScreen() -> NSScreen? {
+    guard let front = NSWorkspace.shared.frontmostApplication,
+      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]]
+    else { return nil }
+    let pid = front.processIdentifier
+    let ordinary = windows.lazy
+      .filter { $0[kCGWindowOwnerPID as String] as? pid_t == pid && $0[kCGWindowLayer as String] as? Int == 0 }
+      .compactMap { ($0[kCGWindowBounds as String] as? NSDictionary).flatMap(CGRect.init(dictionaryRepresentation:)) }
+    let screens = NSScreen.screens
+    return screenIndex(holding: Array(ordinary), screens: screens.map(\.frame)).map { screens[$0] }
+  }
+
+  /// Which of `screens` holds the frontmost of `windows`, listed front to
+  /// back as the window server gives them: from the primary display's
+  /// top-left corner, y down. One off every display is passed over: a
+  /// full-screen app's toolbar waits just above its display while hidden.
+  static func screenIndex(holding windows: [CGRect], screens: [NSRect]) -> Int? {
+    guard let primary = screens.first else { return nil }
+    for bounds in windows {
+      let center = NSPoint(x: bounds.midX, y: primary.maxY - bounds.midY)
+      if let index = screens.firstIndex(where: { NSMouseInRect(center, $0, false) }) { return index }
+    }
+    return nil
   }
 
   static func frame(in visibleFrame: NSRect, minimumHeight: CGFloat) -> NSRect {
@@ -193,7 +301,12 @@ final class QuickTerminalController: NSObject {
     show()
   }
 
-  @objc private func keyboardChanged() { refreshHotKeys() }
+  /// Sent several times for every switch, Pinyin on or off included. Only a
+  /// new ASCII-capable layout moves a shortcut to another key.
+  @objc func keyboardChanged() {
+    guard bindings.map(\.carbonKeyCode) != registeredCodes else { return }
+    refreshHotKeys()
+  }
 
   @objc private func statusPressed() {
     guard let event = NSApp.currentEvent,
@@ -270,6 +383,7 @@ final class QuickTerminalController: NSObject {
   private func refreshHotKeys() {
     for hotKey in hotKeys { UnregisterEventHotKey(hotKey) }
     hotKeys = []
+    registeredCodes = []
     shortcutProblem = nil
     guard enabled, !recordingShortcut, window != nil else { return }
     if eventHandler == nil {
@@ -280,8 +394,12 @@ final class QuickTerminalController: NSObject {
         let result = GetEventParameter(event, EventParamName(kEventParamDirectObject),
           EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
         guard result == noErr, id.signature == 0x54455448 else { return OSStatus(eventNotHandledErr) }
+        // Return before touching the window. Activation from inside this
+        // handler waits on the window server, and the server waits on the
+        // handler — the window never comes back.
         MainActor.assumeIsolated {
-          Unmanaged<QuickTerminalController>.fromOpaque(context).takeUnretainedValue().toggle()
+          Unmanaged<QuickTerminalController>.fromOpaque(context).takeUnretainedValue()
+            .scheduleToggleFromHotKey()
         }
         return noErr
       }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
@@ -290,8 +408,9 @@ final class QuickTerminalController: NSObject {
         return
       }
     }
+    let codes = bindings.map(\.carbonKeyCode)
     for (index, binding) in bindings.enumerated() {
-      guard let keyCode = binding.carbonKeyCode else {
+      guard let keyCode = codes[index] else {
         shortcutProblem = "\(binding.label) is unavailable on this keyboard layout. Choose another shortcut."
         continue
       }
@@ -302,6 +421,7 @@ final class QuickTerminalController: NSObject {
       if status == noErr, let ref { hotKeys.append(ref) }
       else { shortcutProblem = "\(binding.label) could not be registered (\(status)). It may be used by another app. Choose another shortcut." }
     }
+    registeredCodes = codes
   }
 
   func stop() {
@@ -318,7 +438,6 @@ final class QuickTerminalController: NSObject {
   }
 }
 
-/// Attaches only to the main scene, never a Settings window or a sheet.
 /// The menu-bar mark, drawn from the app logo and used as a template so
 /// the system tints it for the menu bar.
 enum MenuBarMark {
@@ -387,28 +506,6 @@ enum MenuBarMark {
   }
 }
 
-struct QuickTerminalHost: NSViewRepresentable {
-  let controller: QuickTerminalController
-  let bindings: KeyBindingStore
-
-  func makeNSView(context: Context) -> Hook { Hook(controller: controller) }
-  func updateNSView(_ view: Hook, context: Context) { controller.useBindings(bindings) }
-  static func dismantleNSView(_ view: Hook, coordinator: ()) { view.controller.stop() }
-
-  final class Hook: NSView {
-    let controller: QuickTerminalController
-    init(controller: QuickTerminalController) {
-      self.controller = controller
-      super.init(frame: .zero)
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not from a nib") }
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      if let window { controller.attach(to: window) }
-    }
-  }
-}
 struct QuickTerminalSettings: View {
   @Bindable var controller: QuickTerminalController
   var bindings: KeyBindingStore?

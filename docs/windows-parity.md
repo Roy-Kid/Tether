@@ -101,7 +101,7 @@ picker groups currently connected hosts above idle ones. Startup settings offer
 the same last-tab stay-or-quit choice as macOS General. A Security page lists
 trusted `known_hosts` entries with Forget, and password identities with Delete.
 Key Bindings now expose primary and secondary chords per command (Command Palette
-defaults include Alt+Shift+P as the secondary chord). Web plugins install,
+defaults to one chord, ⌘⇧O). Web plugins install,
 update and uninstall from Settings → Extensions; a panel can open as an
 inspector beside a terminal or as a full workspace tab in the tab strip.
 

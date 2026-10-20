@@ -5,6 +5,16 @@ import Tether
 #if os(macOS)
   import AppKit
   typealias NativeTerminalView = NSView
+
+  /// `configure` disables this, and `nextDrawable` then waits on the calling
+  /// thread until a drawable exists. That wait never ends while the same
+  /// thread still owes Core Animation the commit that would create one.
+  private final class TimeoutMetalLayer: CAMetalLayer {
+    override var allowsNextDrawableTimeout: Bool {
+      get { super.allowsNextDrawableTimeout }
+      set { super.allowsNextDrawableTimeout = true }
+    }
+  }
 #else
   import UIKit
   typealias NativeTerminalView = UIView
@@ -90,35 +100,77 @@ final class TerminalGPUView: NativeTerminalView {
   private var notedScale: CGFloat = 0
   private var pixelWidth: UInt32 = 0
   private var pixelHeight: UInt32 = 0
+  /// The window was ordered out. The swapchain from that generation cannot
+  /// be acquired; drawing it blocks this thread inside `nextDrawable`.
+  private var orderedIn = false
+  /// The window just came forward. Paint waits until the next run-loop turn,
+  /// after the order-front that made it visible has returned.
+  private var paintHeld = false
+  private var resumeQueued = false
+  /// One missed acquire recreates the surface. A second miss waits for the
+  /// window to come forward again instead of blocking every turn.
+  private var acquireGaveUp = false
   private(set) var submittedFrames = 0
   var onFailure: ((Error, @escaping @MainActor () -> Void, @escaping @MainActor () -> Void) -> Void)?
   var onPresented: ((Int) -> Void)?
   var onScale: ((CGFloat) -> Void)?
 
   #if os(macOS)
-    override func makeBackingLayer() -> CALayer { CAMetalLayer() }
+    override func makeBackingLayer() -> CALayer { TimeoutMetalLayer() }
     init() {
       super.init(frame: .zero)
       wantsLayer = true
-      for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
+      for name in [
+        NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
+        NSWindow.didBecomeKeyNotification,
+      ] {
         NotificationCenter.default.addObserver(self, selector: #selector(windowChanged(_:)), name: name, object: nil)
       }
       NotificationCenter.default.addObserver(self, selector: #selector(resume), name: NSApplication.didUnhideNotification, object: nil)
     }
     override func hitTest(_: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); noteScale(); window == nil ? shutdown() : schedule() }
-    override func layout() { super.layout(); noteScale(); schedule() }
+    override func layout() {
+      super.layout()
+      noteScale()
+      guard window?.isVisible == true else {
+        orderedIn = false
+        paintHeld = false
+        if renderer != nil || initialization != nil { shutdown() }
+        return
+      }
+      guard orderedIn else {
+        orderedIn = true
+        paintHeld = true
+        resume()
+        return
+      }
+      schedule()
+    }
     override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); noteScale(); invalidate(); schedule() }
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     private var displayScale: CGFloat { window?.backingScaleFactor ?? 1 }
     private var drawable: Bool {
-      guard let window, !isHidden, window.isMiniaturized == false, !NSApplication.shared.isHidden else { return false }
+      guard let window, window.isVisible, !isHidden, window.isMiniaturized == false,
+        !NSApplication.shared.isHidden else { return false }
       return window.occlusionState.contains(.visible)
     }
     @objc private func windowChanged(_ note: Notification) {
       guard let window, (note.object as? NSWindow) === window else { return }
-      let visible = window.occlusionState.contains(.visible) || note.name == NSWindow.didDeminiaturizeNotification
+      guard window.isVisible else {
+        // The swapchain from a window that has left the screen cannot be
+        // acquired. Drop it here, not on the turn that orders the window back.
+        orderedIn = false
+        paintHeld = false
+        if renderer != nil || initialization != nil { shutdown() }
+        return
+      }
+      let cameForward = note.name == NSWindow.didDeminiaturizeNotification
+        || note.name == NSWindow.didBecomeKeyNotification
+      let visible = window.occlusionState.contains(.visible) || cameForward
       guard visible else { return }
+      orderedIn = true
+      paintHeld = true
       resume()
     }
   #else
@@ -161,6 +213,9 @@ final class TerminalGPUView: NativeTerminalView {
     } else { dirty = dirtyRows }
     pending = Pending(frame: frame, dirty: dirty, damageEpoch: damageEpoch, metrics: metrics, palette: palette, transparentBackground: transparentBackground, overlay: overlay)
     noteScale()
+    #if os(macOS)
+      if paintHeld { return }
+    #endif
     schedule()
   }
 
@@ -174,7 +229,22 @@ final class TerminalGPUView: NativeTerminalView {
   }
 
   private func invalidate() { pending?.dirty = nil; pixelWidth = 0; pixelHeight = 0 }
-  @objc private func resume() { invalidate(); schedule() }
+  /// Paint after this run-loop turn. A window that just came forward has not
+  /// committed its layer yet, and acquiring a drawable waits until it has.
+  @objc private func resume() {
+    guard !resumeQueued else { return }
+    resumeQueued = true
+    RunLoop.main.perform { [weak self] in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.resumeQueued = false
+        self.acquireGaveUp = false
+        self.paintHeld = false
+        if self.renderer == nil { self.invalidate() }
+        self.schedule()
+      }
+    }
+  }
 
   private func schedule() {
     guard !queued, !failed, !quietDismissal else { return }
@@ -234,6 +304,10 @@ final class TerminalGPUView: NativeTerminalView {
         pixelWidth = width
         pixelHeight = height
       }
+      // `configure` turns this off, and `nextDrawable` then waits on this
+      // thread until a drawable exists. A window that just came forward can
+      // already look visible while the compositor has none.
+      metalLayer.allowsNextDrawableTimeout = true
       renderer.setFonts(primary: pending.metrics.primary, wide: pending.metrics.wide)
       let fontSize = Float(pending.metrics.size * scale)
       _ = try renderer.measure(size: fontSize)
@@ -243,7 +317,17 @@ final class TerminalGPUView: NativeTerminalView {
       let palette = pending.palette.renderPalette(backgroundOpacity: pending.transparentBackground ? 0 : 1)
       let presented = try renderer.draw(frame: pending.frame, palette: palette, overlay: pending.overlay,
         fontSize: fontSize, dirtyRows: pending.dirty.map { $0.sorted().map(UInt32.init) })
-      if !notePresent(presented, epoch: epoch) { schedule() }
+      if notePresent(presented, epoch: epoch) {
+        acquireGaveUp = false
+      } else if !acquireGaveUp {
+        // Retrying inside this turn calls `nextDrawable` again before the
+        // compositor can make one, so the timeout never ends.
+        acquireGaveUp = true
+        shutdown()
+        RunLoop.main.perform { [weak self] in
+          MainActor.assumeIsolated { self?.schedule() }
+        }
+      }
     } catch {
       shutdown()
       if !recovery { recovery = true; schedule() }

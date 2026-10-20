@@ -64,7 +64,7 @@ sessions. View → Show/Hide Tab Bar does the same thing.
 Visibility is saved locally and restored on the next launch in either layout.
 Zen temporarily hides the bar without changing this preference.
 Customize the shortcut under **Toggle Tab Bar** in Settings → Key Bindings.
-The same **Toggle Tab Bar** command is available in the Cmd+Shift+P command menu,
+The same **Toggle Tab Bar** command is available in the Cmd+Shift+O command menu,
 whether the tab bar is currently shown or hidden.
 Showing tabs from Zen Mode exits Zen Mode; opening a tab's accessory also
 reveals a hidden tab bar so its popover has a visible anchor.

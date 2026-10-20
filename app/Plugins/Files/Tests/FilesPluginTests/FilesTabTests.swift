@@ -174,6 +174,7 @@ struct FilesTabTests {
     #endif
     let before = host.shown
     let download = try #require(actions.commands.first { $0.id == "download" })
+    #expect(download.title == "Download…")
     download.action()
     try await settle(model) { !model.pendingSave.isEmpty }
     #expect(host.shown == before + 1)
@@ -620,6 +621,90 @@ struct FilesTabTests {
     #expect(saving.pendingSave.isEmpty)
     let saved = folder.appendingPathComponent("A.png")
     #expect(FileManager.default.fileExists(atPath: saved.path))
+  }
+
+  @Test("a download copies a folder, including an empty one and a hidden file")
+  func downloadCopiesAFolder() async throws {
+    var files = tree
+    files["/home/ada/runs/nested"] = .directory
+    files["/home/ada/runs/nested/note.txt"] = .file
+    files["/home/ada/runs/empty"] = .directory
+    files["/home/ada/runs/.secret"] = .file
+    files["/home/ada/runs/link"] = .link
+    let source = StubSource(files)
+    let asking = browser(source)
+    await asking.go(to: "/home/ada")
+    let runs = try #require(asking.entries.first { $0.name == "runs" })
+    asking.download([runs])
+    #expect(asking.pendingSave.map(\.path) == ["/home/ada/runs"])
+    #expect(source.downloads.isEmpty)
+
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-folder-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let defaults = cleanDefaults()
+    defaults.set(folder.path, forKey: FilesPreferences.directoryKey)
+    let saving = browser(source, defaults: defaults)
+    var revealed = false
+    saving.revealSaved = { _ in revealed = true }
+    await saving.go(to: "/home/ada")
+    let again = try #require(saving.entries.first { $0.name == "runs" })
+    saving.download([again])
+    try await settle(saving) { revealed }
+    #expect(source.downloads.count == 3)
+    let saved = folder.appendingPathComponent("runs")
+    #expect(try Data(contentsOf: saved.appendingPathComponent("plot.png")) == Data("/home/ada/runs/plot.png".utf8))
+    #expect(
+      try Data(contentsOf: saved.appendingPathComponent("nested/note.txt"))
+        == Data("/home/ada/runs/nested/note.txt".utf8))
+    #expect(try Data(contentsOf: saved.appendingPathComponent(".secret")) == Data("/home/ada/runs/.secret".utf8))
+    var empty = ObjCBool(false)
+    #expect(FileManager.default.fileExists(atPath: saved.appendingPathComponent("empty").path, isDirectory: &empty))
+    #expect(empty.boolValue)
+    #expect(!FileManager.default.fileExists(atPath: saved.appendingPathComponent("link").path))
+    #expect(saving.problem == nil)
+  }
+
+  @Test("a folder on this machine is copied as a folder")
+  func downloadCopiesALocalFolder() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("files-local-\(UUID().uuidString)", isDirectory: true)
+    let project = root.appendingPathComponent("proj", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: project.appendingPathComponent("sub"), withIntermediateDirectories: true)
+    try Data("hi".utf8).write(to: project.appendingPathComponent("sub/a.txt"))
+    let destination = root.appendingPathComponent("out", isDirectory: true)
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let source = StubSource(["/": .directory])
+    source.isLocal = true
+    let defaults = cleanDefaults()
+    defaults.set(destination.path, forKey: FilesPreferences.directoryKey)
+    let model = browser(source, defaults: defaults)
+    var revealed = false
+    model.revealSaved = { _ in revealed = true }
+    model.download([
+      FileEntry(
+        name: "proj", path: project.path, kind: .directory, size: 0, modified: nil, permissions: 0o755)
+    ])
+    try await settle(model) { revealed }
+    #expect(try Data(contentsOf: destination.appendingPathComponent("proj/sub/a.txt")) == Data("hi".utf8))
+    #expect(source.downloads.isEmpty)
+  }
+
+  @Test("a printed folder is offered for download")
+  func printedFolderDownloads() async throws {
+    let host = HostProbe()
+    let model = browser(StubSource(tree), host: host)
+    defer { model.close() }
+    await model.go(to: "/home/ada")
+    let actions = try #require(model.actions(for: pointed("runs", in: "/home/ada")))
+    let download = try #require(actions.commands.first { $0.id == "download" })
+    download.action()
+    try await settle(model) { !model.pendingSave.isEmpty }
+    #expect(model.pendingSave.map(\.path) == ["/home/ada/runs"])
   }
 
   @Test("a download moves the preview copy instead of fetching again")

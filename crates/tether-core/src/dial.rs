@@ -143,7 +143,7 @@ impl Dial {
             endpoint,
             user: user.into(),
             verifier: Arc::new(tether_ssh::RejectAll),
-            config: Arc::new(tether_ssh::Config::default()),
+            config: Arc::new(Self::transport()),
             // `xterm-256color` is what the far side will believe it is
             // talking to. It must describe what a consumer can actually
             // render; a frontend that cannot do 256 colours should say so.
@@ -152,6 +152,20 @@ impl Dial {
             options: Options::default(),
             history: None,
             jumps: Vec::new(),
+        }
+    }
+
+    /// The transport's defaults, plus a keepalive. Without one a link that
+    /// dies quietly — the machine slept, a NAT forgot the flow — is never
+    /// noticed: the session reads nothing and reports nothing, and a person
+    /// sees a terminal that has stopped answering. Thirty seconds between
+    /// probes and three missed answers is what OpenSSH users set
+    /// (`ServerAliveInterval`); a consumer passes its own to [`config`](Self::config).
+    fn transport() -> tether_ssh::Config {
+        tether_ssh::Config {
+            keepalive_interval: Some(std::time::Duration::from_secs(30)),
+            keepalive_max: 3,
+            ..tether_ssh::Config::default()
         }
     }
 
@@ -437,4 +451,21 @@ async fn attempt(connection: Connection, user: &str, offer: &Offer) -> Result<St
 
 fn names(methods: &[tether_ssh::Method]) -> Vec<String> {
     methods.iter().map(|method| method.0.clone()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dial_keeps_its_connection_alive_by_default() {
+        let dial = Dial::new(tether_ssh::Endpoint::new("example.invalid", 22), "someone");
+        let interval = dial.config.keepalive_interval.expect("a keepalive interval");
+        assert!(
+            interval >= std::time::Duration::from_secs(15)
+                && interval <= std::time::Duration::from_secs(60),
+            "a dead link is noticed within a few minutes, not a quiet one mistaken for dead"
+        );
+        assert!(dial.config.keepalive_max >= 2, "one lost reply is not a lost connection");
+    }
 }

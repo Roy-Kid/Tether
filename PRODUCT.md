@@ -71,7 +71,7 @@ Claims a neighbouring product (Termius, Blink, Prompt) cannot honestly copy:
   original shell or tmux session → window → pane.
 - **Mac workspace.** One 32pt tab strip that shares its row with the traffic
   lights, plus a 24pt host bar. Commands live in the native menu bar, a
-  command menu (⌃⇧P / ⌘⇧P) and quick switch (⌘P). The inspector opens on
+  command menu (⌘⇧O) and quick switch (⌘P). The inspector opens on
   demand. Zen mode hides all chrome.
 - **iPhone and iPad.** The same host library and sync. A plugin accessory
   opens as a full-screen cover with its own navigation and Close button. A

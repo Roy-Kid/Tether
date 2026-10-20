@@ -118,6 +118,12 @@ keychain.
 iOS targets are not installed by default:
 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
 
+When replacing an installed macOS app, preserve its signing team and application
+identifier (`codesign -dv` and `codesign -d --entitlements :-`). Build with the
+existing team's `--team`; replacing a team-signed app with an ad-hoc build can
+make its saved Data Protection Keychain credentials unavailable. Do not treat
+the resulting missing-credential error as a reason to re-enter or delete secrets.
+
 iCloud sync needs a team-signed build; an ad-hoc one runs but never syncs,
 and carries no credential provider, so it cannot import from a password
 manager either. The app is `Roy-Kid.Tether` with container
@@ -201,6 +207,15 @@ again. A host the file does not name stays. A quiet read (`ConfigImport`)
 still updates a stanza someone edited and never undoes an untouched one.
 `~/.ssh/known_hosts` is still only read. The sync button reads the whole
 library through iCloud again.
+
+On a Mac the workspace window is the app's own `NSPanel`
+(`WorkspaceWindow`), hosting the SwiftUI root, not a SwiftUI scene: the
+quick terminal is that same window shown as a non-activating overlay — key
+without making Tether the active app, on every Space, another app's
+full-screen one on another display included — and only a panel can be
+that. It opens on the display holding the frontmost app's window. Menu
+enabling reads the model (`TabSet.menuShortcuts`); a focused value does
+not leave an `NSHostingView`.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the

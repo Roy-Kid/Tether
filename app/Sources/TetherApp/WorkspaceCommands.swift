@@ -9,7 +9,11 @@ import TetherPluginKit
 /// the in-window palettes use; this is not a second set of buttons.
 struct WorkspaceCommands: Commands {
   @Bindable var tabs: TabSet
-  @FocusedValue(\.workspaceShortcutsEnabled) private var shortcutsEnabled
+  #if os(macOS)
+    private var shortcutsEnabled: Bool? { tabs.menuShortcuts }
+  #else
+    @FocusedValue(\.workspaceShortcutsEnabled) private var shortcutsEnabled
+  #endif
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
@@ -153,7 +157,11 @@ struct WorkspaceCommands: Commands {
 private struct PluginShortcut: ViewModifier {
   let tabs: TabSet
   let id: String
-  @FocusedValue(\.workspaceShortcutsEnabled) private var enabled
+  #if os(macOS)
+    private var enabled: Bool? { tabs.menuShortcuts }
+  #else
+    @FocusedValue(\.workspaceShortcutsEnabled) private var enabled
+  #endif
   func body(content: Content) -> some View {
     content
       .keyboardShortcut(tabs.keyBindings.bindings(forID: id).compactMap { $0 }.first?.keyboardShortcut)

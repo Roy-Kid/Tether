@@ -28,6 +28,14 @@ struct NativeSurfaceTests {
   }
 
   #if os(macOS)
+  @Test("configure cannot disable the drawable timeout")
+  func drawableTimeoutStaysEnabled() {
+    let view = TerminalGPUView()
+    let layer = view.layer as? CAMetalLayer
+    layer?.allowsNextDrawableTimeout = false
+    #expect(layer?.allowsNextDrawableTimeout == true)
+  }
+
   @Test("attach, hidden updates, resize, detach and reattach")
   func lifetime() async throws {
     TerminalFonts.prepare()

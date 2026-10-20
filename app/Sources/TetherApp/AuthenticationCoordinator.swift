@@ -22,7 +22,7 @@ final class AuthenticationCoordinator {
   private let answerTimeout: Duration
   /// The server asked the one-time code this profile routes to a secret.
   private var otpRequested = false
-  /// Why the saved code could not answer, told on the dialog that asks instead.
+  /// Guidance when a saved code cannot answer and manual input is needed.
   private var savedCodeProblem: String?
   /// The account password the person typed during this login, if they did.
   /// Read once the login has worked — it is the one worth keeping — and
@@ -171,8 +171,7 @@ final class AuthenticationCoordinator {
         == profile.authentication.otpPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     else { return nil }
     otpRequested = true
-    // When nothing on this device can answer it, the person can — and is
-    // told why they are being asked.
+    // When automatic code entry is unavailable, ask for manual input.
     do {
       if let recipient = profile.authentication.remoteApprovalDevice,
         recipient != ContinuityService.active[host.accountScope]?.local?.id {
@@ -189,7 +188,7 @@ final class AuthenticationCoordinator {
       let otp = try JSONDecoder().decode(TOTP.self, from: Data(credentials.read(id).utf8))
       return try otp.code()
     } catch {
-      savedCodeProblem = "The saved code could not be used. \(message(for: error))"
+      savedCodeProblem = "Enter your code manually."
       return nil
     }
   }

@@ -20,16 +20,19 @@ struct KeyBindingSettings: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      searchBar
-
-      Divider()
-
-      Form {
-        commandList
+    Form {
+      commandList
+    }
+    .formStyle(.grouped)
+    .scrollContentBackground(.hidden)
+    // Inset, so a pinned section title stays below the field.
+    .safeAreaInset(edge: .top, spacing: 0) {
+      VStack(spacing: 0) {
+        searchBar
+        Divider()
       }
-      .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
+      .frame(maxWidth: .infinity)
+      .background(Theme.window)
     }
     .onChange(of: recording != nil) { _, recording in onRecordingChange(recording) }
     .onDisappear { onRecordingChange(false) }
@@ -37,7 +40,7 @@ struct KeyBindingSettings: View {
   }
 
   private var searchBar: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: UIStyle.Space.section) {
       TextField("Search key bindings", text: $query, prompt: Text("Search commands or shortcuts"))
         .textFieldStyle(.roundedBorder)
         .labelsHidden()
@@ -58,8 +61,10 @@ struct KeyBindingSettings: View {
       .accessibilityValue(grouped ? "On" : "Off")
       .accessibilityAddTraits(grouped ? .isSelected : [])
     }
-    .padding(.horizontal, 20)
-    .padding(.vertical, 8)
+    // Leading matches the grouped form margin, so the field lines up with the rows.
+    .padding(.leading, UIStyle.Space.section + UIStyle.Space.small)
+    .padding(.trailing, UIStyle.Space.wide)
+    .padding(.vertical, UIStyle.Space.group)
   }
 
   @ViewBuilder

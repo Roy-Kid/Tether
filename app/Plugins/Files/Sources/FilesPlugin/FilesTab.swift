@@ -984,46 +984,110 @@ extension FilesTab {
     return location
   }
 
-  /// Saves the files where the person asked, or into the folder they set.
-  /// No folder yet: the browser asks. A preview copy in the cache is moved,
-  /// not fetched again.
-  func download(_ files: [FileEntry]) {
-    let files = files.filter { $0.kind == .file }
-    guard !files.isEmpty else { return }
+  /// Saves the entries where the person asked, or into the folder they set.
+  /// No folder yet: the browser asks. A directory goes with what is in it.
+  /// A link does not: it is not the thing it names.
+  func download(_ entries: [FileEntry]) {
+    let saving = entries.filter { $0.kind == .file || $0.kind == .directory }
+    guard !saving.isEmpty else { return }
     if let folder = FilesPreferences.downloadDirectory(defaults) {
-      Task { await save(files, to: folder) }
+      Task { await save(saving, to: folder) }
     } else {
-      pendingSave = files
+      pendingSave = saving
     }
   }
 
-  /// Puts `files` into `directory`. A remote file that was already previewed
+  /// Puts `entries` into `directory`. A remote file that was already previewed
   /// is moved out of the cache; anything else is fetched straight there. A
-  /// file on this machine is copied, and left where it is.
-  func save(_ files: [FileEntry], to directory: URL) async {
+  /// file on this machine is copied, and left where it is. A directory is
+  /// copied with its contents, including an empty one.
+  func save(_ entries: [FileEntry], to directory: URL) async {
     let scoped = directory.startAccessingSecurityScopedResource()
     defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
-    let manager = FileManager.default
     var saved: [URL] = []
-    for file in files where file.kind == .file {
-      let taken = Set((try? manager.contentsOfDirectory(atPath: directory.path)) ?? [])
-      let target = directory.appendingPathComponent(Names.free(Names.local(file.name), taken: taken))
+    var seen: Set<String> = []
+    for entry in entries where entry.kind == .file || entry.kind == .directory {
       do {
-        let filesSource = try await source()
-        let current = await identity(file, from: filesSource)
-        if filesSource.isLocal {
-          try manager.copyItem(at: URL(fileURLWithPath: file.path), to: target)
-        } else if cache.move(current, to: target) {
-          // The preview copy was the download.
-        } else {
-          _ = try await transfers.download(current, to: target, from: filesSource)
+        if let url = try await saveEntry(entry, into: directory, depth: 0, seen: &seen) {
+          saved.append(url)
         }
-        saved.append(target)
       } catch {
         if (error as? FileError) != .cancelled { problem = describe(error) }
       }
     }
     if !saved.isEmpty { revealSaved(saved) }
+  }
+
+  /// How deep a downloaded folder may go. A listing is the far side's data,
+  /// and one that names a new directory forever has to stop.
+  private static let downloadDepth = 64
+
+  /// One file or directory, under a name not already taken in `directory`.
+  /// A path already saved in this download is skipped, so a listing that
+  /// repeats itself cannot walk twice.
+  private func saveEntry(
+    _ entry: FileEntry, into directory: URL, depth: Int, seen: inout Set<String>
+  ) async throws -> URL? {
+    guard entry.kind == .file || entry.kind == .directory else { return nil }
+    guard seen.insert(entry.path).inserted else { return nil }
+    if entry.kind == .directory {
+      return try await saveDirectory(entry, into: directory, depth: depth, seen: &seen)
+    }
+    return try await saveFile(entry, into: directory)
+  }
+
+  private func saveDirectory(
+    _ entry: FileEntry, into directory: URL, depth: Int, seen: inout Set<String>
+  ) async throws -> URL? {
+    guard depth < Self.downloadDepth else {
+      throw FileError.failed(cause: "“\(Names.display(entry.name))” is too deep to download.")
+    }
+    let filesSource = try await source()
+    let target = Self.uniqueDestination(entry.name, in: directory)
+    if filesSource.isLocal {
+      try FileManager.default.copyItem(at: URL(fileURLWithPath: entry.path), to: target)
+      return target
+    }
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    let children: [FileEntry]
+    do {
+      children = try await filesSource.list(entry.path)
+    } catch {
+      problem = describe(error)
+      return target
+    }
+    for child in children {
+      if Task.isCancelled { return target }
+      do {
+        _ = try await saveEntry(child, into: target, depth: depth + 1, seen: &seen)
+      } catch {
+        if (error as? FileError) != .cancelled { problem = describe(error) }
+      }
+    }
+    return target
+  }
+
+  /// A remote file that was already previewed is moved out of the cache;
+  /// anything else is fetched straight to `directory`. A file on this machine
+  /// is copied, and left where it is.
+  private func saveFile(_ file: FileEntry, into directory: URL) async throws -> URL {
+    let target = Self.uniqueDestination(file.name, in: directory)
+    let filesSource = try await source()
+    let current = await identity(file, from: filesSource)
+    if filesSource.isLocal {
+      try FileManager.default.copyItem(at: URL(fileURLWithPath: file.path), to: target)
+    } else if cache.move(current, to: target) {
+      // The preview copy was the download.
+    } else {
+      _ = try await transfers.download(current, to: target, from: filesSource)
+    }
+    return target
+  }
+
+  /// `name` in `directory`, or `name 2` when that name is already there.
+  private static func uniqueDestination(_ name: String, in directory: URL) -> URL {
+    let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+    return directory.appendingPathComponent(Names.free(Names.local(name), taken: taken))
   }
 
   /// What a drag of `entry` takes: the selection, when `entry` is part of

@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import SwiftUI
 
   /// What the red button does to the main window.
   ///
@@ -56,6 +57,9 @@
       guard !window.isVisible || window.isMiniaturized else { return false }
       if window.isMiniaturized { window.deminiaturize(nil) }
       window.makeKeyAndOrderFront(nil)
+      // The click that asked for this activated the app before the window
+      // was there to bring its Space forward; with the window up, once more.
+      NSApp.activate(ignoringOtherApps: true)
       return true
     }
 
@@ -73,6 +77,74 @@
     override func forwardingTarget(for selector: Selector!) -> Any? {
       if super.responds(to: selector) { return nil }
       return forwarded
+    }
+  }
+
+  /// What the window this view is in is doing — on screen or put away, key
+  /// or not — for views that would have asked a scene. It also hands the
+  /// window the colour scheme the content chose, so sheets and the traffic
+  /// lights match a grid forced light or dark.
+  struct WindowState: NSViewRepresentable {
+    struct Value: Equatable {
+      var shown = false
+      var key = false
+    }
+    var scheme: ColorScheme?
+    let onChange: @MainActor (Value) -> Void
+
+    func makeNSView(context: Context) -> Hook { Hook(onChange: onChange) }
+    func updateNSView(_ view: Hook, context: Context) {
+      view.onChange = onChange
+      view.apply(scheme: scheme)
+    }
+
+    final class Hook: NSView {
+      var onChange: @MainActor (Value) -> Void
+      private var value = Value()
+      private var scheme: ColorScheme?
+
+      init(onChange: @escaping @MainActor (Value) -> Void) {
+        self.onChange = onChange
+        super.init(frame: .zero)
+      }
+
+      @available(*, unavailable)
+      required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        if let window {
+          for name in [
+            NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+          ] {
+            NotificationCenter.default.addObserver(self, selector: #selector(changed), name: name, object: window)
+          }
+        }
+        apply(scheme: scheme)
+        report()
+      }
+
+      @objc private func changed() { report() }
+
+      /// On the next turn: a window change can arrive inside a view update.
+      private func report() {
+        let next = Value(
+          shown: window.map { $0.isVisible && !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false,
+          key: window?.isKeyWindow ?? false)
+        guard next != value else { return }
+        value = next
+        RunLoop.main.perform { [weak self] in
+          MainActor.assumeIsolated { self?.onChange(next) }
+        }
+      }
+
+      func apply(scheme: ColorScheme?) {
+        self.scheme = scheme
+        window?.appearance = scheme.flatMap { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) }
+      }
     }
   }
 

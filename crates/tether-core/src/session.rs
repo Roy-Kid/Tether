@@ -332,6 +332,11 @@ impl TerminalSession {
     }
 
     /// Stops the pump reading until [`resume`](Self::resume). Close still ends it.
+    ///
+    /// Output backs up at the producer meanwhile. Over SSH that is the
+    /// channel's buffer and then the socket: once they are full the server's
+    /// writes stall, its keepalives go unanswered, and it drops the client.
+    /// Pause for moments, not for as long as a window is hidden.
     pub fn pause(&self) {
         let _ = self.commands.send(Command::Pause);
     }

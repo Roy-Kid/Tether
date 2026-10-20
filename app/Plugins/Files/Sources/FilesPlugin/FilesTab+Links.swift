@@ -33,8 +33,10 @@ extension FilesTab {
         })
     #endif
     commands.append(
-      PluginCommand(id: "download", title: "Download", symbol: "arrow.down.circle") { [weak self] in
-        Task { await self?.withResolved(printed) { self?.download([$0]) } }
+      PluginCommand(id: "download", title: "Download…", symbol: "arrow.down.circle") { [weak self] in
+        Task {
+          await self?.withResolved(printed, kinds: [.file, .directory]) { self?.download([$0]) }
+        }
       })
     return LinkActions(
       open: { [weak self] in Task { await self?.look(at: printed) } },
@@ -146,8 +148,10 @@ extension FilesTab {
     #endif
   }
 
-  private func withResolved(_ printed: Printed, _ body: (FileEntry) -> Void) async {
-    guard let entry = await resolve(printed), entry.kind == .file else { return missing() }
+  private func withResolved(
+    _ printed: Printed, kinds: Set<FileKind> = [.file], _ body: (FileEntry) -> Void
+  ) async {
+    guard let entry = await resolve(printed), kinds.contains(entry.kind) else { return missing() }
     // Downloads and large edits present their picker/confirmation through
     // the browser, even when the action started in the terminal's menu.
     tab.focus()

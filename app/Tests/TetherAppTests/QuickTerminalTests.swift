@@ -1,8 +1,15 @@
 #if os(macOS)
 import AppKit
 import Carbon.HIToolbox
+import SwiftUI
 import Testing
 @testable import TetherApp
+
+/// The app's window, key and main whether or not the test process is.
+final class KeyedWorkspaceWindow: WorkspaceWindow {
+  override var isKeyWindow: Bool { true }
+  override var isMainWindow: Bool { true }
+}
 
 @MainActor
 @Suite("Quick Terminal", .serialized)
@@ -23,8 +30,9 @@ struct QuickTerminalTests {
     defer { defaults.removePersistentDomain(forName: suite) }
     let tabs = TabSet(defaults: defaults)
     let controller = tabs.quickTerminal
-    let window = KeyedWindow.make()
-    defer { controller.stop(); window.close() }
+    let autosave = "quick-terminal-test.\(UUID())"
+    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: autosave)
+    defer { controller.stop(); window.close(); UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(autosave)") }
     let terminal = SessionTab(preview: .local, known: KnownHosts(), name: "Kept", live: false)
     tabs.adopt(terminal)
     let original = window.frame
@@ -34,13 +42,20 @@ struct QuickTerminalTests {
     #expect(controller.isQuick)
     #expect(window.isVisible)
     #expect(window.level == .floating)
-    #expect(window.collectionBehavior.contains(.canJoinAllSpaces))
-    #expect(window.collectionBehavior.contains(.canJoinAllApplications))
+    // An overlay: key without the app, on every Space, a full-screen one
+    // included, and never the main window.
+    #expect(window.styleMask.contains(.nonactivatingPanel))
+    #expect(!window.canBecomeMain)
+    #expect(window.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]))
+    #expect(!window.collectionBehavior.contains(.fullScreenPrimary))
+    #expect(window.frameAutosaveName.isEmpty, "the overlay's frame is not what the next launch opens at")
     tabs.perform(.quickTerminal)
     #expect(!window.isVisible)
+    #expect(!window.collectionBehavior.contains(.canJoinAllSpaces))
     #expect(tabs.current?.id == terminal.id)
     tabs.perform(.quickTerminal)
     #expect(window.isVisible)
+    #expect(window.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]))
     let elsewhere = KeyedWindow.make()
     defer { elsewhere.close() }
     elsewhere.makeKeyAndOrderFront(nil)
@@ -53,7 +68,11 @@ struct QuickTerminalTests {
     #expect(!controller.isQuick)
     #expect(window.frame == original)
     #expect(window.collectionBehavior == behavior)
+    #expect(window.collectionBehavior.contains(.fullScreenPrimary), "an ordinary window again, full screen and all")
+    #expect(!window.styleMask.contains(.nonactivatingPanel))
+    #expect(window.canBecomeMain)
     #expect(window.level == .normal)
+    #expect(window.frameAutosaveName == autosave)
     #expect(tabs.current?.id == terminal.id)
   }
 
@@ -195,6 +214,45 @@ struct QuickTerminalTests {
       OptionBits(kEventHotKeyExclusive), &ref)
     #expect(status == noErr)
     #expect(!window.isVisible)
+  }
+
+  @Test("the quick terminal opens on the display holding the frontmost window")
+  func screenChoice() {
+    // The window server counts from the primary display's top-left corner,
+    // y down; AppKit from its bottom-left, y up. A portrait display on the
+    // left, taller than the primary, reaches both above and below it.
+    let primary = NSRect(x: 0, y: 0, width: 2560, height: 1440)
+    let portrait = NSRect(x: -1440, y: -1120, width: 1440, height: 2560)
+    let screens = [primary, portrait]
+    #expect(QuickTerminalController.screenIndex(holding: [CGRect(x: 100, y: 100, width: 500, height: 500)], screens: screens) == 0)
+    #expect(QuickTerminalController.screenIndex(holding: [CGRect(x: -1000, y: 100, width: 800, height: 400)], screens: screens) == 1)
+    #expect(QuickTerminalController.screenIndex(holding: [CGRect(x: -1000, y: 2000, width: 800, height: 400)], screens: screens) == 1)
+    #expect(QuickTerminalController.screenIndex(holding: [CGRect(x: 3000, y: 100, width: 10, height: 10)], screens: screens) == nil)
+    #expect(QuickTerminalController.screenIndex(holding: [.zero], screens: []) == nil)
+    #expect(QuickTerminalController.screenIndex(holding: [], screens: screens) == nil)
+    // A full-screen app's toolbar waits just above its display while hidden,
+    // and is the app's frontmost window. The window behind it is on screen.
+    let toolbar = CGRect(x: 0, y: -32, width: 2560, height: 32)
+    let full = CGRect(x: 0, y: 0, width: 2560, height: 1440)
+    #expect(QuickTerminalController.screenIndex(holding: [toolbar, full], screens: screens) == 0)
+  }
+
+  @Test("an input source change that leaves the layout alone keeps the registration")
+  func inputSourceChangeKeepsRegistration() throws {
+    let suite = "quick-terminal-input-source.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let controller = QuickTerminalController(defaults: defaults)
+    let window = KeyedWindow.make()
+    defer { controller.stop(); window.close() }
+    controller.configure([KeyBinding("f17", [.control, .option, .command])])
+    controller.attach(to: window)
+    let registered = controller.hotKeys
+    #expect(registered.count == 1)
+    controller.keyboardChanged()
+    controller.keyboardChanged()
+    #expect(controller.hotKeys == registered, "switching Pinyin on and off is not a new shortcut")
+    #expect(controller.shortcutProblem == nil)
   }
 
   @Test("global key translation shares the local ASCII layout and named keys")

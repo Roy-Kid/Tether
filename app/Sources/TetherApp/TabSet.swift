@@ -120,6 +120,12 @@ final class TabSet {
   /// How many times the window has been asked to close itself. A count, not
   /// a flag: the window answers each new one, and two in a row are two.
   private(set) var windowCloseRequests = 0
+  /// Whether the workspace window takes the menu's shortcuts: true when it
+  /// is key and free of sheets, false when key but busy, nil while another
+  /// window is key — Settings, say — so ⌘W there closes that one. Kept
+  /// here because the menu cannot see the window's focus: the workspace is
+  /// hosted in an AppKit window, not a scene.
+  var menuShortcuts: Bool?
   var paletteQuery = ""
 
   /// The accepted host keys, shared by every session: trust belongs to the

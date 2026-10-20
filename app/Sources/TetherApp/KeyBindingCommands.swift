@@ -39,8 +39,8 @@ enum WorkspaceAction: String, CaseIterable {
     case .closeTab: definition("Close Tab", "File", KeyBinding("w", [.command, .option]))
     case .closeWindow: definition("Close Window", "File", KeyBinding("w", [.command, .shift]))
     case .restoreTab: definition("Reopen Closed Tab", "File", KeyBinding("t", [.command, .shift]))
-    case .commandMenu:
-      definition("Command Palette", "View", KeyBinding("p", [.command, .shift]), KeyBinding("p", [.control, .shift]))
+    // One chord, iTerm2's Open Quickly. Taken before a system menu item on the same keys.
+    case .commandMenu: definition("Command Palette", "View", KeyBinding("o", [.command, .shift]))
     case .quickTerminal: definition("Toggle Quick Terminal", "Window", KeyBinding("`", .control))
     case .restoreWindow: definition("Return to Normal Window", "Window")
     case .alwaysOnTop: definition("Keep Window on Top", "Window")

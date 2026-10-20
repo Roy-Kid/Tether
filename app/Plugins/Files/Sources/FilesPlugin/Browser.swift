@@ -637,13 +637,12 @@ private struct EntryMenu: View {
 
   var body: some View {
     let files = entries.filter { $0.kind == .file }
-    if entries.count == 1, let entry = entries.first, entry.kind != .file {
-      #if os(macOS)
-        Button("Go Into", systemImage: "arrow.turn.down.right") { model.open(entry) }
-      #else
+    let saving = entries.filter { $0.kind == .file || $0.kind == .directory }
+    #if !os(macOS)
+      if entries.count == 1, let entry = entries.first, entry.kind != .file {
         Button("Open", systemImage: "folder") { model.open(entry) }
-      #endif
-    }
+      }
+    #endif
     if !files.isEmpty {
       Button("Quick Look", systemImage: "eye") { Task { await model.preview(files) } }
       #if os(macOS)
@@ -652,7 +651,9 @@ private struct EntryMenu: View {
           Button("Open", systemImage: "arrow.up.forward.app") { model.openExternally(openable) }
         }
       #endif
-      Button("Download", systemImage: "arrow.down.circle") { model.download(files) }
+    }
+    if !saving.isEmpty {
+      Button("Download…", systemImage: "arrow.down.circle") { model.download(saving) }
     }
     #if !os(macOS)
       if files.count == 1, let file = files.first {
@@ -661,14 +662,25 @@ private struct EntryMenu: View {
           preview: SharePreview(Names.display(file.name)))
       }
     #endif
-    Divider()
+    if showsChoices {
+      Divider()
+    }
     if entries.count == 1, let entry = entries.first {
       Button("Rename", systemImage: "pencil") { model.renaming = entry.path }
     }
     Button("Copy Path", systemImage: "doc.on.doc") { copy(Names.copiedPaths(entries.map(\.path))) }
     Button("Insert Path", systemImage: "terminal") { model.insertPaths(entries) }
     Divider()
-    Button("Delete", systemImage: "trash", role: .destructive) { model.requestDelete(entries) }
+    Button("Delete…", systemImage: "trash", role: .destructive) { model.requestDelete(entries) }
+  }
+
+  /// Whether a command sits above Rename, so the divider is not the first row.
+  private var showsChoices: Bool {
+    if entries.contains(where: { $0.kind == .file || $0.kind == .directory }) { return true }
+    #if !os(macOS)
+      if entries.count == 1, entries.first?.kind != .file { return true }
+    #endif
+    return false
   }
 
   private func copy(_ text: String) {
@@ -784,7 +796,7 @@ private func findChord(_ press: KeyPress) -> Bool {
         .frame(width: UIStyle.controlHeight, height: UIStyle.controlHeight)
         Menu {
           Button("New Folder", systemImage: "folder.badge.plus") { model.newFolder() }
-          Button("Upload", systemImage: "square.and.arrow.up") { importing = true }
+          Button("Upload…", systemImage: "square.and.arrow.up") { importing = true }
         } label: {
           Image(systemName: "plus")
             .font(UIStyle.symbol)
@@ -917,9 +929,9 @@ private func findChord(_ press: KeyPress) -> Bool {
         }
         Menu {
           Button("New Folder", systemImage: "folder.badge.plus") { model.newFolder() }
-          Button("Upload from Files", systemImage: "folder") { importing = true }
+          Button("Upload from Files…", systemImage: "folder") { importing = true }
           PhotosPicker(selection: $photos, matching: .any(of: [.images, .videos])) {
-            Label("Upload from Photos", systemImage: "photo")
+            Label("Upload from Photos…", systemImage: "photo")
           }
         } label: {
           Image(systemName: "plus")

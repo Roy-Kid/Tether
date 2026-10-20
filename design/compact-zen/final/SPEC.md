@@ -46,7 +46,7 @@ host picker 从左下角向上展开，包含搜索、已连接/其他主机。A
 |---|---|
 | File | New tab ⌘T；Close terminal ⌘W；Close tab ⌘⌥W；Close window ⌘⇧W；Reopen closed tab ⌘⇧T |
 | Edit | 平台原生复制、粘贴、撤销、重做 |
-| View | Command menu Ctrl⇧P（兼容 ⌘⇧P）；Quick switch ⌘P；Show/Hide tab bar（无默认快捷键，⌘S 留给保存）；Inspector；Zen ⌘⇧Z |
+| View | Command menu ⌘⇧O（一个键，与 iTerm2 Open Quickly 相同）；Quick switch ⌘P；Show/Hide tab bar（无默认快捷键，⌘S 留给保存）；Inspector；Zen ⌘⇧Z |
 | Host | Change host ⌘⇧H；Manage hosts |
 | Terminal | New terminal ⌘N；Rename terminal ⌘R；Reconnect（new shell），依状态可用；Previous/next terminal ⌘⌥↑/↓；Split right ⌘\；Split down ⌘⇧\ |
 | Plugins ▸ tmux | Attach/Create/Detach session；New window ⌘⇧N；Split left/right ⌘\；Split top/bottom ⌘⇧\；Zoom/Restore pane ⌘⇧Return |
@@ -56,7 +56,7 @@ host picker 从左下角向上展开，包含搜索、已连接/其他主机。A
 
 同一组合键可以同时属于应用和插件，两层之间不算冲突：当前 tab 的附件此刻提供的插件命令先响应，否则执行应用自己的命令。例如 shell 正是 tmux client 时 ⌘\ 分割 tmux pane，否则分割应用自己的 terminal；附件不提供的插件快捷键不吞键，留给菜单和终端。插件只在 TetherPluginKit 的命令描述里提出默认组合键，应用不认识插件名。同一层内的重复仍是冲突，在 Key Bindings 中标出。tmux 附着时 ⌘⌥H 盖过系统的 Hide Others（应用菜单里仍可点），其余时候不受影响。
 
-Ctrl⇧P 打开可搜索的命令菜单，不是把焦点移到系统菜单栏。这是明确保留的 Control 快捷键，必须在终端编码前拦截且不发送终端字节；⌘⇧P 是额外别名。其余未声明的终端按键继续透传。
+⌘⇧O 打开可搜索的命令菜单，只此一个键，与 iTerm2 的 Open Quickly 相同。它在系统菜单项之前被拦截，所以和系统快捷键撞上时仍打开命令菜单，也不发给终端。其余未声明的终端按键继续透传。
 
 ⌘P 搜索已知 host、tab、session/window、独立插件，结果展示完整路径和类型；空搜索显示最近使用项目。选择 window 一次跳转到对应 owner tab 和 window。搜索不连接所有保存的主机来遍历 sessions。
 
@@ -66,7 +66,7 @@ Ctrl⇧P 打开可搜索的命令菜单，不是把焦点移到系统菜单栏�
 
 点击 pane 聚焦，活动 pane 有细边标记。视觉分隔线保持细，但拖动区域 6pt，并显示方向光标。分割新 pane 后由服务器确认再转移焦点，进行中的重复操作抑制。普通 shell 不支持原生分屏，相关命令禁用并说明需先 attach tmux，不能暗中转换现有 shell。
 
-pane zoom 使用真实 tmux 状态，与 Zen 独立。Zen 隐藏 tabs、status 和 inspector，保留系统最小窗口框架和当前 panes，不自动全屏。鼠标通过系统 View → Exit Zen Mode 退出；Ctrl⇧P、⌘⇧Z 继续可用。取消旧方案的悬停退出按钮。跨 host 切换时短暂显示目的地，保留窗口上下文；退出恢复当前内容和原 inspector 可见性，不撤销 Zen 内的导航。
+pane zoom 使用真实 tmux 状态，与 Zen 独立。Zen 隐藏 tabs、status 和 inspector，保留系统最小窗口框架和当前 panes，不自动全屏。鼠标通过系统 View → Exit Zen Mode 退出；⌘⇧O、⌘⇧Z 继续可用。取消旧方案的悬停退出按钮。跨 host 切换时短暂显示目的地，保留窗口上下文；退出恢复当前内容和原 inspector 可见性，不撤销 Zen 内的导航。
 
 区分 Connecting、Needs authentication、Connected、Disconnected、Ended。断线保留最后画面作为只读快照并暂停输入，不缓冲或重放按键。错误、认证、重连条在 Zen 中仍可见。后台失败标记状态，不强制切屏。
 
@@ -93,7 +93,7 @@ UI 使用系统语义颜色和原生字体，浅色/深色、增大对比度随�
 - 应用层管理显式 host/workspace ownership、焦点和可见性；tmux 插件提供可选、带默认实现的 session/window 导航能力，其他插件保持单 workspace 兼容。不得向 Rust SDK 引入应用布局概念。
 - 添加只读 session/window metadata 查询时复用现有 connection/tmux 边界；不能为了显示菜单先 attach/select。保持会话视图身份，避免重建终端和重启任务。
 - 单独验证 control-mode 输入直送 pane 时原生 tmux prefix 的真实行为；不假设“不拦截键”就等于完整 tmux 客户端兼容，更不能增加未约定的全局前缀模拟器。
-- 自动验证 ownership、重复连接、同 host 关闭、延迟完成、焦点恢复、菜单状态及 macOS Ctrl⇧P/IME 输入路由；本地 tmux 集成覆盖 attach/select/resize/detach/reconnect。
+- 自动验证 ownership、重复连接、同 host 关闭、延迟完成、焦点恢复、菜单状态及 macOS ⌘⇧O/IME 输入路由；本地 tmux 集成覆盖 attach/select/resize/detach/reconnect。
 - 鼠标独立完成连接、树状选择、创建 window、分屏、拖动、放大、重连与退出 Zen；Vim 保持 hjkl/Esc/Ctrl-W；快捷键完成同一流程。
 - 检查单/多/空/消失 session、无 tmux、右边缘子菜单、长名称、20 tabs、认证取消、断线后输入屏蔽、错误状态。
 - 860×520 与 1100×700 检查深浅色、原生红绿灯、窗口拖动、VoiceOver、焦点、减少动态效果。运行 app 与 TetherFrontend 的 Swift 测试；connection API 如有修改再运行相关 SDK 检查。不测试写入真实 keychain。

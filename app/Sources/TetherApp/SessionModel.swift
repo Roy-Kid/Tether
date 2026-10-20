@@ -540,14 +540,6 @@ final class SessionTab: Identifiable {
     session?.releaseHistory(keep: 200)
   }
 
-  func pauseReading() {
-    session?.pause()
-  }
-
-  func resumeReading() {
-    session?.resume()
-  }
-
   func finish(_ ending: SessionEnding?) {
     session = nil
     closeCheck.reset()

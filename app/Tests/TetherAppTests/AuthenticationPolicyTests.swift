@@ -7,6 +7,34 @@ import struct TetherApp.Host
 @MainActor
 @Suite("Authentication policy enforcement")
 struct AuthenticationPolicyTests {
+  @Test("a saved code automatically answers after reopening the library without a device approval identity")
+  func savedCodeAfterReopening() async throws {
+    let location = temporaryFile("config")
+    defer { removeDirectory(of: location) }
+    let credentials = DeviceCredentialStore(secrets: MemorySecrets())
+    let secrets = MemorySecrets()
+    let store = HostStore(location: location, secrets: secrets, credentials: credentials)
+    #expect(store.save(HostStoreTests.host()))
+    let seed = try TOTP(importing: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+    try store.setOTP(seed, for: #require(store.hosts.first))
+
+    let reopened = HostStore(location: location, secrets: secrets, credentials: credentials)
+    let host = try #require(reopened.hosts.first)
+    #expect(reopened.snapshot.trust.secretID == nil)
+    #expect(host.profile?.authentication.remoteApprovalDevice == nil)
+    let known = KnownHosts(location: location.appendingPathExtension("known"))
+    let key = HostIdentity(host: host.hostname, port: host.port, algorithm: "ssh-ed25519", fingerprint: "SHA256:fixture")
+    known.remember(key)
+    let coordinator = AuthenticationCoordinator(host: host, password: "", known: known, credentials: credentials,
+      ask: { _, _ in Issue.record("A saved code must answer without a manual prompt or device setup"); return nil })
+    #expect(await coordinator.verify(key))
+    let before = try seed.code()
+    let answer = await coordinator.answer(instruction: "", prompts: [AuthPrompt(text: "Verification code:", echo: false)])
+    let after = try seed.code()
+    #expect(answer == [before] || answer == [after])
+    coordinator.cancel()
+  }
+
   @Test func otpNeverReleasedBeforeHostVerificationOrForAnotherPrompt() async throws {
     let path = temporaryFile("known")
     defer { removeDirectory(of: path) }
