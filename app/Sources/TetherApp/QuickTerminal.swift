@@ -10,7 +10,11 @@ import TetherUI
 /// the active app, so the app in front stays there and the window can join
 /// any Space — another app's full-screen one on another display included —
 /// which no activating window can (`WorkspaceWindow`). Hiding it never
-/// closes a session; leaving this mode restores its ordinary geometry.
+/// closes a session; leaving this mode restores its ordinary geometry, and
+/// the Dock leaves it (`reopen`): the shortcut means the overlay, the Dock
+/// the ordinary window. The overlay's size is its own (`quickSize`): dragged
+/// once, it comes back that size, while the ordinary window's frame stays
+/// what its autosave remembers.
 @MainActor @Observable
 final class QuickTerminalController: NSObject {
   var enabled: Bool {
@@ -53,8 +57,13 @@ final class QuickTerminalController: NSObject {
   /// window server, which is waiting for this thread.
   @ObservationIgnored private var normalAnimation: NSWindow.AnimationBehavior?
   /// Where the window remembers its frame. Not while quick: the overlay's
-  /// frame is a display's top half, not what the next launch should open at.
+  /// frame is not what the next launch should open at; its size is kept
+  /// apart, in `quickSize`.
   @ObservationIgnored private var normalAutosaveName: NSWindow.FrameAutosaveName?
+  /// The overlay's size as it was last dragged, kept apart from the
+  /// ordinary window's frame so each comes back as it was left. Nil until
+  /// a drag: a display's top half.
+  @ObservationIgnored private var quickSize: NSSize?
   @ObservationIgnored private var pendingShow = false
   @ObservationIgnored private var bindingsStore: KeyBindingStore?
   @ObservationIgnored private var bindings: [KeyBinding] = []
@@ -72,7 +81,18 @@ final class QuickTerminalController: NSObject {
     alwaysOnTop = defaults.bool(forKey: "window.alwaysOnTop")
     autoHide = defaults.object(forKey: "quickTerminal.autoHide") as? Bool ?? true
     showsMenuBarIcon = defaults.object(forKey: "quickTerminal.menuBarIcon") as? Bool ?? true
+    quickSize = Self.storedSize(in: defaults)
     super.init()
+  }
+
+  private static let widthKey = "quickTerminal.width"
+  private static let heightKey = "quickTerminal.height"
+
+  private static func storedSize(in defaults: UserDefaults) -> NSSize? {
+    let width = defaults.double(forKey: widthKey)
+    let height = defaults.double(forKey: heightKey)
+    guard width > 0, height > 0 else { return nil }
+    return NSSize(width: width, height: height)
   }
 
   func attach(to window: NSWindow) {
@@ -87,6 +107,8 @@ final class QuickTerminalController: NSObject {
       name: NSWindow.didExitFullScreenNotification, object: window)
     NotificationCenter.default.addObserver(self, selector: #selector(screenChanged),
       name: NSWindow.didChangeScreenNotification, object: window)
+    NotificationCenter.default.addObserver(self, selector: #selector(resized),
+      name: NSWindow.didEndLiveResizeNotification, object: window)
     NotificationCenter.default.addObserver(self, selector: #selector(resignedKey),
       name: NSApplication.didResignActiveNotification, object: NSApp)
     DistributedNotificationCenter.default().addObserver(self, selector: #selector(keyboardChanged),
@@ -191,20 +213,34 @@ final class QuickTerminalController: NSObject {
     (window as? NSPanel)?.styleMask.insert(.nonactivatingPanel)
     window.level = .floating
     applyQuickBehavior(to: window)
-    if let screen {
-      window.setFrame(Self.frame(in: screen.visibleFrame, minimumHeight: window.minSize.height), display: window.isVisible)
-    }
+    let frame = screen.map { Self.frame(in: $0.visibleFrame, size: quickSize, minimum: window.minSize) }
+    if let frame { window.setFrame(frame, display: window.isVisible) }
     window.orderFrontRegardless()
+    // Ordering a hidden window on screen can hand it back narrower than it
+    // was set — measured with Stage Manager on: 2560 points asked for, 2316
+    // given, whatever the content view. A frame set while it is up stays.
+    if let frame, window.frame != frame { window.setFrame(frame, display: true) }
     window.makeKey()
   }
 
-  /// Dragged to another display: it takes that display's top half, as it
+  /// Dragged to another display: it hangs from that display's top, as it
   /// would have been shown there.
   @objc private func screenChanged() {
     guard isQuick, let window, window.isVisible, let screen = window.screen else { return }
-    let frame = Self.frame(in: screen.visibleFrame, minimumHeight: window.minSize.height)
+    let frame = Self.frame(in: screen.visibleFrame, size: quickSize, minimum: window.minSize)
     guard window.frame != frame else { return }
     window.setFrame(frame, display: true)
+  }
+
+  /// A drag on the overlay ended: that is its size from now on, here and
+  /// across launches. A frame set by code — `show`, a display change — is
+  /// not a drag and leaves the memory alone.
+  @objc private func resized() {
+    guard isQuick, let window, window.isVisible else { return }
+    let size = window.frame.size
+    quickSize = size
+    defaults.set(size.width, forKey: Self.widthKey)
+    defaults.set(size.height, forKey: Self.heightKey)
   }
 
   /// Kept separate from toggle so focus changes cannot accidentally reopen it.
@@ -221,6 +257,20 @@ final class QuickTerminalController: NSObject {
         _ = MainActor.assumeIsolated { previous.activate() }
       }
     }
+  }
+
+  /// The Dock asked for the window (`applicationShouldHandleReopen`). How
+  /// the window is summoned decides how it shows: the shortcut and the menu
+  /// bar mean the overlay, the Dock means the ordinary window. So an
+  /// overlay — hidden, or still up — comes back ordinary; left quick, it
+  /// would come back as the overlay for good, floating, which Stage Manager
+  /// and Mission Control never list. False when the window was not quick,
+  /// and the Dock's usual reveal is the answer.
+  @discardableResult
+  func reopen() -> Bool {
+    guard isQuick else { return false }
+    restore()
+    return true
   }
 
   @objc func restore() {
@@ -274,10 +324,15 @@ final class QuickTerminalController: NSObject {
     return nil
   }
 
-  static func frame(in visibleFrame: NSRect, minimumHeight: CGFloat) -> NSRect {
-    let height = min(visibleFrame.height, max(minimumHeight, visibleFrame.height / 2))
-    return NSRect(x: visibleFrame.minX, y: visibleFrame.maxY - height,
-      width: visibleFrame.width, height: height)
+  /// The overlay's frame on a display: hung from the top, centred. Full
+  /// width and half the height until a size was dragged, then that size,
+  /// clamped to the display and never below the window's minimum.
+  static func frame(in visibleFrame: NSRect, size: NSSize?, minimum: NSSize) -> NSRect {
+    let wanted = size ?? NSSize(width: visibleFrame.width, height: visibleFrame.height / 2)
+    let width = min(visibleFrame.width, max(minimum.width, wanted.width))
+    let height = min(visibleFrame.height, max(minimum.height, wanted.height))
+    return NSRect(x: visibleFrame.midX - width / 2, y: visibleFrame.maxY - height,
+      width: width, height: height)
   }
 
   @objc private func resignedKey() {

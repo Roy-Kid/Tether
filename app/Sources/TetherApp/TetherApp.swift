@@ -52,8 +52,11 @@ import TmuxPlugin
 
     /// The main window, not just any: with Settings open and the main
     /// window put away, the icon still means the terminals. Answered here,
-    /// so nothing else opens a second window for the same scene.
+    /// so nothing else opens a second window for the same scene. And the
+    /// ordinary window, not the overlay: the Dock is how a person asks for
+    /// a window, the shortcut how they ask for the quick terminal.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+      if model.tabs.quickTerminal.reopen() { return false }
       guard let window = HideInsteadOfClose.mainWindow(in: sender) else { return true }
       return !HideInsteadOfClose.reveal(window)
     }

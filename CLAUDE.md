@@ -213,9 +213,14 @@ On a Mac the workspace window is the app's own `NSPanel`
 quick terminal is that same window shown as a non-activating overlay — key
 without making Tether the active app, on every Space, another app's
 full-screen one on another display included — and only a panel can be
-that. It opens on the display holding the frontmost app's window. Menu
-enabling reads the model (`TabSet.menuShortcuts`); a focused value does
-not leave an `NSHostingView`.
+that. It opens on the display holding the frontmost app's window. How the
+window is summoned decides how it shows: the shortcut and the menu bar
+mean the overlay, the Dock means the ordinary window, so a Dock click
+leaves quick mode and Stage Manager has a window to list again. The
+overlay's size is remembered on its own: dragged once, it comes back that
+size, hung from the top and centred, while the ordinary window's frame
+stays what it was. Menu enabling reads the model (`TabSet.menuShortcuts`);
+a focused value does not leave an `NSHostingView`.
 
 tmux is a tab plugin: an accessory on every terminal tab,
 and content that can stand in for the tab's shell. The app draws what the

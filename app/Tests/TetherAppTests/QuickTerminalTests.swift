@@ -14,13 +14,66 @@ final class KeyedWorkspaceWindow: WorkspaceWindow {
 @MainActor
 @Suite("Quick Terminal", .serialized)
 struct QuickTerminalTests {
-  @Test("the top half respects display origins, the menu bar and small screens")
+  @Test("the top half respects display origins, the menu bar and small screens; a dragged size comes back centred and clamped")
   func geometry() {
     let screen = NSRect(x: -1600, y: 924, width: 1600, height: 876)
-    #expect(QuickTerminalController.frame(in: screen, minimumHeight: 300) ==
+    let minimum = NSSize(width: 760, height: 300)
+    #expect(QuickTerminalController.frame(in: screen, size: nil, minimum: minimum) ==
       NSRect(x: -1600, y: 1362, width: 1600, height: 438))
     let small = NSRect(x: 0, y: 0, width: 800, height: 400)
-    #expect(QuickTerminalController.frame(in: small, minimumHeight: 520) == small)
+    #expect(QuickTerminalController.frame(in: small, size: nil, minimum: NSSize(width: 760, height: 520)) == small)
+    // Dragged to 1000×600: that size, hanging from the top, centred.
+    #expect(QuickTerminalController.frame(in: screen, size: NSSize(width: 1000, height: 600), minimum: minimum) ==
+      NSRect(x: -1300, y: 1200, width: 1000, height: 600))
+    // Remembered on a bigger display: clamped to this one, never below the minimum.
+    #expect(QuickTerminalController.frame(in: small, size: NSSize(width: 2000, height: 100), minimum: minimum) ==
+      NSRect(x: 0, y: 100, width: 800, height: 300))
+  }
+
+  @Test("the overlay's size is remembered on its own; the ordinary window's frame is not touched")
+  func rememberedSize() throws {
+    let suite = "quick-terminal-size.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let controller = QuickTerminalController(defaults: defaults)
+    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
+    defer { controller.stop(); window.close() }
+    let original = window.frame
+    controller.attach(to: window)
+    controller.toggle()
+    let screen = try #require(window.screen)
+    #expect(window.frame == QuickTerminalController.frame(in: screen.visibleFrame, size: nil, minimum: window.minSize),
+      "a display's top half until dragged: \(window.frame) on \(screen.visibleFrame), minimum \(window.minSize)")
+
+    // A drag ends at 900×520, pulled down and to the right: that size is
+    // the overlay's from now on, hung from the top again.
+    let dragged = NSSize(width: 900, height: 520)
+    window.setFrame(NSRect(x: window.frame.minX + 40, y: window.frame.minY - 60, width: dragged.width, height: dragged.height), display: false)
+    NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: window)
+    controller.hide()
+    controller.toggle()
+    #expect(window.frame == QuickTerminalController.frame(in: screen.visibleFrame, size: dragged, minimum: window.minSize))
+    #expect(window.frame.size == dragged)
+    #expect(window.frame.maxY == screen.visibleFrame.maxY, "still a drop-down from the top")
+
+    // A frame set by code is not a drag, and is not remembered.
+    window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: 1000, height: 600)), display: false)
+    controller.hide()
+    controller.toggle()
+    #expect(window.frame.size == dragged)
+
+    controller.restore()
+    #expect(window.frame == original, "the ordinary window keeps its own frame")
+    controller.stop()
+
+    // The next launch remembers it too.
+    let next = QuickTerminalController(defaults: defaults)
+    defer { next.stop() }
+    next.attach(to: window)
+    next.toggle()
+    #expect(window.frame.size == dragged)
+    next.restore()
+    #expect(window.frame == original)
   }
 
   @Test("toggle hides without destroying the workspace and normal mode restores geometry and behavior")
@@ -74,6 +127,38 @@ struct QuickTerminalTests {
     #expect(window.level == .normal)
     #expect(window.frameAutosaveName == autosave)
     #expect(tabs.current?.id == terminal.id)
+  }
+
+  @Test("the Dock brings back the ordinary window, from a hidden overlay and from one still up")
+  func dockReopensOrdinary() throws {
+    let suite = "quick-terminal-reopen.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let controller = QuickTerminalController(defaults: defaults)
+    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
+    defer { controller.stop(); window.close() }
+    let original = window.frame
+    controller.attach(to: window)
+    #expect(!controller.reopen(), "an ordinary window is the Dock's usual reveal")
+
+    controller.toggle()
+    controller.hide()
+    #expect(controller.isQuick && !window.isVisible)
+    #expect(controller.reopen())
+    #expect(!controller.isQuick)
+    #expect(window.isVisible)
+    #expect(window.level == .normal)
+    #expect(!window.styleMask.contains(.nonactivatingPanel))
+    #expect(window.collectionBehavior.contains(.fullScreenPrimary))
+    #expect(window.frame == original)
+
+    controller.toggle()
+    #expect(controller.isQuick && window.isVisible)
+    #expect(controller.reopen(), "an overlay still up comes back ordinary too")
+    #expect(!controller.isQuick)
+    #expect(window.isVisible)
+    #expect(window.level == .normal)
+    #expect(window.frame == original)
   }
 
   @Test("status menu follows visibility and reuses the existing window actions")
