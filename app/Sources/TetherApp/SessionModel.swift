@@ -31,8 +31,15 @@ final class SessionTab: Identifiable {
   let id = UUID()
   /// The host as it was when this tab last dialled.
   private(set) var host: Host
-  /// Stable work-position name (`Terminal 1`), not the remote title.
+  /// Stable work-position name (`Terminal 1`). The chip may show a session,
+  /// command or directory instead; a rename is kept in `pinnedName`.
   var name: String { didSet { onHistoryChanged?() } }
+  /// Set by Rename Terminal. While set, the chip shows this and ignores activity.
+  var pinnedName: String? { didSet { onHistoryChanged?() } }
+  /// Foreground program on a local shell. Nil at a prompt, and for a remote shell.
+  var foregroundCommand: String?
+  /// Working directory last observed, so the chip follows `cd`.
+  var labelPath: String?
   var historyID: UUID?
   var history: SessionHistory?
   var onHistoryChanged: (() -> Void)?
@@ -47,7 +54,7 @@ final class SessionTab: Identifiable {
   private(set) var damageEpoch = 0
   private(set) var remoteTitle: String = ""
 
-  /// Primary tab label. Identity is `id`, never this string.
+  /// The stable name. The chip uses `TabSet.displayTitle`.
   var title: String { name }
 
   /// What the tab shows next to the name: whatever stands in for the shell
@@ -357,6 +364,7 @@ final class SessionTab: Identifiable {
     }
     stage = .connected
     frame = session.frame()
+    refreshLabels()
     startPumping(session)
   }
 
@@ -458,6 +466,7 @@ final class SessionTab: Identifiable {
   /// update replaces it. With no frame yet, the whole screen is taken,
   /// because a list of dirty rows has nothing to patch.
   private func publish(_ update: FrameUpdate, session: TerminalSession) {
+    if self.session === session { refreshLabels() }
     switch update {
     case .full(let frame):
       self.frame = frame
@@ -606,6 +615,16 @@ final class SessionTab: Identifiable {
 
   /// The directory the shell last reported, if it reports one.
   var workingDirectory: String? { session?.workingDirectory }
+
+  /// Reads the local foreground program and the shell's directory into the
+  /// fields the chip names itself from. A remote shell leaves the program nil.
+  func refreshLabels() {
+    guard session != nil else { return }
+    let command = LocalForeground.command(shellPID: session?.localProcessID)
+    if foregroundCommand != command { foregroundCommand = command }
+    let path = session?.workingDirectory
+    if labelPath != path { labelPath = path }
+  }
   var terminalName: String? { session?.terminalName ?? shellTTY }
 
   /// Checks this session at the close gesture, without writing into its

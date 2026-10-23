@@ -12,6 +12,8 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
   let historyID: UUID?
   let host: Host
   let name: String
+  /// A name the person typed. Nil follows the session, command or directory.
+  let pinnedName: String?
   let directory: String?
   let index: Int
   let attachments: [Attachment]
@@ -29,6 +31,7 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
     historyID = tab.historyID
     host = tab.host
     name = tab.name
+    pinnedName = tab.pinnedName
     directory = tab.workingDirectory
     self.index = index
     attachments = tab.attachments.compactMap { entry in
@@ -82,12 +85,14 @@ extension TabSet {
       return false
     }
     tab.historyID = record.historyID
+    tab.pinnedName = TerminalLabels.restoredPin(name: record.name, pinned: record.pinnedName)
     adopt(tab, at: record.index)
     guard let page = workspace(containing: tab.id) else { cancelRestore(id); return false }
     var mapping = [record.id: tab.id]
     for member in record.companions ?? [] {
       guard let restored = makeTerminal?(member) else { continue }
       restored.historyID = member.historyID
+      restored.pinnedName = TerminalLabels.restoredPin(name: member.name, pinned: member.pinnedName)
       adopt(restored, in: page.id)
       mapping[member.id] = restored.id
     }

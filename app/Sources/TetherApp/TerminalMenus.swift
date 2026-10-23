@@ -5,10 +5,7 @@ extension TabSet {
   var pendingCloseVerb: String { closingWorkspaceID != nil ? "Close Tab" : "Close Terminal" }
 
   func terminalMenuTitle(_ terminal: SessionTab) -> String {
-    let members = workspace(containing: terminal.id)?.terminalIDs.compactMap { id in tabs.first { $0.id == id } } ?? []
-    let same = members.filter { $0.name == terminal.name }
-    let suffix = same.count > 1 ? " (\((same.firstIndex { $0.id == terminal.id } ?? 0) + 1))" : ""
-    return "\(terminal.name)\(suffix) — \(terminal.stateName)"
+    "\(displayTitle(for: terminal.id)) — \(terminal.stateName)"
   }
 
   func terminalMenu(for id: UUID) -> [TerminalMenuItem] {

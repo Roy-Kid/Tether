@@ -346,6 +346,9 @@ public final class TerminalSession: Sendable {
   /// Local PTY name, used to identify tmux clients opened in this shell.
   public var terminalName: String? { inner.terminalName() }
 
+  /// PID of a shell started on this machine. A remote session has none.
+  public var localProcessID: UInt32? { inner.localProcessId() }
+
   /// Connects, authenticates and opens a shell.
   public static func connect(
     to destination: Destination,

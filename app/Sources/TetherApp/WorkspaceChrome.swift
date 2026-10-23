@@ -73,8 +73,11 @@ struct WorkspaceTabBar: View {
           : AnyLayout(HStackLayout(spacing: UIStyle.Space.small))
         stack {
           ForEach(tabs.visibleWorkspaces) { tab in
+            let focused = tabs.tabs.first { $0.id == tab.focused }
+            let title = focused.map { tabs.displayTitle(for: $0.id) } ?? tab.name
+            let note = focused.map { $0.name == title ? "" : $0.name } ?? ""
             tabChip(
-              id: tab.id, title: tab.name, subtitle: tabs.caption(for: tab),
+              id: tab.id, title: title, note: note, subtitle: tabs.caption(for: tab),
               symbol: symbol(for: tab), disconnected: tabs.isDisconnected(tab))
               .id(tab.id)
           }
@@ -153,7 +156,7 @@ struct WorkspaceTabBar: View {
   }
 
   private func tabChip(
-    id: UUID, title: String, subtitle: String, symbol: String?, disconnected: Bool = false
+    id: UUID, title: String, note: String = "", subtitle: String, symbol: String?, disconnected: Bool = false
   ) -> some View {
     let selected = tabs.selectedWorkspaceID == id
     let focused = tabs.workspaces.first { $0.id == id }?.focused ?? id
@@ -201,7 +204,7 @@ struct WorkspaceTabBar: View {
       #if !os(macOS)
         .contextMenu { tabContextMenu(id) }
       #endif
-      .help([title, subtitle, indicator?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+      .help([title, note, subtitle, indicator?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
       .accessibilityAddTraits(selected ? .isSelected : [])
       .accessibilityValue(disconnected ? "Disconnected" : (indicator?.label ?? ""))
       // The space is held whether or not the cross is drawn: a tab that

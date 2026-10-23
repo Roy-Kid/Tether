@@ -606,10 +606,10 @@ final class TabSet {
         let activity = tab.isLive ? await inspect(tab) : .idle
         guard !Task.isCancelled, self.checkingClose == id else { return }
         if tab.isLive, let message = activity.closeMessage {
-          self.workspaceCloseNotes.append("\(tab.name): \(message)")
+          self.workspaceCloseNotes.append("\(self.displayTitle(for: tab.id)): \(message)")
         }
         for attachment in tab.attachments where attachment.attachment.requiresCloseConfirmation {
-          self.workspaceCloseNotes.append(attachment.attachment.closeNote ?? "\(tab.name) has active plugin work.")
+          self.workspaceCloseNotes.append(attachment.attachment.closeNote ?? "\(self.displayTitle(for: tab.id)) has active plugin work.")
         }
       }
       guard !Task.isCancelled, self.workspaces.contains(where: { $0.id == id }) else { return }
@@ -695,10 +695,8 @@ final class TabSet {
   var closeQuestion: String {
     guard let id = pendingClose else { return "Close?" }
     if let page = closingWorkspace, let workspace = workspaces.first(where: { $0.id == page }) { return "Close \(workspace.name)?" }
-    let name =
-      tabs.first { $0.id == id }?.title
-      ?? extensions.first { $0.id == id }?.workspace.title
-    guard let name, !name.isEmpty else { return "Close?" }
+    let name = displayTitle(for: id)
+    guard !name.isEmpty else { return "Close?" }
     return "Close \(name)?"
   }
 
@@ -866,7 +864,7 @@ final class TabSet {
     select(ids[next])
   }
 
-  /// Answers the rename question either way: an empty name keeps the old one.
+  /// An empty terminal name clears the pin. An empty workspace name keeps the old one.
   func rename(_ id: UUID, to name: String) {
     if renaming == id { renaming = nil }
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -875,8 +873,9 @@ final class TabSet {
       if !trimmed.isEmpty { workspaces[index].name = trimmed; persistHistory() }
       return
     }
-    guard !trimmed.isEmpty, let tab = tabs.first(where: { $0.id == id }) else { return }
-    tab.name = trimmed
+    guard let tab = tabs.first(where: { $0.id == id }) else { return }
+    // An empty name drops the pin and the chip follows the session, command or directory again.
+    tab.pinnedName = trimmed.isEmpty ? nil : trimmed
   }
 
   /// A word only when the green dot is not enough. Connected is the
@@ -919,10 +918,11 @@ final class TabSet {
     let tab = preferred ?? owned.last
     let place = host.isLocal ? "Local machine" : host.address
     guard let tab else { return place }
+    let title = displayTitle(for: tab.id)
     if tab.shown != nil {
-      return "\(place) · \(tab.title) / \(tab.subtitle)"
+      return "\(place) · \(title) / \(tab.subtitle)"
     }
-    return "\(place) · \(tab.title)"
+    return "\(place) · \(title)"
   }
 
   func openExtension(_ workspace: any PluginWorkspace, pluginID: String, hostID: UUID?) {

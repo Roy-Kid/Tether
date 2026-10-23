@@ -902,7 +902,7 @@ extension RootView {
     }
     .dialog(for: tabs.renaming) { id in
       Dialog.input(
-        "Rename", field: Dialog.Field("Name", initial: tabs.tabs.first { $0.id == id }?.name ?? ""),
+        "Rename", field: Dialog.Field("Name", initial: tabs.renameSeed(for: id)),
         verb: "Save", cancel: { tabs.renaming = nil }, perform: { tabs.rename(id, to: $0) })
     }
     .dialog(for: tabs.renamingWorkspace) { id in

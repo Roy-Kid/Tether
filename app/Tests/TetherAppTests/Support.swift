@@ -107,6 +107,7 @@ final class StubWorkspace: PluginWorkspace {
 final class StubAttachment: TabAttachment {
   var isShowing = false
   var subtitle: String
+  var tabTitle = ""
   var isDisconnected = false
   var closeNote: String?
   var requiresCloseConfirmation = false

@@ -72,6 +72,8 @@ public final class TmuxTab: TabAttachment {
     guard let id = shellSessionID else { return "" }
     return sessions.first { $0.id == id }?.name ?? shellSessionName
   }
+  /// The chip takes the session name. The host does not invent one.
+  public var tabTitle: String { subtitle }
   public var isDisconnected: Bool { false }
   public var closeNote: String? { shellSessionID == nil ? nil : "tmux stays on the host." }
 

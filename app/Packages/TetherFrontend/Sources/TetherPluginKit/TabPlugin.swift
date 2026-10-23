@@ -219,6 +219,9 @@ public protocol TabAttachment: AnyObject {
   var isShowing: Bool { get }
   /// Beside the tab's name while showing.
   var subtitle: String { get }
+  /// Names the tab while this attachment applies, for example a tmux session.
+  /// Empty leaves naming to the host.
+  var tabTitle: String { get }
   /// SF Symbol in front of the tab's name while this stands in for the shell.
   /// Empty leaves the host's terminal mark, or a `tabSymbols` entry.
   var symbol: String { get }
@@ -273,6 +276,7 @@ public protocol TabAttachment: AnyObject {
 }
 
 extension TabAttachment {
+  public var tabTitle: String { "" }
   public var symbol: String { "" }
   public var requiresCloseConfirmation: Bool { false }
   public var restorationState: Data? { nil }

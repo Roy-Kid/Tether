@@ -117,6 +117,7 @@ struct TmuxTabTests {
     tab.shellSessionID = "$1"
     tab.sessions = [info("$1", "dev")]
     #expect(tab.subtitle == "dev")
+    #expect(tab.tabTitle == "dev")
     #expect(!tab.isShowing)
     #expect(tab.commands.map(\.id) == ["detach", "newWindow", "previousWindow", "nextWindow", "splitHorizontal", "splitVertical", "zoom",
       "focusLeft", "focusDown", "focusUp", "focusRight"])
@@ -128,6 +129,7 @@ struct TmuxTabTests {
     let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
     #expect(!tab.isShowing)
     #expect(tab.subtitle.isEmpty)
+    #expect(tab.tabTitle.isEmpty)
     #expect(tab.closeNote == nil)
     #expect(tab.commands.isEmpty)
   }

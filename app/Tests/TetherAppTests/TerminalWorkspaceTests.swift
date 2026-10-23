@@ -175,7 +175,7 @@ struct TerminalWorkspaceTests {
     let page = try #require(tabs.currentWorkspace?.id)
     tabs.adopt(shell("Other"))
     let menu = tabs.terminalMenu(for: a.id)
-    #expect(menu[0].children.map(\.title) == ["Same (1) — Ended", "Same (2) — Ended"])
+    #expect(menu[0].children.map(\.title) == ["Same 1 — Ended", "Same 2 — Ended"])
     #expect(menu[0].children[1].checked)
     menu.first { $0.title == "New Terminal" }?.action?()
     #expect(tabs.intent == .addTerminal(page))
