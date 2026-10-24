@@ -49,6 +49,10 @@ struct RootView: View {
     @Environment(\.colorSchemeContrast) private var contrast
   #endif
   @AppStorage(TabLayout.preferenceKey) private var tabLayout = TabLayout.default
+  #if os(macOS)
+    @AppStorage("workspace.inspectorWidth") private var inspectorWidth = Double(Chrome.inspectorIdeal)
+    @AppStorage("workspace.tabSidebarWidth") private var tabSidebarWidth = Double(Chrome.tabSidebarIdeal)
+  #endif
   @Environment(\.openURL) private var openURL
   #if os(macOS)
     @Environment(\.openSettings) private var openSettings
@@ -105,12 +109,10 @@ struct RootView: View {
       return ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
           if tabs.showsTabBar && tabLayout == .horizontal {
-            WorkspaceTabBar(tabs: tabs, registry: registry, onClose: { id in
-              if tabs.workspaces.contains(where: { $0.id == id }) { tabs.requestCloseWorkspace(id) }
-              else { tabs.requestClose(id) }
-            })
-            // The split view's panes reach up under the titlebar; drawn
-            // after the strip, they would take every click meant for a tab.
+            WorkspaceTabBar(tabs: tabs, registry: registry, onClose: { tabs.requestCloseFromTabBar($0) })
+            // One strip for every terminal on this host, above every pane. A
+            // split used to be a system split view that drew over this row.
+            .layoutPriority(1)
             .zIndex(1)
           } else {
             HStack(spacing: 0) {
@@ -120,25 +122,30 @@ struct RootView: View {
             .frame(height: tabs.zen ? Chrome.titlebar : Chrome.tab)
             .background { WorkspaceMaterial() }
           }
-          HSplitView {
+          // Side columns keep their width; the window's changes go to the
+          // canvas alone (`SideColumn`).
+          HStack(spacing: 0) {
             if tabs.showsTabBar && tabLayout == .vertical {
-              WorkspaceTabBar(tabs: tabs, registry: registry, layout: .vertical, onClose: { id in
-              if tabs.workspaces.contains(where: { $0.id == id }) { tabs.requestCloseWorkspace(id) }
-              else { tabs.requestClose(id) }
-            })
-                .frame(minWidth: Chrome.tabSidebarMin, idealWidth: Chrome.tabSidebarIdeal,
-                       maxWidth: Chrome.tabSidebarMax)
+              SideColumn(side: .leading, width: $tabSidebarWidth,
+                         range: Chrome.tabSidebarMin...Chrome.tabSidebarMax) {
+                WorkspaceTabBar(tabs: tabs, registry: registry, layout: .vertical,
+                  onClose: { tabs.requestCloseFromTabBar($0) })
+              }
             }
             macCanvas
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .clipped()
             // The inspector sits under the tab strip, not beside it in the
             // titlebar: its own header belongs to the column, in the same
             // row as the listing it controls (design 16-inspector).
             if showInspector {
-              inspectorPane
-                .scrollContentBackground(opacity < 1 ? .hidden : .automatic)
-                .frame(minWidth: Chrome.inspectorMin, idealWidth: Chrome.inspectorIdeal, maxWidth: Chrome.inspectorMax)
-                .frame(maxHeight: .infinity)
-                .background { WorkspaceMaterial() }
+              SideColumn(side: .trailing, width: $inspectorWidth,
+                         range: Chrome.inspectorMin...Chrome.inspectorMax) {
+                inspectorPane
+                  .scrollContentBackground(opacity < 1 ? .hidden : .automatic)
+                  .frame(maxHeight: .infinity)
+                  .background { WorkspaceMaterial() }
+              }
             }
           }
           if !tabs.zen {
@@ -157,6 +164,7 @@ struct RootView: View {
               makeStatusWorkspace: { pluginID in
                 registry.plugins.first { $0.metadata.id == pluginID }?.statusBarWorkspace()
               })
+              .layoutPriority(1)
           }
         }
         if tabs.hostPicker, !tabs.zen {
@@ -459,41 +467,16 @@ struct RootView: View {
   #if os(macOS)
   @ViewBuilder
   private var macCanvas: some View {
-    if let layout = tabs.workspaceSplit {
-      splitCanvas(layout)
+    if let layout = tabs.workspaceSplit, let workspace = tabs.currentWorkspace?.id {
+      SplitCanvas(
+        layout: layout, selected: tabs.selected, inputAllowed: terminalInputAllowed,
+        pane: { AnyView(workspaceContent($0)) },
+        onReplace: { tabs.replaceLayout(of: workspace, with: $0) },
+        onCommit: { tabs.commitLayout() },
+        onSelect: { tabs.select($0) },
+        onPlace: { dragged, target, edge in _ = tabs.place(dragged, beside: target, edge: edge) })
     } else {
       canvas
-    }
-  }
-
-  private func splitCanvas(_ layout: WorkspaceSplit) -> AnyView {
-    switch layout {
-    case .tab(let id):
-      return AnyView(workspaceContent(id)
-        .terminalInputEnabled(terminalInputAllowed && tabs.selected == id)
-        .frame(minWidth: 120, maxWidth: .infinity, minHeight: 80, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded { tabs.select(id) })
-        .overlay(alignment: .top) {
-          if tabs.selected == id {
-            Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
-              .allowsHitTesting(false)
-          }
-        })
-    case .split(.left, let first, let second), .split(.right, let first, let second):
-      return AnyView(GeometryReader { geometry in
-        HSplitView {
-          splitCanvas(first).frame(idealWidth: geometry.size.width / 2)
-          splitCanvas(second).frame(idealWidth: geometry.size.width / 2)
-        }
-      })
-    case .split(.up, let first, let second), .split(.down, let first, let second):
-      return AnyView(GeometryReader { geometry in
-        VSplitView {
-          splitCanvas(first).frame(idealHeight: geometry.size.height / 2)
-          splitCanvas(second).frame(idealHeight: geometry.size.height / 2)
-        }
-      })
     }
   }
   #endif
@@ -517,6 +500,9 @@ struct RootView: View {
     Group {
       if let id = tabs.selected {
         workspaceContent(id)
+          #if os(macOS)
+            .overlay { PaneDrop(target: id) { dragged, edge in _ = tabs.place(dragged, beside: id, edge: edge) } }
+          #endif
       } else if tabs.currentHost != nil {
         EmptyWorkspace()
           .padding(Chrome.margin)
@@ -535,9 +521,12 @@ struct RootView: View {
       if let workspace = extensionWorkspace {
         workspace.inspector()
       } else if let pluginID = tabs.inspectorPlugin,
-        let attachment = tabs.current?.attachment(for: pluginID)
+        let tab = tabs.current,
+        let attachment = tab.attachment(for: pluginID)
       {
-        attachment.inspector()
+        // This tab's inspector. Without an identity SwiftUI keeps the previous
+        // tab's view, so a shell beside a client never loads that host's list.
+        attachment.inspector().id(tab.id)
       } else if let shown = tabs.current?.shown {
         shown.inspector()
       } else if let tab = tabs.current {
@@ -782,9 +771,9 @@ struct RootView: View {
       switch layout {
       case .tab(let id):
         return AnyView(touchPane(id))
-      case .split(.left, let first, let second), .split(.right, let first, let second):
+      case .split(.left, let first, let second, _), .split(.right, let first, let second, _):
         return AnyView(HStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
-      case .split(.up, let first, let second), .split(.down, let first, let second):
+      case .split(.up, let first, let second, _), .split(.down, let first, let second, _):
         return AnyView(VStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
       }
     }
@@ -1005,6 +994,7 @@ extension RootView {
       }
       .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
       .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
+      .onChange(of: tabs.workspaceSplit?.ids ?? [], initial: false) { _, _ in refreshFramePublishing() }
       #if os(macOS)
         .onChange(of: windowShown) { _, _ in refreshFramePublishing() }
       #else
@@ -1447,6 +1437,210 @@ extension RootView {
     EmptyWorkspace()
   }
 }
+
+#if os(macOS)
+  /// One split, sized from the fraction the page stored. A system split view
+  /// keeps its own divider, and that divider is wrong after the panes leave
+  /// the window and come back — and it draws through the tab strip.
+  private struct SplitCanvas: View {
+    let layout: WorkspaceSplit
+    let selected: UUID?
+    let inputAllowed: Bool
+    let pane: (UUID) -> AnyView
+    let onReplace: (WorkspaceSplit) -> Void
+    let onCommit: () -> Void
+    let onSelect: (UUID) -> Void
+    var onPlace: (UUID, UUID, SplitDirection) -> Void = { _, _, _ in }
+
+    var body: some View {
+      switch layout {
+      case .tab(let id):
+        pane(id)
+          .terminalInputEnabled(inputAllowed && selected == id)
+          .frame(minWidth: 120, maxWidth: .infinity, minHeight: 80, maxHeight: .infinity)
+          .clipped()
+          .contentShape(Rectangle())
+          .simultaneousGesture(TapGesture().onEnded { onSelect(id) })
+          .overlay { PaneDrop(target: id) { dragged, edge in onPlace(dragged, id, edge) } }
+          .overlay(alignment: .top) {
+            if selected == id {
+              Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
+                .allowsHitTesting(false)
+            }
+          }
+      case .split(let direction, let first, let second, let fraction):
+        let vertical = direction == .up || direction == .down
+        DividedPanes(axis: vertical ? .vertical : .horizontal, fraction: fraction, onFraction: { next in
+          onReplace(.split(direction, first, second, next))
+        }, onCommit: onCommit) {
+          SplitCanvas(layout: first, selected: selected, inputAllowed: inputAllowed, pane: pane,
+            onReplace: { onReplace(.split(direction, $0, second, fraction)) },
+            onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
+        } second: {
+          SplitCanvas(layout: second, selected: selected, inputAllowed: inputAllowed, pane: pane,
+            onReplace: { onReplace(.split(direction, first, $0, fraction)) },
+            onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
+        }
+      }
+    }
+  }
+
+  private struct DividedPanes<First: View, Second: View>: View {
+    var axis: Axis
+    var fraction: Double
+    var onFraction: (Double) -> Void
+    var onCommit: () -> Void
+    @ViewBuilder var first: () -> First
+    @ViewBuilder var second: () -> Second
+    @State private var dragStart: Double?
+
+    var body: some View {
+      GeometryReader { geometry in
+        let horizontal = axis == .horizontal
+        let length = horizontal ? geometry.size.width : geometry.size.height
+        let minimum: CGFloat = horizontal ? 120 : 80
+        let size = Self.length(fraction, usable: length, minimum: minimum)
+        Group {
+          if horizontal {
+            HStack(spacing: 0) {
+              first().frame(width: size).frame(maxHeight: .infinity)
+              grip(horizontal: true, usable: length, minimum: minimum)
+              second().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+          } else {
+            VStack(spacing: 0) {
+              first().frame(height: size).frame(maxWidth: .infinity)
+              grip(horizontal: false, usable: length, minimum: minimum)
+              second().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+          }
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+      }
+    }
+
+    /// The first pane's length. Below the minimum, both panes share what is left.
+    private static func length(_ fraction: Double, usable: CGFloat, minimum: CGFloat) -> CGFloat {
+      guard usable > 0 else { return 0 }
+      let floor = min(minimum, usable / 2)
+      let proposed = CGFloat(fraction.isFinite ? fraction : 0.5) * usable
+      return min(max(proposed, floor), usable - floor)
+    }
+
+    private func grip(horizontal: Bool, usable: CGFloat, minimum: CGFloat) -> some View {
+      Divider()
+        .overlay {
+          Color.clear
+            .frame(width: horizontal ? Chrome.columnHandle : nil, height: horizontal ? nil : Chrome.columnHandle)
+            .contentShape(Rectangle())
+            .pointerStyle(horizontal ? .columnResize : .rowResize)
+            .gesture(
+              DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                  guard usable > 0 else { return }
+                  let origin = dragStart ?? fraction
+                  dragStart = origin
+                  let moved = horizontal ? value.translation.width : value.translation.height
+                  let pixels = Self.length(origin, usable: usable, minimum: minimum) + moved
+                  onFraction(Double(Self.length(pixels / usable, usable: usable, minimum: minimum) / usable))
+                }
+                .onEnded { _ in
+                  dragStart = nil
+                  onCommit()
+                })
+        }
+        .accessibilityHidden(true)
+    }
+  }
+
+  /// Drop a dragged tab on the side of a pane. The overlay stays out of the
+  /// way until a drag is in progress, so typing and clicking still reach the shell.
+  private struct PaneDrop: NSViewRepresentable {
+    var target: UUID
+    var onPlace: (UUID, SplitDirection) -> Void
+
+    func makeNSView(context: Context) -> Dropper {
+      let view = Dropper()
+      view.registerForDraggedTypes([TabDrag.type])
+      return view
+    }
+
+    func updateNSView(_ view: Dropper, context: Context) {
+      view.target = target
+      view.onPlace = onPlace
+    }
+
+    final class Dropper: NSView {
+      var target: UUID?
+      var onPlace: ((UUID, SplitDirection) -> Void)?
+      private let mark = CALayer()
+      private var edge: SplitDirection?
+
+      override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = window?.currentEvent, event.type == .leftMouseDragged else { return nil }
+        let local = convert(point, from: superview)
+        return bounds.contains(local) ? self : nil
+      }
+
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        wantsLayer = true
+        layer?.backgroundColor = .clear
+        mark.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
+        mark.isHidden = true
+        if mark.superlayer == nil { layer?.addSublayer(mark) }
+      }
+
+      override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
+          dragged != target else {
+          hide()
+          return []
+        }
+        let local = convert(sender.draggingLocation, from: nil)
+        let point = bounds.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
+        guard let side = SplitDirection.drop(
+          x: point.x - bounds.minX, y: point.y - bounds.minY,
+          width: bounds.width, height: bounds.height, band: 0.28)
+        else {
+          hide()
+          return []
+        }
+        show(side)
+        return .move
+      }
+
+      override func draggingExited(_ sender: NSDraggingInfo?) { hide() }
+
+      override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { hide() }
+        guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
+          let target, let edge, dragged != target else { return false }
+        onPlace?(dragged, edge)
+        return true
+      }
+
+      private func show(_ side: SplitDirection) {
+        edge = side
+        let thickness = min(bounds.width, bounds.height) * 0.28
+        let rect: CGRect
+        switch side {
+        case .left: rect = CGRect(x: 0, y: 0, width: thickness, height: bounds.height)
+        case .right: rect = CGRect(x: bounds.width - thickness, y: 0, width: thickness, height: bounds.height)
+        case .up: rect = CGRect(x: 0, y: bounds.height - thickness, width: bounds.width, height: thickness)
+        case .down: rect = CGRect(x: 0, y: 0, width: bounds.width, height: thickness)
+        }
+        mark.isHidden = false
+        mark.frame = rect
+      }
+
+      private func hide() {
+        edge = nil
+        mark.isHidden = true
+      }
+    }
+  }
+#endif
 
 /// Something the window tells a person once, with nothing to decide.
 struct WorkspaceNotice: Hashable {

@@ -50,11 +50,14 @@ public struct PluginManifest: Sendable, Equatable {
   public let contributions: [Contribution]
   /// Exact GET endpoints approved at install; no arbitrary URLs or redirects.
   public let networkURLs: [URL]
+  /// Native settings window. Only `nerve://settings` passes validation.
+  public let settingsURL: URL?
 
   init(
     id: String, name: String, publisher: String, version: String, api: Int,
     runtime: PluginRuntimeKind, entrypoint: String, ageRating: String, link: URL,
-    permissions: [Permission], contributions: [Contribution], networkURLs: [URL] = []
+    permissions: [Permission], contributions: [Contribution], networkURLs: [URL] = [],
+    settingsURL: URL? = nil
   ) {
     self.id = id
     self.name = name
@@ -68,6 +71,17 @@ public struct PluginManifest: Sendable, Equatable {
     self.permissions = permissions
     self.contributions = contributions
     self.networkURLs = networkURLs
+    self.settingsURL = settingsURL
+  }
+
+  /// The Nerve settings window, or nil when the text names anything else.
+  static func settingsWindow(_ text: String) -> URL? {
+    guard text.utf8.count <= 32, let url = URL(string: text),
+      url.scheme?.lowercased() == "nerve", url.host?.lowercased() == "settings",
+      url.user == nil, url.password == nil,
+      url.path.isEmpty || url.path == "/", url.query == nil, url.fragment == nil
+    else { return nil }
+    return URL(string: "nerve://settings")
   }
 
   public func allows(_ permission: Permission) -> Bool {
@@ -94,4 +108,5 @@ struct RawManifest: Decodable {
   var permissions: [String]
   var contributions: [RawContribution]
   var networkURLs: [String]?
+  var settingsURL: String?
 }

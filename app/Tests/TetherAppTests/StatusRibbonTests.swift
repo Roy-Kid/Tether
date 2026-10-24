@@ -26,6 +26,20 @@ struct StatusRibbonTests {
     #expect(stops.allSatisfy { $0.location.isFinite })
   }
 
+  @Test("a saturated colour breathes, and the same colour stays in phase")
+  func motion() {
+    #expect(StatusMotion.period(for: 0x8E8E93) == nil)
+    #expect(StatusMotion.pulse(color: 0x8E8E93, time: 1.2) == 1)
+    let running = StatusMotion.period(for: 0x0A84FF)
+    #expect(running != nil)
+    let time = 12.5
+    #expect(StatusMotion.pulse(color: 0x0A84FF, time: time) == StatusMotion.pulse(color: 0x0A84FF, time: time))
+    let shimmer = StatusMotion.shimmer(time: time)
+    #expect(shimmer >= 0 && shimmer < 1)
+    #expect(StatusRibbon.shares(for: [Self.segment(0x0A84FF, 3), Self.segment(0x8E8E93, 1)]).map(\.color)
+      == [0x0A84FF, 0x8E8E93])
+  }
+
   @Test("one segment fills the band")
   func single() {
     #expect(StatusRibbon.stops(for: [Self.segment(0x00FF00, 3)]) == [

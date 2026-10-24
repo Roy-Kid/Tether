@@ -56,6 +56,11 @@ struct EditingTests {
 
   private func text(_ url: URL) throws -> String { try String(contentsOf: url, encoding: .utf8) }
 
+  /// The copy's inode: what an app that has it open holds on to.
+  private func node(_ url: URL) throws -> UInt64 {
+    try #require((FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? NSNumber)?.uint64Value)
+  }
+
   @Test("opening edits a copy, and saving writes it back")
   func savingWritesBack() async throws {
     let source = StubSource(tree)
@@ -93,6 +98,7 @@ struct EditingTests {
     let url = try #require(opened.urls.first)
     source.touch(Self.notes)
     try save("mine", to: url)
+    let original = try node(url)
     await model.editing.check(Self.notes)
 
     switch answer {
@@ -113,6 +119,7 @@ struct EditingTests {
     case "discard":
       #expect(source.writeBacks.isEmpty)
       #expect(try text(url) == Self.notes, "the far side's contents")
+      #expect(try node(url) == original, "the same file: the editor keeps its document")
       #expect(model.editing.states[Self.notes] == .synced)
     default:
       #expect(source.writeBacks.isEmpty)
@@ -300,11 +307,13 @@ struct EditingTests {
     model.editing.watchEvery = .milliseconds(20)
     await model.edit([entry(Self.notes)])
     let url = try #require(opened.urls.first)
+    let original = try node(url)
     source.revise(Self.notes, "from the server")
     for _ in 0..<200 where (try? text(url)) != "from the server" {
       try await Task.sleep(for: .milliseconds(10))
     }
     #expect(try text(url) == "from the server")
+    #expect(try node(url) == original, "the same file: an app that has it open is told it changed, not that it went")
     #expect(model.editing.states[Self.notes] == .synced)
     try await Task.sleep(for: .milliseconds(80))
     #expect(source.writeBacks.isEmpty, "bringing the far side in is not an edit")

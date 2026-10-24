@@ -26,8 +26,26 @@ public enum TerminalFonts {
   public static var primary: String {
     UserDefaults.standard.string(forKey: primaryKey) ?? defaultPrimary
   }
+  /// "System Default" in the wide-character picker.
+  public static let defaultWide = "system"
+  /// What "System Default" meant before it had a name of its own, and what
+  /// settings saved until then.
+  private static let storedSystemWide = "PingFang SC"
+  /// The platform's CJK face. iOS ships PingFang with `hvgl` outlines only,
+  /// which the renderer cannot paint, so Chinese would come out blank there.
+  private static var systemWide: String {
+    #if os(iOS)
+      DownloadedWideFont.face
+    #else
+      "PingFang SC"
+    #endif
+  }
   public static var wide: String {
-    UserDefaults.standard.string(forKey: wideKey) ?? "PingFang SC"
+    resolvedWide(UserDefaults.standard.string(forKey: wideKey) ?? defaultWide)
+  }
+
+  static func resolvedWide(_ choice: String) -> String {
+    choice == defaultWide || choice == storedSystemWide ? systemWide : choice
   }
 
   private static var directory: URL {
@@ -89,6 +107,9 @@ public enum TerminalFonts {
       }
     }
     for path in paths { _ = try? RenderingFonts.registerFile(path) }
+    #if os(iOS)
+      DownloadedWideFont.prepare()
+    #endif
     if let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
       for file in files where file.pathExtension == "font" {
         guard let data = try? Data(contentsOf: file) else { continue }

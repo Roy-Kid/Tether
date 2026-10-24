@@ -71,9 +71,53 @@ public struct LinkMenu {
 struct CellGeometry: Equatable {
   var cellWidth: CGFloat
   var lineHeight: CGFloat
-  var inset: CGFloat
+  /// The grid's top-left corner. Not the inset alone: the renderer centres
+  /// the grid in what the inset leaves, and a click has to land where the
+  /// cell was drawn.
+  var originX: CGFloat
+  var originY: CGFloat
   var columns: UInt16
   var rows: UInt16
+
+  init(cellWidth: CGFloat, lineHeight: CGFloat, inset: CGFloat, columns: UInt16, rows: UInt16) {
+    self.init(cellWidth: cellWidth, lineHeight: lineHeight, originX: inset, originY: inset,
+      columns: columns, rows: rows)
+  }
+
+  init(cellWidth: CGFloat, lineHeight: CGFloat, originX: CGFloat, originY: CGFloat, columns: UInt16, rows: UInt16) {
+    self.cellWidth = cellWidth
+    self.lineHeight = lineHeight
+    self.originX = originX
+    self.originY = originY
+    self.columns = columns
+    self.rows = rows
+  }
+
+  /// Where the renderer puts a grid on a surface of `size` points given
+  /// `inset` (`RenderSurface.setGridPadding`): the same arithmetic, in the
+  /// same device pixels, so the cell under the pointer is the cell drawn.
+  static func placed(
+    size: CGSize, scale: CGFloat, inset: CGFloat, cellWidth: CGFloat, lineHeight: CGFloat,
+    columns: UInt16, rows: UInt16
+  ) -> CellGeometry {
+    let scale = scale > 0 ? scale : 1
+    let insetPixels = gridPadding(inset: inset, scale: scale)
+    func origin(_ points: CGFloat, _ pitch: CGFloat, _ count: UInt16) -> CGFloat {
+      let available = (points * scale).rounded()
+      let used = CGFloat(count) * (pitch * scale).rounded()
+      let spare = max(0, available - 2 * insetPixels - used)
+      return (insetPixels + (spare / 2).rounded(.down)) / scale
+    }
+    return CellGeometry(
+      cellWidth: cellWidth, lineHeight: lineHeight,
+      originX: origin(size.width, cellWidth, columns), originY: origin(size.height, lineHeight, rows),
+      columns: columns, rows: rows)
+  }
+
+  /// The inset as the renderer is told it: whole device pixels.
+  static func gridPadding(inset: CGFloat, scale: CGFloat) -> CGFloat {
+    (max(0, inset) * (scale > 0 ? scale : 1)).rounded()
+  }
 
   static let empty = CellGeometry(cellWidth: 1, lineHeight: 1, inset: 0, columns: 0, rows: 0)
 
@@ -82,15 +126,15 @@ struct CellGeometry: Equatable {
   /// [`cell(at:)`] instead.
   func clampedCell(at point: CGPoint) -> (row: UInt16, column: UInt16)? {
     guard columns > 0, rows > 0, cellWidth > 0, lineHeight > 0 else { return nil }
-    let column = min(max(Int((point.x - inset) / cellWidth), 0), Int(columns) - 1)
-    let row = min(max(Int((point.y - inset) / lineHeight), 0), Int(rows) - 1)
+    let column = min(max(Int((point.x - originX) / cellWidth), 0), Int(columns) - 1)
+    let row = min(max(Int((point.y - originY) / lineHeight), 0), Int(rows) - 1)
     return (UInt16(row), UInt16(column))
   }
 
   /// The cell under `point`, or `nil` in the margin.
   func cell(at point: CGPoint) -> (row: UInt16, column: UInt16)? {
-    let x = (point.x - inset) / cellWidth
-    let y = (point.y - inset) / lineHeight
+    let x = (point.x - originX) / cellWidth
+    let y = (point.y - originY) / lineHeight
     guard x >= 0, y >= 0 else { return nil }
     let column = Int(x)
     let row = Int(y)
@@ -101,8 +145,8 @@ struct CellGeometry: Equatable {
   /// The rectangle a span covers.
   func rect(for span: LinkSpan) -> CGRect {
     CGRect(
-      x: inset + CGFloat(span.start) * cellWidth,
-      y: inset + CGFloat(span.row) * lineHeight,
+      x: originX + CGFloat(span.start) * cellWidth,
+      y: originY + CGFloat(span.row) * lineHeight,
       width: CGFloat(span.end - span.start) * cellWidth,
       height: lineHeight)
   }

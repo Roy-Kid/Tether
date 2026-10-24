@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// faces; no operating-system font installation or iCloud write is performed.
 public struct TerminalFontSettings: View {
   @AppStorage(TerminalFonts.primaryKey) private var primary = TerminalFonts.defaultPrimary
-  @AppStorage(TerminalFonts.wideKey) private var wide = "PingFang SC"
+  @AppStorage(TerminalFonts.wideKey) private var wide = TerminalFonts.defaultWide
   @State private var faces: [TerminalFontFace] = []
   @State private var importing = false
   @State private var problem: Dialog?
@@ -23,8 +23,10 @@ public struct TerminalFontSettings: View {
       }
     }
     Picker("Wide Character Font", selection: $wide) {
-      Text("System Default").tag("PingFang SC")
-      if !faces.contains(where: { $0.id == wide }), wide != "PingFang SC" { Text(wide).tag(wide) }
+      Text("System Default").tag(TerminalFonts.defaultWide)
+      if !faces.contains(where: { $0.id == wide }), TerminalFonts.resolvedWide(wide) == wide {
+        Text(wide).tag(wide)
+      }
       ForEach(faces, id: \.id) { face in Text(face.name).tag(face.id) }
     }
     SettingsAction("Import Font", systemImage: "square.and.arrow.down") { importing = true }

@@ -211,6 +211,107 @@ pub struct Terminal {
     pub(crate) history: Option<crate::history::Capture>,
 }
 
+/// Where a point sits relative to vertical rules on its row.
+enum ColumnSpan {
+    /// No confirmed rule. The row is the whole screen.
+    Screen,
+    /// The point is on a rule, which names nothing.
+    Rule,
+    /// The columns between two rules, or a rule and the edge of the screen.
+    Pane { left: usize, right: usize },
+}
+
+/// A vertical stroke a split draws between columns. `|` is included because
+/// that is the same stroke when the other side is not drawing with Unicode.
+fn is_vertical_rule(c: char) -> bool {
+    matches!(
+        c,
+        '|' | '│'
+            | '┃'
+            | '║'
+            | '┆'
+            | '┇'
+            | '┊'
+            | '┋'
+            | '╎'
+            | '╏'
+            | '├'
+            | '┤'
+            | '┼'
+            | '╞'
+            | '╡'
+            | '╪'
+            | '╫'
+    )
+}
+
+fn rule_columns(
+    row: &alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>,
+    above: Option<&alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>>,
+    below: Option<&alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>>,
+    columns: usize,
+) -> Vec<usize> {
+    let mut rules = Vec::new();
+    for column in 0..columns {
+        if !is_vertical_rule(row[Column(column)].c) {
+            continue;
+        }
+        // One stroke in a sentence is not a split. The rule runs down the
+        // screen, so an adjacent row has it in the same column.
+        let neighbor = above.is_some_and(|row| is_vertical_rule(row[Column(column)].c))
+            || below.is_some_and(|row| is_vertical_rule(row[Column(column)].c));
+        if neighbor {
+            rules.push(column);
+        }
+    }
+    rules
+}
+
+fn column_span<'a>(
+    cells_at: impl Fn(u16) -> &'a alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>,
+    position: Position,
+    columns: usize,
+    rows: u16,
+) -> ColumnSpan {
+    if position.column as usize >= columns {
+        return ColumnSpan::Screen;
+    }
+    let above = (position.row > 0).then(|| cells_at(position.row - 1));
+    let below = (position.row + 1 < rows).then(|| cells_at(position.row + 1));
+    let rules = rule_columns(cells_at(position.row), above, below, columns);
+    if rules.is_empty() {
+        return ColumnSpan::Screen;
+    }
+    let column = position.column as usize;
+    if rules.contains(&column) {
+        return ColumnSpan::Rule;
+    }
+    let left = rules.iter().rev().find(|rule| **rule < column).map(|rule| *rule + 1).unwrap_or(0);
+    let right = rules.iter().find(|rule| **rule > column).copied().unwrap_or(columns);
+    if left >= right { ColumnSpan::Screen } else { ColumnSpan::Pane { left, right } }
+}
+
+/// Whether `row` has something in the last column of `[left, right)`.
+///
+/// A split that runs out of room writes a newline there and continues in
+/// the same columns of the next row. Space left before the rule means the
+/// program really ended the line.
+fn row_fills_span(
+    row: &alacritty_terminal::grid::Row<alacritty_terminal::term::cell::Cell>,
+    left: usize,
+    right: usize,
+) -> bool {
+    if right <= left {
+        return false;
+    }
+    let last = right - 1;
+    if wide::is_right_half(row, last) {
+        return true;
+    }
+    let cell = &row[Column(last)];
+    cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) || cell.c != ' '
+}
+
 impl Terminal {
     pub fn new(size: ScreenSize) -> Self {
         Self::with_options(size, Options::default())
@@ -335,7 +436,10 @@ impl Terminal {
 
     /// What the text at `position` names, if it names somewhere: the
     /// hyperlink a program attached to it, or a web address or path it is
-    /// shaped like. Wrapped rows are read as the one line they are.
+    /// shaped like. Wrapped rows are read as the one line they are, and so
+    /// is a row that fills up to a vertical rule: a split writes the rest
+    /// on the next row of that column range, with a newline, because the
+    /// rule is not the edge of the screen.
     ///
     /// Shape, not truth. Whether a path exists is for whoever holds the
     /// connection to ask.
@@ -365,32 +469,58 @@ impl Terminal {
         link::find(&line, hit)
     }
 
-    /// The visible rows the one at `position` is part of — joined across
-    /// soft wraps, never across a newline — as glyphs with their screen
-    /// positions, which of them `position` is on, and each one's hyperlink.
+    /// The visible rows the one at `position` is part of, as glyphs with
+    /// their screen positions, which of them `position` is on, and each
+    /// one's hyperlink.
+    ///
+    /// Soft-wrapped rows are one line. So are the rows of a column range
+    /// bounded by a vertical rule, when each row is full up to that rule:
+    /// a split writes a newline there and the rest on the next row, and the
+    /// screen's wrap flag stays off because the rule is not the edge. A
+    /// newline that leaves space before the rule stays a newline. A screen
+    /// with no such rule is read only across soft wraps.
     fn logical_line(&self, position: Position) -> (Vec<Glyph>, Option<usize>, Vec<Option<String>>) {
         let grid = self.inner.grid();
         let offset = grid.display_offset() as i32;
         let columns = self.size.columns as usize;
-        let wraps = |row: u16| {
-            grid[Line(row as i32 - offset)][Column(columns - 1)].flags.contains(Flags::WRAPLINE)
-        };
+        let rows = self.size.rows;
+        let cells_at = |row: u16| &grid[Line(row as i32 - offset)];
 
-        let mut first = position.row;
-        while first > 0 && wraps(first - 1) {
-            first -= 1;
-        }
-        let mut last = position.row;
-        while last + 1 < self.size.rows && wraps(last) {
-            last += 1;
-        }
+        let (first, last, left, right) = match column_span(cells_at, position, columns, rows) {
+            ColumnSpan::Rule => return (Vec::new(), None, Vec::new()),
+            ColumnSpan::Pane { left, right } => {
+                let continues = |row: u16| row_fills_span(cells_at(row), left, right);
+                let mut first = position.row;
+                while first > 0 && continues(first - 1) {
+                    first -= 1;
+                }
+                let mut last = position.row;
+                while last + 1 < rows && continues(last) {
+                    last += 1;
+                }
+                (first, last, left, right)
+            }
+            ColumnSpan::Screen => {
+                let wraps =
+                    |row: u16| cells_at(row)[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+                let mut first = position.row;
+                while first > 0 && wraps(first - 1) {
+                    first -= 1;
+                }
+                let mut last = position.row;
+                while last + 1 < rows && wraps(last) {
+                    last += 1;
+                }
+                (first, last, 0, columns)
+            }
+        };
 
         let mut glyphs = Vec::new();
         let mut links = Vec::new();
         let mut hit = None;
         for row in first..=last {
-            let cells = &grid[Line(row as i32 - offset)];
-            for column in 0..columns {
+            let cells = cells_at(row);
+            for column in left..right {
                 let cell = &cells[Column(column)];
                 // A wrap placeholder is where a wide character did not fit;
                 // the line goes on at the start of the next row.
@@ -408,7 +538,7 @@ impl Terminal {
                 {
                     hit = Some(glyphs.len());
                 }
-                let mut text = String::from(cell.c);
+                let mut text = String::from(wide::published_char(cell.c));
                 if let Some(zerowidth) = cell.zerowidth() {
                     text.extend(zerowidth);
                 }
@@ -677,7 +807,7 @@ impl Terminal {
                 continue;
             }
 
-            let mut text = String::from(cell.c);
+            let mut text = String::from(wide::published_char(cell.c));
             if let Some(zerowidth) = cell.zerowidth() {
                 text.extend(zerowidth);
             }

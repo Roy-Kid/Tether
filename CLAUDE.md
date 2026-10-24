@@ -244,11 +244,14 @@ is brought into the copy, as soon as either happens. A save lands only while
 the far side's file is still the one that was opened, and a far-side change
 lands only while the copy still matches it. Otherwise the person chooses
 Replace, Save as Copy or Discard My Changes; nothing is overwritten unasked.
+What lands, lands in the same file, never swapped in under its name: an app
+that has it open keeps it, and one that reloads on change does.
 An edit copy
 lives under Application Support and goes once it is written back and its
 editor has quit; one with an edit not yet written back stays across launches.
 Previews and other copies that can be fetched again live in this account's
 own temporary directory, never the shared `/tmp`, closed to other accounts.
+Settings ▸ Files shows where they are and what they take, and clears them.
 
 A session can forward the user's own loopback ports on that machine to this
 device. The listener is on this side of the lease — a direct-tcpip channel,

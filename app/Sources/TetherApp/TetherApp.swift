@@ -5,6 +5,7 @@
 #endif
 import AuthenticationServices
 import FilesPlugin
+import UserNotifications
 import PortsPlugin
 import SwiftUI
 import Tether
@@ -14,7 +15,19 @@ import TetherPluginKit
 import TmuxPlugin
 
 #if os(macOS)
-  /// One window is the whole app. Closing it must not quit: the icon stays
+  /// The main window is put away rather than closed. Additional windows are
+  /// real windows: each has its own tabs, and the red button ends them.
+  private final class ExtraWindow {
+    let tabs: TabSet
+    let window: WorkspaceWindow
+    var closeObserver: NSObjectProtocol?
+    init(tabs: TabSet, window: WorkspaceWindow) {
+      self.tabs = tabs
+      self.window = window
+    }
+  }
+
+  /// One window starts as the app. Closing it must not quit: the icon stays
   /// in the Dock, the window is put away with every tab in it, and a click on
   /// the icon brings it back (`HideInsteadOfClose`).
   ///
@@ -24,11 +37,13 @@ import TmuxPlugin
   final class TetherAppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private(set) var window: WorkspaceWindow?
+    private var extras: [ExtraWindow] = []
     private lazy var quitGate = QuitGate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
       let window = WorkspaceWindow(hosting: RootHost(model: model))
       self.window = window
+      model.openAdditionalWindow = { [weak self] in self?.openAdditionalWindow() }
       model.tabs.quickTerminal.attach(to: window)
       model.tabs.quickTerminal.useBindings(model.tabs.keyBindings)
       window.makeKeyAndOrderFront(nil)
@@ -36,6 +51,8 @@ import TmuxPlugin
       // Space forward. Now that it has one, once more — measured: launched
       // behind another app's full-screen Space, the window stayed behind it.
       NSApp.activate(ignoringOtherApps: true)
+      UNUserNotificationCenter.current().delegate = self
+      Task { await NotificationPermission.askIfNeeded() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -43,11 +60,45 @@ import TmuxPlugin
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-      quitGate.shouldTerminate(sender, tabs: model.tabs)
+      let live = model.tabs.liveTerminalCount + model.additionalSessions.reduce(0) { $0 + $1.liveTerminalCount }
+      return quitGate.shouldTerminate(sender, live: live)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
       model.tabs.quickTerminal.stop()
+      for extra in extras { extra.tabs.closeAll() }
+    }
+
+    /// Another workspace window. It has its own tabs and does not hide in
+    /// place of closing, and it does not rewrite the main window's history.
+    func openAdditionalWindow() {
+      let tabs = TabSet()
+      let window = WorkspaceWindow(
+        hosting: RootHost(model: model, ownedSessions: tabs)
+          .environment(\.workspaceHidesOnClose, false),
+        autosaveName: nil)
+      window.isReleasedWhenClosed = true
+      if let main = self.window {
+        window.setFrame(main.frame.offsetBy(dx: 32, dy: -32), display: false)
+      }
+      let extra = ExtraWindow(tabs: tabs, window: window)
+      extras.append(extra)
+      model.additionalSessions.append(tabs)
+      extra.closeObserver = NotificationCenter.default.addObserver(
+        forName: NSWindow.willCloseNotification, object: window, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in self?.closeExtra(window) }
+      }
+      window.makeKeyAndOrderFront(nil)
+    }
+
+    private func closeExtra(_ window: NSWindow) {
+      guard let index = extras.firstIndex(where: { $0.window === window }) else { return }
+      let tabs = extras[index].tabs
+      extras.remove(at: index)
+      model.additionalSessions.removeAll { $0 === tabs }
+      if model.keyTabs === tabs { model.keyTabs = nil }
+      tabs.closeAll()
     }
 
     /// The main window, not just any: with Settings open and the main
@@ -100,7 +151,7 @@ struct TetherApp: App {
       .defaultSize(width: Chrome.settingsWidth, height: Chrome.settingsHeight)
       .windowResizability(.contentMinSize)
       .commands {
-        WorkspaceCommands(tabs: model.tabs)
+        WorkspaceCommands(model: model)
       }
     #else
       // A phone has no preferences window and no menu bar; settings are
@@ -108,22 +159,79 @@ struct TetherApp: App {
       WindowGroup {
         RootHost(model: model)
       }
-      .commands { WorkspaceCommands(tabs: model.tabs) }
+      .commands { WorkspaceCommands(model: model) }
     #endif
   }
 }
+
+extension Notification.Name {
+  /// A status row landed on a terminal. The panel gets out of the way.
+  static let closePluginPanel = Notification.Name("Tether.closePluginPanel")
+}
+
+/// An editor a job already named. A directory is not opened here: that launches Finder.
+enum FocusLink {
+  private static let schemes: Set<String> = [
+    "vscode", "vscode-insiders", "cursor", "windsurf", "zed", "jetbrains",
+  ]
+
+  static func url(_ raw: String) -> URL? {
+    guard raw.count <= 2048, let url = URL(string: raw),
+      let scheme = url.scheme?.lowercased(), schemes.contains(scheme) else { return nil }
+    return url
+  }
+}
+
+#if os(macOS)
+/// A tty that belongs to Terminal.app, not to a tab in this process.
+enum ExternalTerminal {
+  static func focus(device: String) -> Bool {
+    guard let source = script(device: device) else { return false }
+    var error: NSDictionary?
+    let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
+    return error == nil && result?.booleanValue == true
+  }
+
+  /// `device` is interpolated into AppleScript, so it has to be a bare tty path.
+  static func script(device: String) -> String? {
+    guard device.range(of: #"^/dev/(ttys\d+|pts/\d+)$"#, options: .regularExpression) != nil else {
+      return nil
+    }
+    return """
+    tell application "Terminal"
+      if not running then return false
+      repeat with w in windows
+        repeat with t in tabs of w
+          if tty of t is "\(device)" then
+            set selected tab of w to t
+            set index of w to 1
+            activate
+            return true
+          end if
+        end repeat
+      end repeat
+      return false
+    end tell
+    """
+  }
+}
+#endif
 
 /// The whole app's view, with what happens around it as it comes up, as the
 /// library changes and as attention comes and goes. The same everywhere;
 /// only the window or scene around it differs.
 struct RootHost: View {
   @Bindable var model: AppModel
+  /// Nil on the main window, which keeps `model.tabs`. An additional window
+  /// passes its own set and closes for real.
+  var ownedSessions: TabSet? = nil
+  private var windowTabs: TabSet { ownedSessions ?? model.tabs }
   #if os(iOS)
     @Environment(\.scenePhase) private var phase
   #endif
 
   var body: some View {
-    RootView(store: model.store, tabs: model.tabs, registry: model.registry, secrets: model.secrets,
+    RootView(store: model.store, tabs: windowTabs, registry: model.registry, secrets: model.secrets,
       plugins: model.plugins, installedPlugins: $model.installedPlugins)
       .task {
         // First, so the keychain is listed before anything on screen could
@@ -134,6 +242,35 @@ struct RootHost: View {
             directory: InstalledPlugins.defaultDirectory, registry: model.registry, host: PluginHost(api: model.plugins))
           model.plugins.onStatus = { [registry = model.registry] id, item in
             registry.plugins.first { $0.metadata.id == id }?.receiveStatus(item)
+          }
+          library.onFocus = { request in
+            let sets = [model.tabs] + model.additionalSessions
+            if let terminal = request.terminal {
+              if sets.contains(where: { $0.focusSession(host: request.host, terminal: terminal, directory: nil) }) {
+                NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+                return "tab"
+              }
+              #if os(macOS)
+                if let host = request.host,
+                  TabSet.sameMachine(host, LocalMachine.kernelName),
+                  ExternalTerminal.focus(device: terminal)
+                {
+                  NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+                  return "tab"
+                }
+              #endif
+              return "none"
+            }
+            if sets.contains(where: { $0.focusSession(host: nil, terminal: nil, directory: request.directory) }) {
+              NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+              return "tab"
+            }
+            #if os(macOS)
+              if let raw = request.url, let url = FocusLink.url(raw), NSWorkspace.shared.open(url) {
+                return "url"
+              }
+            #endif
+            return "none"
           }
           model.installedPlugins = library
           library.discover()
@@ -148,56 +285,67 @@ struct RootHost: View {
             }
           #endif
         }
-        model.tabs.reconcileClosedTabs(with: model.store.hosts)
-        model.tabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
-        model.store.useKeyBindings(model.tabs.keyBindings)
+        windowTabs.reconcileClosedTabs(with: model.store.hosts)
+        windowTabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
+        if ownedSessions == nil { model.store.useKeyBindings(windowTabs.keyBindings) }
+        if ownedSessions != nil, windowTabs.tabs.isEmpty {
+          windowTabs.open(.local, password: "")
+        }
         await Task.yield()
         // The first terminal waits for nothing slow: the library on this
         // device is already read, and a shell here needs nothing else.
-        await openAtLaunch()
+        if ownedSessions == nil { await openAtLaunch() }
         // Then the SSH file and the keychain, off the main actor. Ask before
         // copying ~/.ssh/config over the library. The file is not written.
-        await model.store.refresh()
-        model.store.offerConfigurationImport()
-        // iCloud last: account status, the user record and a full fetch can
-        // take seconds on a slow network, and nothing above needs them.
-        await model.store.startSync()
-      }
-      .onChange(of: model.registry.plugins.map(\.metadata.id)) { _, _ in
-        model.tabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
-      }
-      .onChange(of: model.store.hosts) { _, hosts in
-        model.tabs.reconcileClosedTabs(with: hosts)
-        // A synchronized endpoint or policy change invalidates an in-flight
-        // attempt and its old lease. Stale tabs cannot keep granting channels.
-        for tab in model.tabs.tabs where tab.host.isManaged {
-          let current = hosts.first { $0.id == tab.host.id }
-          if current?.sameSessionTarget(as: tab.host) != true { model.tabs.close(tab.id, remember: false) }
+        // An additional window shares this library; it does not import again.
+        if ownedSessions == nil {
+          await model.store.refresh()
+          model.store.offerConfigurationImport()
+          await model.store.startSync()
         }
       }
-      .onChange(of: model.store.accountGeneration) { _, _ in model.tabs.closeAccountSessions() }
+      .onChange(of: model.registry.plugins.map(\.metadata.id)) { _, _ in
+        windowTabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
+      }
+      .onChange(of: model.store.hosts) { _, hosts in
+        windowTabs.reconcileClosedTabs(with: hosts)
+        // A synchronized endpoint or policy change invalidates an in-flight
+        // attempt and its old lease. Stale tabs cannot keep granting channels.
+        for tab in windowTabs.tabs where tab.host.isManaged {
+          let current = hosts.first { $0.id == tab.host.id }
+          if current?.sameSessionTarget(as: tab.host) != true { windowTabs.close(tab.id, remember: false) }
+        }
+      }
+      .onChange(of: model.store.accountGeneration) { _, _ in windowTabs.closeAccountSessions() }
       .dialog(for: model.imports.notice) { notice in
         Dialog.notice(notice.title, message: notice.message) { model.imports.notice = nil }
       }
       #if os(macOS)
         // Attention is the window being key. The overlay is worked in
         // without the app ever becoming active, so the app's state says nothing.
-        .background { WindowState { attend($0.key) }.allowsHitTesting(false) }
+        .background {
+          WindowState { value in
+            if value.key { model.keyTabs = windowTabs }
+            else if model.keyTabs === windowTabs { model.keyTabs = nil }
+            attend(value.key)
+          }
+          .allowsHitTesting(false)
+        }
+        .environment(\.workspaceHidesOnClose, ownedSessions == nil)
       #else
         .onChange(of: phase) { _, phase in attend(phase == .active) }
         .onContinueUserActivity(ASCredentialExchangeActivity) { model.imports.receive($0) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-          for tab in model.tabs.tabs { tab.releaseHistory() }
+          for tab in windowTabs.tabs { tab.releaseHistory() }
         }
       #endif
   }
 
   /// Coming forward reads the library through iCloud again. The SSH file
   /// is imported only from the question at open, or from Settings. Going
-  /// away, the histories are written and notes go to the system.
+  /// away, the histories are written.
   private func attend(_ attentive: Bool) {
-    model.plugins.deliversSystemNotes = !attentive
-    if !attentive { model.tabs.checkpointHistory() }
+    if !attentive { windowTabs.checkpointHistory() }
     if attentive {
       Task {
         await model.store.refresh()
@@ -250,7 +398,7 @@ extension RootHost {
       })
     else { return false }
 
-    model.tabs.intent = .connect(host)
+    windowTabs.intent = .connect(host)
     return true
   }
 
@@ -265,9 +413,9 @@ extension RootHost {
     guard TerminalSession.isLocalAvailable,
       UserDefaults.standard.object(forKey: LaunchPreference.key) as? Bool
         ?? LaunchPreference.default,
-      model.tabs.tabs.isEmpty
+      windowTabs.tabs.isEmpty
     else { return }
 
-    model.tabs.open(.local, password: "")
+    windowTabs.open(.local, password: "")
   }
 }

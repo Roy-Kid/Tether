@@ -170,6 +170,8 @@ enum Chrome {
   static let inspectorMin: CGFloat = 240
   static let inspectorIdeal: CGFloat = 280
   static let inspectorMax: CGFloat = 480
+  /// How wide the grab area of a side column's edge is.
+  static let columnHandle: CGFloat = 7
   /// Height of the native titlebar the content draws under on a Mac.
   #if os(macOS)
     static let titlebar: CGFloat = 32

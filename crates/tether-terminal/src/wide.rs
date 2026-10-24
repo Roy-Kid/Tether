@@ -31,3 +31,15 @@ pub(crate) fn is_right_half(row: &Row<Cell>, column: usize) -> bool {
         && row[Column(column)].flags.contains(Flags::WIDE_CHAR_SPACER)
         && row[Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
 }
+
+/// The character a reader of the screen should publish for this cell.
+///
+/// A tab is the engine's record that the cursor jumped: it stores `\t` in
+/// the cell it left and the columns it skipped are the blank cells after
+/// that one. The tab is therefore one column. Publishing `\t` makes a
+/// shaper jump to its own tab stop — eight columns, by default — and clip
+/// the rest of the line. tmux moves the cursor that way, so a line it
+/// redraws loses every character after the first tab.
+pub(crate) fn published_char(c: char) -> char {
+    if c == '\t' { ' ' } else { c }
+}

@@ -85,6 +85,25 @@ enum LocalCopies {
     #endif
   }
 
+  /// Every host's previews, gone: what Clear in Settings ▸ Files does.
+  /// Anything here can be fetched again, so nothing is asked first.
+  static func clearPreviews(in base: URL = disposable) {
+    try? FileManager.default.removeItem(at: previews(in: base))
+  }
+
+  /// What every host's previews take on disk.
+  static func previewBytes(in base: URL = disposable) -> Int64 {
+    let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey]
+    guard let files = FileManager.default.enumerator(at: previews(in: base), includingPropertiesForKeys: Array(keys))
+    else { return 0 }
+    var total: Int64 = 0
+    for case let url as URL in files {
+      guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+      total += Int64(values.fileSize ?? 0)
+    }
+    return total
+  }
+
   /// Removes every host's previews not looked at within `maxAge`, then the
   /// least recently looked at until what is left fits `limit`.
   static func trimPreviews(in root: URL, limit: Int64, maxAge: TimeInterval, now: Date = Date()) {

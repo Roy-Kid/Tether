@@ -30,13 +30,9 @@ public struct TerminalSurface: View {
   let active: Bool
   private let explicitInset: CGFloat?
   public static let insetPreferenceKey = "terminalInset"
-  public static var defaultInset: Double {
-    #if os(macOS)
-      16
-    #else
-      12
-    #endif
-  }
+  /// The chrome's own inset, so the first column lines up with what the
+  /// status bar and the panels draw at their edge.
+  public static var defaultInset: Double { Double(UIStyle.Space.inset) }
   @AppStorage(Self.insetPreferenceKey) private var preferredInset = Self.defaultInset
 
   private var inset: CGFloat {
@@ -78,7 +74,7 @@ public struct TerminalSurface: View {
   @AppStorage("terminalFontSize") private var fontSize = 13.0
   @AppStorage(Palette.colorStyleKey) private var colorStyle = Palette.defaultColorStyle
   @AppStorage(TerminalFonts.primaryKey) private var primaryFont = TerminalFonts.defaultPrimary
-  @AppStorage(TerminalFonts.wideKey) private var wideFont = "PingFang SC"
+  @AppStorage(TerminalFonts.wideKey) private var wideFont = TerminalFonts.defaultWide
   @Environment(\.displayScale) private var displayScale
   /// Scale of the layer that draws. Nil until that view has one.
   @State private var layerScale: CGFloat?
@@ -122,7 +118,7 @@ public struct TerminalSurface: View {
     let metrics = self.metrics ?? FontMetrics(size: min(24, max(10, fontSize)), scale: scale, primary: primaryFont, wide: wideFont)
     let palette = Palette.chosen(setting: "system", scheme: scheme, style: colorStyle)
     VStack(spacing: 0) {
-      grid(metrics: metrics, palette: palette)
+      grid(metrics: metrics, palette: palette, scale: scale)
       #if os(iOS)
         TerminalKeyBar(latch: latch, onInput: onInput)
       #endif
@@ -148,8 +144,8 @@ public struct TerminalSurface: View {
       },
       links: links, geometry: cells,
       cursorRect: CGRect(
-        x: inset + CGFloat(frame.cursorColumn) * metrics.cellWidth,
-        y: inset + CGFloat(frame.cursorRow) * metrics.lineHeight,
+        x: cells.originX + CGFloat(frame.cursorColumn) * metrics.cellWidth,
+        y: cells.originY + CGFloat(frame.cursorRow) * metrics.lineHeight,
         width: metrics.cellWidth, height: metrics.lineHeight),
       onHover: hover, onSelection: applySelection, selection: selection, mouse: tracking,
       latch: latch
@@ -163,18 +159,20 @@ public struct TerminalSurface: View {
     .accessibilityLabel("Terminal")
   }
 
-  private func grid(metrics: FontMetrics, palette: Palette) -> some View {
+  private func grid(metrics: FontMetrics, palette: Palette, scale: CGFloat) -> some View {
     shown.frame = frame
     return GeometryReader { geometry in
       ZStack(alignment: .topLeading) {
-        let cells = CellGeometry(
-          cellWidth: metrics.cellWidth, lineHeight: metrics.lineHeight, inset: inset,
+        // The renderer draws the margin itself, centring the grid and
+        // carrying edge backgrounds into it; this is where it put the cells.
+        let cells = CellGeometry.placed(
+          size: geometry.size, scale: scale, inset: inset,
+          cellWidth: metrics.cellWidth, lineHeight: metrics.lineHeight,
           columns: UInt16(frame.columns), rows: UInt16(frame.rows))
         // History is not the live grid. A click there selects text here
         // rather than landing on a cell the program is no longer showing.
         let tracking: MouseTracking = frame.viewportOffset == 0 ? frame.mouse : .off
-        terminal(metrics: metrics, palette: palette)
-          .padding(inset)
+        terminal(metrics: metrics, palette: palette, padding: CellGeometry.gridPadding(inset: inset, scale: scale))
         capture(cells: cells, metrics: metrics, tracking: tracking)
 
         if frame.viewportOffset > 0 {
@@ -222,9 +220,9 @@ public struct TerminalSurface: View {
       }
     }
   }
-  private func terminal(metrics: FontMetrics, palette: Palette) -> some View {
+  private func terminal(metrics: FontMetrics, palette: Palette, padding: CGFloat) -> some View {
     WgpuTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette,
-      overlay: renderOverlay, onPresented: onPresented, onScale: { layerScale = $0 })
+      padding: padding, overlay: renderOverlay, onPresented: onPresented, onScale: { layerScale = $0 })
   }
 
   private var renderOverlay: RenderOverlay {

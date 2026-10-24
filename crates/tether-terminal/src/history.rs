@@ -48,11 +48,8 @@ pub(crate) fn row(term: &Term<Sink>, line: i32) -> HistoryRow {
             }
             let spacer =
                 cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
-            let mut text = if spacer {
-                " ".to_owned()
-            } else {
-                if cell.c == '\t' { " ".to_owned() } else { cell.c.to_string() }
-            };
+            let mut text =
+                if spacer { " ".to_owned() } else { wide::published_char(cell.c).to_string() };
             if !spacer && let Some(extra) = cell.zerowidth() {
                 text.extend(extra);
             }

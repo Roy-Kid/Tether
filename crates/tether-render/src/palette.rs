@@ -19,6 +19,9 @@ pub struct Palette {
     pub normal: [Rgba; 8],
     /// Indices 8–15.
     pub bright: [Rgba; 8],
+    /// How opaque a program's own cell backgrounds are while the page
+    /// background is see-through. `1.0` keeps them solid.
+    pub cell_background_opacity: f32,
 }
 
 impl Palette {
@@ -50,6 +53,7 @@ impl Palette {
                 Rgba::new(0.48, 0.85, 0.87, 1.0),
                 Rgba::new(0.94, 0.95, 0.96, 1.0),
             ],
+            cell_background_opacity: 1.0,
         }
     }
 
@@ -78,6 +82,7 @@ impl Palette {
                 Rgba::new(0.0, 0.5, 0.5, 1.0),
                 Rgba::new(1.0, 1.0, 1.0, 1.0),
             ],
+            cell_background_opacity: 1.0,
         }
     }
 
@@ -89,6 +94,26 @@ impl Palette {
     pub fn chosen(setting: &str, system_is_dark: bool) -> Self {
         let dark = setting == "dark" || (setting == "system" && system_is_dark);
         if dark { Self::dark() } else { Self::light() }
+    }
+
+    /// What a cell's background is drawn as, or `None` where the page shows.
+    ///
+    /// On a see-through page a program that paints every cell would leave a
+    /// solid slab in the glass. A colour that is the page's own, or close to
+    /// it, is a program saying "background" in its theme's words, so the page
+    /// shows there. Any other colour still marks its cells — a selection, a
+    /// diff line — at the page's opacity rather than as a solid block.
+    pub fn cell_background(&self, color: Rgba) -> Option<Rgba> {
+        if color == self.background {
+            return None;
+        }
+        if self.background.alpha >= 1.0 {
+            return Some(color);
+        }
+        if near(color, self.background) {
+            return None;
+        }
+        Some(color.with_alpha(color.alpha * self.cell_background_opacity.clamp(0.0, 1.0)))
     }
 
     pub fn resolve(&self, paint: Paint) -> Rgba {
@@ -148,9 +173,42 @@ impl Palette {
     }
 }
 
+/// The furthest a channel may be from the page's and still read as it:
+/// one dark grey for another, not a highlight.
+const NEAR_BACKGROUND: f32 = 0.06;
+
+fn near(color: Rgba, background: Rgba) -> bool {
+    (color.red - background.red).abs() <= NEAR_BACKGROUND
+        && (color.green - background.green).abs() <= NEAR_BACKGROUND
+        && (color.blue - background.blue).abs() <= NEAR_BACKGROUND
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_solid_page_draws_every_cell_background_as_it_is() {
+        let palette = Palette::dark();
+        let grey = Rgba::new(0.098, 0.098, 0.098, 1.0);
+        assert_eq!(palette.cell_background(palette.background), None);
+        assert_eq!(palette.cell_background(grey), Some(grey));
+    }
+
+    #[test]
+    fn on_glass_a_programs_own_background_lets_the_page_show() {
+        let mut palette = Palette::dark();
+        palette.background = palette.background.with_alpha(0.0);
+        palette.cell_background_opacity = 0.5;
+        // #191919, a TUI theme's background over a page of #12141A.
+        let theirs = Rgba::new(25.0 / 255.0, 25.0 / 255.0, 25.0 / 255.0, 1.0);
+        assert_eq!(palette.cell_background(theirs), None);
+        // A highlight is still there, at the page's opacity.
+        let highlight = Rgba::new(47.0 / 255.0, 47.0 / 255.0, 47.0 / 255.0, 1.0);
+        assert_eq!(palette.cell_background(highlight), Some(highlight.with_alpha(0.5)));
+        let red = palette.normal[1];
+        assert_eq!(palette.cell_background(red), Some(red.with_alpha(0.5)));
+    }
 
     #[test]
     fn named_colours_come_from_the_theme() {

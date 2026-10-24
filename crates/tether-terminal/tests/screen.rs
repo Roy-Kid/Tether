@@ -21,6 +21,18 @@ fn plain_text_lands_on_the_first_row() {
     assert_eq!(term.screen().row_text(0), "hello");
 }
 
+/// tmux moves the cursor with a tab and leaves `\t` in the cell it jumped
+/// from. That cell is one column; the text after the stop has to stay.
+#[test]
+fn a_tab_is_one_column_and_the_text_after_it_stays() {
+    let mut term = terminal(40, 3);
+    term.feed(b"5015d3a\tcommit message");
+    let text = term.screen().row_text(0);
+    assert!(!text.contains('\t'), "{text:?}");
+    assert!(text.starts_with("5015d3a "), "{text:?}");
+    assert!(text.contains("commit message"), "{text:?}");
+}
+
 /// A network delivers whatever sizes it likes. An escape sequence cut in half
 /// by a packet boundary must resume, not be printed as garbage — this is the
 /// single most common way a terminal wrapper breaks in the field.

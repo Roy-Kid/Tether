@@ -10,6 +10,12 @@ public final class InstalledPlugins {
   public private(set) var pluginIDs: Set<String> = []
   private let registry: TetherPluginKit.PluginRegistry
   private let host: PluginHost
+
+  /// A panel asked to open the session it is showing. The app decides where that is.
+  public var onFocus: (@MainActor (PluginFocusRequest) -> String)? {
+    get { host.onFocus }
+    set { host.onFocus = newValue }
+  }
   private var installingIDs: Set<String> = []
 
   public init(directory: URL, registry: TetherPluginKit.PluginRegistry,
@@ -23,6 +29,7 @@ public final class InstalledPlugins {
     host.onTabIndicators = { [weak registry] session, id, items in
       (registry?.plugins.first { $0.metadata.id == id } as? WebPlugin)?
         .receiveTabIndicators(items, session: session)
+      registry?.noteTabIndicatorsChanged()
     }
   }
 
@@ -127,7 +134,13 @@ public final class InstalledPlugins {
       throw PluginHostError.duplicate(manifest.id)
     }
     let approved = Set(readNetworkGrants()[manifest.id] ?? [])
-    host.grantNetwork(pluginID: manifest.id, urls: manifest.networkURLs.filter { approved.contains($0.absoluteString) })
+    let expanded = NetworkEndpoint.expandGrants(declared: manifest.networkURLs, approved: approved)
+    if expanded != approved {
+      var grants = readNetworkGrants()
+      grants[manifest.id] = expanded.sorted()
+      try writeNetworkGrants(grants)
+    }
+    host.grantNetwork(pluginID: manifest.id, urls: manifest.networkURLs.filter { expanded.contains($0.absoluteString) })
     let record = try host.install(directory: root)
     if !registry.isEnabled(record.id) { try host.setEnabled(false, id: record.id) }
     pluginIDs.insert(record.id)

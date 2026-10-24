@@ -228,3 +228,38 @@ func tabIndicatorsRequireAContributionAndReplaceOnlyTheirOwnSession() async thro
   let denied = await host.perform(request("host.tabIndicators", session: session, payload: .array([item])))
   #expect(denied.error == "permissionDenied")
 }
+
+@Test @MainActor
+func focusRequiresAPanelAndReportsWhereTheHostLanded() async throws {
+  let host = PluginHost(consent: ScriptedConsent(allow: true))
+  let root = try Fixture.make(contributions: "[{\"kind\":\"panel\",\"id\":\"panel/jobs\"}]")
+  defer { try? FileManager.default.removeItem(at: root) }
+  let record = try host.install(directory: root)
+  let session = try await host.activate(id: record.id, runtime: IdleRuntime())
+  defer { host.unload(session: session) }
+  var asked: PluginFocusRequest?
+  host.onFocus = { request in
+    asked = request
+    return request.terminal == "/dev/ttys001" ? "tab" : "none"
+  }
+  let landed = await host.perform(request("host.focus", session: session, payload: .object([
+    "target": .object(["host": .string("studio"), "terminal": .string("/dev/ttys001")]),
+    "directory": .string("/tmp/nerve"),
+    "url": .string("file:///tmp/nerve"),
+  ])))
+  #expect(landed.ok)
+  #expect(landed.payload.key("focused")?.string == "tab")
+  #expect(asked?.directory == "/tmp/nerve")
+  let missing = await host.perform(request("host.focus", session: session, payload: .object([:])))
+  #expect(missing.error == "malformed")
+  let bare = try Fixture.make(
+    id: "fixture.no-panel", contributions: "[{\"kind\":\"command\",\"id\":\"command/fixture\"}]")
+  defer { try? FileManager.default.removeItem(at: bare) }
+  let other = try host.install(directory: bare)
+  let blocked = try await host.activate(id: other.id, runtime: IdleRuntime())
+  defer { host.unload(session: blocked) }
+  let denied = await host.perform(request("host.focus", session: blocked, payload: .object([
+    "directory": .string("/tmp/nerve"),
+  ])))
+  #expect(denied.error == "permissionDenied")
+}

@@ -124,7 +124,13 @@ final class StubSource: FileSource, @unchecked Sendable {
     }
     if let downloadFailure { throw downloadFailure }
     let body = lock.withLock { bodies[path].map { Data($0.utf8) } ?? Data(path.utf8) }
-    try body.write(to: URL(fileURLWithPath: destination))
+    // As `Files::download` does: a working file beside the destination,
+    // renamed into place once whole — which is a new inode at the path.
+    let working = destination + ".part"
+    try body.write(to: URL(fileURLWithPath: working))
+    guard Darwin.rename(working, destination) == 0 else {
+      throw FileError.failed(cause: "rename: \(String(cString: strerror(errno)))")
+    }
     progress?(UInt64(body.count))
     lock.withLock { recordedDownloads.append(destination) }
     return UInt64(body.count)

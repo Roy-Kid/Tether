@@ -72,14 +72,21 @@ struct WorkspaceTabBar: View {
           ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
           : AnyLayout(HStackLayout(spacing: UIStyle.Space.small))
         stack {
-          ForEach(tabs.visibleWorkspaces) { tab in
-            let focused = tabs.tabs.first { $0.id == tab.focused }
-            let title = focused.map { tabs.displayTitle(for: $0.id) } ?? tab.name
-            let note = focused.map { $0.name == title ? "" : $0.name } ?? ""
-            tabChip(
-              id: tab.id, title: title, note: note, subtitle: tabs.caption(for: tab),
-              symbol: symbol(for: tab), disconnected: tabs.isDisconnected(tab))
-              .id(tab.id)
+          // One chip per terminal, on this host, in this one strip. A split
+          // is a layout of those terminals, not a reason to hide them or to
+          // close them together.
+          ForEach(tabs.visibleWorkspaces) { page in
+            ForEach(page.terminalIDs, id: \.self) { terminalID in
+              if let terminal = tabs.tabs.first(where: { $0.id == terminalID }) {
+                let title = tabs.displayTitle(for: terminal.id)
+                tabChip(
+                  id: terminal.id, title: title,
+                  note: terminal.name == title ? "" : terminal.name,
+                  subtitle: terminal.subtitle,
+                  symbol: symbol(for: terminal), disconnected: terminal.isDisconnected)
+                  .id(terminal.id)
+              }
+            }
           }
           ForEach(tabs.visibleExtensions) { entry in
             tabChip(
@@ -96,13 +103,16 @@ struct WorkspaceTabBar: View {
           #if os(macOS)
             TabStripCatcher(
               frames: anchors.reduce(into: [:]) { $0[$1.key] = proxy[$1.value] },
-              closeable: Set([tabs.selectedWorkspaceID, hovering].compactMap { $0 }),
+              closeable: Set([tabs.selected, hovering].compactMap { $0 }),
               closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
               onPrimary: { id in
                 if id == addTabID { tabs.perform(.newTab) }
                 else { tabs.handleTabClick(id) }
               },
               onClose: { if $0 != addTabID { onClose($0) } },
+              onPlace: { dragged, target, edge in
+                _ = tabs.place(dragged, beside: target, edge: edge)
+              },
               makeMenu: { $0 == addTabID ? NSMenu() : tabMenu($0) })
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           #else
@@ -110,7 +120,7 @@ struct WorkspaceTabBar: View {
           #endif
         }
       }
-      .onChange(of: tabs.selectedWorkspaceID, initial: true) { _, id in
+      .onChange(of: tabs.selected, initial: true) { _, id in
         if let id { proxy.scrollTo(id, anchor: .center) }
       }
     }
@@ -127,15 +137,27 @@ struct WorkspaceTabBar: View {
   /// A plugin's `tabSymbols` entry wins, then the attachment that is standing
   /// in for the shell. Otherwise it is a terminal: the same mark for every
   /// host, because a local shell is a host like any other.
-  private func symbol(for page: TerminalWorkspace) -> String {
-    guard let tab = tabs.tabs.first(where: { $0.id == page.focused }) else { return "terminal" }
-    if let identity = tab.pluginTerminalIdentity,
-      let symbol = registry?.tabSymbol(for: identity), !symbol.isEmpty
-    {
-      return symbol
+  private func symbol(for tab: SessionTab) -> String {
+    if let identity = tab.pluginTerminalIdentity {
+      for host in LocalMachine.lookupNames(for: identity.host) {
+        let candidate = PluginTerminalIdentity(host: host, terminal: identity.terminal)
+        if let symbol = registry?.tabSymbol(for: candidate), !symbol.isEmpty { return symbol }
+      }
     }
     if let shown = tab.shown, !shown.symbol.isEmpty { return shown.symbol }
     return "terminal"
+  }
+
+  /// The status circle for this terminal. Reads `tabIndicatorEpoch` so a mark
+  /// that arrives after the tab is drawn still replaces the terminal glyph.
+  private func indicator(for tab: SessionTab) -> PluginTabIndicator? {
+    _ = registry?.tabIndicatorEpoch
+    guard let identity = tab.pluginTerminalIdentity, let registry else { return nil }
+    for host in LocalMachine.lookupNames(for: identity.host) {
+      let candidate = PluginTerminalIdentity(host: host, terminal: identity.terminal)
+      if let mark = registry.tabIndicator(for: candidate) { return mark }
+    }
+    return nil
   }
 
   /// The tab's symbol, or — when the terminal is down — the mark that says
@@ -158,10 +180,10 @@ struct WorkspaceTabBar: View {
   private func tabChip(
     id: UUID, title: String, note: String = "", subtitle: String, symbol: String?, disconnected: Bool = false
   ) -> some View {
-    let selected = tabs.selectedWorkspaceID == id
+    let selected = tabs.selected == id
     let focused = tabs.workspaces.first { $0.id == id }?.focused ?? id
     let tab = tabs.tabs.first { $0.id == focused }
-    let indicator = tab?.pluginTerminalIdentity.flatMap { registry?.tabIndicator(for: $0) }
+    let indicator = tab.flatMap { indicator(for: $0) }
     let titleColor: Color = selected ? Theme.text : Theme.subtle
     let secondary = Theme.subtle
     return HStack(spacing: UIStyle.Space.inline) {
@@ -169,13 +191,12 @@ struct WorkspaceTabBar: View {
         tabs.handleTabClick(id)
       } label: {
         HStack(spacing: UIStyle.Space.inline) {
-          chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
+          // One mark in front of the name. A live status dot takes the
+          // icon's place; the terminal glyph is not drawn beside it.
           if let indicator, !disconnected {
-            Circle()
-              .fill(Color(hex: indicator.color))
-              .frame(width: 6, height: 6)
-              .help(indicator.label)
-              .accessibilityLabel(indicator.label)
+            TabStatusMark(color: indicator.color, label: indicator.label)
+          } else {
+            chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
           }
           let labels = layout == .vertical
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
@@ -227,7 +248,7 @@ struct WorkspaceTabBar: View {
       .opacity(selected || hovering == id ? 1 : 0)
       .allowsHitTesting(selected || hovering == id)
       .accessibilityHidden(!(selected || hovering == id))
-      .help("Close tab")
+      .help("Close terminal")
       .accessibilityLabel("Close \(title)")
     }
     .padding(.leading, layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.group)
@@ -270,27 +291,30 @@ struct WorkspaceTabBar: View {
     private func tabMenu(_ id: UUID) -> NSMenu {
       let menu = NSMenu()
       menu.autoenablesItems = false
-      if let page = tabs.workspaces.first(where: { $0.id == id }) {
-        menu.addItem(ActionMenuItem("New Terminal") { tabs.select(id); tabs.perform(.newTerminal) })
+      if let page = tabs.workspaces.first(where: { $0.id == id }) ?? tabs.workspace(containing: id) {
+        let terminalID = page.terminalIDs.contains(id) ? id : page.focused
+        menu.addItem(ActionMenuItem("New Terminal") { tabs.select(terminalID); tabs.perform(.newTerminal) })
         menu.addItem(.separator())
-        for terminalID in page.terminalIDs {
-          guard let terminal = tabs.tabs.first(where: { $0.id == terminalID }) else { continue }
+        for other in page.terminalIDs {
+          guard let terminal = tabs.tabs.first(where: { $0.id == other }) else { continue }
           menu.addItem(ActionMenuItem(
-            tabs.terminalMenuTitle(terminal), checked: page.focused == terminalID
-          ) { tabs.select(terminalID) })
+            tabs.terminalMenuTitle(terminal), checked: page.focused == other
+          ) { tabs.select(other) })
         }
         menu.addItem(.separator())
-        let canSplit = tabs.tabs.first { $0.id == page.focused }
+        let canSplit = tabs.tabs.first { $0.id == terminalID }
           .map { tabs.wide && ($0.isLive || $0.host.isLocal) } ?? false
         for action: WorkspaceAction in [.splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups] {
-          let item = ActionMenuItem(tabs.title(for: action)) { tabs.select(id); tabs.perform(action) }
+          let item = ActionMenuItem(tabs.title(for: action)) { tabs.select(terminalID); tabs.perform(action) }
           item.isEnabled = action == .joinGroups ? page.layout != nil : canSplit
           menu.addItem(item)
         }
         menu.addItem(.separator())
-        menu.addItem(ActionMenuItem("Rename Tab…") { tabs.renamingWorkspace = id })
+        menu.addItem(ActionMenuItem("Rename Terminal…") { tabs.renaming = terminalID })
+        menu.addItem(ActionMenuItem("Close Terminal") { onClose(terminalID) })
+      } else {
+        menu.addItem(ActionMenuItem("Close Tab") { onClose(id) })
       }
-      menu.addItem(ActionMenuItem("Close Tab") { onClose(id) })
       return menu
     }
   #endif
@@ -298,15 +322,16 @@ struct WorkspaceTabBar: View {
   #if !os(macOS)
   @ViewBuilder
   private func tabContextMenu(_ id: UUID) -> some View {
-    if let page = tabs.workspaces.first(where: { $0.id == id }) {
-      Button("New Terminal") { tabs.select(id); tabs.perform(.newTerminal) }
+    if let page = tabs.workspaces.first(where: { $0.id == id }) ?? tabs.workspace(containing: id) {
+      let terminalID = page.terminalIDs.contains(id) ? id : page.focused
+      Button("New Terminal") { tabs.select(terminalID); tabs.perform(.newTerminal) }
       Section {
-        ForEach(page.terminalIDs, id: \.self) { terminalID in
-          if let terminal = tabs.tabs.first(where: { $0.id == terminalID }) {
+        ForEach(page.terminalIDs, id: \.self) { other in
+          if let terminal = tabs.tabs.first(where: { $0.id == other }) {
             Button {
-              tabs.select(terminalID)
+              tabs.select(other)
             } label: {
-              if page.focused == terminalID { Label(tabs.terminalMenuTitle(terminal), systemImage: "checkmark") }
+              if page.focused == other { Label(tabs.terminalMenuTitle(terminal), systemImage: "checkmark") }
               else { Text(tabs.terminalMenuTitle(terminal)) }
             }
           }
@@ -315,16 +340,16 @@ struct WorkspaceTabBar: View {
       if tabs.wide {
         Section {
           ForEach([WorkspaceAction.splitLeft, .splitRight, .splitUp, .splitDown], id: \.self) { action in
-            Button(tabs.title(for: action)) { tabs.select(id); tabs.perform(action) }
-              .disabled(!(tabs.tabs.first { $0.id == page.focused }.map { $0.isLive || $0.host.isLocal } ?? false))
+            Button(tabs.title(for: action)) { tabs.select(terminalID); tabs.perform(action) }
+              .disabled(!(tabs.tabs.first { $0.id == terminalID }.map { $0.isLive || $0.host.isLocal } ?? false))
           }
-          Button(tabs.title(for: .joinGroups)) { tabs.select(id); tabs.perform(.joinGroups) }
+          Button(tabs.title(for: .joinGroups)) { tabs.select(terminalID); tabs.perform(.joinGroups) }
             .disabled(page.layout == nil)
         }
       }
       Section {
-        Button("Rename Tab…") { tabs.renamingWorkspace = id }
-        Button("Close Tab") { onClose(id) }
+        Button("Rename Terminal…") { tabs.renaming = terminalID }
+        Button("Close Terminal") { onClose(terminalID) }
       }
     } else {
       Button("Close Tab") { onClose(id) }
@@ -364,15 +389,24 @@ private struct TabFrameKey: PreferenceKey {
 /// One hit target for the whole strip. The scroll view under it takes the
 /// width the tabs leave, so a press that misses every tab is a press on the
 /// titlebar, and is answered as one: it drags the window.
+enum TabDrag {
+  static let type = NSPasteboard.PasteboardType("dev.tether.tab")
+}
+
 private struct TabStripCatcher: NSViewRepresentable {
   var frames: [UUID: CGRect]
   var closeable: Set<UUID>
   var closeWidth: CGFloat
   var onPrimary: (UUID) -> Void
   var onClose: (UUID) -> Void
+  var onPlace: (UUID, UUID, SplitDirection) -> Void
   var makeMenu: (UUID) -> NSMenu
 
-  func makeNSView(context: Context) -> Catcher { Catcher() }
+  func makeNSView(context: Context) -> Catcher {
+    let view = Catcher()
+    view.registerForDraggedTypes([TabDrag.type])
+    return view
+  }
 
   func updateNSView(_ view: Catcher, context: Context) {
     view.frames = frames
@@ -380,16 +414,21 @@ private struct TabStripCatcher: NSViewRepresentable {
     view.closeWidth = closeWidth
     view.onPrimary = onPrimary
     view.onClose = onClose
+    view.onPlace = onPlace
     view.makeMenu = makeMenu
   }
 
-  final class Catcher: NSView {
+  final class Catcher: NSView, NSDraggingSource {
     var frames: [UUID: CGRect] = [:]
     var closeable: Set<UUID> = []
     var closeWidth: CGFloat = 18
     var onPrimary: ((UUID) -> Void)?
     var onClose: ((UUID) -> Void)?
+    var onPlace: ((UUID, UUID, SplitDirection) -> Void)?
     var makeMenu: ((UUID) -> NSMenu)?
+    private var pressed: (id: UUID, point: NSPoint)?
+    private var didDrag = false
+    private var highlight: (id: UUID, edge: SplitDirection, frame: CGRect)?
 
     // The strip lies in the titlebar, where a clear view otherwise lets the
     // window take the press as a drag and the tab never hears it.
@@ -402,12 +441,99 @@ private struct TabStripCatcher: NSViewRepresentable {
     }
 
     override func mouseDown(with event: NSEvent) {
+      didDrag = false
       guard let (id, frame, point) = tab(at: event) else {
+        pressed = nil
         TitlebarPress.handle(event, in: window)
         return
       }
-      if closeable.contains(id), point.x >= frame.maxX - closeWidth { onClose?(id) }
-      else { onPrimary?(id) }
+      if closeable.contains(id), point.x >= frame.maxX - closeWidth {
+        pressed = nil
+        onClose?(id)
+        return
+      }
+      pressed = (id, convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      guard let pressed, !didDrag else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      guard hypot(point.x - pressed.point.x, point.y - pressed.point.y) > 4 else { return }
+      didDrag = true
+      let item = NSPasteboardItem()
+      item.setString(pressed.id.uuidString, forType: TabDrag.type)
+      let dragging = NSDraggingItem(pasteboardWriter: item)
+      let image = NSImage(size: NSSize(width: 88, height: 24), flipped: false) { rect in
+        NSColor.controlAccentColor.withAlphaComponent(0.35).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        return true
+      }
+      dragging.setDraggingFrame(NSRect(x: point.x - 44, y: point.y - 12, width: 88, height: 24), contents: image)
+      beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      defer { pressed = nil }
+      guard let pressed, !didDrag else { return }
+      onPrimary?(pressed.id)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+      .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+      let local = convert(sender.draggingLocation, from: nil)
+      guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
+        let (target, frame) = tab(at: local)
+      else {
+        setHighlight(nil)
+        return []
+      }
+      guard dragged != target else { setHighlight(nil); return [] }
+      let point = frame.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
+      let edge = SplitDirection.drop(
+        x: point.x - frame.minX, y: point.y - frame.minY,
+        width: frame.width, height: frame.height, band: nil) ?? .right
+      setHighlight((target, edge, frame))
+      return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { setHighlight(nil) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+      defer { setHighlight(nil) }
+      guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
+        let highlight else { return false }
+      onPlace?(dragged, highlight.id, highlight.edge)
+      return true
+    }
+
+    private let mark = CALayer()
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      wantsLayer = true
+      layer?.backgroundColor = .clear
+      mark.backgroundColor = NSColor.controlAccentColor.cgColor
+      mark.isHidden = true
+      if mark.superlayer == nil { layer?.addSublayer(mark) }
+    }
+
+    private func setHighlight(_ next: (id: UUID, edge: SplitDirection, frame: CGRect)?) {
+      highlight = next
+      guard let next else { mark.isHidden = true; return }
+      let thickness: CGFloat = 3
+      let frame = next.frame
+      let rect: CGRect
+      switch next.edge {
+      case .left: rect = CGRect(x: frame.minX, y: frame.minY, width: thickness, height: frame.height)
+      case .right: rect = CGRect(x: frame.maxX - thickness, y: frame.minY, width: thickness, height: frame.height)
+      case .up: rect = CGRect(x: frame.minX, y: frame.maxY - thickness, width: frame.width, height: thickness)
+      case .down: rect = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: thickness)
+      }
+      mark.isHidden = false
+      mark.frame = rect
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -821,6 +947,28 @@ struct HostPicker: View {
   }
 }
 
+/// The status dot in the tab icon's place. Its opacity uses the same clock as
+/// the status ribbon, so a running tab and that colour on the lamp breathe together.
+private struct TabStatusMark: View {
+  let color: UInt32
+  let label: String
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    let moving = !reduceMotion && StatusMotion.period(for: color) != nil
+    TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !moving)) { timeline in
+      let alpha = moving
+        ? StatusMotion.pulse(color: color, time: timeline.date.timeIntervalSinceReferenceDate) : 1
+      Circle()
+        .fill(Color(hex: color).opacity(alpha))
+        .frame(width: 8, height: 8)
+    }
+    .frame(width: 11, height: 11)
+    .help(label)
+    .accessibilityLabel(label)
+  }
+}
+
 /// The host's row chrome behind a generic lamp. A plugin that draws its own
 /// ribbon is already the control, and a second fill behind it stretches the row.
 private struct RibbonButtonChrome: ViewModifier {
@@ -877,7 +1025,7 @@ private struct PluginStatusRibbon: View {
     .help(item.label)
     #if os(macOS)
     .background {
-      PluginPanelPopover(isPresented: $isPresented, workspace: presentation?.workspace)
+      PluginPanelPopover(isPresented: $isPresented, pluginID: item.id, workspace: presentation?.workspace)
     }
     #else
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -891,6 +1039,9 @@ private struct PluginStatusRibbon: View {
         presentation?.workspace.close()
         presentation = nil
       }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .closePluginPanel)) { _ in
+      isPresented = false
     }
   }
 }
@@ -910,10 +1061,14 @@ struct EmptyWorkspace: View {
   struct CompactTitlebar: NSViewRepresentable {
     var closeRequests = 0
     @Environment(\.workspaceBackgroundOpacity) private var opacity
-    func makeNSView(context: Context) -> NSView { Hook(closeRequests: closeRequests, translucent: opacity < 1) }
+    @Environment(\.workspaceHidesOnClose) private var hidesOnClose
+    func makeNSView(context: Context) -> NSView {
+      Hook(closeRequests: closeRequests, translucent: opacity < 1, hidesOnClose: hidesOnClose)
+    }
     func updateNSView(_ view: NSView, context: Context) {
       guard let hook = view as? Hook else { return }
       hook.translucent = opacity < 1
+      hook.hidesOnClose = hidesOnClose
       hook.apply()
       hook.close(ifNew: closeRequests)
     }
@@ -927,10 +1082,12 @@ struct EmptyWorkspace: View {
       private var closeRequests: Int
 
       var translucent: Bool
+      var hidesOnClose: Bool
 
-      init(closeRequests: Int, translucent: Bool) {
+      init(closeRequests: Int, translucent: Bool, hidesOnClose: Bool) {
         self.closeRequests = closeRequests
         self.translucent = translucent
+        self.hidesOnClose = hidesOnClose
         super.init(frame: .zero)
       }
 
@@ -973,7 +1130,7 @@ struct EmptyWorkspace: View {
       /// closes takes its views with it. This one is hidden instead, and the
       /// Dock brings it back (`HideInsteadOfClose`). Quit is still the menu.
       private func installCloseGuard(on window: NSWindow) {
-        guard !(window.delegate is HideInsteadOfClose) else { return }
+        guard hidesOnClose, !(window.delegate is HideInsteadOfClose) else { return }
         let proxy = HideInsteadOfClose(forwarding: window.delegate)
         closeGuard = proxy
         window.delegate = proxy

@@ -27,6 +27,51 @@ import Testing
   }
 }
 
+@Test func settingsURLMustNameTheNerveSettingsWindow() throws {
+  let rejected = try Fixture.make(settingsURL: "https://example.com/settings")
+  defer { try? FileManager.default.removeItem(at: rejected) }
+  #expect(throws: PackageFailure.malformed) {
+    try PackageValidator.validate(directory: rejected)
+  }
+  let query = try Fixture.make(settingsURL: "nerve://settings?pane=ribbon")
+  defer { try? FileManager.default.removeItem(at: query) }
+  #expect(throws: PackageFailure.malformed) {
+    try PackageValidator.validate(directory: query)
+  }
+  let root = try Fixture.make(settingsURL: "nerve://settings")
+  defer { try? FileManager.default.removeItem(at: root) }
+  let manifest = try PackageValidator.validate(directory: root)
+  #expect(manifest.settingsURL == URL(string: "nerve://settings"))
+}
+
+@Test @MainActor
+func theSettingsSlotOpensTheDeclaredWindowAndNothingElse() async throws {
+  let host = PluginHost(consent: ScriptedConsent(allow: true))
+  let root = try Fixture.make(id: "app.nerve.tether", settingsURL: "nerve://settings")
+  defer { try? FileManager.default.removeItem(at: root) }
+  let record = try host.install(directory: root)
+  let plugin = WebPlugin(record: record, host: host)
+  #expect(plugin.statusBarSettings() != nil)
+  let session = try await host.activate(id: record.id, runtime: IdleRuntime())
+  var opened: [URL] = []
+  host.onOpenSettings = { opened.append($0) }
+  let response = await host.perform(request("host.openSettings", session: session, payload: .object(["url": .string("https://example.com")])))
+  #expect(response.ok)
+  #expect(opened == [URL(string: "nerve://settings")])
+  let plain = PluginHost(consent: ScriptedConsent(allow: true))
+  let plainRoot = try Fixture.make(id: "fixture.plain")
+  defer { try? FileManager.default.removeItem(at: plainRoot) }
+  let other = try plain.install(directory: plainRoot)
+  let otherSession = try await plain.activate(id: other.id, runtime: IdleRuntime())
+  var unexpected: [URL] = []
+  plain.onOpenSettings = { unexpected.append($0) }
+  let denied = await plain.perform(request("host.openSettings", session: otherSession, payload: .object([:])))
+  #expect(denied.ok == false)
+  #expect(denied.error == "permissionDenied")
+  #expect(unexpected.isEmpty)
+  #expect(WebPlugin(record: other, host: plain).statusBarSettings() == nil)
+}
+
 @Test @MainActor
 func installRegistersContributionsWithoutASession() async throws {
   let consent = ScriptedConsent(allow: true)

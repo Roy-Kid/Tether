@@ -73,6 +73,8 @@ pub fn font_faces() -> Vec<FontFace> {
     faces
 }
 
+const UNDRAWABLE: &str = "font has no TrueType, CFF or bitmap glyphs to draw";
+
 /// Validate before publishing anything to the live catalogue.
 pub fn register_font(data: Vec<u8>) -> Result<Vec<FontFace>, RenderError> {
     register_with_alias(data, None)
@@ -100,6 +102,10 @@ fn register_with_alias(data: Vec<u8>, alias: Option<&str>) -> Result<Vec<FontFac
     let ids = parsed.load_font_source(fontdb::Source::Binary(std::sync::Arc::new(data)));
     if ids.is_empty() {
         return Err(RenderError::Font("not a supported TTF, OTF or TTC font".into()));
+    }
+    drop_undrawable_faces(&mut parsed);
+    if parsed.is_empty() {
+        return Err(RenderError::Font(UNDRAWABLE.into()));
     }
     normalize_monospace_metadata(&mut parsed);
     let ids = parsed.faces().map(|face| face.id).collect::<Vec<_>>();
@@ -160,6 +166,10 @@ pub fn register_font_file(path: &str, alias: Option<&str>) -> Result<Vec<FontFac
     parsed.load_font_file(&key).map_err(|error| RenderError::Font(error.to_string()))?;
     if parsed.is_empty() {
         return Err(RenderError::Font("not a supported TTF, OTF or TTC font".into()));
+    }
+    drop_undrawable_faces(&mut parsed);
+    if parsed.is_empty() {
+        return Err(RenderError::Font(UNDRAWABLE.into()));
     }
     normalize_monospace_metadata(&mut parsed);
     if parsed.is_empty() {
@@ -241,7 +251,14 @@ fn content_digest(data: &[u8]) -> String {
 
 pub(crate) fn snapshot() -> (FontSystem, u64) {
     let catalogue = lock_catalogue();
-    (FontSystem::new_with_locale_and_db("en-US".into(), catalogue.db.clone()), catalogue.generation)
+    (
+        FontSystem::new_with_locale_and_db_and_fallback(
+            "en-US".into(),
+            catalogue.db.clone(),
+            crate::fallback::platform(),
+        ),
+        catalogue.generation,
+    )
 }
 
 pub(crate) fn generation() -> u64 {
@@ -355,6 +372,35 @@ fn canonical_key(path: &std::path::Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
+/// Tables holding glyph images swash can paint: TrueType and CFF outlines,
+/// and the colour bitmaps emoji ship as. `COLR` layers are drawn from `glyf`.
+const DRAWABLE_GLYPH_TABLES: [&[u8; 4]; 6] = [b"glyf", b"CFF ", b"CFF2", b"sbix", b"CBDT", b"EBDT"];
+
+/// Leaves out faces this renderer cannot draw.
+///
+/// iOS ships PingFang with Apple's `hvgl` outlines and nothing else. Kept,
+/// such a face is chosen for its character map, so fallback never looks
+/// further, and every glyph comes out empty: Chinese vanishes from the line.
+fn drop_undrawable_faces(db: &mut fontdb::Database) {
+    let undrawable = db
+        .faces()
+        .filter(|face| {
+            !db.with_face_data(face.id, |data, index| {
+                ttf_parser::RawFace::parse(data, index).is_ok_and(|raw| {
+                    DRAWABLE_GLYPH_TABLES
+                        .iter()
+                        .any(|tag| raw.table(ttf_parser::Tag::from_bytes(tag)).is_some())
+                })
+            })
+            .unwrap_or(false)
+        })
+        .map(|face| face.id)
+        .collect::<Vec<_>>();
+    for id in undrawable {
+        db.remove_face(id);
+    }
+}
+
 /// Some Apple fallback faces declare themselves monospaced but give space a
 /// zero advance. cosmic-text's monospace fallback scaling then divides by
 /// zero. Keep shaping those faces normally while retaining our grid snapping.
@@ -409,6 +455,48 @@ mod tests {
         assert_eq!(generation, super::generation());
         assert!(register_font_file(path.to_str().unwrap(), None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real font's tables, as CoreText would hand them over.
+    fn system_font_tables() -> Option<Vec<(u32, Vec<u8>)>> {
+        let data = [
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
+        ]
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())?;
+        let face = ttf_parser::RawFace::parse(&data, 0).ok()?;
+        Some(
+            face.table_records
+                .into_iter()
+                .filter_map(|record| {
+                    let bytes = face.table(record.tag)?;
+                    Some((record.tag.0, bytes.to_vec()))
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_face_with_no_outline_this_renderer_draws_is_refused() {
+        let Some(tables) = system_font_tables() else { return };
+        // iOS ships PingFang with Apple's `hvgl` outlines only. A face
+        // registered without outlines it can paint would be chosen for its
+        // cmap and then draw every glyph as nothing.
+        let hidden = tables
+            .iter()
+            .map(|(tag, data)| {
+                let tag =
+                    if &tag.to_be_bytes() == b"glyf" { u32::from_be_bytes(*b"hvgl") } else { *tag };
+                (tag, data.clone())
+            })
+            .collect::<Vec<_>>();
+        let refused = register_font_tables(hidden, "Undrawable Test Family");
+        assert!(refused.is_err(), "{refused:?}");
+        assert!(!font_faces().iter().any(|face| face.family == "Undrawable Test Family"));
+        let accepted =
+            register_font_tables(tables, "Drawable Test Family").expect("outlines present");
+        assert!(!accepted.is_empty());
     }
 
     #[test]

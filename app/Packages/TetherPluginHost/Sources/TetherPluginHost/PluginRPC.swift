@@ -66,8 +66,59 @@ public enum PluginMethod: String, Sendable, Equatable, CaseIterable {
   case reconnect = "host.reconnect"
   case stream = "network.stream"
   case closeStream = "network.closeStream"
+  case post = "network.post"
   case status = "host.status"
   case tabIndicators = "host.tabIndicators"
+  case focus = "host.focus"
+  /// Opens the settings URL declared in the manifest. The payload is ignored.
+  case openSettings = "host.openSettings"
+}
+
+/// Where a panel asked to land. The host picks a live tab, then an allowlisted URL.
+public struct PluginFocusRequest: Sendable, Equatable {
+  public var host: String?
+  public var terminal: String?
+  public var directory: String?
+  public var url: String?
+
+  public init?(_ payload: JSONValue) {
+    guard case .object = payload else { return nil }
+    var host: String?
+    var terminal: String?
+    if let target = payload.key("target") {
+      guard case .object = target,
+        let namedHost = target.key("host")?.string, let namedTerminal = target.key("terminal")?.string,
+        Self.validTerminal(host: namedHost, terminal: namedTerminal) else { return nil }
+      host = namedHost
+      terminal = namedTerminal
+    }
+    var directory: String?
+    if let raw = payload.key("directory")?.string {
+      guard Self.validDirectory(raw) else { return nil }
+      directory = raw
+    }
+    var url: String?
+    if let raw = payload.key("url")?.string {
+      guard (1...2048).contains(raw.count), raw.contains("://"), !raw.contains("\n") else { return nil }
+      url = raw
+    }
+    guard host != nil || directory != nil || url != nil else { return nil }
+    self.host = host
+    self.terminal = terminal
+    self.directory = directory
+    self.url = url
+  }
+
+  static func validTerminal(host: String, terminal: String) -> Bool {
+    !host.isEmpty && host.utf8.count <= 255 && host == host.lowercased()
+      && !host.contains(where: { $0.isWhitespace || $0.isNewline })
+      && terminal.hasPrefix("/dev/") && terminal.utf8.count <= 256
+  }
+
+  static func validDirectory(_ raw: String) -> Bool {
+    raw.hasPrefix("/") && raw.count <= 1024 && !raw.contains("..")
+      && !raw.contains("\n") && !raw.contains("\0")
+  }
 }
 
 public struct RPCRequest: Sendable, Equatable, Codable {

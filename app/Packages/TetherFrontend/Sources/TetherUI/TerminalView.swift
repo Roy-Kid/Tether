@@ -13,7 +13,7 @@ public struct TerminalView: View {
     self.palette = palette
   }
   public var body: some View {
-    WgpuTerminal(frame: frame, dirtyRows: nil, damageEpoch: 0, metrics: metrics, palette: palette, overlay: nil,
+    WgpuTerminal(frame: frame, dirtyRows: nil, damageEpoch: 0, metrics: metrics, palette: palette, padding: -1, overlay: nil,
       onPresented: { _ in }, onScale: { _ in })
       .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
   }
@@ -33,7 +33,7 @@ public struct FontMetrics: Equatable, Sendable {
   public init(size: CGFloat, scale: CGFloat = 1, primary: String? = nil, wide: String? = nil) {
     let scale = max(scale, 1)
     let primary = TerminalFonts.resolvedPrimary(primary ?? TerminalFonts.primary)
-    let wide = wide ?? TerminalFonts.wide
+    let wide = TerminalFonts.resolvedWide(wide ?? TerminalFonts.wide)
     let metrics = TerminalFonts.measure(size: size, scale: scale, primary: primary, wide: wide)
     self.size = size
     self.scale = scale

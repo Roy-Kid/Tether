@@ -49,6 +49,7 @@ enum Fixture {
     runtime: String = "web",
     permissions: [String] = ["document.read", "storage.plugin"],
     contributions: String? = nil,
+    settingsURL: String? = nil,
     files: [String: Data] = [:]
   ) throws -> URL {
     let root = FileManager.default.temporaryDirectory.appending(path: "TetherPluginHost-\(UUID().uuidString)")
@@ -58,8 +59,9 @@ enum Fixture {
     let body = contributions ?? """
       [{"kind":"viewer","id":"viewer/fixture","suffixes":[\(suffixes.map { "\"\($0)\"" }.joined(separator: ","))]},{"kind":"command","id":"command/fixture"},{"kind":"panel","id":"panel/fixture"}]
       """
+    let settings = settingsURL.map { ",\"settingsURL\":\"\($0)\"" } ?? ""
     let manifest = """
-      {"id":"\(id)","name":"Fixture","publisher":"Fixture","version":"0.1.0","api":1,"runtime":"\(runtime)","entrypoint":"web/index.html","ageRating":"4+","link":"https://example.com/plugins/\(id)","permissions":[\(permissions.map { "\"\($0)\"" }.joined(separator: ","))],"contributions":\(body)}
+      {"id":"\(id)","name":"Fixture","publisher":"Fixture","version":"0.1.0","api":1,"runtime":"\(runtime)","entrypoint":"web/index.html","ageRating":"4+","link":"https://example.com/plugins/\(id)","permissions":[\(permissions.map { "\"\($0)\"" }.joined(separator: ","))],"contributions":\(body)\(settings)}
       """
     try Data(manifest.utf8).write(to: root.appending(path: "manifest.json"))
     for (name, data) in files {

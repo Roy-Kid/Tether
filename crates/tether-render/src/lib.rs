@@ -14,11 +14,13 @@
 //! link no UI framework and no GPU (spec §8, §15).
 
 mod draw;
+mod fallback;
 mod fonts;
 mod frame;
 mod layout;
 mod metrics;
 mod palette;
+mod placement;
 mod platform;
 mod renderer;
 
@@ -36,6 +38,7 @@ pub use frame::{Caret, Frame, Name, Paint, Row, Run, RunStyle, Underline};
 pub use layout::{prepare, prepare_with_overlay};
 pub use metrics::FontMetrics;
 pub use palette::Palette;
+pub use placement::Placement;
 pub use platform::NativeAttachment;
 pub use renderer::{RenderError, SurfaceSize, TerminalRenderer, font_families};
 

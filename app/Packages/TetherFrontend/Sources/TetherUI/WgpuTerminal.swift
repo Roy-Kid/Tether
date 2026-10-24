@@ -26,6 +26,8 @@ struct WgpuTerminal: View {
   let damageEpoch: Int
   let metrics: FontMetrics
   let palette: Palette
+  /// The margin round the grid, in device pixels; the renderer draws it.
+  let padding: CGFloat
   let overlay: RenderOverlay?
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
@@ -34,7 +36,7 @@ struct WgpuTerminal: View {
 
   var body: some View {
     NativeTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics,
-      palette: palette, transparentBackground: backgroundOpacity < 1, overlay: overlay, onPresented: onPresented, onScale: onScale) { error, retry, dismiss in
+      palette: palette, padding: padding, backgroundOpacity: backgroundOpacity, overlay: overlay, onPresented: onPresented, onScale: onScale) { error, retry, dismiss in
       problem = Dialog(title: "Terminal Rendering Failed", message: error.localizedDescription,
         actions: [.cancel("Close") { problem = nil; dismiss() }, .init("Retry") { _ in problem = nil; retry() }])
     }
@@ -48,7 +50,8 @@ private struct NativeTerminal {
   let damageEpoch: Int
   let metrics: FontMetrics
   let palette: Palette
-  let transparentBackground: Bool
+  let padding: CGFloat
+  let backgroundOpacity: Double
   let overlay: RenderOverlay?
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
@@ -58,7 +61,7 @@ private struct NativeTerminal {
     view.onFailure = failure
     view.onPresented = onPresented
     view.onScale = onScale
-    view.update(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay, transparentBackground: transparentBackground)
+    view.update(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay, padding: padding, backgroundOpacity: backgroundOpacity)
   }
 }
 #if os(macOS)
@@ -84,8 +87,12 @@ final class TerminalGPUView: NativeTerminalView {
     var damageEpoch: Int
     var metrics: FontMetrics
     var palette: Palette
-    var transparentBackground: Bool
+    /// The margin round the grid, in device pixels. Negative: none drawn.
+    var padding: CGFloat
+    /// The window's opacity. Below 1 the page is the window's glass.
+    var backgroundOpacity: Double
     var overlay: RenderOverlay?
+    var transparentBackground: Bool { backgroundOpacity < 1 }
   }
   private var pending: Pending?
   private var renderer: TerminalRenderer?
@@ -204,14 +211,14 @@ final class TerminalGPUView: NativeTerminalView {
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("not from a nib") }
 
-  func update(frame: ScreenFrame, dirtyRows: Set<Int>?, damageEpoch: Int, metrics: FontMetrics, palette: Palette, overlay: RenderOverlay?, transparentBackground: Bool = false) {
+  func update(frame: ScreenFrame, dirtyRows: Set<Int>?, damageEpoch: Int, metrics: FontMetrics, palette: Palette, overlay: RenderOverlay?, padding: CGFloat = -1, backgroundOpacity: Double = 1) {
     // Close holds until Retry. A newer frame must not clear that latch.
     if quietDismissal { return }
     let dirty: Set<Int>?
     if let pending {
       dirty = pending.dirty.flatMap { old in dirtyRows.map { old.union($0) } }
     } else { dirty = dirtyRows }
-    pending = Pending(frame: frame, dirty: dirty, damageEpoch: damageEpoch, metrics: metrics, palette: palette, transparentBackground: transparentBackground, overlay: overlay)
+    pending = Pending(frame: frame, dirty: dirty, damageEpoch: damageEpoch, metrics: metrics, palette: palette, padding: padding, backgroundOpacity: backgroundOpacity, overlay: overlay)
     noteScale()
     #if os(macOS)
       if paintHeld { return }
@@ -315,6 +322,9 @@ final class TerminalGPUView: NativeTerminalView {
       // The host supplies the shared workspace backdrop behind grid and padding.
       // Only default terminal backgrounds become clear; explicit cell colors stay solid.
       let palette = pending.palette.renderPalette(backgroundOpacity: pending.transparentBackground ? 0 : 1)
+      // A program's own backgrounds sit on the glass at the window's opacity.
+      renderer.setGridPadding(Float(pending.padding))
+      renderer.setCellBackgroundOpacity(Float(pending.transparentBackground ? pending.backgroundOpacity : 1))
       let presented = try renderer.draw(frame: pending.frame, palette: palette, overlay: pending.overlay,
         fontSize: fontSize, dirtyRows: pending.dirty.map { $0.sorted().map(UInt32.init) })
       if notePresent(presented, epoch: epoch) {

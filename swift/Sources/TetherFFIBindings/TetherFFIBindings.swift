@@ -2449,7 +2449,26 @@ public protocol RenderSurfaceProtocol: AnyObject, Sendable {
     
     func resize(width: UInt32, height: UInt32) 
     
+    /**
+     * How opaque a program's own cell backgrounds are drawn while the
+     * palette's background is see-through: a consumer drawing on glass
+     * passes its window opacity. Colours close to the background become the
+     * background. `1.0`, the default, draws them solid. A setter rather than
+     * a palette field, so bindings generated before it still read the palette.
+     */
+    func setCellBackgroundOpacity(opacity: Float) 
+    
     func setFonts(primary: String, wide: String) 
+    
+    /**
+     * The least margin round the grid, in physical pixels, drawn by the
+     * surface itself: the grid is centred in what is left, and each edge
+     * cell's background carries on to the surface's edge, so a program that
+     * paints its own background is not framed by the page's. A negative
+     * value, the default, leaves the grid at the corner for a consumer that
+     * lays out its own margin.
+     */
+    func setGridPadding(padding: Float) 
     
     func waitIdle() throws 
     
@@ -2654,11 +2673,42 @@ open func resize(width: UInt32, height: UInt32)  {try! rustCall() {
 }
 }
     
+    /**
+     * How opaque a program's own cell backgrounds are drawn while the
+     * palette's background is see-through: a consumer drawing on glass
+     * passes its window opacity. Colours close to the background become the
+     * background. `1.0`, the default, draws them solid. A setter rather than
+     * a palette field, so bindings generated before it still read the palette.
+     */
+open func setCellBackgroundOpacity(opacity: Float)  {try! rustCall() {
+    uniffi_tether_ffi_fn_method_rendersurface_set_cell_background_opacity(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(opacity),$0
+    )
+}
+}
+    
 open func setFonts(primary: String, wide: String)  {try! rustCall() {
     uniffi_tether_ffi_fn_method_rendersurface_set_fonts(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(primary),
         FfiConverterString.lower(wide),$0
+    )
+}
+}
+    
+    /**
+     * The least margin round the grid, in physical pixels, drawn by the
+     * surface itself: the grid is centred in what is left, and each edge
+     * cell's background carries on to the surface's edge, so a program that
+     * paints its own background is not framed by the page's. A negative
+     * value, the default, leaves the grid at the corner for a consumer that
+     * lays out its own margin.
+     */
+open func setGridPadding(padding: Float)  {try! rustCall() {
+    uniffi_tether_ffi_fn_method_rendersurface_set_grid_padding(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(padding),$0
     )
 }
 }
@@ -9924,7 +9974,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_rendersurface_resize() != 36122) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tether_ffi_checksum_method_rendersurface_set_cell_background_opacity() != 49543) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tether_ffi_checksum_method_rendersurface_set_fonts() != 45006) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding() != 62672) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_rendersurface_wait_idle() != 2605) {

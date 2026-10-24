@@ -40,7 +40,10 @@ enum QuitConfirmation {
     private var asking: Task<Void, Never>?
 
     func shouldTerminate(_ app: NSApplication, tabs: TabSet?) -> NSApplication.TerminateReply {
-      let live = tabs?.liveTerminalCount ?? 0
+      shouldTerminate(app, live: tabs?.liveTerminalCount ?? 0)
+    }
+
+    func shouldTerminate(_ app: NSApplication, live: Int) -> NSApplication.TerminateReply {
       guard QuitConfirmation.decision(live: live) == .ask else { return .terminateNow }
       // Already asking: this second request is the same question.
       guard asking == nil else { return .terminateCancel }

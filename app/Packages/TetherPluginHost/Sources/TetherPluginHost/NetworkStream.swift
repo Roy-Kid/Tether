@@ -2,6 +2,27 @@ import Foundation
 
 /// Exact endpoints, not origins. Plain HTTP is limited to literal loopback.
 public enum NetworkEndpoint {
+  /// `scheme://host:port`, so a granted loopback stream can cover refresh and clear
+  /// on that same port without granting a new machine.
+  public static func origin(_ url: URL) -> String? {
+    guard let host = url.host, let scheme = url.scheme else { return nil }
+    let port = url.port ?? (scheme == "https" ? 443 : 80)
+    return "\(scheme)://\(host):\(port)"
+  }
+
+  /// Declared URLs whose origin was already approved. New origins stay unapproved.
+  public static func expandGrants(declared: [URL], approved: Set<String>) -> Set<String> {
+    var origins = Set<String>()
+    for raw in approved {
+      if let url = URL(string: raw), let key = origin(url) { origins.insert(key) }
+    }
+    var expanded = approved
+    for url in declared {
+      if let key = origin(url), origins.contains(key) { expanded.insert(url.absoluteString) }
+      }
+    return expanded
+  }
+
   public static func valid(_ url: URL) -> Bool {
     guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
       parts.user == nil, parts.password == nil, parts.fragment == nil,
@@ -52,6 +73,32 @@ enum StreamFailure: Error { case tooLarge, invalidResponse }
 @MainActor
 public protocol PluginStreaming: AnyObject {
   func stream(url: URL, receive: @escaping @MainActor (JSONValue) async -> Void) async throws
+}
+
+/// One POST with an empty body. Refresh and clear are this shape.
+@MainActor
+public protocol PluginPosting: AnyObject {
+  func post(url: URL) async throws
+}
+
+@MainActor
+public final class HTTPPoster: PluginPosting {
+  public init() {}
+  public func post(url: URL) async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpCookieStorage = nil
+    configuration.urlCredentialStorage = nil
+    configuration.urlCache = nil
+    let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+    defer { session.invalidateAndCancel() }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 5
+    let (_, response) = try await session.data(for: request)
+    guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+      throw StreamFailure.invalidResponse
+    }
+  }
 }
 
 private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {

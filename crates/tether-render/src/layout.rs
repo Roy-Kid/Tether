@@ -9,6 +9,7 @@ use crate::draw::{BgRect, Cell, CursorQuad, DrawList, LinkUnderline, Overlay, Rg
 use crate::frame::{Caret, Frame, RunStyle};
 use crate::metrics::FontMetrics;
 use crate::palette::Palette;
+use crate::placement::{self, Placement};
 
 /// Turns one frame into what to paint. No pointer marks.
 pub fn prepare(frame: &Frame, metrics: &FontMetrics, palette: &Palette) -> DrawList {
@@ -64,8 +65,8 @@ fn append_row(
         let width = metrics.cells_width(run.columns.min(columns as u32 - column));
 
         let (foreground, background) = resolved(&run.style, palette);
-        if background != palette.background {
-            list.rects.push(BgRect { x, y, width, height: metrics.line_height, color: background });
+        if let Some(color) = palette.cell_background(background) {
+            list.rects.push(BgRect { x, y, width, height: metrics.line_height, color });
         }
 
         // Text present but not to be drawn: what a shell does while
@@ -151,6 +152,8 @@ impl LayoutCache {
         self.configuration = None;
     }
 
+    /// The grid at the corner: what the tests compare against.
+    #[cfg(test)]
     pub fn prepare(
         &mut self,
         frame: &Frame,
@@ -158,6 +161,21 @@ impl LayoutCache {
         palette: &Palette,
         overlay: &Overlay,
         dirty: Option<&[u32]>,
+    ) -> DrawList {
+        self.prepare_placed(frame, metrics, palette, overlay, dirty, None)
+    }
+
+    /// The same frame, centred on a surface and with its edge backgrounds
+    /// carried to the surface's edges (`placement`). `None` draws the grid
+    /// at the corner with nothing round it.
+    pub fn prepare_placed(
+        &mut self,
+        frame: &Frame,
+        metrics: &FontMetrics,
+        palette: &Palette,
+        overlay: &Overlay,
+        dirty: Option<&[u32]>,
+        placement: Option<Placement>,
     ) -> DrawList {
         let configuration = (frame.columns, frame.rows, *metrics, palette.clone());
         let full = self.configuration.as_ref() != Some(&configuration) || dirty.is_none();
@@ -190,7 +208,16 @@ impl LayoutCache {
             list.rects.extend_from_slice(&row.rects);
             list.texts.extend_from_slice(&row.texts);
         }
+        let grid = (metrics.cells_width(frame.columns), metrics.cell_y(frame.rows));
+        let origin = placement.map(|placed| placed.origin(grid.0, grid.1));
+        if let (Some(placed), Some(origin)) = (placement, origin) {
+            let complete = self.rows.len() == frame.rows as usize;
+            list.rects.extend(placement::extensions(&self.rows, grid, origin, &placed, complete));
+        }
         append_marks(&mut list, frame, metrics, palette, overlay);
+        if let Some((x, y)) = origin {
+            list.translate(x, y);
+        }
         list
     }
 }

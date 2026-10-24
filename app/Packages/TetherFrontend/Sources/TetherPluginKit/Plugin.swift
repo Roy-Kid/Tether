@@ -219,6 +219,10 @@ public struct PluginPreferences {
 @MainActor @Observable
 public final class PluginRegistry {
   public private(set) var plugins: [any TetherPlugin] = []
+  /// Bumps when a plugin replaces its tab marks. The tab strip reads this:
+  /// marks live on the plugin object, and a view that only holds `any TetherPlugin`
+  /// does not observe that object's stored properties.
+  public private(set) var tabIndicatorEpoch: Int = 0
   public private(set) var disabled: Set<String>
   private let defaults: UserDefaults
   public var onDisable: ((String) -> Void)?
@@ -241,6 +245,8 @@ public final class PluginRegistry {
     defaults.set(Array(disabled).sorted(), forKey: "disabledPlugins")
   }
   public func isEnabled(_ id: String) -> Bool { !disabled.contains(id) }
+
+  public func noteTabIndicatorsChanged() { tabIndicatorEpoch &+= 1 }
   /// Registration order breaks ties between enabled plugins; domain priority
   /// within a plugin belongs to that plugin, not to the host.
   public func tabIndicator(for terminal: PluginTerminalIdentity) -> PluginTabIndicator? {

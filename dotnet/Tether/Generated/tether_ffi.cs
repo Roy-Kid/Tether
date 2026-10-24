@@ -1005,6 +1005,10 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -1563,7 +1567,29 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     void uniffi_tether_ffi_fn_method_rendersurface_set_cell_background_opacity(ulong @ptr,float @opacity,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      void uniffi_tether_ffi_fn_method_rendersurface_set_fonts(ulong @ptr,RustBuffer @primary,RustBuffer @wide,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     void uniffi_tether_ffi_fn_method_rendersurface_set_grid_padding(ulong @ptr,float @padding,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     #if NET8_0_OR_GREATER
@@ -3422,7 +3448,29 @@ static class _UniFFILib {
     [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern
 #endif
+     ushort uniffi_tether_ffi_checksum_method_rendersurface_set_cell_background_opacity(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
      ushort uniffi_tether_ffi_checksum_method_rendersurface_set_fonts(
+    );
+
+    #if NET8_0_OR_GREATER
+    [LibraryImport("tether_ffi")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    public static partial
+#else
+    [DllImport("tether_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern
+#endif
+     ushort uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding(
     );
 
     #if NET8_0_OR_GREATER
@@ -4271,9 +4319,21 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_set_cell_background_opacity();
+            if (checksum != 49543) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_cell_background_opacity` checksum `49543`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_set_fonts();
             if (checksum != 45006) {
                 throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_fonts` checksum `45006`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding();
+            if (checksum != 62672) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding` checksum `62672`, library returned `{checksum}`");
             }
         }
         {
@@ -6988,7 +7048,24 @@ internal interface IRenderSurface {
     /// <exception cref="RenderFailure"></exception>
     byte[] ReadPixels();
     void Resize(uint @width, uint @height);
+    /// <summary>
+    /// How opaque a program's own cell backgrounds are drawn while the
+    /// palette's background is see-through: a consumer drawing on glass
+    /// passes its window opacity. Colours close to the background become the
+    /// background. `1.0`, the default, draws them solid. A setter rather than
+    /// a palette field, so bindings generated before it still read the palette.
+    /// </summary>
+    void SetCellBackgroundOpacity(float @opacity);
     void SetFonts(string @primary, string @wide);
+    /// <summary>
+    /// The least margin round the grid, in physical pixels, drawn by the
+    /// surface itself: the grid is centred in what is left, and each edge
+    /// cell's background carries on to the surface's edge, so a program that
+    /// paints its own background is not framed by the page's. A negative
+    /// value, the default, leaves the grid at the corner for a consumer that
+    /// lays out its own margin.
+    /// </summary>
+    void SetGridPadding(float @padding);
     /// <exception cref="RenderFailure"></exception>
     void WaitIdle();
 }
@@ -7176,10 +7253,43 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     
     
     
+    /// <summary>
+    /// How opaque a program's own cell backgrounds are drawn while the
+    /// palette's background is see-through: a consumer drawing on glass
+    /// passes its window opacity. Colours close to the background become the
+    /// background. `1.0`, the default, draws them solid. A setter rather than
+    /// a palette field, so bindings generated before it still read the palette.
+    /// </summary>
+    public void SetCellBackgroundOpacity(float @opacity) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_set_cell_background_opacity(thisPtr, FfiConverterFloat.INSTANCE.Lower(@opacity), ref _status)
+));
+    }
+    
+    
+    
     public void SetFonts(string @primary, string @wide) {
         CallWithPointer(thisPtr =>
     _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_set_fonts(thisPtr, FfiConverterString.INSTANCE.Lower(@primary), FfiConverterString.INSTANCE.Lower(@wide), ref _status)
+));
+    }
+    
+    
+    
+    /// <summary>
+    /// The least margin round the grid, in physical pixels, drawn by the
+    /// surface itself: the grid is centred in what is left, and each edge
+    /// cell's background carries on to the surface's edge, so a program that
+    /// paints its own background is not framed by the page's. A negative
+    /// value, the default, leaves the grid at the corner for a consumer that
+    /// lays out its own margin.
+    /// </summary>
+    public void SetGridPadding(float @padding) {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_tether_ffi_fn_method_rendersurface_set_grid_padding(thisPtr, FfiConverterFloat.INSTANCE.Lower(@padding), ref _status)
 ));
     }
     

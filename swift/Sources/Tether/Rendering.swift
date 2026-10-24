@@ -82,6 +82,13 @@ public final class TerminalRenderer {
     ready = true
   }
   public func setFonts(primary: String, wide: String) { inner.setFonts(primary: primary, wide: wide) }
+  /// How opaque a program's own cell backgrounds are while the palette's
+  /// background is see-through; colours near that background let it show.
+  public func setCellBackgroundOpacity(_ opacity: Float) { inner.setCellBackgroundOpacity(opacity: opacity) }
+  /// The least margin round the grid, in device pixels, drawn by the
+  /// renderer: the grid centred, edge backgrounds carried to the edges.
+  /// Negative leaves the grid at the corner.
+  public func setGridPadding(_ pixels: Float) { inner.setGridPadding(padding: pixels) }
   public func measure(size: Float) throws -> RenderFontMetrics {
     guard ready, !closed else { throw RenderingError(cause: "Surface not ready or closed") }
     return try renderingCall { try inner.measure(size: size) }

@@ -8,7 +8,8 @@ import TetherPluginKit
 /// Native menu bar. Every item calls the same TabSet / intent dispatcher
 /// the in-window palettes use; this is not a second set of buttons.
 struct WorkspaceCommands: Commands {
-  @Bindable var tabs: TabSet
+  @Bindable var model: AppModel
+  private var tabs: TabSet { model.commandTabs }
   #if os(macOS)
     private var shortcutsEnabled: Bool? { tabs.menuShortcuts }
   #else
@@ -17,6 +18,10 @@ struct WorkspaceCommands: Commands {
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
+      #if os(macOS)
+        Button("New Window") { model.openAdditionalWindow?() }
+          .keyboardShortcut("n", modifiers: [.command, .shift])
+      #endif
       command(.newTab)
       command(.renameTab)
     }

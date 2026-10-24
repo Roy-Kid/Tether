@@ -134,7 +134,8 @@
       #expect(hosted.tabs.selectedWorkspaceID == ids[1])
 
       let (strip, frames) = try catcher(in: hosted.window)
-      let chip = try #require(frames[ids[0]], "the strip knows where the first tab is")
+      let first = try #require(hosted.tabs.workspaces.first { $0.id == ids[0] }?.focused)
+      let chip = try #require(frames[first], "the strip knows where the first tab is")
       hosted.click(at: windowPoint(chip.midX, chip.midY, in: strip))
       #expect(hosted.tabs.selectedWorkspaceID == ids[0])
       #expect(hosted.window.drags == 0)

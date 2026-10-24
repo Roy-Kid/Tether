@@ -11,13 +11,15 @@ import TetherPluginKit
 @MainActor
 public final class TmuxPlugin: TabPlugin {
   public static let id = "dev.tether.tmux"
+  /// The plugin's mark, on its metadata, its accessory and a tab running tmux.
+  static let symbol = "rectangle.3.offgrid"
   public let metadata = PluginMetadata(
-    id: TmuxPlugin.id, name: "tmux", symbol: "rectangle.split.2x2",
+    id: TmuxPlugin.id, name: "tmux", symbol: TmuxPlugin.symbol,
     summary: "Persistent sessions, in the terminal itself.")
   /// Beside Files on a Mac: the host draws one status-bar button per inspector
   /// accessory. A phone has no status bar, so the shell button keeps the picker.
   public let accessory = TabAccessory(
-    symbol: "rectangle.split.2x2", name: "tmux sessions",
+    symbol: TmuxPlugin.symbol, name: "tmux sessions",
     placement: {
       #if os(macOS)
         .inspector
@@ -42,6 +44,10 @@ public final class TmuxPlugin: TabPlugin {
     PluginCommandDescriptor(id: $0.commandID, title: $0.title, shortcut: PluginKeyChord($0.key, [.command, .option]))
   }
   private var tabs: [UUID: TmuxTab] = [:]
+  /// The last list read on a host. Every terminal there shows it: a shell
+  /// beside a client is still that host, and its own read may not have
+  /// landed yet.
+  private var sessionsByHost: [UUID: [TmuxSessionInfo]] = [:]
 
   public init() {}
 
@@ -51,9 +57,19 @@ public final class TmuxPlugin: TabPlugin {
     let attached = TmuxTab(
       tab: tab,
       owner: { [weak self] session in self?.tab(owning: session, on: host) },
-      onClose: { [weak self] in self?.tabs[id] = nil })
+      onClose: { [weak self] in self?.tabs[id] = nil },
+      rememberSessions: { [weak self] sessions in self?.remember(sessions, on: host) },
+      recalledSessions: { [weak self] in self?.rememberedSessions(on: host) ?? [] })
     tabs[id] = attached
     return attached
+  }
+
+  func remember(_ sessions: [TmuxSessionInfo], on host: UUID) {
+    sessionsByHost[host] = sessions
+  }
+
+  func rememberedSessions(on host: UUID) -> [TmuxSessionInfo] {
+    sessionsByHost[host] ?? []
   }
 
   /// The tab attached to this session, if any.

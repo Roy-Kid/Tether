@@ -40,11 +40,16 @@ struct Browser: View {
       .onChange(of: model.finding) { _, open in
         if !open, !model.query.isEmpty { model.query = "" }
       }
-      .fileImporter(
-        isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true
-      ) { result in
-        guard case .success(let files) = result, let target = model.targetDirectory else { return }
-        Task { await model.upload(files, into: target) }
+      .background {
+        // An importer left on the browser presents itself whenever that
+        // browser is created, which is every return to this host.
+        if importing {
+          AskingImporter(types: [.item], multiple: true) { files in
+            importing = false
+            guard let files, let target = model.targetDirectory else { return }
+            Task { await model.upload(files, into: target) }
+          }
+        }
       }
       .modifier(DownloadPicker(model: model))
       .modifier(Confirmations(model: model))
@@ -1057,35 +1062,73 @@ private struct TransferList: View {
 
 /// A folder for a download, asked when none has been set. The files are copied
 /// out before the panel closes, so a cancel and a choice both see them.
+///
+/// The panel is attached only while a download is asking. Left on the browser,
+/// it opens by itself each time that browser is created — every return to
+/// this host.
 private struct DownloadPicker: ViewModifier {
   @Bindable var model: FilesTab
-  @State private var presented = false
   @State private var saving: [FileEntry] = []
 
   func body(content: Content) -> some View {
     content
       .onChange(of: model.pendingSave.map(\.path), initial: true) { _, paths in
-        guard !paths.isEmpty else { return }
-        saving = model.pendingSave
-        presented = true
+        saving = paths.isEmpty ? [] : model.pendingSave
       }
       .background {
-        Color.clear
-          .fileImporter(
-            isPresented: $presented, allowedContentTypes: [.folder], allowsMultipleSelection: false
-          ) { result in
+        if !saving.isEmpty {
+          AskingImporter(types: [.folder], directory: model.preferredDownloadDirectory) { urls in
             let files = saving
             saving = []
             model.pendingSave = []
-            guard case .success(let urls) = result, let folder = urls.first, !files.isEmpty else {
-              return
-            }
+            guard let folder = urls?.first, !files.isEmpty else { return }
             Task { await model.save(files, to: folder) }
           }
-          #if os(macOS)
-            .fileDialogDefaultDirectory(model.preferredDownloadDirectory)
-          #endif
+        }
       }
+  }
+}
+
+/// An open panel that exists only for the question that asked it.
+///
+/// Asking on the turn the panel is attached is ignored, so the question
+/// waits until the panel is listening.
+private struct AskingImporter: View {
+  var types: [UTType]
+  var multiple = false
+  var directory: URL?
+  var answer: ([URL]?) -> Void
+  @State private var presented = false
+
+  var body: some View {
+    Color.clear
+      .fileImporter(
+        isPresented: $presented, allowedContentTypes: types, allowsMultipleSelection: multiple
+      ) { result in
+        answer(try? result.get())
+      }
+      .modifier(ImporterDirectory(url: directory))
+      .task {
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        presented = true
+      }
+  }
+}
+
+private struct ImporterDirectory: ViewModifier {
+  var url: URL?
+
+  @ViewBuilder func body(content: Content) -> some View {
+    #if os(macOS)
+      if let url {
+        content.fileDialogDefaultDirectory(url)
+      } else {
+        content
+      }
+    #else
+      content
+    #endif
   }
 }
 

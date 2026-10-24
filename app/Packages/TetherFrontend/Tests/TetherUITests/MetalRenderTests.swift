@@ -202,4 +202,41 @@ struct SharedRenderTests {
     #expect(try fresh.readPixels() == image, "eviction must not drop the current frame's glyphs")
   }
 
+
+  @Test("a placed grid is centred and a program's own background reaches every edge")
+  func placedGrid() async throws {
+    TerminalFonts.prepare()
+    let renderer = try await TerminalRenderer.offscreen(width: 300, height: 120)
+    defer { renderer.close() }
+    renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)
+    _ = try renderer.measure(size: 26)
+    // A TUI that paints every cell #191919, as one with its own theme does.
+    let theirs = CellStyle(foreground: .named(name: .foreground), background: .rgb(red: 25, green: 25, blue: 25),
+      underline: .none, underlineColor: nil, bold: false, dim: false, italic: false, strikethrough: false,
+      inverse: false, hidden: false)
+    let frame = ScreenFrame(columns: 10, rows: 2, cursorRow: 0, cursorColumn: 0, cursorShape: .hidden,
+      cursorVisible: false, alternateScreen: true, mouse: .off, viewportOffset: 0, historyLines: 0, title: "",
+      lines: [ScreenRow(runs: [StyledRun(text: "          ", columns: 10, style: theirs)]),
+              ScreenRow(runs: [StyledRun(text: "          ", columns: 10, style: theirs)])])
+    func pixel(_ data: Data, _ x: Int, _ y: Int) -> [UInt8] { Array(data[(y * 300 + x) * 4..<(y * 300 + x) * 4 + 4]) }
+
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26)
+    let cornered = try renderer.readPixels()
+    #expect(pixel(cornered, 299, 119) != [25, 25, 25, 255], "unplaced, the spare space is the page")
+
+    renderer.setGridPadding(16)
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26)
+    let placed = try renderer.readPixels()
+    for (x, y) in [(0, 0), (299, 0), (0, 119), (299, 119), (150, 2), (2, 60)] {
+      #expect(pixel(placed, x, y) == [25, 25, 25, 255], "(\(x), \(y)) is the program's background, not a frame")
+    }
+
+    // On glass the same theme is the page's own colour, and the glass shows to every edge.
+    renderer.setCellBackgroundOpacity(0.5)
+    _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(backgroundOpacity: 0), fontSize: 26)
+    let glass = try renderer.readPixels()
+    for (x, y) in [(0, 0), (150, 60), (299, 119)] {
+      #expect(pixel(glass, x, y)[3] == 0, "(\(x), \(y)) shows the window")
+    }
+  }
 }

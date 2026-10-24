@@ -21,6 +21,13 @@ final class AppModel {
   /// connecting and never held here (spec §18).
   let secrets: any SecretStore = Keychain()
   var installedPlugins: InstalledPlugins?
+  /// Windows after the first. Each has its own tabs and does not rewrite the
+  /// main window's session history.
+  var additionalSessions: [TabSet] = []
+  /// The key window's tabs. Menu commands follow it.
+  var keyTabs: TabSet?
+  var commandTabs: TabSet { keyTabs ?? tabs }
+  var openAdditionalWindow: (() -> Void)?
 
   init() {
     #if DEBUG

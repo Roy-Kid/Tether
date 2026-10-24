@@ -64,6 +64,10 @@ pub struct RenderSurface {
     /// Fonts and size asked for before the renderer exists. Applied when
     /// `initialize` stores it, so an early call is not dropped.
     deferred: Mutex<Deferred>,
+    /// See [`RenderSurface::set_cell_background_opacity`].
+    cell_background_opacity: Mutex<f32>,
+    /// See [`RenderSurface::set_grid_padding`].
+    grid_padding: Mutex<Option<f32>>,
 }
 
 fn apply_deferred(renderer: &mut TerminalRenderer, deferred: &Deferred) {
@@ -99,6 +103,8 @@ impl RenderSurface {
             closed: AtomicBool::new(false),
             font_size: Mutex::new(DEFAULT_FONT_SIZE),
             deferred: Mutex::new(Deferred { fonts: None, size: None }),
+            cell_background_opacity: Mutex::new(1.0),
+            grid_padding: Mutex::new(None),
         }))
     }
 
@@ -115,6 +121,8 @@ impl RenderSurface {
             closed: AtomicBool::new(false),
             font_size: Mutex::new(DEFAULT_FONT_SIZE),
             deferred: Mutex::new(Deferred { fonts: None, size: None }),
+            cell_background_opacity: Mutex::new(1.0),
+            grid_padding: Mutex::new(None),
         }))
     }
 
@@ -127,6 +135,8 @@ impl RenderSurface {
             closed: AtomicBool::new(false),
             font_size: Mutex::new(DEFAULT_FONT_SIZE),
             deferred: Mutex::new(Deferred { fonts: None, size: None }),
+            cell_background_opacity: Mutex::new(1.0),
+            grid_padding: Mutex::new(None),
         }))
     }
 
@@ -179,6 +189,28 @@ impl RenderSurface {
             .ok_or_else(|| RenderFailure::Surface { cause: "surface not ready".into() })?
             .wait_idle()
             .map_err(Into::into)
+    }
+
+    /// How opaque a program's own cell backgrounds are drawn while the
+    /// palette's background is see-through: a consumer drawing on glass
+    /// passes its window opacity. Colours close to the background become the
+    /// background. `1.0`, the default, draws them solid. A setter rather than
+    /// a palette field, so bindings generated before it still read the palette.
+    pub fn set_cell_background_opacity(&self, opacity: f32) {
+        let value = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+        *self.cell_background_opacity.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            value;
+    }
+
+    /// The least margin round the grid, in physical pixels, drawn by the
+    /// surface itself: the grid is centred in what is left, and each edge
+    /// cell's background carries on to the surface's edge, so a program that
+    /// paints its own background is not framed by the page's. A negative
+    /// value, the default, leaves the grid at the corner for a consumer that
+    /// lays out its own margin.
+    pub fn set_grid_padding(&self, padding: f32) {
+        let value = (padding.is_finite() && padding >= 0.0).then_some(padding);
+        *self.grid_padding.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
     }
 
     pub fn set_fonts(&self, primary: String, wide: String) {
@@ -257,7 +289,12 @@ impl RenderSurface {
         #[cfg(feature = "render-diagnostics")]
         let conversion_started = std::time::Instant::now();
         let frame = Frame::from(frame);
-        let palette = Palette::from(palette);
+        renderer.set_padding(
+            *self.grid_padding.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        let mut palette = Palette::from(palette);
+        palette.cell_background_opacity =
+            *self.cell_background_opacity.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let overlay = overlay.map(Overlay::from).unwrap_or_default();
         #[cfg(feature = "render-diagnostics")]
         tether_render::diagnostics::record(
@@ -447,6 +484,7 @@ impl From<PaletteDto> for Palette {
             cursor: rgba(palette.cursor),
             normal,
             bright,
+            cell_background_opacity: 1.0,
         }
     }
 }

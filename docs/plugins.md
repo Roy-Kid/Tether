@@ -226,8 +226,18 @@ installation path for development.
 A `statusBar` contribution starts one background page while the plugin is enabled.
 That page can call `host.status` with `{label, segments: [{color, weight}]}`.
 Colours are `0xRRGGBB` integers; weights are finite nonnegative numbers. Tether
-paints the ribbon and opens the plugin panel when it is clicked. Background pages
-have `tether.background === true`; visible panels have it false.
+paints the ribbon and opens the plugin panel when it is clicked. A saturated
+colour breathes, and the tab mark of that same colour breathes on the same
+clock. Gray stays still. Background pages have `tether.background === true`;
+visible panels have it false.
+
+A panel can call `host.focus` with
+`{target?: {host, terminal}, directory?: string, url?: string}`. When `target`
+names a tty, the host selects that Tether tab, or the Terminal.app tab on this
+machine with the same tty. A directory is used only when no tty was named, and
+only to select a Tether tab already in that directory. `url` opens an editor
+scheme (`vscode`, `cursor`, `windsurf`, `zed`, `jetbrains`). A `file` URL is
+not opened. The result is `{focused: "tab" | "url" | "none"}`.
 
 A plugin declaring `network` can also declare `networkURLs`: an exact list of
 GET endpoints. `network.stream` takes `{url}` and returns `{stream}` after consent.
@@ -387,9 +397,11 @@ local producer's TTY or its existing remote TTY discovery, and reads the remote
 hostname over the same authenticated lease. If identity cannot be established,
 no mark is shown; task titles and working directories are never used for matching.
 
-The host draws one 6pt solid circle before the tab name in horizontal and vertical
-tab bars; the label is a tooltip/accessibility description. A split workspace shows
-the mark for its focused terminal. Disabled plugins contribute nothing. Between
+The host draws one circle in the tab icon's place, in horizontal and vertical
+tab bars. The terminal glyph is not drawn beside it. The label is a tooltip
+and accessibility description. The circle uses the reported colour and, when
+that colour is saturated, the same pulse as the status ribbon. A split
+workspace shows the mark for its focused terminal. Disabled plugins contribute nothing. Between
 plugins, registration order wins; each plugin must resolve its own domain priority
 before reporting. An empty array clears that session's marks. Unloading a session
 clears only its own marks; closing a panel does not erase a background page's set.

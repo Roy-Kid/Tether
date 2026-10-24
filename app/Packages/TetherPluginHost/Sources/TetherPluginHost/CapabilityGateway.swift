@@ -25,6 +25,8 @@ final class CapabilityGateway {
     let networkURLs: Set<URL>
     let reportsStatus: Bool
     let reportsTabIndicators: Bool
+    let hasPanel: Bool
+    let settingsURL: URL?
     var documents: [UUID: Data] = [:]
     var storageAsked = false
     var storageAllowed = false
@@ -36,16 +38,20 @@ final class CapabilityGateway {
   private let api: PluginAPI
   private var sessions: [UUID: Session] = [:]
   private let streaming: any PluginStreaming
+  private let posting: any PluginPosting
   private var streams: [UUID: (session: UUID, task: Task<Void, Never>)] = [:]
   var emit: (@MainActor (UUID, JSONValue) async -> Void)?
   var status: (@MainActor (UUID, JSONValue) -> Void)?
   var tabIndicators: (@MainActor (UUID, String, [PluginTabIndicator]) -> Void)?
+  var focus: (@MainActor (PluginFocusRequest) -> String)?
+  var openSettings: (@MainActor (URL) -> Void)?
   private var networkGrants: [String: Set<URL>] = [:]
 
-  init(consent: any ConsentAsking, api: PluginAPI, streaming: any PluginStreaming) {
+  init(consent: any ConsentAsking, api: PluginAPI, streaming: any PluginStreaming, posting: any PluginPosting) {
     self.consent = consent
     self.api = api
     self.streaming = streaming
+    self.posting = posting
   }
 
   func open(
@@ -57,6 +63,8 @@ final class CapabilityGateway {
       permissions: Set(record.manifest.permissions), networkURLs: Set(record.manifest.networkURLs),
       reportsStatus: record.manifest.contributions.contains { $0.kind == .statusBar },
       reportsTabIndicators: record.manifest.contributions.contains { $0.kind == .tabIndicator },
+      hasPanel: record.manifest.contributions.contains { $0.kind == .panel },
+      settingsURL: record.manifest.settingsURL,
       environment: environment, reconnect: reconnect)
   }
 
@@ -157,11 +165,33 @@ final class CapabilityGateway {
       }
       streams.removeValue(forKey: id)?.task.cancel()
       response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
+    case .post:
+      response = await post(request, session: session)
     case .status:
       guard session.reportsStatus else {
         return .failure(session: request.session, id: request.id, error: RPCError.permissionDenied)
       }
       status?(request.session, request.payload)
+      response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
+    case .focus:
+      guard session.hasPanel else {
+        return .failure(session: request.session, id: request.id, error: RPCError.permissionDenied)
+      }
+      guard let asked = PluginFocusRequest(request.payload) else {
+        return .failure(session: request.session, id: request.id, error: RPCError.malformed)
+      }
+      let landed = focus?(asked) ?? "none"
+      guard landed == "tab" || landed == "url" || landed == "none" else {
+        return .failure(session: request.session, id: request.id, error: RPCError.malformed)
+      }
+      response = RPCResponse(
+        session: request.session, id: request.id, ok: true,
+        payload: .object(["focused": .string(landed)]))
+    case .openSettings:
+      guard let url = session.settingsURL else {
+        return .failure(session: request.session, id: request.id, error: RPCError.permissionDenied)
+      }
+      openSettings?(url)
       response = RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
     }
     if (method == .storageGet || method == .storageSet), var current = sessions[request.session] {
@@ -204,6 +234,25 @@ final class CapabilityGateway {
     }
     streams[id] = (owner, task)
     return RPCResponse(session: owner, id: request.id, ok: true, payload: .object(["stream": .string(id.uuidString)]))
+  }
+
+  /// Empty POST. Same grant as the stream: the URL must be declared and already approved.
+  private func post(_ request: RPCRequest, session: Session) async -> RPCResponse {
+    func failure(_ error: String) -> RPCResponse {
+      .failure(session: request.session, id: request.id, error: error)
+    }
+    guard session.permissions.contains(.network),
+      let text = request.payload.key("url")?.string, let url = URL(string: text),
+      session.networkURLs.contains(url), NetworkEndpoint.valid(url) else {
+      return failure(RPCError.permissionDenied)
+    }
+    guard networkGrants[session.pluginID]?.contains(url) == true else { return failure(RPCError.consentDenied) }
+    do {
+      try await posting.post(url: url)
+      return RPCResponse(session: request.session, id: request.id, ok: true, payload: .null)
+    } catch {
+      return failure(RPCError.unavailable)
+    }
   }
 
   private func readDocument(_ request: RPCRequest, session: Session) -> RPCResponse {

@@ -276,8 +276,11 @@ final class EditingCopies {
         try await saveAsCopy(record, url, source: source, transfers: writer.transfers)
       case "discard":
         let current = try await source.stat(record.path)
+        let temp = Self.landing()
+        defer { try? FileManager.default.removeItem(at: temp) }
         try await writingCopy(path) {
-          _ = try await writer.transfers.download(current, to: url, from: source)
+          _ = try await writer.transfers.download(current, to: temp, from: source)
+          _ = try await Task.detached { try Self.install(temp, over: url, expected: nil) }.value
         }
         adopt(current, at: url)
       default:
@@ -456,10 +459,10 @@ final class EditingCopies {
     await absorb(path, through: writer)
   }
 
-  /// The far side's file moved and the copy has not. Bring that file in,
-  /// atomically, and only while the copy is still the one that was asked
-  /// about: a save that arrives while the bytes are in flight is the
-  /// person's, and goes back instead.
+  /// The far side's file moved and the copy has not. Bring that file in —
+  /// into the same file, so an editor keeps it (`install`) — and only while
+  /// the copy is still the one that was asked about: a save that arrives
+  /// while the bytes are in flight is the person's, and goes back instead.
   private func absorb(_ path: String, through writer: Writer) async {
     guard !running.contains(path) else { return }
     running.insert(path)
@@ -486,8 +489,7 @@ final class EditingCopies {
       schedule(path)
       return
     }
-    let temp = FileManager.default.temporaryDirectory
-      .appendingPathComponent("tether-edit-\(UUID().uuidString)")
+    let temp = Self.landing()
     defer { try? FileManager.default.removeItem(at: temp) }
     states[path] = .receiving
     do {
@@ -508,7 +510,7 @@ final class EditingCopies {
       var applied = false
       try await writingCopy(path) {
         applied = try await Task.detached {
-          try Self.install(temp, over: freshURL, size: expected.size, modified: expected.modified)
+          try Self.install(temp, over: freshURL, expected: expected)
         }.value
         guard applied else { return }
         LocalCopies.seal(freshURL)
@@ -531,22 +533,29 @@ final class EditingCopies {
     }
   }
 
-  /// Puts `temp` in place of `url` so an editor that has `url` open is told,
-  /// and only while `url` is still `size` bytes modified at `modified`.
-  /// The coordinator is what a document-based editor watches. The check is
+  /// Writes `temp` into `url` so an editor that has `url` open is told, and
+  /// only while `url` is still `expected` — nil lands it regardless. The
+  /// coordinator is what a document-based editor watches; the check is
   /// inside it, so a save that took the file first is left where it is.
+  ///
+  /// Into, not in place of. A document-based editor tracks its file by ID,
+  /// and a file swapped in under the same name — `replaceItemAt`, a rename
+  /// — is one it has lost: it says the document cannot be opened. The same
+  /// inode with new contents is a change, which an editor that reloads on
+  /// change follows.
   private nonisolated static func install(
-    _ temp: URL, over url: URL, size: Int64, modified: Date
+    _ temp: URL, over url: URL, expected: (size: Int64, modified: Date)?
   ) throws -> Bool {
     var coordination: NSError?
     var failure: Error?
     var applied = false
     NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordination) { writingURL in
-      guard let current = stamp(url), current.size == size, current.modified == modified else { return }
+      if let expected {
+        guard let current = stamp(url), current.size == expected.size, current.modified == expected.modified
+        else { return }
+      }
       do {
-        // Replacing, not "for replacing": that option tells an open document
-        // the file went away. This one tells it the contents moved.
-        _ = try FileManager.default.replaceItemAt(writingURL, withItemAt: temp)
+        try overwrite(writingURL, with: temp)
         applied = true
       } catch {
         failure = error
@@ -555,6 +564,35 @@ final class EditingCopies {
     if let coordination { throw coordination }
     if let failure { throw failure }
     return applied
+  }
+
+  /// The bytes at `temp`, written over what is at `url`: the same file,
+  /// truncated and filled, synced to disk. Made when missing, closed to
+  /// other accounts.
+  private nonisolated static func overwrite(_ url: URL, with temp: URL) throws {
+    let manager = FileManager.default
+    if !manager.fileExists(atPath: url.path) {
+      guard manager.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+      }
+    }
+    let reading = try FileHandle(forReadingFrom: temp)
+    defer { try? reading.close() }
+    let writing = try FileHandle(forWritingTo: url)
+    defer { try? writing.close() }
+    try writing.truncate(atOffset: 0)
+    while let chunk = try reading.read(upToCount: chunkSize), !chunk.isEmpty {
+      try writing.write(contentsOf: chunk)
+    }
+    try writing.synchronize()
+  }
+
+  private nonisolated static let chunkSize = 1 << 20
+
+  /// Where the far side's bytes wait before they go into a copy: this
+  /// account's temporary directory, under a name of their own.
+  private nonisolated static func landing() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("tether-edit-\(UUID().uuidString)")
   }
 
   private func remoteDue() -> Bool {

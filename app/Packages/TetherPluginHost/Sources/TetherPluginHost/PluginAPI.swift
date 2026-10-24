@@ -14,9 +14,6 @@ public struct PluginNote: Identifiable, Equatable, Sendable {
 @MainActor @Observable
 public final class PluginAPI: PluginServing {
   public private(set) var notes: [PluginNote] = []
-  /// Set while the app is not the frontmost scene, so a note is also posted
-  /// to the system as a notification from this app.
-  public var deliversSystemNotes = false
   public var onStatus: ((String, PluginStatusBarItem) -> Void)?
 
   let consent: any ConsentAsking
@@ -47,7 +44,7 @@ public final class PluginAPI: PluginServing {
     let note = PluginNote(id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)))
     notes.insert(note, at: 0)
     if notes.count > 4 { notes.removeLast(notes.count - 4) }
-    if deliversSystemNotes { await SystemNote.post(title: note.title, body: note.body) }
+    await SystemNote.post(title: note.title, body: note.body)
   }
 
   public func ask(_ prompt: PluginPrompt) async -> PluginAnswer {

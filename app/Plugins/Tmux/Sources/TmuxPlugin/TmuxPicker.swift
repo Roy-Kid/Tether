@@ -21,7 +21,8 @@ struct TmuxPicker: View {
 
   var body: some View {
     layout
-      .onAppear { model.refresh() }
+      .task(id: model.tab.id) { model.refresh() }
+      .onChange(of: model.tab.id) { _, _ in opened = nil }
       #if os(macOS)
         .focusable()
         .focusEffectDisabled()
@@ -60,7 +61,7 @@ struct TmuxPicker: View {
             guard opened != nil else { return .ignored }
             opened = nil
           } else {
-            guard !model.busy, let session = model.sessions.first(where: { "session:\($0.id)" == keyboardSelection }),
+            guard !model.busy, let session = model.listedSessions.first(where: { "session:\($0.id)" == keyboardSelection }),
               model.windows(for: session).count > 1 else { return .ignored }
             opened = session.id
           }
@@ -122,7 +123,7 @@ struct TmuxPicker: View {
 
   @ViewBuilder
   private var level: some View {
-    if let opened, let session = model.sessions.first(where: { $0.id == opened }) {
+    if let opened, let session = model.listedSessions.first(where: { $0.id == opened }) {
       windows(of: session)
     } else {
       root
@@ -168,11 +169,11 @@ struct TmuxPicker: View {
         note(error).textSelection(.enabled)
       }
 
-      if model.busy && model.sessions.isEmpty {
+      if model.busy && model.listedSessions.isEmpty {
         ProgressView().controlSize(.mini).padding(.horizontal, UIStyle.Space.inline)
       }
 
-      ForEach(model.sessions, id: \.id) { session in
+      ForEach(model.listedSessions, id: \.id) { session in
         sessionRow(session).disabled(model.busy)
       }
 
@@ -318,7 +319,7 @@ struct TmuxPicker: View {
   }
 
   private var keyboardItems: [KeyboardItem] {
-    if let opened, let session = model.sessions.first(where: { $0.id == opened }) {
+    if let opened, let session = model.listedSessions.first(where: { $0.id == opened }) {
       var items = [KeyboardItem(id: "back") { self.opened = nil }]
       guard !model.busy else { return items }
       items += model.windows(for: session).map { window in
@@ -344,7 +345,7 @@ struct TmuxPicker: View {
       items.append(KeyboardItem(id: "shell", run: model.showShell))
     }
     items.append(KeyboardItem(id: "new-shell") { model.tab.newShell(); model.tab.dismissAccessory() })
-    items += model.sessions.map { session in
+    items += model.listedSessions.map { session in
       KeyboardItem(id: "session:\(session.id)") {
         let windows = model.windows(for: session)
         if windows.count > 1 { self.opened = session.id }

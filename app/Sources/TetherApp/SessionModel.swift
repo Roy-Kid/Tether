@@ -332,7 +332,8 @@ final class SessionTab: Identifiable {
     }
     self.session = session
     identityTask?.cancel()
-    terminalHost = host.isLocal ? ProcessInfo.processInfo.hostName : nil
+    // The kernel name, not the Bonjour name: hooks report `os.hostname()`.
+    terminalHost = host.isLocal ? LocalMachine.kernelName : nil
     if !host.isLocal, let connection = session.connection {
       identityTask = Task { [weak self] in
         guard let output = try? await connection.execute("hostname"), output.status == 0,
@@ -691,7 +692,11 @@ final class SessionTab: Identifiable {
     // the window to a corner of this one.
     guard shown == nil else { return }
     sized = true
-    identifyShellTTY()
+    // The search compares sizes, so it starts from the size the pty is
+    // about to have. Started before, it looked for the old one, and a
+    // neighbour still that size on the same connection was taken for this
+    // shell, and a plugin asking about this tab was answered about that one.
+    defer { identifyShellTTY() }
     guard columns != self.columns || rows != self.rows else { return }
     closeCheck.noteActivity()
     self.columns = columns

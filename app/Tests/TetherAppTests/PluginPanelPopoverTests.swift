@@ -51,6 +51,8 @@ struct PluginPanelPopoverTests {
     anchor.presented = true
     anchor.updatePresentation()
     #expect(anchor.popover.isShown)
+    #expect(anchor.popover.contentSize.width == PluginPanelPopover.Anchor.contentWidth)
+    #expect(anchor.popover.contentSize.height == PluginPanelPopover.Anchor.initialHeight)
     probe.pending = true
     defer { probe.pending = false }
     for _ in 0..<300 where window.sheets.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
@@ -72,6 +74,37 @@ struct PluginPanelPopoverTests {
       context: nil, eventNumber: 2, clickCount: 1, pressure: 1))
     _ = anchor.route(outside)
     #expect(!anchor.popover.isShown)
+  }
+
+  @Test func aDraggedSizeOpensAgain() async throws {
+    let name = "plugin-panel-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { defaults.removePersistentDomain(forName: name) }
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 500),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    let anchor = PluginPanelPopover.Anchor(frame: NSRect(x: 200, y: 20, width: 40, height: 24))
+    window.contentView?.addSubview(anchor)
+    window.makeKeyAndOrderFront(nil)
+    defer { anchor.stop(); window.orderOut(nil) }
+    anchor.defaults = defaults
+    anchor.pluginID = "fixture.plugin"
+    anchor.workspace = PanelWorkspace()
+    anchor.presented = true
+    anchor.updatePresentation()
+    anchor.apply(NSSize(width: 520, height: 400), commit: true)
+    #expect(anchor.popover.contentSize.width == 520)
+    #expect(anchor.popover.contentSize.height == 400)
+    anchor.popover.performClose(nil)
+    for _ in 0..<50 where anchor.popover.isShown { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!anchor.popover.isShown)
+    anchor.updatePresentation()
+    #expect(anchor.popover.isShown)
+    #expect(anchor.popover.contentSize.width == 520)
+    #expect(anchor.popover.contentSize.height == 400)
+    #expect(PluginPanelPopover.Anchor.clamp(NSSize(width: 10, height: 9_000)).width
+      == PluginPanelPopover.Anchor.minimumWidth)
+    #expect(PluginPanelPopover.Anchor.clamp(NSSize(width: 10, height: 9_000)).height
+      == PluginPanelPopover.Anchor.maximumHeight)
   }
 
   private func button(_ title: String, in view: NSView) -> NSButton? {

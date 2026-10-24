@@ -10,6 +10,8 @@ extension EnvironmentValues {
   /// Opacity of workspace backgrounds over the host's native backdrop.
   /// The host supplies 0.5...1; 1 preserves opaque rendering by default.
   @Entry public var workspaceBackgroundOpacity: Double = 1
+  /// The main workspace hides instead of closing. An additional window closes.
+  @Entry public var workspaceHidesOnClose: Bool = true
 }
 
 /// The visual vocabulary, in one place.

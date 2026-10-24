@@ -83,6 +83,27 @@ struct LinkGeometryTests {
     #expect(geometry.cell(at: CGPoint(x: 20, y: 8 + 16 * 24)) == nil)
   }
 
+  @Test("a click lands where the renderer centred the grid")
+  func placedGrid() {
+    // 100 × 50 points at 2×: 200 × 100 pixels, a 16-pixel inset, cells of
+    // 16 × 32 pixels. Across, 200 − 32 − 160 leaves 8 spare, 4 each side:
+    // the grid starts at 20 pixels. Down, 100 − 32 − 64 leaves 4: 18.
+    let placed = CellGeometry.placed(
+      size: CGSize(width: 100, height: 50), scale: 2, inset: 8, cellWidth: 8, lineHeight: 16,
+      columns: 10, rows: 2)
+    #expect(placed.originX == 10)
+    #expect(placed.originY == 9)
+    #expect(placed.cell(at: CGPoint(x: 9.5, y: 20)) == nil, "the margin, though inside the inset's reach")
+    #expect(placed.cell(at: CGPoint(x: 10, y: 9))! == (0, 0))
+    // An odd spare pixel stays on the far side, as the renderer leaves it.
+    let odd = CellGeometry.placed(
+      size: CGSize(width: 100.5, height: 50), scale: 2, inset: 8, cellWidth: 8, lineHeight: 16,
+      columns: 10, rows: 2)
+    #expect(odd.originX == 10)
+    #expect(CellGeometry.gridPadding(inset: 8, scale: 2) == 16)
+    #expect(CellGeometry.gridPadding(inset: -4, scale: 2) == 0)
+  }
+
   @Test("a drag that leaves the grid ends on the nearest cell")
   func clamped() {
     #expect(geometry.clampedCell(at: CGPoint(x: -10, y: -10))! == (0, 0))

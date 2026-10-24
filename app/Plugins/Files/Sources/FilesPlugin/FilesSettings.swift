@@ -3,6 +3,10 @@ import SwiftUI
 import TetherUI
 import UniformTypeIdentifiers
 
+#if os(macOS)
+  import AppKit
+#endif
+
 /// The file browser's two preferences: how large a file must be before a
 /// preview or an open asks, and where a download goes when it should not ask.
 enum FilesPreferences {
@@ -38,6 +42,8 @@ enum FilesPreferences {
 }
 
 /// Rows under the Files switch. The settings form already owns the section.
+/// Besides the two preferences, where the previews are and what they take,
+/// with the one thing done to them by hand: clearing.
 struct FilesSettings: View {
   @AppStorage(FilesPreferences.promptKey) private var megabytes = FilesPreferences.defaultMegabytes
   @AppStorage(FilesPreferences.directoryKey) private var directory = ""
@@ -45,6 +51,8 @@ struct FilesSettings: View {
   /// What is in the field, including while it is empty. The stored number
   /// stays until the field holds a number again.
   @State private var megabytesText = ""
+  /// What the previews take on disk; nil until measured.
+  @State private var previewBytes: Int64?
 
   var body: some View {
     VStack(alignment: .leading, spacing: UIStyle.Space.group) {
@@ -79,6 +87,23 @@ struct FilesSettings: View {
         }
       }
       .help(directory.isEmpty ? "Ask for a folder each download" : directory)
+      LabeledContent("Previews") {
+        Text(FilesPreferences.shorten(LocalCopies.previews().path))
+          .lineLimit(1)
+          .truncationMode(.middle)
+        if let previewBytes {
+          Text(ByteCountFormatter.string(fromByteCount: previewBytes, countStyle: .file))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+        #if os(macOS)
+          SettingsAction("Open in Finder", systemImage: "arrow.up.right.square") { openPreviews() }
+        #endif
+        SettingsAction("Clear Previews", systemImage: "trash", role: .destructive) { clearPreviews() }
+          .disabled(previewBytes == 0)
+      }
+      .help(LocalCopies.previews().path)
+      .task { await measure() }
     }
     .fileImporter(
       isPresented: $picking, allowedContentTypes: [.folder], allowsMultipleSelection: false
@@ -87,4 +112,27 @@ struct FilesSettings: View {
       directory = url.path
     }
   }
+
+  /// Walked off the main actor: a full cache is a gigabyte of small files.
+  private func measure() async {
+    previewBytes = await Task.detached(priority: .utility) { LocalCopies.previewBytes() }.value
+  }
+
+  /// Quick Look is hidden first: it may be showing a copy about to go.
+  private func clearPreviews() {
+    QuickLook.hide()
+    Task {
+      await Task.detached(priority: .utility) { LocalCopies.clearPreviews() }.value
+      await measure()
+    }
+  }
+
+  #if os(macOS)
+    /// The folder itself, made if no preview has yet, so there is one to open.
+    private func openPreviews() {
+      let folder = LocalCopies.previews()
+      try? LocalCopies.privateDirectory(folder)
+      NSWorkspace.shared.open(folder)
+    }
+  #endif
 }

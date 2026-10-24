@@ -97,6 +97,53 @@ fn a_path_the_screen_wrapped_is_one_path() {
 }
 
 #[test]
+fn a_path_broken_at_a_vertical_rule_is_one_path() {
+    // A split draws a rule and, when a line fills the columns before it,
+    // writes a newline and the rest on the next row. The screen's own wrap
+    // flag stays off: the rule is not the edge of the screen.
+    let mut bytes = String::new();
+    for row in 1..=3 {
+        bytes.push_str(&format!("\x1b[{row};41H│"));
+    }
+    bytes.push_str("\x1b[1;1Hsee .claude/specs/rondo-geom-01-ordinary\r\n-ef.md now");
+    let terminal = terminal(80, 6, &bytes);
+    let expected = ".claude/specs/rondo-geom-01-ordinary-ef.md".to_owned();
+    assert_eq!(path_at(&terminal, 0, 10).unwrap().0, expected);
+    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, expected);
+    assert_eq!(terminal.link_at(Position::new(0, 0)), None, "the word before it");
+    let link = terminal.link_at(Position::new(1, 2)).unwrap();
+    let spans: Vec<(u16, u16, u16)> =
+        link.spans.iter().map(|span| (span.row, span.start, span.end)).collect();
+    assert_eq!(spans, [(0, 4, 40), (1, 0, 6)]);
+}
+
+#[test]
+fn a_path_broken_in_the_right_hand_columns_is_one_path() {
+    // The right side is continued by moving the cursor, not by a newline.
+    let mut bytes = String::new();
+    for row in 1..=3 {
+        bytes.push_str(&format!("\x1b[{row};41H│"));
+    }
+    bytes.push_str("\x1b[1;42HRIGHT .claude/specs/rondo-geom-01-ordin\x1b[2;42Hary-ef.md END");
+    let terminal = terminal(80, 6, &bytes);
+    let expected = ".claude/specs/rondo-geom-01-ordinary-ef.md".to_owned();
+    assert_eq!(path_at(&terminal, 0, 50).unwrap().0, expected);
+    assert_eq!(path_at(&terminal, 1, 45).unwrap().0, expected);
+}
+
+#[test]
+fn a_short_line_beside_a_vertical_rule_stays_on_its_own_row() {
+    let mut bytes = String::new();
+    for row in 1..=3 {
+        bytes.push_str(&format!("\x1b[{row};41H│"));
+    }
+    bytes.push_str("\x1b[1;1Hsrc/main.rs\x1b[2;1Hplot.png");
+    let terminal = terminal(80, 6, &bytes);
+    assert_eq!(path_at(&terminal, 0, 2).unwrap().0, "src/main.rs");
+    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, "plot.png");
+}
+
+#[test]
 fn a_line_that_merely_ends_at_the_edge_is_not_joined_to_the_next() {
     // Exactly twenty characters, then a newline: two lines, not one.
     let terminal = terminal(20, 4, "aaaaaaaaaa/bbbbbbbbb\r\nccc/ddd.txt\r\n");

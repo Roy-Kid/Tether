@@ -337,6 +337,10 @@ pub struct TerminalRenderer {
     size: SurfaceSize,
     baseline_cache: Option<(u32, u32, f32)>,
     metrics_cache: Option<(u32, FontMetrics)>,
+    /// The least margin round the grid, in pixels. `Some` centres the grid
+    /// and carries its edge backgrounds out to the surface's edges; `None`
+    /// draws it at the corner, for a consumer that lays out its own margin.
+    padding: Option<f32>,
     device_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
@@ -537,6 +541,7 @@ impl TerminalRenderer {
             wide_font_family: String::new(),
             baseline_cache: None,
             metrics_cache: None,
+            padding: None,
             device_error,
             swash: SwashCache::new(),
             atlas,
@@ -662,7 +667,12 @@ impl TerminalRenderer {
         #[cfg(feature = "diagnostics")]
         let layout_started = std::time::Instant::now();
         let metrics = self.measure(font_size)?;
-        let list = self.layout.prepare(frame, &metrics, palette, overlay, dirty);
+        let placement = self.padding.map(|inset| crate::Placement {
+            inset,
+            width: self.config.width as f32,
+            height: self.config.height as f32,
+        });
+        let list = self.layout.prepare_placed(frame, &metrics, palette, overlay, dirty, placement);
         #[cfg(feature = "diagnostics")]
         crate::diagnostics::record(
             "metrics_layout_ms",
@@ -930,6 +940,13 @@ impl TerminalRenderer {
         Ok(true)
     }
 
+    /// The least margin round the grid, in pixels: `Some` centres the grid
+    /// and carries its edge backgrounds to the surface's edges. A margin that
+    /// is not a finite, non-negative number of pixels is none.
+    pub fn set_padding(&mut self, padding: Option<f32>) {
+        self.padding = padding.filter(|value| value.is_finite() && *value >= 0.0);
+    }
+
     pub fn set_fonts(&mut self, primary: String, wide: String) {
         let primary = crate::fonts::family_name(&primary);
         let wide = crate::fonts::family_name(&wide);
@@ -1061,6 +1078,11 @@ fn build_buffer(fonts: &mut FontSystem, run: &TextRun, primary: &str, wide: &str
     // cursor, which is drawn on the cell grid. Multiplying back by the font
     // size makes the snap grid one column.
     buffer.set_monospace_width(Some(pitch * font_size));
+    // A tab in a cell is one column: the cursor jump already left blank
+    // cells after it. cosmic-text's default stop is eight columns, so the
+    // glyph after a tab lands past the run and the clip drops it. tmux
+    // moves with tabs, and that is the line that comes out in pieces.
+    buffer.set_tab_width(1);
 
     let chosen = if pitch > run.cell_width * 1.5 && !wide.is_empty() { wide } else { primary };
     let mut attrs = Attrs::new()
@@ -1138,6 +1160,21 @@ fn a_missing_face_is_not_sized_from_a_fallback() {
     let (mut fonts, _) = crate::fonts::snapshot();
     let error = measure_font(&mut fonts, 13.0, "Tether Missing Face", "").unwrap_err();
     assert!(matches!(error, RenderError::Font(_)), "{error}");
+}
+
+#[test]
+fn a_tab_stays_in_its_own_cell() {
+    let height = 13.0 * 1.2;
+    let pitch = 8.0;
+    // The spaces are the columns the cursor jumped. The tab must not jump
+    // again, or TEXT is drawn past the end of the run and clipped.
+    let text = "S1\t     TEXT";
+    let xs = glyph_xs(text, pitch, height);
+    assert_eq!(xs.len(), text.chars().count(), "xs {xs:?}");
+    for (i, x) in xs.iter().enumerate() {
+        let expect = i as f32 * pitch;
+        assert!((x - expect).abs() < 0.51, "glyph {i} at {x} expected {expect}");
+    }
 }
 
 #[test]

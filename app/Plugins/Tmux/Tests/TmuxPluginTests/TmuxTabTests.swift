@@ -191,6 +191,45 @@ struct TmuxTabTests {
     #expect(!tab.shellInputWaits)
     #expect(tab.error == nil)
   }
+
+  @Test("a shell beside a client lists that host's sessions before its own read")
+  func sessionsFollowTheHost() async throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let client = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    let shell = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    let elsewhere = try #require(plugin.attach(to: host.context(host: UUID())) as? TmuxTab)
+    client.sessions = [info("$1", "dev"), info("$2", "ops")]
+
+    #expect(shell.listedSessions.map(\.name) == ["dev", "ops"])
+    #expect(elsewhere.listedSessions.isEmpty, "another host's server is not this one")
+
+    shell.refresh()
+    #expect(shell.sessions.map(\.name) == ["dev", "ops"])
+    for _ in 0..<100 where shell.busy { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(shell.error == "Not connected.")
+    #expect(!shell.sessionsLoaded)
+    #expect(shell.sessions.map(\.name) == ["dev", "ops"], "a failed read keeps the host's list")
+  }
+
+  @Test("a refresh asked while busy runs once the operation finishes")
+  func refreshWaitsForTheOperation() async throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let client = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    let shell = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    client.sessions = [info("$3", "kept")]
+
+    shell.run { try await Task.sleep(for: .milliseconds(60)) }
+    #expect(shell.busy)
+    shell.refresh()
+    #expect(shell.busy)
+    #expect(shell.sessions.map(\.name) == ["kept"])
+
+    for _ in 0..<100 where shell.busy { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(shell.error == "Not connected.")
+    #expect(shell.sessions.map(\.name) == ["kept"])
+  }
 }
 
 @MainActor
@@ -439,5 +478,27 @@ struct PaneWheelTests {
     #expect(TmuxPaneDirectories.parse("") == nil)
     #expect(TmuxPaneDirectories.listCommand(session: "$2")?.contains("#{pane_current_path}") == true)
     #expect(TmuxPaneDirectories.listCommand(session: "$2'; touch /tmp/unsafe") == nil)
+  }
+
+  @Test("without a tty, a link is matched to the pane row that shows it")
+  func paneSearch() throws {
+    // Status on top: terminal row 12 is row 1 of the second pane.
+    let entries = try #require(TmuxPaneDirectories.parse("""
+      %0|0|0|80|9|0|0|0|0|0|19|top|on|/srv/first
+      %1|0|10|80|9|0|0|0|1|0|19|top|on|/srv/second
+      """))
+    let cell = try #require(TmuxPaneSearch.cell(in: entries, column: 4, row: 12))
+    #expect(cell.entry.directory == "/srv/second")
+    #expect(cell.row == 1)
+    #expect(TmuxPaneSearch.cell(in: entries, column: 4, row: 0) == nil, "status line")
+
+    let wrapped = TerminalLink(
+      text: "results/run-42/out.csv", kind: .path(path: "results/run-42/out.csv", line: nil, column: nil),
+      spans: [LinkSpan(row: 3, start: 70, end: 80), LinkSpan(row: 4, start: 0, end: 12)])
+    #expect(TmuxPaneSearch.fragment(of: wrapped) == "results/ru", "only what the first row draws")
+
+    #expect(TmuxPaneSearch.captureCommand(pane: "%1", row: 1) == "tmux capture-pane -p -t '%1' -S 1 -E 1")
+    #expect(TmuxPaneSearch.captureCommand(pane: "%1'; touch /tmp/unsafe", row: 1) == nil)
+    #expect(TmuxPaneSearch.captureCommand(pane: "%1", row: -1) == nil)
   }
 }

@@ -9,30 +9,117 @@ import TetherUI
 /// Drawn by the host, so a plugin can report status as data alone —
 /// `PluginStatusSegment` — without importing a UI framework, and so the lamp
 /// looks the same on a Mac and on a phone.
+/// One clock for the status ribbon and the tab mark of the same colour.
+enum StatusMotion {
+  /// Gray stays still. A saturated colour breathes; the same colour always
+  /// shares one period, so a tab mark and its ribbon band stay in phase.
+  nonisolated static func period(for color: UInt32) -> Double? {
+    let r = Double((color >> 16) & 0xFF)
+    let g = Double((color >> 8) & 0xFF)
+    let b = Double(color & 0xFF)
+    let maxC = max(r, g, b)
+    let minC = min(r, g, b)
+    let chroma = maxC - minC
+    guard chroma >= 28, maxC > 0 else { return nil }
+    let hue: Double
+    if r == maxC { hue = (g - b) / chroma }
+    else if g == maxC { hue = 2 + (b - r) / chroma }
+    else { hue = 4 + (r - g) / chroma }
+    let unit = ((hue.truncatingRemainder(dividingBy: 6)) + 6).truncatingRemainder(dividingBy: 6) / 6
+    return 0.9 + unit * 1.7
+  }
+
+  /// 0.72...1, or 1 when the colour does not move.
+  nonisolated static func pulse(color: UInt32, time: TimeInterval) -> Double {
+    guard let period = period(for: color), period > 0 else { return 1 }
+    let phase = (time / period).truncatingRemainder(dividingBy: 1)
+    return 0.72 + 0.28 * (0.5 + 0.5 * sin(phase * 2 * Double.pi))
+  }
+
+  /// 0...1 position of the glint, one trip every 1.8s.
+  nonisolated static func shimmer(time: TimeInterval) -> Double {
+    let phase = (time / 1.8).truncatingRemainder(dividingBy: 1)
+    return phase < 0 ? phase + 1 : phase
+  }
+}
+
 struct StatusRibbon: View {
   let segments: [PluginStatusSegment]
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private var shares: [(color: UInt32, weight: Double)] { Self.shares(for: segments) }
+  private var animates: Bool {
+    !reduceMotion && shares.contains { StatusMotion.period(for: $0.color) != nil }
+  }
 
   var body: some View {
     let dark = colorScheme == .dark
-    Capsule()
-      .fill(fill(dark: dark))
-      .overlay(Capsule().stroke(Theme.stroke.opacity(dark ? 0.45 : 0.30), lineWidth: 0.5))
-      .frame(height: Chrome.ribbonThickness)
-      .padding(.horizontal, 2)
-      .accessibilityHidden(true)
+    TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !animates)) { timeline in
+      band(dark: dark, time: animates ? timeline.date.timeIntervalSinceReferenceDate : nil)
+    }
+    .frame(height: Chrome.ribbonThickness)
+    .padding(.horizontal, 2)
+    .accessibilityHidden(true)
+  }
+
+  private func band(dark: Bool, time: TimeInterval?) -> some View {
+    let shape = Capsule()
+    return ZStack {
+      if let time {
+        GeometryReader { geo in
+          ZStack(alignment: .leading) {
+            HStack(spacing: 0) {
+              ForEach(Array(shares.enumerated()), id: \.offset) { _, share in
+                Rectangle()
+                  .fill(Self.color(share.color, dark: dark)
+                    .opacity(StatusMotion.pulse(color: share.color, time: time)))
+                  .frame(width: max(1, geo.size.width * share.weight))
+              }
+            }
+            shimmer(time: time, width: geo.size.width)
+          }
+        }
+      } else {
+        shape.fill(fill(dark: dark))
+      }
+    }
+    .clipShape(shape)
+    .overlay(shape.stroke(Theme.stroke.opacity(dark ? 0.45 : 0.30), lineWidth: 0.5))
+  }
+
+  private func shimmer(time: TimeInterval, width: CGFloat) -> some View {
+    let travel = width * 1.7
+    let x = -width * 0.35 + StatusMotion.shimmer(time: time) * travel
+    return LinearGradient(
+      colors: [.white.opacity(0), .white.opacity(colorScheme == .dark ? 0.22 : 0.16), .white.opacity(0)],
+      startPoint: .leading, endPoint: .trailing)
+      .frame(width: max(12, width * 0.45))
+      .offset(x: x)
+      .allowsHitTesting(false)
   }
 
   private func fill(dark: Bool) -> AnyShapeStyle {
     let stops = Self.stops(for: segments)
-    guard !stops.isEmpty else { return AnyShapeStyle(Self.color(Self.idle, dark: dark).opacity(0.55)) }
+    // Idle is a tint of the bar's own ink, as every other chrome fill is:
+    // a fixed grey on glass reads as a solid bar laid over the window.
+    guard !stops.isEmpty else { return AnyShapeStyle(Theme.text.opacity(UIStyle.pressedOpacity)) }
     return AnyShapeStyle(LinearGradient(
       stops: stops.map { Gradient.Stop(color: Self.color($0.color, dark: dark), location: $0.location) },
       startPoint: .leading, endPoint: .trailing))
   }
 
-  /// What an empty ribbon shows: something is reporting, nothing is happening.
-  nonisolated static let idle: UInt32 = 0x8E8E93
+  /// Normalised shares of the ribbon, in report order. Zero and non-finite
+  /// weights drop out, matching `stops(for:)`.
+  nonisolated static func shares(for segments: [PluginStatusSegment]) -> [(color: UInt32, weight: Double)] {
+    let visible = segments.filter { $0.weight.isFinite && $0.weight > 0 }
+    guard let largest = visible.map(\.weight).max(), largest > 0 else { return [] }
+    let scaled = visible.map { $0.weight / largest }
+    let total = scaled.reduce(0, +)
+    guard total > 0 else { return [] }
+    return zip(visible, scaled).map { ($0.0.color, $0.1 / total) }
+  }
+
   /// How much of the width, at most, two neighbours spend blending.
   nonisolated static let blend = 0.11
 

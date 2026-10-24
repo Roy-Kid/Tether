@@ -127,10 +127,16 @@ enum PackageValidator {
     guard endpoints.isEmpty || permissions.contains(.network) else {
       throw PackageFailure.unknownPermission("network")
     }
+    var settingsURL: URL?
+    if let declared = raw.settingsURL {
+      guard let window = PluginManifest.settingsWindow(declared) else { throw PackageFailure.malformed }
+      settingsURL = window
+    }
     return PluginManifest(
       id: raw.id, name: raw.name, publisher: raw.publisher, version: raw.version, api: raw.api,
       runtime: .web, entrypoint: raw.entrypoint, ageRating: raw.ageRating, link: link,
-      permissions: permissions, contributions: contributions, networkURLs: endpoints)
+      permissions: permissions, contributions: contributions, networkURLs: endpoints,
+      settingsURL: settingsURL)
   }
 
   private static func entrypoint(_ relative: String, in root: URL) throws -> URL {

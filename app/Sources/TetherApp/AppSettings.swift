@@ -331,7 +331,7 @@ struct AppSettings: View {
 
   @ViewBuilder
   private func sectionPage(_ section: Section) -> some View {
-    SettingsPage(title: section.title, subtitle: section.subtitle) {
+    SettingsPage(title: section.title, subtitle: section.subtitle, sharesTitleBar: true) {
       if section == .keyBindings {
         KeyBindingSettings(
           store: connections?.keyBindings ?? fallbackKeyBindings,
@@ -405,7 +405,19 @@ private struct SettingsSidebarLabel: View {
 private struct SettingsPage<Content: View>: View {
     let title: String
     let subtitle: String
+    /// A section's own page sits in the title bar's row, beside the traffic
+    /// lights, as nothing else is drawn there. A pushed page leaves that row
+    /// to its back button.
+    var sharesTitleBar = false
     @ViewBuilder var content: Content
+
+    private var inTitleBar: Bool {
+      #if os(macOS)
+        sharesTitleBar
+      #else
+        false
+      #endif
+    }
 
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
@@ -420,12 +432,13 @@ private struct SettingsPage<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, UIStyle.Space.wide)
-        .padding(.top, UIStyle.Space.page)
+        .padding(.top, inTitleBar ? UIStyle.Space.section : UIStyle.Space.page)
         .padding(.bottom, UIStyle.panelRadius)
 
         content
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
+      .ignoresSafeArea(.container, edges: inTitleBar ? .top : [])
       .background(Theme.window)
     }
   }

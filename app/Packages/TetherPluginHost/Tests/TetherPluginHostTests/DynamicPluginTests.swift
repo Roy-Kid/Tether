@@ -75,6 +75,50 @@ private func networkFixture(status: Bool = false) throws -> URL {
   #expect(throws: StreamFailure.tooLarge) { _ = try overlong.append(65) }
 }
 
+@MainActor private final class RecordingPoster: PluginPosting {
+  var urls: [URL] = []
+  var fails = false
+  func post(url: URL) async throws {
+    urls.append(url)
+    if fails { throw StreamFailure.invalidResponse }
+  }
+}
+
+@Test func aGrantedLoopbackOriginCoversLaterPathsOnThatPort() {
+  let stream = URL(string: "http://127.0.0.1:17890/v1/stream?surface=tether")!
+  let refresh = URL(string: "http://127.0.0.1:17890/v1/refresh")!
+  let other = URL(string: "http://127.0.0.1:9/v1/refresh")!
+  let expanded = NetworkEndpoint.expandGrants(declared: [stream, refresh, other], approved: [stream.absoluteString])
+  #expect(expanded.contains(refresh.absoluteString))
+  #expect(!expanded.contains(other.absoluteString))
+}
+
+@Test @MainActor func postUsesTheSameGrantAsTheStream() async throws {
+  let source = try networkFixture()
+  defer { try? FileManager.default.removeItem(at: source) }
+  let file = source.appending(path: "manifest.json")
+  var manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+  let refresh = "http://127.0.0.1:17890/v1/refresh"
+  manifest["networkURLs"] = [endpoint, refresh]
+  try JSONSerialization.data(withJSONObject: manifest).write(to: file)
+  let poster = RecordingPoster()
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter(), streaming: HoldingStream(), posting: poster)
+  let record = try host.install(directory: source)
+  let session = try await host.activate(id: record.id, runtime: EventRuntime())
+  let payload = JSONValue.object(["url": .string(refresh)])
+  #expect(await host.perform(request("network.post", session: session, payload: payload)).error == "consentDenied")
+  host.grantNetwork(pluginID: record.id, urls: [URL(string: endpoint)!])
+  #expect(await host.perform(request("network.post", session: session, payload: payload)).error == "consentDenied")
+  let foreign = await host.perform(request("network.post", session: session,
+    payload: .object(["url": .string("http://127.0.0.1:17890/v1/jobs")])))
+  #expect(foreign.error == "permissionDenied")
+  host.grantNetwork(pluginID: record.id, urls: record.manifest.networkURLs)
+  #expect(await host.perform(request("network.post", session: session, payload: payload)).ok)
+  #expect(poster.urls.map(\.absoluteString) == [refresh])
+  poster.fails = true
+  #expect(await host.perform(request("network.post", session: session, payload: payload)).error == "unavailable")
+}
+
 @Test func endpointsDoNotGrantArbitraryNetworking() {
   for text in ["file:///etc/passwd", "http://example.com/stream", "https://user:password@example.com/s", "http://127.0.0.1/s#fragment"] {
     #expect(!NetworkEndpoint.valid(URL(string: text)!))
@@ -171,6 +215,31 @@ private func networkFixture(status: Bool = false) throws -> URL {
     try await host.activate(id: record.id, runtime: IdleRuntime())
   }
   #expect(host.liveSessions.isEmpty)
+}
+
+@Test @MainActor func aBrokenManifestIsToldInsideThePlugin() async throws {
+  let source = try Fixture.make(contributions: #"[{"kind":"statusBar","id":"status/main"}]"#)
+  defer { try? FileManager.default.removeItem(at: source) }
+  let presenter = RecordedPresenter()
+  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: presenter)
+  let record = try host.install(directory: source)
+  let manifest = source.appending(path: "manifest.json")
+  let text = try String(contentsOf: manifest, encoding: .utf8).replacingOccurrences(of: "0.1.0", with: "9.9.9")
+  try Data(text.utf8).write(to: manifest)
+  let plugin = WebPlugin(record: record, host: host)
+  plugin.activate()
+  let workspace = try #require(plugin.statusBarWorkspace())
+  defer { workspace.close(); plugin.deactivate() }
+
+  // The panel body is this sentence. SwiftUI Text is not an AppKit field.
+  var message: String?
+  for _ in 0..<50 {
+    message = plugin.activationFailure(in: workspace)
+    if message != nil { break }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(message == "The plugin manifest is invalid or has changed since installation.")
+  #expect(presenter.notes.isEmpty)
 }
 
 @Test @MainActor func webPageReceivesUTF8StreamAndReportsStatus() async throws {

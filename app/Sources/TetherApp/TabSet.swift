@@ -169,8 +169,8 @@ final class TabSet {
     if let index = workspaces.firstIndex(where: { $0.id == page.id }) {
       let panes: WorkspaceSplit
       switch direction {
-      case .left, .up: panes = .split(direction, .tab(newTab.id), .tab(id))
-      case .right, .down: panes = .split(direction, .tab(id), .tab(newTab.id))
+      case .left, .up: panes = .split(direction, .tab(newTab.id), .tab(id), 0.5)
+      case .right, .down: panes = .split(direction, .tab(id), .tab(newTab.id), 0.5)
       }
       workspaces[index].layout = base.replacing(id, with: panes)
     }
@@ -188,6 +188,46 @@ final class TabSet {
       tab = SessionTab(host: host, password: "", known: known, name: nextName(for: host))
     }
     split(tab, beside: id, direction: direction)
+  }
+
+  /// Move an existing terminal to one side of another. Same host only.
+  /// The session stays; only the layout changes. Dropping a tab on itself does nothing.
+  @discardableResult
+  func place(_ dragged: UUID, beside target: UUID, edge: SplitDirection) -> Bool {
+    guard dragged != target,
+      let moving = tabs.first(where: { $0.id == dragged }),
+      let staying = tabs.first(where: { $0.id == target }),
+      moving.host.id == staying.host.id,
+      workspace(containing: dragged) != nil,
+      workspace(containing: target) != nil
+    else { return false }
+
+    if let source = workspaces.firstIndex(where: { $0.terminalIDs.contains(dragged) }) {
+      workspaces[source].terminalIDs.removeAll { $0 == dragged }
+      let remaining = workspaces[source].layout?.removing(dragged)
+      workspaces[source].layout = (remaining?.ids.count ?? 0) > 1 ? remaining : nil
+      if workspaces[source].terminalIDs.isEmpty {
+        workspaces.remove(at: source)
+      } else if workspaces[source].focused == dragged {
+        let next = remaining?.ids.first ?? workspaces[source].terminalIDs[0]
+        workspaces[source].focused = next
+      }
+    }
+    guard let page = workspaces.firstIndex(where: { $0.terminalIDs.contains(target) }) else { return false }
+    if !workspaces[page].terminalIDs.contains(dragged) {
+      workspaces[page].terminalIDs.append(dragged)
+    }
+    let current = workspaces[page].layout ?? .tab(target)
+    let rooted = current.ids.contains(target) ? current : .tab(target)
+    let panes: WorkspaceSplit = switch edge {
+    case .left, .up: .split(edge, .tab(dragged), .tab(target), 0.5)
+    case .right, .down: .split(edge, .tab(target), .tab(dragged), 0.5)
+    }
+    workspaces[page].layout = rooted.replacing(target, with: panes)
+    workspaces[page].focused = dragged
+    select(dragged)
+    persistHistory()
+    return true
   }
 
   func joinSplits() {
@@ -397,17 +437,79 @@ final class TabSet {
   }
 
   /// Switch the window to this host, restoring its last tab. Does not connect.
+  ///
+  /// Goes through `select` so the page's focused pane, and the split that
+  /// belongs to it, are the ones that come back on screen.
   func show(_ host: Host) {
     if let current = currentHost, current.id != host.id {
       lastByHost[current.id] = selected
     }
     currentHost = host
     remember(host.id)
-    if let restored = lastByHost[host.id], (tabs.contains { $0.id == restored && $0.host.id == host.id } || visibleIDs.contains(restored)) {
-      selected = restored
+    let saved = lastByHost[host.id]
+    let known = saved.map { id in
+      tabs.contains { $0.id == id && $0.host.id == host.id } || visibleIDs.contains(id)
+    } ?? false
+    if let saved, known {
+      select(saved)
+    } else if let restored = visibleWorkspaces.last?.focused ?? visibleExtensions.last?.id {
+      select(restored)
     } else {
-      selected = visibleWorkspaces.last?.focused ?? visibleExtensions.last?.id
+      selected = nil
+      accessory = nil
+      tabMenu = nil
     }
+    // The tab still carries the host it opened with. The window shows the
+    // one the person just picked, label and all.
+    currentHost = host
+  }
+
+  /// Writes a pane drag into the page that owns it. Disk follows `commitLayout`.
+  func replaceLayout(of workspace: UUID, with layout: WorkspaceSplit) {
+    guard let index = workspaces.firstIndex(where: { $0.id == workspace }) else { return }
+    workspaces[index].layout = layout
+  }
+
+  func commitLayout() { persistHistory() }
+
+  /// This machine, including the `.local` name a shell and a hook spell differently.
+  nonisolated static func sameMachine(_ reported: String, _ local: String) -> Bool {
+    if LocalMachine.same(reported, local) { return true }
+    let reported = reported.lowercased()
+    let local = local.lowercased()
+    if reported == local { return true }
+    func strip(_ value: String) -> String {
+      value.hasSuffix(".local") ? String(value.dropLast(".local".count)) : value
+    }
+    let short = strip(reported)
+    return !short.isEmpty && short == strip(local)
+  }
+
+  /// Land on the shell a status row named. A named terminal is that tty only.
+  /// A directory is used when the row named no terminal.
+  @discardableResult
+  func focusSession(host: String?, terminal: String?, directory: String?) -> Bool {
+    if let host, let terminal {
+      guard let tab = tabs.first(where: { tab in
+        guard let identity = tab.pluginTerminalIdentity else { return false }
+        return identity.terminal == terminal && Self.sameMachine(identity.host, host)
+      }) else { return false }
+      select(tab.id)
+      return true
+    }
+    guard let directory, !directory.isEmpty else { return false }
+    let wanted = URL(fileURLWithPath: directory).standardizedFileURL.path
+    let matches = tabs.filter { tab in
+      guard let cwd = tab.workingDirectory else { return false }
+      return URL(fileURLWithPath: cwd).standardizedFileURL.path == wanted
+    }
+    if let current = tabs.first(where: { $0.id == selected }), matches.contains(where: { $0.id == current.id }) {
+      select(current.id)
+      return true
+    }
+    guard let tab = matches.first else { return false }
+    select(tab.id)
+    return true
   }
 
   func select(_ requested: UUID) {
@@ -589,6 +691,21 @@ final class TabSet {
     guard !ids.isEmpty else { return }
     let index = selected.flatMap { ids.firstIndex(of: $0) } ?? 0
     select(ids[(index + (forward ? 1 : ids.count - 1)) % ids.count])
+  }
+
+  /// The tab bar's close box, and a middle-click on a chip.
+  ///
+  /// A chip is one terminal. Closing it folds that pane and leaves the
+  /// others; the question names that terminal. Closing every pane on the
+  /// page is Close Tab.
+  func requestCloseFromTabBar(_ id: UUID) {
+    if workspaces.contains(where: { $0.terminalIDs.contains(id) }) {
+      requestClose(id)
+    } else if let page = workspaces.first(where: { $0.id == id }) {
+      requestClose(page.focused)
+    } else {
+      requestClose(id)
+    }
   }
 
   func requestCloseWorkspace(_ id: UUID) {

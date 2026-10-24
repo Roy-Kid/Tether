@@ -1066,6 +1066,26 @@ struct FileCacheTests {
     #expect(other.cached(elsewhere) != nil)
   }
 
+  /// The one thing done to the cache by hand. Every host's previews go, what
+  /// they took is reported before and after, and the next look fetches again
+  /// without a launch in between.
+  @Test("clearing removes every host's previews and reports the room they took")
+  func clearingRemovesEveryPreview() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-clear-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(LocalCopies.previewBytes(in: base) == 0, "nothing yet, and no folder to walk")
+    let lab = FileCache(host: UUID(), base: base), other = FileCache(host: UUID(), base: base)
+    try Data(count: 600).write(to: lab.location(for: entry("/a.bin")))
+    try Data(count: 400).write(to: other.location(for: entry("/b.bin")))
+    #expect(LocalCopies.previewBytes(in: base) == 1000)
+    LocalCopies.clearPreviews(in: base)
+    #expect(LocalCopies.previewBytes(in: base) == 0)
+    #expect(lab.cached(entry("/a.bin")) == nil)
+    #expect(other.cached(entry("/b.bin")) == nil)
+    try Data(count: 5).write(to: lab.location(for: entry("/c.bin")))
+    #expect(lab.cached(entry("/c.bin")) != nil, "usable again at once")
+  }
+
   /// A placeholder or a received file outlives its run only by accident.
   @Test("leftovers from an earlier run are swept")
   func leftoversAreSwept() throws {

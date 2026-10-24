@@ -11,10 +11,13 @@ public final class PluginHost: PluginBridge {
 
   public var onStatus: (@MainActor (String, JSONValue) -> Void)?
   public var onTabIndicators: (@MainActor (UUID, String, [PluginTabIndicator]) -> Void)?
+  public var onFocus: (@MainActor (PluginFocusRequest) -> String)?
+  /// Test hook. When nil, a settings request opens the manifest URL.
+  public var onOpenSettings: (@MainActor (URL) -> Void)?
 
-  public init(api: PluginAPI, streaming: any PluginStreaming = HTTPEventStream()) {
+  public init(api: PluginAPI, streaming: any PluginStreaming = HTTPEventStream(), posting: any PluginPosting = HTTPPoster()) {
     self.api = api
-    gateway = CapabilityGateway(consent: api.consent, api: api, streaming: streaming)
+    gateway = CapabilityGateway(consent: api.consent, api: api, streaming: streaming, posting: posting)
     api.gateway = gateway
     gateway.emit = { [weak self] session, event in
       guard let runtime = self?.runtimes[session] else { return }
@@ -26,6 +29,14 @@ public final class PluginHost: PluginBridge {
     }
     gateway.tabIndicators = { [weak self] session, pluginID, items in
       self?.onTabIndicators?(session, pluginID, items)
+    }
+    gateway.focus = { [weak self] request in
+      self?.onFocus?(request) ?? "none"
+    }
+    gateway.openSettings = { [weak self] url in
+      guard let self else { return }
+      if let onOpenSettings = self.onOpenSettings { onOpenSettings(url); return }
+      HostLinks.open(url)
     }
   }
 
@@ -42,9 +53,9 @@ public final class PluginHost: PluginBridge {
 
   public convenience init(
     consent: any ConsentAsking, presenting: (any PluginPresenting)? = nil,
-    streaming: any PluginStreaming = HTTPEventStream()
+    streaming: any PluginStreaming = HTTPEventStream(), posting: any PluginPosting = HTTPPoster()
   ) {
-    self.init(api: PluginAPI(consent: consent, presenting: presenting), streaming: streaming)
+    self.init(api: PluginAPI(consent: consent, presenting: presenting), streaming: streaming, posting: posting)
   }
 
   public func authorizeNetwork(_ manifest: PluginManifest) async -> Bool {

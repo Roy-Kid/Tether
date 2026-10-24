@@ -12,7 +12,12 @@ import TetherUI
 @MainActor @Observable
 public final class TmuxTab: TabAttachment {
   public let tab: TabContext
-  public var sessions: [TmuxSessionInfo] = []
+  public var sessions: [TmuxSessionInfo] = [] {
+    didSet { rememberSessions(sessions) }
+  }
+  /// Set once a list has been read on this tab. Until then an empty `sessions`
+  /// is "not loaded", and the host's last list stands in for it.
+  private(set) var sessionsLoaded = false
   /// The session a tmux client on this tab's own shell tty is showing.
   public var shellSessionID: String?
   public var error: String?
@@ -26,12 +31,17 @@ public final class TmuxTab: TabAttachment {
   public var renaming: TmuxRename?
   private var shellSessionName = ""
   private var operation: Task<Void, Never>?
-  private var closed = false
+  private(set) var closed = false
   private let creation = SessionCreation()
   /// The tab, if any, whose shell is this session. One server's `$0` is not
   /// another's; the plugin matches host as well as id.
   private let owner: (String) -> TmuxTab?
   private let onClose: () -> Void
+  private let rememberSessions: ([TmuxSessionInfo]) -> Void
+  private let recalledSessions: () -> [TmuxSessionInfo]
+  /// A refresh that arrived while an operation was running. `run` drops a
+  /// second call, so the list would otherwise stay whatever the first one saw.
+  private var refreshPending = false
   /// The tty `shellSessionID` was learned from. A wheel is taken only while
   /// the shell is still that tty.
   private var shellTTY: String?
@@ -54,11 +64,19 @@ public final class TmuxTab: TabAttachment {
   private var paneTask: Task<Void, Never>?
   private var paneGeneration = 0
 
-  init(tab: TabContext, owner: @escaping (String) -> TmuxTab?, onClose: @escaping () -> Void) {
+  init(
+    tab: TabContext,
+    owner: @escaping (String) -> TmuxTab?,
+    onClose: @escaping () -> Void,
+    rememberSessions: @escaping ([TmuxSessionInfo]) -> Void = { _ in },
+    recalledSessions: @escaping () -> [TmuxSessionInfo] = { [] }
+  ) {
     self.tab = tab
     self.connection = tab.plugin.connection
     self.owner = owner
     self.onClose = onClose
+    self.rememberSessions = rememberSessions
+    self.recalledSessions = recalledSessions
   }
 
   // MARK: - TabAttachment
@@ -67,7 +85,7 @@ public final class TmuxTab: TabAttachment {
   /// terminal is showing.
   public var isShowing: Bool { false }
   /// While this shell is a tmux client, the tab wears the plugin's mark.
-  public var symbol: String { shellSessionID == nil ? "" : "rectangle.split.2x2" }
+  public var symbol: String { shellSessionID == nil ? "" : TmuxPlugin.symbol }
   public var subtitle: String {
     guard let id = shellSessionID else { return "" }
     return sessions.first { $0.id == id }?.name ?? shellSessionName
@@ -99,7 +117,7 @@ public final class TmuxTab: TabAttachment {
       connection = leased
     }
     run { [self] in
-      sessions = try await lease().tmuxSessions()
+      store(try await lease().tmuxSessions())
       guard !closed, !Task.isCancelled else { return }
       guard let restored = sessions.first(where: {
         $0.id == saved.sessionID && $0.name == saved.sessionName
@@ -146,7 +164,14 @@ public final class TmuxTab: TabAttachment {
   public func inspector() -> AnyView { AnyView(TmuxPicker(model: self)) }
   public func accessoryContent() -> AnyView { AnyView(TmuxPicker(model: self)) }
   public func workingDirectory(for link: TerminalLink?) async -> String? {
-    guard !closed, let connection, let tty = tab.terminalName() else { return nil }
+    guard !closed, let connection else { return nil }
+    // A remote shell's tty is a guess that can fail, most often with two
+    // tabs of one size on one connection. tmux can still say which pane
+    // shows this text where it was pointed at.
+    guard let tty = tab.terminalName() else {
+      guard let link else { return nil }
+      return await directory(showing: link, on: connection)
+    }
     // Ask the client again: panes and windows can change through tmux's
     // own keys or another client, without any command passing through us.
     guard let session = try? await connection.tmuxSession(forClientTTY: tty),
@@ -168,6 +193,9 @@ public final class TmuxTab: TabAttachment {
     shellLookup = nil
     shellScrollTask?.cancel()
     forgetShellClient()
+    // The picker may have listed before this lease existed. That attempt
+    // fails, and a refresh started while it was in flight used to be dropped.
+    refresh()
   }
   public func close() {
     closed = true
@@ -300,6 +328,9 @@ public final class TmuxTab: TabAttachment {
         self?.error = error.localizedDescription
       }
       self?.busy = false
+      let pending = self?.refreshPending == true
+      self?.refreshPending = false
+      if pending { self?.refresh() }
     }
   }
 
@@ -310,12 +341,31 @@ public final class TmuxTab: TabAttachment {
     return connection
   }
 
+  /// Sessions to show. This tab's own list once a read has finished; until
+  /// then, the list already read on this host, so a shell beside a client
+  /// is not an empty server.
+  var listedSessions: [TmuxSessionInfo] {
+    if sessionsLoaded || !sessions.isEmpty { return sessions }
+    return recalledSessions()
+  }
+
   public func refresh() {
+    guard !closed else { return }
+    // Show the host's list on the first frame. A failed read leaves it;
+    // a finished one replaces it.
+    if !sessionsLoaded, sessions.isEmpty {
+      let remembered = recalledSessions()
+      if !remembered.isEmpty { sessions = remembered }
+    }
+    guard !busy else {
+      refreshPending = true
+      return
+    }
     run { [self] in
       missing = false
       do {
         let connection = try lease()
-        sessions = try await connection.tmuxSessions()
+        store(try await connection.tmuxSessions())
         if let tty = tab.terminalName() {
           noteShellClient(tty: tty, session: try? await connection.tmuxSession(forClientTTY: tty))
         } else {
@@ -330,6 +380,12 @@ public final class TmuxTab: TabAttachment {
         throw error
       }
     }
+  }
+
+  /// Keeps a list this tab read, and the host's copy of it.
+  private func store(_ listed: [TmuxSessionInfo]) {
+    sessions = listed
+    sessionsLoaded = true
   }
 
   /// Reports success only after the new session is running in this terminal.
@@ -360,7 +416,7 @@ public final class TmuxTab: TabAttachment {
       if let other = owner(ending.id), other !== self, other.shellSessionID == ending.id {
         other.forgetShellClient()
       }
-      sessions = try await connection.tmuxSessions()
+      store(try await connection.tmuxSessions())
     }
   }
 
@@ -370,7 +426,7 @@ public final class TmuxTab: TabAttachment {
     run { [self] in
       let connection = try lease()
       try await connection.endTmuxWindow(id: window.id)
-      sessions = try await connection.tmuxSessions()
+      store(try await connection.tmuxSessions())
     }
   }
 
@@ -383,7 +439,7 @@ public final class TmuxTab: TabAttachment {
           throw TmuxTabError.rejected(TmuxCommands.rejectedName)
         }
         try await exec(command)
-        sessions = try await lease().tmuxSessions()
+        store(try await lease().tmuxSessions())
       }
     }
   }
@@ -392,7 +448,7 @@ public final class TmuxTab: TabAttachment {
     run { [self] in
       let connection = try lease()
       try await connection.renameTmux(sessionID: renamed.id, name: name)
-      sessions = try await connection.tmuxSessions()
+      store(try await connection.tmuxSessions())
       if shellSessionID == renamed.id { shellSessionName = name }
     }
   }

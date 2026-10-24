@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import TetherPluginKit
+import TetherUI
 
 /// Adapts an installed manifest to the same UI contract as built-in extensions.
 @MainActor @Observable
@@ -30,6 +31,20 @@ public final class WebPlugin: TetherPlugin {
                    symbol: "puzzlepiece.extension", summary: "\(record.manifest.publisher) · \(record.manifest.version)")
   }
   public var needsRemoteConnection: Bool { false }
+
+  /// Right-click Settings… and the Extensions row both open the native window.
+  /// The page does not get a second preferences form.
+  public func statusBarSettings() -> (() -> Void)? {
+    guard let url = record.manifest.settingsURL else { return nil }
+    return { HostLinks.open(url) }
+  }
+
+  public func settings() -> AnyView {
+    guard let url = record.manifest.settingsURL else {
+      return AnyView(Text("No additional settings"))
+    }
+    return AnyView(NativeSettingsLink(name: record.manifest.name, url: url))
+  }
   public var isStatusBarOnly: Bool {
     record.manifest.contributions.allSatisfy { $0.kind == .statusBar }
   }
@@ -49,8 +64,7 @@ public final class WebPlugin: TetherPlugin {
         guard enabled, !Task.isCancelled else { host.unload(session: session); return }
         background = session
       } catch {
-        guard enabled, !Task.isCancelled else { return }
-        await report(error)
+        // The panel says why, when someone opens it. The host does not banner this.
       }
     }
   }
@@ -77,6 +91,11 @@ public final class WebPlugin: TetherPlugin {
   public func statusBarWorkspace() -> (any PluginWorkspace)? {
     enabled ? makeWorkspace(compact: true) : nil
   }
+  /// The sentence the open panel shows when this plugin cannot start.
+  func activationFailure(in workspace: any PluginWorkspace) -> String? {
+    (workspace as? WebPluginWorkspace)?.failure
+  }
+
   public func receiveStatus(_ item: PluginStatusBarItem) {
     guard enabled, item != statusBarItem else { return }
     statusBarItem = item
@@ -106,9 +125,20 @@ public final class WebPlugin: TetherPlugin {
     let label = String((payload.key("label")?.string ?? record.manifest.name).prefix(256))
     receiveStatus(PluginStatusBarItem(id: record.id, label: label, segments: segments))
   }
+}
 
-  private func report(_ error: Error) async {
-    await host.api.notify(title: record.manifest.name, body: error.localizedDescription)
+/// One control. Clicking it leaves Tether and opens the app that owns the URL.
+private struct NativeSettingsLink: View {
+  let name: String
+  let url: URL
+
+  var body: some View {
+    Button {
+      HostLinks.open(url)
+    } label: {
+      Label("Open \(name) Settings", systemImage: "gearshape")
+    }
+    .help("Opens the \(name) settings window")
   }
 }
 
@@ -125,6 +155,8 @@ private final class WebPluginWorkspace: PluginWorkspace {
   private let environment: PluginEnvironment
   private let reconnect: (@MainActor () async throws -> Void)?
   private let onClose: (UUID) -> Void
+  /// Why this panel has no page. Nil while it is loading or showing one.
+  fileprivate var failure: String?
   var title: String { record.manifest.name }
   var subtitle: String { "" }
   var symbol: String { "puzzlepiece.extension" }
@@ -149,8 +181,7 @@ private final class WebPluginWorkspace: PluginWorkspace {
         session = opened
       } catch {
         guard !closed, !Task.isCancelled else { return }
-        await host.api.notify(title: record.manifest.name, body: error.localizedDescription)
-        close()
+        failure = error.localizedDescription
       }
     }
   }
@@ -163,7 +194,14 @@ private final class WebPluginWorkspace: PluginWorkspace {
     var body: some View {
       Group {
         if workspace.closed { Color.clear }
-        else if let session = workspace.session {
+        else if let failure = workspace.failure {
+          Text(failure)
+            .font(UIStyle.input)
+            .foregroundStyle(Theme.text)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(UIStyle.Space.section)
+        } else if let session = workspace.session {
           PluginSurface(runtime: workspace.runtime, session: session)
         } else {
           ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
