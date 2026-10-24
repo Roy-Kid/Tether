@@ -15,6 +15,20 @@ extension MacUITests {
 @MainActor
 @Suite("Unix picker navigation", .serialized)
 struct PaletteNavigationTests {
+  /// Lets SwiftUI apply what just changed. Run with the whole suite, the
+  /// main thread is shared with other window tests, so a fixed pause is a
+  /// guess: this forces the hosting view to lay out and draw, and polls
+  /// `done` until it holds.
+  private func settle(_ window: NSWindow, until done: () -> Bool = { true }) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    repeat {
+      window.contentView?.layoutSubtreeIfNeeded()
+      window.displayIfNeeded()
+      if done() { return }
+      try await Task.sleep(for: .milliseconds(20))
+    } while ContinuousClock.now < deadline
+  }
+
   private func findField(in view: NSView) -> NSTextField? {
     if let field = view as? NSTextField, field.isEditable { return field }
     return view.subviews.lazy.compactMap { findField(in: $0) }.first
@@ -35,7 +49,7 @@ struct PaletteNavigationTests {
     monitor.handle = { _, _, _ in workspaceActions += 1; return true }
     window.orderFrontRegardless()
     defer { monitor.stop(); window.orderOut(nil) }
-    try await Task.sleep(for: .milliseconds(300))
+    try await settle(window) { findField(in: window.contentView!) != nil }
     let field = try #require(findField(in: window.contentView!))
     window.makeFirstResponder(field)
     let editor = try #require(field.currentEditor() as? NSTextView)
@@ -61,6 +75,7 @@ struct PaletteNavigationTests {
     // The focused search editor keeps ordinary numbers, then narrows the list.
     editor.insertText("10", replacementRange: editor.selectedRange())
     try await Task.sleep(for: .milliseconds(100))
+    try await settle(window)
     #expect(state.query == "10")
     #expect(monitor.route(try event("1")) == nil)
     #expect(state.chosen.last == "item-10")
@@ -70,6 +85,7 @@ struct PaletteNavigationTests {
 
     state.query = "no matches"
     try await Task.sleep(for: .milliseconds(100))
+    try await settle(window)
     #expect(monitor.route(try event("1")) == nil)
     #expect(state.chosen.count == 4)
     editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
@@ -111,7 +127,7 @@ struct PaletteNavigationTests {
     window.contentView = NSHostingView(rootView: HostPicker(tabs: tabs, store: store))
     window.orderFrontRegardless()
     defer { window.orderOut(nil) }
-    try await Task.sleep(for: .milliseconds(300))
+    try await settle(window)
     let key = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
       timestamp: 0, windowNumber: window.windowNumber, context: nil,
       characters: "1", charactersIgnoringModifiers: "1", isARepeat: false, keyCode: 18))
@@ -125,6 +141,7 @@ struct PaletteNavigationTests {
     let editor = try #require(field.currentEditor() as? NSTextView)
     editor.insertText("Alpha", replacementRange: editor.selectedRange())
     try await Task.sleep(for: .milliseconds(100))
+    try await settle(window)
     #expect(PickerShortcuts.handle(key))
     #expect(tabs.intent == .connect(savedFirst))
     #expect(!tabs.hostPicker)
@@ -146,7 +163,7 @@ struct PaletteNavigationTests {
       onCancel: { cancelled = true }))
     window.orderFrontRegardless()
     defer { window.orderOut(nil) }
-    try await Task.sleep(for: .milliseconds(300))
+    try await settle(window) { findField(in: window.contentView!) != nil }
     let field = try #require(findField(in: window.contentView!))
     window.makeFirstResponder(field)
     let editor = try #require(field.currentEditor() as? NSTextView)

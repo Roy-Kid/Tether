@@ -120,8 +120,14 @@ struct CloseCheckTests {
     var runs = 0
   }
 
+  /// How long a check may take to come back. Long because the suite is run
+  /// whole: "Tab strip clicks" holds the main thread for about eleven seconds
+  /// in nested run loops, and a check queued behind it on the main actor
+  /// cannot answer until that suite lets go. A hang still fails.
+  static let patience: Duration = .seconds(30)
+
   private func settle(_ check: CloseCheck, until done: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    let deadline = ContinuousClock.now.advanced(by: Self.patience)
     while !done() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
   }
 
@@ -192,7 +198,7 @@ struct CloseCheckTests {
     // A waiting shell can briefly be running while ps samples it. Establish
     // an actual idle answer ahead of the close, rather than assuming the
     // first sample is idle because an earlier, independent listing was.
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    let deadline = ContinuousClock.now.advanced(by: Self.patience)
     repeat {
       let previous = probe.runs
       check.noteActivity()
@@ -209,7 +215,7 @@ struct CloseCheckTests {
     try session.send(.key(.enter))
     check.noteActivity()
     var running: ShellActivity = .idle
-    let busy = ContinuousClock.now.advanced(by: .seconds(10))
+    let busy = ContinuousClock.now.advanced(by: Self.patience)
     repeat {
       running = await check.activity()
       if running == .running(["sleep"]) { break }

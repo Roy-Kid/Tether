@@ -718,7 +718,9 @@
     private var symbols: [ObjectIdentifier: String] = [:]
     private var widths: [NSLayoutConstraint] = []
     private var stackSpacing: UIStackView?
-    private var sideInset: NSLayoutConstraint?
+    /// Scroll to the safe area's left, between the row and the hide key,
+    /// and the hide key to the right.
+    private var sideInsets: [NSLayoutConstraint] = []
     private var verticalInsets: [NSLayoutConstraint] = []
 
     /// Height of one row on this device, from the text size it is using.
@@ -759,10 +761,14 @@
         key(symbol: "arrow.down", named: "Down") { [weak self] in self?.onKey(.down) },
         key(symbol: "arrow.up", named: "Up") { [weak self] in self?.onKey(.up) },
         key(symbol: "arrow.right", named: "Right") { [weak self] in self?.onKey(.right) },
-        key(symbol: "keyboard.chevron.compact.down", named: "Hide keyboard") {
-          [weak self] in self?.onDismiss()
-        },
       ])
+      // Pinned at the right, outside the scrolling row: the way out of the
+      // keyboard is never scrolled off screen.
+      let hide = key(symbol: "keyboard.chevron.compact.down", named: "Hide keyboard") {
+        [weak self] in self?.onDismiss()
+      }
+      hide.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(hide)
       let scroll = UIScrollView()
       scroll.showsHorizontalScrollIndicator = false
       scroll.alwaysBounceHorizontal = false
@@ -774,7 +780,7 @@
       stack.translatesAutoresizingMaskIntoConstraints = false
       scroll.addSubview(stack)
       stackSpacing = stack
-      keys = stack.arrangedSubviews.compactMap { $0 as? UIButton }
+      keys = stack.arrangedSubviews.compactMap { $0 as? UIButton } + [hide]
       widths = keys.map { button in
         let width = button.widthAnchor.constraint(greaterThanOrEqualToConstant: touch)
         width.isActive = true
@@ -782,17 +788,25 @@
       }
       let fill = stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)
       fill.priority = .defaultHigh
-      let availableWidth = scroll.widthAnchor.constraint(
-        equalTo: safeAreaLayoutGuide.widthAnchor, constant: -gap * 2)
-      availableWidth.priority = .defaultHigh
+      // As wide as the keys it sits beside while they fill the row.
+      let sameWidth = hide.widthAnchor.constraint(equalTo: control.widthAnchor)
+      sameWidth.priority = .defaultHigh
+      let leading = scroll.leadingAnchor.constraint(
+        equalTo: safeAreaLayoutGuide.leadingAnchor, constant: gap)
+      let between = hide.leadingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: gap)
+      let trailing = hide.trailingAnchor.constraint(
+        equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -gap)
       let top = scroll.topAnchor.constraint(equalTo: topAnchor, constant: gap)
       let bottom = scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gap)
-      sideInset = availableWidth
+      sideInsets = [leading, between, trailing]
       verticalInsets = [top, bottom]
       NSLayoutConstraint.activate([
-        scroll.centerXAnchor.constraint(equalTo: safeAreaLayoutGuide.centerXAnchor),
-        scroll.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor),
-        scroll.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor),
+        leading,
+        between,
+        trailing,
+        hide.topAnchor.constraint(equalTo: scroll.topAnchor),
+        hide.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
+        sameWidth,
         top,
         bottom,
         stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
@@ -801,7 +815,6 @@
         stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
         stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
         fill,
-        availableWidth,
       ])
       restyle()
       registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: KeyBar, _: UITraitCollection) in
@@ -817,7 +830,9 @@
     private func restyle() {
       stackSpacing?.spacing = gap
       for constraint in widths { constraint.constant = touch }
-      sideInset?.constant = -gap * 2
+      for (index, constraint) in sideInsets.enumerated() {
+        constraint.constant = index == sideInsets.count - 1 ? -gap : gap
+      }
       for (index, constraint) in verticalInsets.enumerated() {
         constraint.constant = index == 0 ? gap : -gap
       }

@@ -477,12 +477,24 @@ mod tests {
         )
     }
 
+    /// A private database holding `tables` as one font, as CoreText hands
+    /// them over. Never the shared catalogue: other tests read its generation.
+    fn database_of(tables: &[(u32, Vec<u8>)]) -> fontdb::Database {
+        let mut builder = write_fonts::FontBuilder::new();
+        for (tag, data) in tables {
+            builder.add_raw(write_fonts::types::Tag::new(&tag.to_be_bytes()), data.clone());
+        }
+        let mut db = fontdb::Database::new();
+        db.load_font_source(fontdb::Source::Binary(std::sync::Arc::new(builder.build())));
+        db
+    }
+
     #[test]
-    fn a_face_with_no_outline_this_renderer_draws_is_refused() {
+    fn a_face_with_no_outline_this_renderer_draws_is_left_out() {
         let Some(tables) = system_font_tables() else { return };
-        // iOS ships PingFang with Apple's `hvgl` outlines only. A face
-        // registered without outlines it can paint would be chosen for its
-        // cmap and then draw every glyph as nothing.
+        // iOS ships PingFang with Apple's `hvgl` outlines only. A face kept
+        // without outlines it can paint would be chosen for its cmap and
+        // then draw every glyph as nothing.
         let hidden = tables
             .iter()
             .map(|(tag, data)| {
@@ -491,12 +503,13 @@ mod tests {
                 (tag, data.clone())
             })
             .collect::<Vec<_>>();
-        let refused = register_font_tables(hidden, "Undrawable Test Family");
-        assert!(refused.is_err(), "{refused:?}");
-        assert!(!font_faces().iter().any(|face| face.family == "Undrawable Test Family"));
-        let accepted =
-            register_font_tables(tables, "Drawable Test Family").expect("outlines present");
-        assert!(!accepted.is_empty());
+        let mut undrawable = database_of(&hidden);
+        assert!(!undrawable.is_empty(), "the rebuilt font still parses");
+        drop_undrawable_faces(&mut undrawable);
+        assert!(undrawable.is_empty());
+        let mut drawable = database_of(&tables);
+        drop_undrawable_faces(&mut drawable);
+        assert!(!drawable.is_empty(), "outlines present");
     }
 
     #[test]
