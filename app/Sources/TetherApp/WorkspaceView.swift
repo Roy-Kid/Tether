@@ -20,6 +20,16 @@ private let terminationNotification: Notification.Name = {
   #endif
 }()
 
+#if os(iOS)
+  /// One status plugin's panel, opened from its lamp. The id is the plugin's,
+  /// so opening the same lamp again is the same page.
+  private struct PhoneStatusPanel: Identifiable {
+    let pluginID: String
+    let workspace: any PluginWorkspace
+    var id: String { pluginID }
+  }
+#endif
+
 struct RootView: View {
   @Bindable var store: HostStore
   @Bindable var tabs: TabSet
@@ -77,17 +87,27 @@ struct RootView: View {
     @State private var compactColumn: NavigationSplitViewColumn = .sidebar
     /// Whether the on-screen keyboard is up.
     @State private var keyboardShown = false
+    /// The status plugin opened from its lamp. One page, the same cover as any other plugin.
+    @State private var statusPanel: PhoneStatusPanel?
     private var phone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
   #endif
 
   private var extensionWorkspace: (any PluginWorkspace)? {
     tabs.extensions.first { $0.id == tabs.selected }?.workspace
   }
+  private var pluginStatusItems: [PluginStatusBarItem] {
+    registry.plugins.filter { registry.isEnabled($0.metadata.id) }.compactMap(\.statusBarItem)
+  }
+
   private var terminalInputAllowed: Bool {
-    tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
+    var allowed = tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
       && tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
       && connectRequests.isEmpty && !showingSettings
       && notice == nil
+    #if os(iOS)
+      allowed = allowed && statusPanel == nil
+    #endif
+    return allowed
   }
   var body: some View {
     windowChrome
@@ -155,9 +175,7 @@ struct RootView: View {
             HostStatusBar(
               tabs: tabs,
               store: store,
-              pluginStatusItems: registry.plugins
-                .filter { registry.isEnabled($0.metadata.id) }
-                .compactMap(\.statusBarItem),
+              pluginStatusItems: pluginStatusItems,
               statusBarLabel: { pluginID in
                 registry.plugins.first { $0.metadata.id == pluginID }?.statusBarLabel()
               },
@@ -217,6 +235,9 @@ struct RootView: View {
       }
       .navigationSplitViewStyle(.balanced)
       .modifier(PhoneColumnStyle(phone: phone))
+      .fullScreenCover(item: $statusPanel) { panel in
+        statusCover(panel)
+      }
       .onChange(of: tabs.selected, initial: true) { _, id in
         compactColumn = id == nil ? .sidebar : .detail
       }
@@ -361,6 +382,17 @@ struct RootView: View {
       onSettings: { showingSettings = true }
     )
     .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
+    #if os(iOS)
+      // The detail bar is off-screen while a phone is on the host list.
+      // An iPad shows both columns, so the lamps stay on the detail only.
+      .toolbar {
+        if phone && compactColumn == .sidebar {
+          ToolbarItemGroup(placement: .topBarLeading) {
+            statusLamps
+          }
+        }
+      }
+    #endif
   }
 
   /// Opens a host, asking for a password only where one could be used.
@@ -671,6 +703,11 @@ struct RootView: View {
     // connection's host, user and port are the inspector's, where there is
     // room for one; the host row in the sidebar carries them otherwise.
     .toolbar {
+      #if os(iOS)
+        ToolbarItemGroup(placement: .topBarLeading) {
+          statusLamps
+        }
+      #endif
       ToolbarItemGroup(placement: .primaryAction) {
         #if os(iOS)
           Menu {
@@ -780,6 +817,57 @@ struct RootView: View {
       }
     }
   }
+
+  #if os(iOS)
+    @ViewBuilder
+    private var statusLamps: some View {
+      ForEach(pluginStatusItems) { item in
+        Button {
+          openStatus(item)
+        } label: {
+          StatusRibbon(segments: item.segments)
+            .frame(width: 44, height: Chrome.ribbonThickness)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.label)
+        .help(item.label)
+      }
+    }
+
+    private func statusCover(_ panel: PhoneStatusPanel) -> some View {
+      NavigationStack {
+        panel.workspace.content()
+          .navigationTitle(panel.workspace.title)
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button {
+                closeStatus()
+              } label: {
+                Label("Close", systemImage: "xmark")
+              }
+              .buttonStyle(.iconOnly)
+              .keyboardShortcut(.cancelAction)
+              .accessibilityLabel("Close")
+            }
+          }
+      }
+    }
+
+    private func openStatus(_ item: PluginStatusBarItem) {
+      guard let workspace = registry.plugins.first(where: { $0.metadata.id == item.id })?.statusBarWorkspace()
+      else { return }
+      statusPanel?.workspace.close()
+      statusPanel = PhoneStatusPanel(pluginID: item.id, workspace: workspace)
+    }
+
+    private func closeStatus() {
+      statusPanel?.workspace.close()
+      statusPanel = nil
+    }
+  #endif
 
   private func extensionContent(_ entry: WorkspaceEntry) -> some View {
     entry.workspace.content().id(entry.id)
@@ -1012,14 +1100,32 @@ extension RootView {
     .onReceive(NotificationCenter.default.publisher(for: terminationNotification)) { _ in
       tabs.shutdown()
     }
-    .onAppear { registry.onDisable = { id in tabs.closePlugin(id) } }
+    .onAppear {
+      registry.onDisable = { id in
+        tabs.closePlugin(id)
+        PluginLive.end(id)
+      }
+    }
+    .onChange(of: pluginStatusItems.map(\.id)) { _, ids in
+      PluginLive.retain(Set(ids))
+    }
     .dialog(for: notice) { shown in
       Dialog.notice(shown.title, message: shown.message) { notice = nil }
     }
-    .overlay(alignment: .topTrailing) {
-      PluginNoteStack(plugins: plugins)
-        .padding(UIStyle.Space.group)
-    }
+    #if os(iOS)
+      .safeAreaInset(edge: .top, spacing: 0) {
+        if !plugins.notes.isEmpty {
+          PluginNoteStack(plugins: plugins)
+            .padding(.horizontal, UIStyle.Space.group)
+            .padding(.bottom, UIStyle.Space.small)
+        }
+      }
+    #else
+      .overlay(alignment: .topTrailing) {
+        PluginNoteStack(plugins: plugins)
+          .padding(UIStyle.Space.group)
+      }
+    #endif
     #if os(macOS)
       .dialog(for: store.pendingImport) { offer in
         Dialog.confirm(

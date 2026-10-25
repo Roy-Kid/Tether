@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 source scripts/signing.sh
 source scripts/credential-provider.sh
+source scripts/live-activity.sh
 
 usage() {
   cat <<'EOF'
@@ -167,6 +168,7 @@ cat > "$APP/Info.plist" <<PLIST
         </dict>
     </dict>
     <key>LSRequiresIPhoneOS</key><true/>
+    <key>NSSupportsLiveActivities</key><true/>
     <!-- A password manager's export arrives as this activity (CredentialImport);
          see build-app.sh for why both names. -->
     <key>NSUserActivityTypes</key>
@@ -204,6 +206,12 @@ cat > "$APP/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# The Live Activity extension before the app is signed, so the signature
+# covers it. A missing device profile leaves the app without one.
+live_sdk=iphonesimulator
+[[ -z "$PHONE" ]] || live_sdk=iphoneos
+embed_live_activity "$live_sdk" "$APP" "$TEAM"
 
 if [[ -n "$PHONE" ]]; then
   # The extension first: the app's signature seals what is inside it.

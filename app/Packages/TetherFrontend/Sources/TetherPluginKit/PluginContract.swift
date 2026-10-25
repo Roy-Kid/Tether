@@ -107,7 +107,7 @@ public enum PluginServiceError: Error, Equatable {
 /// What one plugin may ask the host to do. Native code and a web page share it.
 @MainActor
 public protocol PluginServing: AnyObject {
-  func notify(title: String, body: String) async
+  func notify(title: String, body: String, source: String) async
   func ask(_ prompt: PluginPrompt) async -> PluginAnswer
   func storageGet(pluginID: String, pluginName: String, key: String) async throws -> String?
   func storageSet(pluginID: String, pluginName: String, key: String, value: String) async throws
@@ -135,7 +135,7 @@ public struct PluginServices {
   }
 
   public func notify(title: String, body: String = "") async {
-    await PluginGateway.current?.notify(title: title, body: body)
+    await PluginGateway.current?.notify(title: title, body: body, source: pluginName)
   }
 
   public func ask(_ prompt: PluginPrompt) async -> PluginAnswer {

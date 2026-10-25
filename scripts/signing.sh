@@ -17,6 +17,9 @@ TETHER_CLOUD_CONTAINER="${TETHER_CLOUD_CONTAINER:-iCloud.Roy-Kid.Tether}"
 # The credential provider extension (credential-provider.sh), which is what
 # a password manager looks for before it offers to export to Tether.
 TETHER_PROVIDER_ID="${TETHER_PROVIDER_ID:-$TETHER_BUNDLE_ID.CredentialProvider}"
+# The Live Activity extension (live-activity.sh). The app publishes the
+# state; this is what the lock screen and the island draw.
+TETHER_LIVE_ID="${TETHER_LIVE_ID:-$TETHER_BUNDLE_ID.LiveActivity}"
 AUTOFILL_ENTITLEMENT=com.apple.developer.authentication-services.autofill-credential-provider
 
 PROFILE_DIRS=(

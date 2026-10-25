@@ -103,7 +103,7 @@ extension BrowserUITests {
         let action: String
         var asked: [String] = []
         init(_ action: String) { self.action = action }
-        func notify(title: String, body: String) async {}
+        func notify(title: String, body: String, source: String) async {}
         func ask(_ prompt: PluginPrompt) async -> PluginAnswer {
           asked.append(prompt.title)
           return PluginAnswer(action: action)

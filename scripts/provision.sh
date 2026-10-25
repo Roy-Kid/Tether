@@ -43,9 +43,27 @@ command -v xcodegen >/dev/null || { echo "xcodegen not found: brew install xcode
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/src" "$work/provider"
+mkdir -p "$work/src" "$work/provider" "$work/live"
 echo 'print("provision")' >"$work/src/main.swift"
 cp app/Extensions/CredentialProvider/*.swift "$work/provider/"
+cp app/Sources/TetherApp/PluginLiveAttributes.swift app/Extensions/LiveActivity/PluginLiveWidget.swift "$work/live/"
+cat >"$work/live/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
+    </dict>
+</dict>
+</plist>
+EOF
 cat >"$work/provider/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,8 +85,24 @@ EOF
 
 target() {
   # A Mac runs an extension only in a sandbox; a phone runs every one in one.
-  local sandbox=
+  local sandbox= live_dep= live_target=
   [[ "$2" != macOS ]] || sandbox="com.apple.security.app-sandbox: true"
+  if [[ "$2" == iOS ]]; then
+    live_dep="
+      - target: LiveActivity$1"
+    live_target="
+  LiveActivity$1:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: \"26.0\"
+    sources: [live]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $TETHER_LIVE_ID
+        INFOPLIST_FILE: live/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+"
+  fi
   cat <<EOF
   Tether$1:
     type: application
@@ -76,7 +110,7 @@ target() {
     deploymentTarget: "26.0"
     sources: [src]
     dependencies:
-      - target: Provider$1
+      - target: Provider$1$live_dep
     entitlements:
       path: $1.entitlements
       properties:
@@ -98,6 +132,7 @@ target() {
       properties:
         $AUTOFILL_ENTITLEMENT: true
         $sandbox
+$live_target
 EOF
 }
 

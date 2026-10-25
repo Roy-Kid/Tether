@@ -142,6 +142,7 @@ struct TetherApp: App {
     @NSApplicationDelegateAdaptor(TetherAppDelegate.self) private var appDelegate
     private var model: AppModel { appDelegate.model }
   #else
+    @UIApplicationDelegateAdaptor(TetherPhoneDelegate.self) private var phoneDelegate
     @State private var model = AppModel()
   #endif
 
@@ -173,6 +174,29 @@ struct TetherApp: App {
     #endif
   }
 }
+
+#if os(iOS)
+  /// A note posted while Tether is in front stays on the page. One that arrives
+  /// as the app is leaving still has to be allowed onto the screen.
+  @MainActor
+  final class TetherPhoneDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+      _ application: UIApplication,
+      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+      UNUserNotificationCenter.current().delegate = self
+      return true
+    }
+
+    nonisolated func userNotificationCenter(
+      _ center: UNUserNotificationCenter,
+      willPresent notification: UNNotification,
+      withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+      completionHandler([.banner, .sound, .list])
+    }
+  }
+#endif
 
 extension Notification.Name {
   /// A status row landed on a terminal. The panel gets out of the way.
@@ -256,7 +280,10 @@ struct RootHost: View {
           let library = InstalledPlugins(
             directory: InstalledPlugins.defaultDirectory, registry: model.registry, host: PluginHost(api: model.plugins))
           model.plugins.onStatus = { [registry = model.registry] id, item in
-            registry.plugins.first { $0.metadata.id == id }?.receiveStatus(item)
+            let plugin = registry.plugins.first { $0.metadata.id == id }
+            plugin?.receiveStatus(item)
+            PluginLive.note(
+              pluginID: id, name: plugin?.metadata.name ?? item.label, label: item.label, segments: item.segments)
           }
           library.onFocus = { request in
             let sets = [model.tabs] + model.additionalSessions
@@ -289,6 +316,10 @@ struct RootHost: View {
           }
           model.installedPlugins = library
           library.discover()
+          #if os(iOS)
+            await NotificationPermission.askIfNeeded()
+            PluginLive.adopt()
+          #endif
           #if os(macOS)
             if let flag = CommandLine.arguments.firstIndex(of: "--install-plugin"),
               CommandLine.arguments.indices.contains(flag + 1) {

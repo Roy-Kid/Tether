@@ -40,6 +40,16 @@ struct StatusRibbonTests {
       == [0x0A84FF, 0x8E8E93])
   }
 
+  @Test("a saturated band is living, and gray or an empty ribbon is idle")
+  func living() {
+    #expect(PluginLiving.presence(of: []) == .idle)
+    #expect(PluginLiving.presence(of: [Self.segment(0x8E8E93, 1)]) == .idle)
+    #expect(PluginLiving.presence(of: [Self.segment(0x0A84FF, 0)]) == .idle)
+    #expect(PluginLiving.presence(of: [Self.segment(0x0A84FF, 1)]) == .living(tint: 0x0A84FF))
+    #expect(PluginLiving.presence(of: [Self.segment(0x8E8E93, 2), Self.segment(0x30D158, 1)])
+      == .living(tint: 0x30D158))
+  }
+
   @Test("one segment fills the band")
   func single() {
     #expect(StatusRibbon.stops(for: [Self.segment(0x00FF00, 3)]) == [

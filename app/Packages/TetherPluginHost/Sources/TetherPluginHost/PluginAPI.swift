@@ -2,11 +2,16 @@ import Foundation
 import Observation
 import TetherPluginKit
 import UserNotifications
+#if os(iOS)
+  import UIKit
+#endif
 
 public struct PluginNote: Identifiable, Equatable, Sendable {
   public let id: UUID
   public var title: String
   public var body: String
+  /// The plugin the note came from. Empty when the caller did not name one.
+  public var source: String
 }
 
 /// One implementation of the plugin contract. A page's RPC and a native
@@ -36,15 +41,17 @@ public final class PluginAPI: PluginServing {
     notes.removeAll { $0.id == id }
   }
 
-  public func notify(title: String, body: String) async {
+  public func notify(title: String, body: String, source: String = "") async {
     if let presenting {
       await presenting.notify(title: title, body: body)
       return
     }
-    let note = PluginNote(id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)))
+    let note = PluginNote(
+      id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)),
+      source: String(source.prefix(80)))
     notes.insert(note, at: 0)
     if notes.count > 4 { notes.removeLast(notes.count - 4) }
-    await SystemNote.post(title: note.title, body: note.body)
+    await SystemNote.post(title: note.title, body: note.body, source: note.source)
   }
 
   public func ask(_ prompt: PluginPrompt) async -> PluginAnswer {
@@ -113,21 +120,32 @@ public protocol PluginPresenting: AnyObject {
   func ask(_ prompt: PluginPrompt) async -> PluginAnswer
 }
 
+@MainActor
 enum SystemNote {
-  static func post(title: String, body: String) async {
+  /// While the app is open the note is already on screen. A banner then would
+  /// be the same words twice. Away, the system is the only place it can land.
+  static func post(title: String, body: String, source: String) async {
+    #if os(iOS)
+      if UIApplication.shared.applicationState == .active { return }
+    #endif
     let center = UNUserNotificationCenter.current()
     let settings = await center.notificationSettings()
     switch settings.authorizationStatus {
     case .notDetermined:
-      guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+      guard (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true else { return }
     case .authorized, .provisional, .ephemeral:
       break
     default:
       return
     }
     let content = UNMutableNotificationContent()
-    content.title = title
-    if !body.isEmpty { content.body = body }
+    if source.isEmpty {
+      content.title = title
+      if !body.isEmpty { content.body = body }
+    } else {
+      content.title = source
+      content.body = body.isEmpty ? title : "\(title)\n\(body)"
+    }
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
     try? await center.add(request)
   }

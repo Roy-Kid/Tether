@@ -309,7 +309,7 @@ final class CapabilityGateway {
     guard body.count <= 240 else {
       return .failure(session: request.session, id: request.id, error: RPCError.malformed)
     }
-    await api.notify(title: title, body: body)
+    await api.notify(title: title, body: body, source: sessions[request.session]?.pluginName ?? "")
     return RPCResponse(session: request.session, id: request.id, ok: true, payload: .object([:]))
   }
 

@@ -31,6 +31,19 @@
   pages and editing/dialog states disable workspace shortcuts. Tab-bar and Zen
   actions stay Mac-only.
 
+## Plugin status, notifications and Live Activities (2026-10-25)
+
+- A status plugin's lamp sits in the leading toolbar of the page in front:
+  the host list, or the terminal. An iPad keeps it on the terminal column.
+  Tapping it opens that plugin's panel as a full-screen cover with Close, the
+  same page other phone plugins use.
+- `host.notify` is a note on the page while Tether is open, and a system
+  notification in the plugin's name when it is not. Permission is asked once;
+  a denial offers Settings.
+- A saturated status keeps a Live Activity: the plugin's name, its label and
+  the status colour, on the Lock Screen and in the Dynamic Island. Gray or an
+  empty ribbon ends it.
+
 ## Navigation and size classes (2026-10-12)
 
 - One terminal shows at a time; the navigation title is the switcher. Its menu lists
