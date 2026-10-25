@@ -4,6 +4,26 @@
   import Tether
   import UIKit
 
+  /// The software keyboard stays down when the app comes forward. A tap on
+  /// the terminal asks for it; opening the app, or switching back to it,
+  /// does not. An iPad is unchanged: a hardware keyboard has to land somewhere.
+  @MainActor
+  enum PhoneKeyboard {
+    static var staysDown = true
+
+    static func allowsAutomaticFocus(phone: Bool) -> Bool {
+      !(phone && staysDown)
+    }
+
+    static func noteLeftForeground(phone: Bool) {
+      if phone { staysDown = true }
+    }
+
+    static func noteTapped(phone: Bool) {
+      if phone { staysDown = false }
+    }
+  }
+
   /// The same job as the AppKit capture, against a different set of facts.
   ///
   /// A phone has two keyboards and they arrive by different routes. The
@@ -148,18 +168,32 @@
       // A long-press on a path is a context menu with the file above it —
       // the gesture the rest of the system uses for "show me this".
       addInteraction(UIContextMenuInteraction(delegate: self))
+      let center = NotificationCenter.default
+      center.addObserver(self, selector: #selector(leftForeground(_:)),
+        name: UIScene.didEnterBackgroundNotification, object: nil)
+      center.addObserver(self, selector: #selector(enteredForeground(_:)),
+        name: UIScene.willEnterForegroundNotification, object: nil)
+      center.addObserver(self, selector: #selector(enteredForeground(_:)),
+        name: UIScene.didActivateNotification, object: nil)
     }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not from a nib") }
 
-    override var canBecomeFirstResponder: Bool { true }
+    private var phone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
+    override var canBecomeFirstResponder: Bool {
+      PhoneKeyboard.allowsAutomaticFocus(phone: phone)
+    }
 
     override func didMoveToWindow() {
       super.didMoveToWindow()
       guard wantsFocus else { return }
       // During the SwiftUI update that inserts this view, becoming first
       // responder does not present the keyboard. The next turn does.
+      // Coming forward leaves that keyboard down (`PhoneKeyboard`).
       DispatchQueue.main.async { [weak self] in
         guard let self, self.wantsFocus, self.window != nil else { return }
         self.becomeFirstResponder()
@@ -168,9 +202,34 @@
 
     @discardableResult
     override func becomeFirstResponder() -> Bool {
+      guard canBecomeFirstResponder else { return false }
       let accepted = super.becomeFirstResponder()
       if accepted { reloadInputViews() }
       return accepted
+    }
+
+    /// The app left the foreground. The keyboard it had up is not brought
+    /// back with it.
+    @objc private func leftForeground(_ note: Notification) {
+      guard sceneMatches(note) else { return }
+      PhoneKeyboard.noteLeftForeground(phone: phone)
+      if isFirstResponder { _ = resignFirstResponder() }
+    }
+
+    /// iOS restores the first responder as the scene activates, which would
+    /// open the software keyboard again. Refuse that until a tap.
+    @objc private func enteredForeground(_ note: Notification) {
+      guard sceneMatches(note), phone, PhoneKeyboard.staysDown else { return }
+      if isFirstResponder { _ = resignFirstResponder() }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, PhoneKeyboard.staysDown, self.isFirstResponder else { return }
+        _ = self.resignFirstResponder()
+      }
+    }
+
+    private func sceneMatches(_ note: Notification) -> Bool {
+      guard let scene = note.object as? UIScene, let mine = window?.windowScene else { return true }
+      return scene === mine
     }
 
     @objc private func takeFocus(_ gesture: UITapGestureRecognizer) {
@@ -180,6 +239,7 @@
         selection = nil
         return
       }
+      PhoneKeyboard.noteTapped(phone: phone)
       becomeFirstResponder()
       onFocus?()
       guard mouse != .off, gesture.state == .ended else { return }

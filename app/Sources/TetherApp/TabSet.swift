@@ -69,7 +69,9 @@ enum WorkspaceIntent: Equatable {
 final class TabSet {
   let keyBindings = KeyBindingStore()
   #if os(macOS)
-    let quickTerminal: QuickTerminalController
+    /// The app's one quick terminal. A window's own tabs share the main
+    /// window's controller, so its menu toggles the same overlay.
+    var quickTerminal: QuickTerminalController
   #endif
   var tabs: [SessionTab] = []
   var workspaces: [TerminalWorkspace] = []
@@ -127,6 +129,39 @@ final class TabSet {
   /// hosted in an AppKit window, not a scene.
   var menuShortcuts: Bool?
   var paletteQuery = ""
+
+  /// The windows these tabs are on screen in, by an id each window makes
+  /// for itself. One set of tabs can be in two windows at once — the
+  /// ordinary one and the quick terminal — and each answers for itself.
+  private(set) var shownWindows: Set<UUID> = []
+  private(set) var keyWindows: Set<UUID> = []
+  /// The window in front of the two: the one most recently key while
+  /// shown, handed to one still shown when it goes away. It sizes the
+  /// sessions — another keeps the size it would want and applies it once it
+  /// is in front — and it alone answers an intent and shows the host picker
+  /// and the palette, so ⌘T opens one tab, in one window.
+  private(set) var frontWindow: UUID?
+
+  /// Where `window` is now. Order-free: what is decided reads the sets,
+  /// not which window reported last.
+  func note(window: UUID, shown: Bool, key: Bool) {
+    if shown != shownWindows.contains(window) {
+      if shown { shownWindows.insert(window) } else { shownWindows.remove(window) }
+    }
+    if key != keyWindows.contains(window) {
+      if key { keyWindows.insert(window) } else { keyWindows.remove(window) }
+    }
+    if shown && key {
+      if frontWindow != window { frontWindow = window }
+    } else if frontWindow == window && !shown {
+      frontWindow = keyWindows.first { shownWindows.contains($0) } ?? shownWindows.first
+    } else if frontWindow == nil, shown {
+      frontWindow = window
+    }
+  }
+
+  /// Whether `window` is the one in front. With none noted yet, any is.
+  func isFront(_ window: UUID) -> Bool { frontWindow == nil || frontWindow == window }
 
   /// The accepted host keys, shared by every session: trust belongs to the
   /// person and their machine, not to one tab.

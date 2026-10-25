@@ -40,6 +40,19 @@ struct TouchWorkspaceTests {
     #expect(pad.suffix(2) == [[.splitLeft, .splitRight, .splitUp, .splitDown], [.joinGroups]])
   }
 
+  @Test("a phone keeps the portrait stack, including when landscape reports a regular width")
+  func phoneStaysStacked() {
+    #expect(!TouchLayout.wide(phone: true, regularWidth: true, regularHeight: false))
+    #expect(!TouchLayout.wide(phone: true, regularWidth: false, regularHeight: true))
+    #expect(!TouchLayout.wide(phone: true, regularWidth: true, regularHeight: true))
+    #expect(!TouchLayout.wide(phone: false, regularWidth: true, regularHeight: false))
+    #expect(!TouchLayout.wide(phone: false, regularWidth: false, regularHeight: true))
+    #expect(TouchLayout.wide(phone: false, regularWidth: true, regularHeight: true))
+    #expect(TouchLayout.popsToHostList(phone: true, compactWidth: false))
+    #expect(TouchLayout.popsToHostList(phone: false, compactWidth: true))
+    #expect(!TouchLayout.popsToHostList(phone: false, compactWidth: false))
+  }
+
   @Test("a window without room for a second column cannot open one")
   func narrowWindow() {
     let tabs = TabSet()

@@ -15,6 +15,24 @@ extension WorkspaceAction {
   }
 }
 
+/// How a touch window spends its width.
+///
+/// A phone is the portrait stack in both orientations. A large phone's
+/// landscape width is regular, and a split view would then keep the host
+/// list on screen beside the terminal. An iPad gets that column only when
+/// both axes are regular.
+enum TouchLayout {
+  static func wide(phone: Bool, regularWidth: Bool, regularHeight: Bool) -> Bool {
+    !phone && regularWidth && regularHeight
+  }
+
+  /// Back, and asking for the host list, leave the terminal and show the
+  /// list. A wide iPad reveals the column instead of covering the terminal.
+  static func popsToHostList(phone: Bool, compactWidth: Bool) -> Bool {
+    phone || compactWidth
+  }
+}
+
 /// The Commands menu on a touch screen.
 ///
 /// Not the Mac's menu bar laid flat: only what applies to the terminal in

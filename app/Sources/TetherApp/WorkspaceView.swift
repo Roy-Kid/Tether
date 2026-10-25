@@ -60,13 +60,15 @@ struct RootView: View {
   #if os(macOS)
     /// On screen and key, as the window reports them; a scene would have said.
     @State private var windowShown = true
+    /// This window among the ones these tabs are shown in (`TabSet.note`).
+    @State private var windowID = UUID()
     @State private var windowKey = false
   #else
     @Environment(\.scenePhase) private var phase
   #endif
   #if os(iOS)
-    /// Whether there is room for two columns. A phone in portrait is compact;
-    /// an iPad, and a large phone turned sideways, are not.
+    /// The window's width. A large phone turned sideways is regular here;
+    /// the phone still uses the portrait stack (`TouchLayout`).
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// Compact on a phone turned sideways, where every row counts.
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -75,6 +77,7 @@ struct RootView: View {
     @State private var compactColumn: NavigationSplitViewColumn = .sidebar
     /// Whether the on-screen keyboard is up.
     @State private var keyboardShown = false
+    private var phone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
   #endif
 
   private var extensionWorkspace: (any PluginWorkspace)? {
@@ -167,7 +170,7 @@ struct RootView: View {
               .layoutPriority(1)
           }
         }
-        if tabs.hostPicker, !tabs.zen {
+        if tabs.hostPicker, !tabs.zen, isFront {
           Color.black.opacity(0.001)
             .ignoresSafeArea()
             .onTapGesture { tabs.hostPicker = false }
@@ -203,6 +206,9 @@ struct RootView: View {
     /// Collapsed, a split view pushes its detail only when a `NavigationLink`
     /// is followed, and nothing here is a link — opening a host goes through a
     /// question first — so the column it shows follows the selection instead.
+    ///
+    /// A phone stays collapsed in landscape too. Its landscape width is
+    /// regular, which would otherwise leave the host list beside the terminal.
     private var splitView: some View {
       NavigationSplitView(columnVisibility: columnVisibility, preferredCompactColumn: compactColumnChoice) {
         sidebar
@@ -210,11 +216,13 @@ struct RootView: View {
         phoneDetail
       }
       .navigationSplitViewStyle(.balanced)
+      .modifier(PhoneColumnStyle(phone: phone))
       .onChange(of: tabs.selected, initial: true) { _, id in
         compactColumn = id == nil ? .sidebar : .detail
       }
       .onChange(of: [sizeClass, verticalSizeClass], initial: true) { _, _ in
-        tabs.wide = sizeClass == .regular && verticalSizeClass == .regular
+        tabs.wide = TouchLayout.wide(
+          phone: phone, regularWidth: sizeClass == .regular, regularHeight: verticalSizeClass == .regular)
       }
       // There is no floating host picker here: the host list is the sidebar,
       // so asking for the picker — ⌘⇧H, or a new terminal with nowhere to
@@ -222,7 +230,11 @@ struct RootView: View {
       .onChange(of: tabs.hostPicker) { _, asked in
         guard asked else { return }
         tabs.hostPicker = false
-        if sizeClass == .compact { tabs.selected = nil } else { visibility = .all }
+        if TouchLayout.popsToHostList(phone: phone, compactWidth: sizeClass == .compact) {
+          tabs.selected = nil
+        } else {
+          visibility = .all
+        }
       }
       .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
         keyboardShown = true
@@ -233,13 +245,17 @@ struct RootView: View {
     }
 
     /// Going back on a phone leaves the terminal running and no longer in
-    /// front, as popping the stack did.
+    /// front, as popping the stack did. Landscape is the same stack.
     private var compactColumnChoice: Binding<NavigationSplitViewColumn> {
       Binding(
         get: { compactColumn },
         set: { column in
           compactColumn = column
-          if column == .sidebar, sizeClass == .compact { tabs.selected = nil }
+          if column == .sidebar,
+            TouchLayout.popsToHostList(phone: phone, compactWidth: sizeClass == .compact)
+          {
+            tabs.selected = nil
+          }
         })
     }
 
@@ -265,6 +281,76 @@ struct RootView: View {
         // Narrowing the window takes the column away without forgetting it
         // was open.
         set: { if tabs.wide { tabs.inspector = $0 } })
+    }
+  #endif
+
+  #if os(iOS)
+    /// Collapses the phone's split view onto the portrait stack.
+    ///
+    /// The environment is what SwiftUI's columns read. The trait override is
+    /// what `UISplitViewController` reads after a rotation, which otherwise
+    /// puts the regular landscape width back and shows the host list again.
+    private struct PhoneColumnStyle: ViewModifier {
+      let phone: Bool
+
+      @ViewBuilder
+      func body(content: Content) -> some View {
+        if phone {
+          content
+            .environment(\.horizontalSizeClass, .compact)
+            .background { PhoneStackTraits().allowsHitTesting(false) }
+        } else {
+          content
+        }
+      }
+    }
+
+    private struct PhoneStackTraits: UIViewControllerRepresentable {
+      func makeUIViewController(context: Context) -> TraitController {
+        let controller = TraitController()
+        controller.view.isUserInteractionEnabled = false
+        controller.view.backgroundColor = .clear
+        return controller
+      }
+
+      func updateUIViewController(_ controller: TraitController, context: Context) {
+        controller.collapseIfPhone()
+      }
+
+      final class TraitController: UIViewController {
+        override func didMove(toParent parent: UIViewController?) {
+          super.didMove(toParent: parent)
+          collapseIfPhone()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+          super.viewWillAppear(animated)
+          collapseIfPhone()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+          super.viewDidAppear(animated)
+          collapseIfPhone()
+        }
+
+        override func viewWillTransition(
+          to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator
+        ) {
+          super.viewWillTransition(to: size, with: coordinator)
+          coordinator.animate(alongsideTransition: nil) { _ in self.collapseIfPhone() }
+        }
+
+        func collapseIfPhone() {
+          guard UIDevice.current.userInterfaceIdiom == .phone, let split = splitViewController else { return }
+          // The override has to land on the split's parent. On the split
+          // itself it only reaches the columns, and the split keeps the
+          // landscape width it was given. Writing the same value again
+          // invalidates layout, so stop once it is installed.
+          let host = split.parent ?? split
+          guard host.traitOverrides.horizontalSizeClass != .compact else { return }
+          host.traitOverrides.horizontalSizeClass = .compact
+        }
+      }
     }
   #endif
 
@@ -840,7 +926,8 @@ extension RootView {
   fileprivate var windowChrome: some View {
     watchedWindow
     .onChange(of: tabs.intent) { _, intent in
-      guard let intent else { return }
+      // Both windows on these tabs see the intent; the one in front acts.
+      guard let intent, isFront else { return }
       tabs.intent = nil
       switch intent {
       case .splitTerminal(let id, let direction):
@@ -953,11 +1040,15 @@ extension RootView {
           WindowState(scheme: appearance == "system" ? nil : (appearance == "dark" ? .dark : .light)) {
             windowShown = $0.shown
             windowKey = $0.key
+            tabs.note(window: windowID, shown: $0.shown, key: $0.key)
+            routeMenuShortcuts()
           }
           .allowsHitTesting(false)
         }
-        .onChange(of: windowKey, initial: true) { _, _ in tabs.menuShortcuts = windowKey ? shortcutsAllowed : nil }
-        .onChange(of: shortcutsAllowed) { _, _ in tabs.menuShortcuts = windowKey ? shortcutsAllowed : nil }
+        .onChange(of: windowKey, initial: true) { _, _ in routeMenuShortcuts() }
+        .onChange(of: shortcutsAllowed) { _, _ in routeMenuShortcuts() }
+        .onDisappear { tabs.note(window: windowID, shown: false, key: false) }
+        .environment(\.isFrontWindow, tabs.isFront(windowID))
       #endif
       .overlay {
         PaletteOverlay(
@@ -997,6 +1088,7 @@ extension RootView {
       .onChange(of: tabs.workspaceSplit?.ids ?? [], initial: false) { _, _ in refreshFramePublishing() }
       #if os(macOS)
         .onChange(of: windowShown) { _, _ in refreshFramePublishing() }
+        .onChange(of: tabs.shownWindows) { _, _ in refreshFramePublishing() }
       #else
         .onChange(of: phase) { _, _ in refreshFramePublishing() }
       #endif
@@ -1145,6 +1237,25 @@ extension RootView {
     )
   }
 
+  /// Whether this window is the one in front of those showing these tabs.
+  private var isFront: Bool {
+    #if os(macOS)
+      tabs.isFront(windowID)
+    #else
+      true
+    #endif
+  }
+
+  #if os(macOS)
+    /// The menu's shortcuts go to the key window. A window that is not key
+    /// clears them only when no window on these tabs is, so whichever of two
+    /// windows reports last cannot take them from the one in front.
+    private func routeMenuShortcuts() {
+      if windowKey { tabs.menuShortcuts = shortcutsAllowed }
+      else if tabs.keyWindows.isEmpty { tabs.menuShortcuts = nil }
+    }
+  #endif
+
   /// Only the tab in front copies a frame, and only while the app is in
   /// front. The others stay subscribed, so the next time they are shown
   /// the screen they copy is the current one. Every tab keeps reading:
@@ -1152,7 +1263,9 @@ extension RootView {
   /// a client that has stopped answering (`TerminalSession.pause`).
   private func refreshFramePublishing() {
     #if os(macOS)
-      let foreground = windowShown
+      // Any window these tabs are shown in: the quick terminal and the
+      // ordinary window share them, and one hiding must not stop the other.
+      let foreground = windowShown || !tabs.shownWindows.isEmpty
     #else
       let foreground = phase != .background
     #endif

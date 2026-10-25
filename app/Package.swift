@@ -15,6 +15,8 @@ let package = Package(
         .package(path: "Plugins/Tmux"),
         .package(path: "Plugins/Files"),
         .package(path: "Plugins/Ports"),
+        // macOS only: Nerve's own panel, from the sibling checkout.
+        .package(path: "../../nerve/surfaces/tether"),
     ],
     targets: [
         .executableTarget(
@@ -27,6 +29,7 @@ let package = Package(
                 .product(name: "TmuxPlugin", package: "Tmux"),
                 .product(name: "FilesPlugin", package: "Files"),
                 .product(name: "PortsPlugin", package: "Ports"),
+                .product(name: "NervePlugin", package: "tether", condition: .when(platforms: [.macOS])),
             ]
         ),
         .testTarget(name: "TetherAppTests", dependencies: ["TetherApp"])

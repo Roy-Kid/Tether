@@ -37,12 +37,15 @@
   every open terminal by host, with its state and the current one checked, then New
   Terminal. With nothing open there is no menu, so no chevron.
 - One `NavigationSplitView` serves every size, so rotating or resizing keeps the
-  terminal's view and focus. On iPhone it still behaves as a stack.
+  terminal's view and focus. On iPhone it is always that stack, including in
+  landscape: a large phone's regular landscape width must not leave the host
+  list on screen beside the terminal.
 - On an iPad with regular width and height the inspector is a column, and terminals
-  split side by side as on the Mac (equal shares, no drag handles). A large iPhone
-  in landscape gets neither.
-- With a compact height and the keyboard up, the navigation bar and host column hide;
-  they return when the keyboard goes down.
+  split side by side as on the Mac (equal shares, no drag handles). A phone
+  gets neither.
+- With a compact height and the keyboard up, the navigation bar hides and
+  returns when the keyboard goes down. Coming to the foreground leaves the
+  software keyboard down until the terminal is tapped.
 - Key Bindings appear in Settings on iPad, recorded from a hardware keyboard.
 
 ## Validation

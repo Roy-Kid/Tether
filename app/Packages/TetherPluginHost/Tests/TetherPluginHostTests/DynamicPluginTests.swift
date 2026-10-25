@@ -203,6 +203,27 @@ private func networkFixture(status: Bool = false) throws -> URL {
   #expect(relaunched.pluginIDs.isEmpty)
 }
 
+@Test @MainActor func discoverLeavesAnAlreadyRegisteredPlugin() async throws {
+  let source = try Fixture.make()
+  let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+  defer {
+    try? FileManager.default.removeItem(at: source)
+    try? FileManager.default.removeItem(at: directory)
+  }
+  let registry = TetherPluginKit.PluginRegistry()
+  let library = InstalledPlugins(directory: directory, registry: registry,
+    host: PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter()))
+  let installed = try await library.install(directory: source)
+  let occupied = TetherPluginKit.PluginRegistry()
+  occupied.register(OccupyingPlugin(id: installed.id))
+  let again = InstalledPlugins(directory: directory, registry: occupied,
+    host: PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter()))
+  again.discover()
+  #expect(again.problems.isEmpty)
+  #expect(occupied.plugins.count == 1)
+  #expect(occupied.plugins[0] is OccupyingPlugin)
+}
+
 @Test @MainActor func changedManifestCannotRunWithOldPermissions() async throws {
   let source = try Fixture.make()
   defer { try? FileManager.default.removeItem(at: source) }
@@ -400,4 +421,13 @@ func aTabIndicatorOnlyPluginOwnsABackgroundPageWithoutARibbon() async throws {
   plugin.deactivate()
   #expect(host.liveSessions.isEmpty)
   #expect(plugin.tabIndicators.isEmpty)
+}
+
+@MainActor
+private final class OccupyingPlugin: TetherPlugin {
+  let metadata: PluginMetadata
+  init(id: String) {
+    metadata = PluginMetadata(id: id, name: "Native", symbol: "circle", summary: "Already registered")
+  }
+  func launch(in context: PluginContext) {}
 }

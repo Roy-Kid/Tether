@@ -30,15 +30,19 @@ struct QuickTerminalTests {
       NSRect(x: 0, y: 100, width: 800, height: 300))
   }
 
-  @Test("the overlay's size is remembered on its own; the ordinary window's frame is not touched")
+  /// A panel the way the app makes the quick terminal: the workspace window.
+  private func panel() -> KeyedWorkspaceWindow {
+    KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
+  }
+
+  @Test("the overlay's size is remembered on its own, here and across launches")
   func rememberedSize() throws {
     let suite = "quick-terminal-size.\(UUID())"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let controller = QuickTerminalController(defaults: defaults)
-    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
+    let window = panel()
     defer { controller.stop(); window.close() }
-    let original = window.frame
     controller.attach(to: window)
     controller.toggle()
     let screen = try #require(window.screen)
@@ -61,9 +65,6 @@ struct QuickTerminalTests {
     controller.hide()
     controller.toggle()
     #expect(window.frame.size == dragged)
-
-    controller.restore()
-    #expect(window.frame == original, "the ordinary window keeps its own frame")
     controller.stop()
 
     // The next launch remembers it too.
@@ -72,154 +73,151 @@ struct QuickTerminalTests {
     next.attach(to: window)
     next.toggle()
     #expect(window.frame.size == dragged)
-    next.restore()
-    #expect(window.frame == original)
   }
 
-  @Test("toggle hides without destroying the workspace and normal mode restores geometry and behavior")
-  func windowLifecycle() throws {
+  @Test("the quick terminal is a panel of its own; showing and hiding it leaves the ordinary window alone")
+  func separateFromTheOrdinaryWindow() throws {
     let suite = "quick-terminal-window.\(UUID())"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let tabs = TabSet(defaults: defaults)
     let controller = tabs.quickTerminal
-    let autosave = "quick-terminal-test.\(UUID())"
-    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: autosave)
-    defer { controller.stop(); window.close(); UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(autosave)") }
-    let terminal = SessionTab(preview: .local, known: KnownHosts(), name: "Kept", live: false)
-    tabs.adopt(terminal)
-    let original = window.frame
-    let behavior = window.collectionBehavior
-    controller.attach(to: window)
+    let main = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
+    var made: [KeyedWorkspaceWindow] = []
+    defer { controller.stop(); main.close(); for window in made { window.close() } }
+    main.makeKeyAndOrderFront(nil)
+    let frame = main.frame
+    let behavior = main.collectionBehavior
+    controller.attachMain(main)
+    controller.provide {
+      let window = self.panel()
+      made.append(window)
+      return window
+    }
+    #expect(made.isEmpty, "nothing is made until the quick terminal is asked for")
+
     tabs.perform(.quickTerminal)
-    #expect(controller.isQuick)
-    #expect(window.isVisible)
-    #expect(window.level == .floating)
+    let quick = try #require(made.first)
+    #expect(made.count == 1)
+    #expect(quick !== main)
+    #expect(quick.isVisible)
+    #expect(controller.isShown)
     // An overlay: key without the app, on every Space, a full-screen one
-    // included, and never the main window.
-    #expect(window.styleMask.contains(.nonactivatingPanel))
-    #expect(!window.canBecomeMain)
-    #expect(window.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]))
-    #expect(!window.collectionBehavior.contains(.fullScreenPrimary))
-    #expect(window.frameAutosaveName.isEmpty, "the overlay's frame is not what the next launch opens at")
+    // included, never the main window, and never full screen itself.
+    #expect(quick.level == .floating)
+    #expect(quick.styleMask.contains(.nonactivatingPanel))
+    #expect(!quick.canBecomeMain)
+    #expect(quick.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]))
+    #expect(!quick.collectionBehavior.contains(.fullScreenPrimary))
+    #expect(quick.frameAutosaveName.isEmpty)
+
+    // The ordinary window is exactly as it was, and still on screen.
+    #expect(main.isVisible, "showing the quick terminal does not take the ordinary window away")
+    #expect(main.frame == frame)
+    #expect(main.collectionBehavior == behavior)
+    #expect(main.level == .normal)
+    #expect(!main.styleMask.contains(.nonactivatingPanel))
+    #expect(main.canBecomeMain)
+
     tabs.perform(.quickTerminal)
-    #expect(!window.isVisible)
-    #expect(!window.collectionBehavior.contains(.canJoinAllSpaces))
-    #expect(tabs.current?.id == terminal.id)
+    #expect(!quick.isVisible)
+    #expect(main.isVisible, "hiding it leaves the ordinary window too")
+    #expect(main.frame == frame)
+
     tabs.perform(.quickTerminal)
-    #expect(window.isVisible)
-    #expect(window.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]))
+    #expect(quick.isVisible)
+    #expect(made.count == 1, "the same panel comes back, with its tabs")
     let elsewhere = KeyedWindow.make()
     defer { elsewhere.close() }
     elsewhere.makeKeyAndOrderFront(nil)
     controller.statusItemClicked()
-    #expect(!window.isVisible, "the menu bar closes it even after the click took the key")
+    #expect(!quick.isVisible, "the menu bar closes it even after the click took the key")
     controller.statusItemClicked()
-    #expect(window.isVisible)
-    #expect(controller.isQuick)
-    tabs.perform(.restoreWindow)
-    #expect(!controller.isQuick)
-    #expect(window.frame == original)
-    #expect(window.collectionBehavior == behavior)
-    #expect(window.collectionBehavior.contains(.fullScreenPrimary), "an ordinary window again, full screen and all")
-    #expect(!window.styleMask.contains(.nonactivatingPanel))
-    #expect(window.canBecomeMain)
-    #expect(window.level == .normal)
-    #expect(window.frameAutosaveName == autosave)
-    #expect(tabs.current?.id == terminal.id)
+    #expect(quick.isVisible)
+    #expect(main.isVisible && main.frame == frame)
   }
 
-  @Test("the Dock brings back the ordinary window, from a hidden overlay and from one still up")
-  func dockReopensOrdinary() throws {
-    let suite = "quick-terminal-reopen.\(UUID())"
+  @Test("two windows on one set of tabs: the one in front is the last key while shown, whatever order they report in")
+  func frontWindow() throws {
+    let suite = "quick-terminal-front.\(UUID())"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
-    let controller = QuickTerminalController(defaults: defaults)
-    let window = KeyedWorkspaceWindow(hosting: Color.clear, autosaveName: nil)
-    defer { controller.stop(); window.close() }
-    let original = window.frame
-    controller.attach(to: window)
-    #expect(!controller.reopen(), "an ordinary window is the Dock's usual reveal")
+    let tabs = TabSet(defaults: defaults)
+    let main = UUID()
+    let quick = UUID()
+    #expect(tabs.isFront(main) && tabs.isFront(quick), "with none noted, either may act")
+    tabs.note(window: main, shown: true, key: true)
+    tabs.note(window: quick, shown: false, key: false)
+    #expect(tabs.isFront(main) && !tabs.isFront(quick))
 
-    controller.toggle()
-    controller.hide()
-    #expect(controller.isQuick && !window.isVisible)
-    #expect(controller.reopen())
-    #expect(!controller.isQuick)
-    #expect(window.isVisible)
-    #expect(window.level == .normal)
-    #expect(!window.styleMask.contains(.nonactivatingPanel))
-    #expect(window.collectionBehavior.contains(.fullScreenPrimary))
-    #expect(window.frame == original)
+    // The overlay takes the key before the ordinary window reports losing it.
+    tabs.note(window: quick, shown: true, key: true)
+    tabs.note(window: main, shown: true, key: false)
+    #expect(tabs.isFront(quick) && !tabs.isFront(main))
+    #expect(tabs.keyWindows == [quick])
+    #expect(tabs.shownWindows == [main, quick])
 
-    controller.toggle()
-    #expect(controller.isQuick && window.isVisible)
-    #expect(controller.reopen(), "an overlay still up comes back ordinary too")
-    #expect(!controller.isQuick)
-    #expect(window.isVisible)
-    #expect(window.level == .normal)
-    #expect(window.frame == original)
+    // Hidden, it hands the front to the window still on screen, key or not.
+    tabs.note(window: quick, shown: false, key: false)
+    #expect(tabs.isFront(main))
+    #expect(tabs.keyWindows.isEmpty)
+    #expect(tabs.shownWindows == [main])
+
+    // The other order: the ordinary window loses the key first.
+    tabs.note(window: main, shown: true, key: true)
+    tabs.note(window: main, shown: true, key: false)
+    tabs.note(window: quick, shown: true, key: true)
+    #expect(tabs.isFront(quick))
+    // Another app in front: neither is key, and the last one in front stays.
+    tabs.note(window: quick, shown: true, key: false)
+    #expect(tabs.isFront(quick) && tabs.keyWindows.isEmpty)
   }
 
-  @Test("status menu follows visibility and reuses the existing window actions")
+  @Test("status menu shows or hides the quick terminal, and quits")
   func statusMenu() throws {
     let suite = "quick-terminal-menu.\(UUID())"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let controller = QuickTerminalController(defaults: defaults)
-    let window = KeyedWindow.make()
-    let closeGuard = HideInsteadOfClose(forwarding: window.delegate)
-    window.delegate = closeGuard
-    defer { controller.stop(); window.delegate = nil; window.close() }
+    let window = panel()
+    defer { controller.stop(); window.close() }
     controller.attach(to: window)
-    let original = window.frame
     let initial = controller.statusMenu()
-    #expect(initial.items.map(\.title) == ["Show Quick Terminal", "Restore Window", "", "Close Window", "", "Quit Tether"])
-    #expect(initial.items[1].isEnabled == false)
+    #expect(initial.items.map(\.title) == ["Show Quick Terminal", "", "Quit Tether"])
     #expect(initial.items.last?.action == #selector(NSApplication.terminate(_:)))
     #expect(initial.items.last?.target === NSApplication.shared)
     let show = try #require(initial.items.first)
     #expect(NSApplication.shared.sendAction(try #require(show.action), to: show.target, from: show))
-    #expect(controller.isQuick && window.isVisible)
+    #expect(controller.isShown && window.isVisible)
     let visible = controller.statusMenu()
     #expect(visible.items[0].title == "Hide Quick Terminal")
-    #expect(visible.items[1].isEnabled)
     let hide = visible.items[0]
     #expect(NSApplication.shared.sendAction(try #require(hide.action), to: hide.target, from: hide))
     #expect(!window.isVisible)
-    let hidden = controller.statusMenu()
-    #expect(hidden.items[0].title == "Show Quick Terminal")
-    #expect(!hidden.items[3].isEnabled)
-    let restore = hidden.items[1]
-    #expect(NSApplication.shared.sendAction(try #require(restore.action), to: restore.target, from: restore))
-    #expect(!controller.isQuick && window.isVisible)
-    #expect(window.frame == original)
-    let close = controller.statusMenu().items[3]
-    #expect(NSApplication.shared.sendAction(try #require(close.action), to: close.target, from: close))
-    #expect(!window.isVisible)
-    #expect(window.delegate === closeGuard, "closing keeps the existing session-preserving delegate")
+    #expect(controller.statusMenu().items[0].title == "Show Quick Terminal")
   }
 
-  @Test("disabling Quick Terminal restores the window; topmost is independent and persisted")
+  @Test("disabling Quick Terminal hides it; on top is the ordinary window's, and persisted")
   func preferences() throws {
     let suite = "quick-terminal-preferences.\(UUID())"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let controller = QuickTerminalController(defaults: defaults)
-    let window = KeyedWindow.make()
-    defer { controller.stop(); window.close() }
-    let frame = window.frame
+    let main = KeyedWindow.make()
+    let window = panel()
+    defer { controller.stop(); main.close(); window.close() }
+    controller.attachMain(main)
     controller.attach(to: window)
     controller.alwaysOnTop = true
-    #expect(window.level == .floating)
+    #expect(main.level == .floating)
     controller.toggle()
+    #expect(window.isVisible)
     controller.autoHide = false
     controller.enabled = false
-    #expect(!controller.isQuick)
-    #expect(window.frame == frame)
-    #expect(window.level == .floating)
+    #expect(!window.isVisible)
+    #expect(window.level == .floating, "the overlay floats whatever on top says")
     controller.toggle()
-    #expect(!controller.isQuick)
+    #expect(!window.isVisible)
     let restored = QuickTerminalController(defaults: defaults)
     #expect(!restored.enabled)
     #expect(restored.alwaysOnTop)
@@ -228,7 +226,8 @@ struct QuickTerminalTests {
     controller.showsMenuBarIcon = false
     #expect(!QuickTerminalController(defaults: defaults).showsMenuBarIcon)
     controller.alwaysOnTop = false
-    #expect(window.level == .normal)
+    #expect(main.level == .normal)
+    #expect(window.level == .floating)
   }
 
   @Test("system-wide registrations report conflicts, suspend for recording and release on stop")

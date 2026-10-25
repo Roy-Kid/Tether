@@ -2,6 +2,19 @@ import SwiftUI
 import Tether
 import TetherUI
 
+extension EnvironmentValues {
+  /// Whether this window is in front of those showing its tabs
+  /// (`TabSet.isFront`). Two windows can show the same tabs at different
+  /// sizes; the one in front sizes the sessions and shows the pickers.
+  @Entry var isFrontWindow = true
+}
+
+/// A size the surface asked for.
+private struct GridSize: Equatable {
+  let columns: UInt16
+  let rows: UInt16
+}
+
 /// One tab's contents.
 struct SessionView: View {
   let tab: SessionTab
@@ -13,6 +26,10 @@ struct SessionView: View {
   var onFocus: () -> Void = {}
   @AppStorage(TetherUI.Palette.colorStyleKey) private var colorStyle = TetherUI.Palette.defaultColorStyle
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.isFrontWindow) private var drivesSize
+  /// What this window's surface would size the session to. Kept while
+  /// another window sizes it, and applied when this one does again.
+  @State private var wanted: GridSize?
 
   /// What the surface below will draw with, and what the far side is told.
   /// The window already followed the system theme; the grid follows that.
@@ -48,6 +65,11 @@ struct SessionView: View {
     // that changes: a program asks once, at the start, and paints itself for
     // the answer it got.
     .task(id: palette) { tab.use(palette: palette.remoteForm) }
+    // Sizing passed to this window: the session takes the size it shows here.
+    .onChange(of: drivesSize) { _, drives in
+      guard drives, let wanted else { return }
+      tab.resize(columns: wanted.columns, rows: wanted.rows)
+    }
   }
 
   /// What the terminal last showed, dimmed and taking no input. Text can
@@ -69,7 +91,10 @@ struct SessionView: View {
         dirtyRows: tab.dirtyRows,
         active: active,
         onInput: { tab.send($0) },
-        onResize: { tab.resize(columns: $0, rows: $1) },
+        onResize: { columns, rows in
+          wanted = GridSize(columns: columns, rows: rows)
+          if drivesSize { tab.resize(columns: columns, rows: rows) }
+        },
         onFocus: onFocus,
         onScroll: { tab.scroll($0) },
         onClaimWheel: { tab.claimWheel($0, column: $1, row: $2) },

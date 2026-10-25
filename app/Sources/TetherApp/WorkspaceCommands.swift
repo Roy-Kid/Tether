@@ -62,7 +62,6 @@ struct WorkspaceCommands: Commands {
     CommandGroup(after: .windowArrangement) {
       #if os(macOS)
         command(.quickTerminal)
-        command(.restoreWindow)
         command(.alwaysOnTop)
         Divider()
       #endif

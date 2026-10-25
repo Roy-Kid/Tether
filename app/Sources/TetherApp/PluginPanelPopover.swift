@@ -104,13 +104,26 @@ struct PluginPanelPopover: NSViewRepresentable {
     }
 
     private func fitToContent() async {
-      guard !chosen, popover.isShown, let root = popover.contentViewController?.view,
-        let web = Self.webView(in: root) else { return }
-      let value = try? await web.evaluateJavaScript(
-        "Math.ceil(document.body.getBoundingClientRect().height)")
-      guard !Task.isCancelled, !chosen, let measured = Self.points(value) else { return }
-      let height = min(Self.maximumHeight, max(Self.minimumHeight, measured))
-      let size = NSSize(width: Self.contentWidth, height: height)
+      guard !chosen, popover.isShown, let controller = popover.contentViewController else { return }
+      let root = controller.view
+      if let web = Self.webView(in: root) {
+        let value = try? await web.evaluateJavaScript(
+          "Math.ceil(document.body.getBoundingClientRect().height)")
+        guard !Task.isCancelled, !chosen, let measured = Self.points(value) else { return }
+        let height = min(Self.maximumHeight, max(Self.minimumHeight, measured))
+        let size = NSSize(width: Self.contentWidth, height: height)
+        guard abs(popover.contentSize.height - size.height) > 0.5
+          || abs(popover.contentSize.width - size.width) > 0.5 else { return }
+        popover.contentSize = size
+        return
+      }
+      // A SwiftUI panel brings its own frame. Follow that instead of the web page's width.
+      guard let hosting = controller.children.compactMap({ $0 as? NSHostingController<AnyView> }).first else { return }
+      hosting.sizingOptions = .intrinsicContentSize
+      hosting.view.layoutSubtreeIfNeeded()
+      let fitted = hosting.view.intrinsicContentSize
+      guard fitted.width.isFinite, fitted.height.isFinite, fitted.width > 1, fitted.height > 1 else { return }
+      let size = Self.clamp(NSSize(width: fitted.width, height: fitted.height))
       guard abs(popover.contentSize.height - size.height) > 0.5
         || abs(popover.contentSize.width - size.width) > 0.5 else { return }
       popover.contentSize = size

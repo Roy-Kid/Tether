@@ -44,8 +44,10 @@ import TmuxPlugin
       let window = WorkspaceWindow(hosting: RootHost(model: model))
       self.window = window
       model.openAdditionalWindow = { [weak self] in self?.openAdditionalWindow() }
-      model.tabs.quickTerminal.attach(to: window)
-      model.tabs.quickTerminal.useBindings(model.tabs.keyBindings)
+      let quick = model.tabs.quickTerminal
+      quick.attachMain(window)
+      quick.provide { [weak self] in self?.makeQuickTerminal() ?? NSPanel() }
+      quick.useBindings(model.tabs.keyBindings)
       window.makeKeyAndOrderFront(nil)
       // Launch activated the app before it had a window, which brings no
       // Space forward. Now that it has one, once more — measured: launched
@@ -69,10 +71,19 @@ import TmuxPlugin
       for extra in extras { extra.tabs.closeAll() }
     }
 
+    /// The quick terminal: a panel of its own showing the main window's
+    /// tabs, so the two share every tab and session and neither moves or
+    /// hides the other. Made the first time it is asked for. Closing it puts
+    /// it away like hiding it does.
+    private func makeQuickTerminal() -> NSWindow {
+      WorkspaceWindow(hosting: RootHost(model: model, primary: false), autosaveName: nil)
+    }
+
     /// Another workspace window. It has its own tabs and does not hide in
     /// place of closing, and it does not rewrite the main window's history.
     func openAdditionalWindow() {
       let tabs = TabSet()
+      tabs.quickTerminal = model.tabs.quickTerminal
       let window = WorkspaceWindow(
         hosting: RootHost(model: model, ownedSessions: tabs)
           .environment(\.workspaceHidesOnClose, false),
@@ -103,11 +114,10 @@ import TmuxPlugin
 
     /// The main window, not just any: with Settings open and the main
     /// window put away, the icon still means the terminals. Answered here,
-    /// so nothing else opens a second window for the same scene. And the
-    /// ordinary window, not the overlay: the Dock is how a person asks for
-    /// a window, the shortcut how they ask for the quick terminal.
+    /// so nothing else opens a second window for the same scene. The quick
+    /// terminal is not it either: the Dock is how a person asks for a
+    /// window, the shortcut how they ask for the quick terminal.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-      if model.tabs.quickTerminal.reopen() { return false }
       guard let window = HideInsteadOfClose.mainWindow(in: sender) else { return true }
       return !HideInsteadOfClose.reveal(window)
     }
@@ -225,7 +235,12 @@ struct RootHost: View {
   /// Nil on the main window, which keeps `model.tabs`. An additional window
   /// passes its own set and closes for real.
   var ownedSessions: TabSet? = nil
+  /// False for the quick terminal: the main window's tabs in a second
+  /// window, which must not open them, import, or sync a second time.
+  var primary = true
   private var windowTabs: TabSet { ownedSessions ?? model.tabs }
+  /// The window that starts the app: the main window's tabs, in the main window.
+  private var isPrimary: Bool { ownedSessions == nil && primary }
   #if os(iOS)
     @Environment(\.scenePhase) private var phase
   #endif
@@ -287,18 +302,18 @@ struct RootHost: View {
         }
         windowTabs.reconcileClosedTabs(with: model.store.hosts)
         windowTabs.keyBindings.register(KeyBindingCatalog.commands(registry: model.registry))
-        if ownedSessions == nil { model.store.useKeyBindings(windowTabs.keyBindings) }
+        if isPrimary { model.store.useKeyBindings(windowTabs.keyBindings) }
         if ownedSessions != nil, windowTabs.tabs.isEmpty {
           windowTabs.open(.local, password: "")
         }
         await Task.yield()
         // The first terminal waits for nothing slow: the library on this
         // device is already read, and a shell here needs nothing else.
-        if ownedSessions == nil { await openAtLaunch() }
+        if isPrimary { await openAtLaunch() }
         // Then the SSH file and the keychain, off the main actor. Ask before
         // copying ~/.ssh/config over the library. The file is not written.
         // An additional window shares this library; it does not import again.
-        if ownedSessions == nil {
+        if isPrimary {
           await model.store.refresh()
           model.store.offerConfigurationImport()
           await model.store.startSync()
@@ -317,7 +332,7 @@ struct RootHost: View {
         }
       }
       .onChange(of: model.store.accountGeneration) { _, _ in windowTabs.closeAccountSessions() }
-      .dialog(for: model.imports.notice) { notice in
+      .dialog(for: isPrimary ? model.imports.notice : nil) { notice in
         Dialog.notice(notice.title, message: notice.message) { model.imports.notice = nil }
       }
       #if os(macOS)
@@ -326,12 +341,18 @@ struct RootHost: View {
         .background {
           WindowState { value in
             if value.key { model.keyTabs = windowTabs }
-            else if model.keyTabs === windowTabs { model.keyTabs = nil }
+            else if model.keyTabs === windowTabs {
+              // Two windows can show these tabs. Cleared only once neither
+              // is key, after both have reported (`TabSet.note`).
+              DispatchQueue.main.async {
+                if windowTabs.keyWindows.isEmpty, model.keyTabs === windowTabs { model.keyTabs = nil }
+              }
+            }
             attend(value.key)
           }
           .allowsHitTesting(false)
         }
-        .environment(\.workspaceHidesOnClose, ownedSessions == nil)
+        .environment(\.workspaceHidesOnClose, isPrimary)
       #else
         .onChange(of: phase) { _, phase in attend(phase == .active) }
         .onContinueUserActivity(ASCredentialExchangeActivity) { model.imports.receive($0) }

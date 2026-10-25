@@ -8,7 +8,7 @@ enum WorkspaceAction: String, CaseIterable {
   case restoreTab
   case splitLeft, splitRight, splitUp, splitDown, joinGroups
   case reconnect
-  case quickTerminal, restoreWindow, alwaysOnTop
+  case quickTerminal, alwaysOnTop
 
   /// The tab bar, zen and closing the window belong to a Mac window. The inspector and splits
   /// are here everywhere, and `TabSet.canPerform` keeps them to a window
@@ -17,7 +17,7 @@ enum WorkspaceAction: String, CaseIterable {
     #if os(macOS)
       allCases
     #else
-      allCases.filter { $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow && $0 != .quickTerminal && $0 != .restoreWindow && $0 != .alwaysOnTop }
+      allCases.filter { $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow && $0 != .quickTerminal && $0 != .alwaysOnTop }
     #endif
   }
 
@@ -42,7 +42,6 @@ enum WorkspaceAction: String, CaseIterable {
     // One chord, iTerm2's Open Quickly. Taken before a system menu item on the same keys.
     case .commandMenu: definition("Command Palette", "View", KeyBinding("o", [.command, .shift]))
     case .quickTerminal: definition("Toggle Quick Terminal", "Window", KeyBinding("`", .control))
-    case .restoreWindow: definition("Return to Normal Window", "Window")
     case .alwaysOnTop: definition("Keep Window on Top", "Window")
     case .quickSwitch: definition("Quick Switch…", "View", KeyBinding("p"))
     case .inspector: definition("Inspector", "View")
@@ -188,12 +187,6 @@ extension TabSet {
       #else
         false
       #endif
-    case .restoreWindow:
-      #if os(macOS)
-        quickTerminal.isQuick
-      #else
-        false
-      #endif
     case .alwaysOnTop:
       #if os(macOS)
         true
@@ -220,10 +213,6 @@ extension TabSet {
     case .quickTerminal:
       #if os(macOS)
         quickTerminal.toggle()
-      #endif
-    case .restoreWindow:
-      #if os(macOS)
-        quickTerminal.restore()
       #endif
     case .alwaysOnTop:
       #if os(macOS)

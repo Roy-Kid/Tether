@@ -60,7 +60,9 @@ public final class InstalledPlugins {
         do {
           let manifest = try PackageValidator.validate(directory: root)
           if pluginIDs.contains(manifest.id) { continue }
-          try register(root)
+          // A plugin already owns this id. The copy on disk is not a second one.
+          if registry.plugins.contains(where: { $0.metadata.id == manifest.id }) { continue }
+          _ = try register(root)
         } catch { problems.append("\(root.lastPathComponent): \(error.localizedDescription)") }
       }
     } catch { problems.append(error.localizedDescription) }

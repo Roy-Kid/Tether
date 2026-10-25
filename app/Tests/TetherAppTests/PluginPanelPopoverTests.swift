@@ -107,6 +107,26 @@ struct PluginPanelPopoverTests {
       == PluginPanelPopover.Anchor.maximumHeight)
   }
 
+  @Test func aSwiftUIPanelOpensAtItsOwnSize() async throws {
+    _ = NSApplication.shared
+    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 800),
+      styleMask: [.titled], backing: .buffered, defer: false)
+    let anchor = PluginPanelPopover.Anchor(frame: NSRect(x: 200, y: 20, width: 40, height: 24))
+    window.contentView?.addSubview(anchor)
+    window.makeKeyAndOrderFront(nil)
+    defer { anchor.stop(); window.orderOut(nil) }
+    anchor.workspace = PanelWorkspace()
+    anchor.presented = true
+    anchor.updatePresentation()
+    for _ in 0..<40 {
+      if abs(anchor.popover.contentSize.width - 400) < 1,
+        abs(anchor.popover.contentSize.height - 450) < 1 { break }
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    #expect(abs(anchor.popover.contentSize.width - 400) < 1)
+    #expect(abs(anchor.popover.contentSize.height - 450) < 1)
+  }
+
   private func button(_ title: String, in view: NSView) -> NSButton? {
     if let button = view as? NSButton, button.title == title { return button }
     for child in view.subviews { if let found = button(title, in: child) { return found } }

@@ -169,7 +169,8 @@ private struct HostSearchField: NSViewRepresentable {
 
 private struct HostListStyle: ViewModifier {
   #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.horizontalSizeClass) private var width
+    @Environment(\.verticalSizeClass) private var height
   #endif
 
   @ViewBuilder
@@ -177,7 +178,9 @@ private struct HostListStyle: ViewModifier {
     #if os(macOS)
       content.listStyle(.sidebar)
     #else
-      if sizeClass == .regular {
+      // A phone on its side is wide and short. That is still the portrait
+      // list: the sidebar style is the iPad's column.
+      if width == .regular && height == .regular {
         content.listStyle(.sidebar)
       } else {
         content.listStyle(.insetGrouped)

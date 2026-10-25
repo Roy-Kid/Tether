@@ -6,6 +6,9 @@ import TetherPluginHost
 import TetherPluginKit
 import TetherUI
 import TmuxPlugin
+#if os(macOS)
+import NervePlugin
+#endif
 
 /// What the app holds for the life of the process, made once: the library,
 /// the sessions, the plugins and the keychain. The Mac's window and the
@@ -49,6 +52,9 @@ final class AppModel {
     registry.register(TmuxPlugin())
     registry.register(FilesPlugin())
     registry.register(PortsPlugin())
+    #if os(macOS)
+    registry.register(NervePlugin())
+    #endif
     self.registry = registry
   }
 }

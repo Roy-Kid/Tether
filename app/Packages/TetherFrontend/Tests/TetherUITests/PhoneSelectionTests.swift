@@ -72,6 +72,27 @@ struct PhoneSelectionTests {
     #expect(!view.canPerformAction(#selector(view.copy(_:)), withSender: nil))
   }
 
+  @Test("the software keyboard stays down until the terminal is tapped, and after leaving the app")
+  func keyboardStaysDownUntilTap() {
+    let saved = PhoneKeyboard.staysDown
+    defer { PhoneKeyboard.staysDown = saved }
+    PhoneKeyboard.staysDown = true
+    #expect(!PhoneKeyboard.allowsAutomaticFocus(phone: true))
+    #expect(PhoneKeyboard.allowsAutomaticFocus(phone: false))
+    PhoneKeyboard.noteTapped(phone: true)
+    #expect(PhoneKeyboard.allowsAutomaticFocus(phone: true))
+    PhoneKeyboard.noteLeftForeground(phone: true)
+    #expect(!PhoneKeyboard.allowsAutomaticFocus(phone: true))
+    PhoneKeyboard.noteTapped(phone: false)
+    #expect(!PhoneKeyboard.allowsAutomaticFocus(phone: true))
+    PhoneKeyboard.noteLeftForeground(phone: false)
+    #expect(!PhoneKeyboard.allowsAutomaticFocus(phone: true))
+    let view = view()
+    #expect(!view.canBecomeFirstResponder)
+    PhoneKeyboard.noteTapped(phone: true)
+    #expect(view.canBecomeFirstResponder)
+  }
+
   @Test("Paste clears selection and sends a paste event rather than keyboard text")
   func pasteIsPaste() {
     let view = view()

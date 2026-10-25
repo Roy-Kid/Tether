@@ -14,9 +14,11 @@ struct PaletteOverlay: View {
   let store: HostStore
   let commands: [CommandItem]
   let onPickHost: (Host) -> Void
+  /// Shown in the window in front: two windows can show the same tabs.
+  @Environment(\.isFrontWindow) private var isFront
 
   var body: some View {
-    if let palette = tabs.palette {
+    if isFront, let palette = tabs.palette {
       ZStack {
         Color.black.opacity(UIStyle.scrimOpacity)
           .ignoresSafeArea()

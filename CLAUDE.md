@@ -209,17 +209,20 @@ still updates a stanza someone edited and never undoes an untouched one.
 library through iCloud again.
 
 On a Mac the workspace window is the app's own `NSPanel`
-(`WorkspaceWindow`), hosting the SwiftUI root, not a SwiftUI scene: the
-quick terminal is that same window shown as a non-activating overlay — key
-without making Tether the active app, on every Space, another app's
-full-screen one on another display included — and only a panel can be
-that. It opens on the display holding the frontmost app's window. How the
-window is summoned decides how it shows: the shortcut and the menu bar
-mean the overlay, the Dock means the ordinary window, so a Dock click
-leaves quick mode and Stage Manager has a window to list again. The
-overlay's size is remembered on its own: dragged once, it comes back that
-size, hung from the top and centred, while the ordinary window's frame
-stays what it was. Menu enabling reads the model (`TabSet.menuShortcuts`);
+(`WorkspaceWindow`), hosting the SwiftUI root, not a SwiftUI scene. The
+quick terminal is another of them over the same tabs, always shown as a
+non-activating overlay — key without making Tether the active app, on
+every Space, another app's full-screen one on another display included —
+and only a panel can be that. The two do not touch: the shortcut and the
+menu bar show and hide the overlay, the Dock means the ordinary window,
+and neither moves, hides or restyles the other. Both show every tab and
+session; the one in front — last key while shown — sizes the sessions and
+answers intents, the host picker and the palette, and the other keeps the
+size it wants until it is in front again (`TabSet.note`). The overlay is
+made the first time it is asked for, opens on the display holding the
+frontmost app's window, and hiding or closing it closes no session. Its size is
+remembered on its own: dragged once, it comes back that size, hung from
+the top and centred. Menu enabling reads the model (`TabSet.menuShortcuts`);
 a focused value does not leave an `NSHostingView`.
 
 tmux is a tab plugin: an accessory on every terminal tab,
