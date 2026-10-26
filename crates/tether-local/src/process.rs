@@ -276,6 +276,10 @@ fn spawn(command: &Command, stdin: Stdio) -> Result<Child, LocalError> {
 
     let (program, arguments, directory, term) = command.parts();
     let mut builder = tokio::process::Command::new(program);
+    // Pipe-based helpers must not allocate a console when embedded in a
+    // Windows GUI. ConPTY shells use their own, separate spawn path.
+    #[cfg(windows)]
+    builder.creation_flags(0x0800_0000 /* CREATE_NO_WINDOW */);
     builder
         .args(arguments)
         .env("TERM", term)

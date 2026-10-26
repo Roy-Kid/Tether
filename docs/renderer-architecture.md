@@ -2,7 +2,8 @@
 
 Windows, macOS and iOS use `tether-render`: wgpu + cosmic-text + glyphon.
 Windows keeps its existing backend selection policy (the measured path is
-DX12); Apple presents through wgpu's Metal backend. This is one implementation
+DX12); alpha-composited Windows hosts opt into DX12 DirectComposition as described
+in [Windows appearance](windows-appearance.md). Apple presents through wgpu's Metal backend. This is one implementation
 of terminal drawing, not three renderers sharing a GPU API.
 
 ```text
@@ -16,6 +17,24 @@ terminal state → ScreenFrame + palette + damage + pointer overlay
 ```
 
 ## Ownership and interfaces
+
+Windows and macOS use the same workspace composition rule: the native host
+provides one system material plus one palette-coloured tint across the workspace.
+The shared wgpu renderer receives a default background alpha of zero for glass
+or one for solid; it does not apply the workspace tint again. Foreground, cursor
+and explicit cell colours keep their opacity. The default workspace tint is 60%,
+bounded to 50–100%; accessibility/system transparency restrictions resolve it to
+solid. Native settings and material API adapters stay in each application.
+
+Windows resolves system appearance outside the draw loop. Native broadcasts are
+coalesced to one pending UI refresh, and system capability values are refreshed
+there. Each TerminalControl retains its resolved render palette until the logical
+palette or background mode changes; unchanged appearance settings do not request
+another draw. Logical session colours stay independent of transparent GPU clear
+colours. Rebinding/detaching a control releases its previous frame subscription.
+Workspace notifications also coalesce and unsubscribe before shutdown; native
+titlebar attachment changes only when the drag target changes. These host-side
+optimizations do not add another renderer or change the SDK contracts.
 
 - The terminal core owns VT state, damage and input encoding, with no UI/GPU
   dependencies. The render crate owns font measurement, layout, shaping,

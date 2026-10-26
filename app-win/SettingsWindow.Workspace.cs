@@ -63,7 +63,11 @@ public sealed partial class SettingsWindow
         {
             var bindings = fields.ToDictionary(p => p.Key, p => p.Value.Text.Trim());
             problem.Text = WorkspaceCommands.Validate(bindings, AppSettings.Current.Terminal) ?? "";
-            if (problem.Text.Length == 0) ShowSaveResult((AppSettings.Current with { KeyBindings = bindings }).Save());
+            if (problem.Text.Length == 0)
+            {
+                ShowSaveResult((AppSettings.Current with { KeyBindings = bindings }).Save());
+                problem.Text = QuickTerminalController.Current?.Problem ?? "";
+            }
         };
         var reset = new Button { Content = "Restore defaults" };
         reset.Click += (_, _) => { ShowSaveResult((AppSettings.Current with { KeyBindings = new() }).Save()); BuildWorkspaceSettings(); };

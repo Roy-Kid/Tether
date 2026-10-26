@@ -20,12 +20,19 @@ internal static class Appearance
             color.AlphaByte, color.RedByte, color.GreenByte, color.BlueByte));
     }
 
-    /// <summary>
-    /// Paints the one brush shared by the terminal canvas and the selected tab.
-    /// </summary>
+    public static SolidColorBrush WorkspaceBackground(Palette palette, Brush? existing = null)
+    {
+        var background = palette.Background with { Alpha = (float)WindowEffects.Opacity };
+        var color = Microsoft.UI.ColorHelper.FromArgb(background.AlphaByte, background.RedByte, background.GreenByte, background.BlueByte);
+        if (existing is not SolidColorBrush brush) return new SolidColorBrush(color);
+        if (brush.Color != color) brush.Color = color;
+        return brush;
+    }
+
+    /// <summary>The canvas and selected tab expose the one native workspace tint.</summary>
     public static void SetCanvas(Palette palette)
     {
         if (Application.Current.Resources["TerminalCanvasBrush"] is SolidColorBrush brush)
-            brush.Color = Background(palette).Color;
+            brush.Color = palette.Background.Alpha < 1 ? Microsoft.UI.Colors.Transparent : Background(palette).Color;
     }
 }

@@ -36,10 +36,12 @@ public sealed partial class SettingsWindow : Window
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         VersionLabel.Text = version is null ? "v0.1.0" : $"v{version.Major}.{version.Minor}.{version.Build}";
         AppBranding.Apply(this);
+        WindowPlacement.Own(this, topmost: false);
         SystemBackdrop = new MicaBackdrop();
         BuildExtensions();
         BuildTerminal();
         BuildWorkspaceSettings();
+        BuildQuickTerminalSettings();
         BuildSecurity();
         IdentitiesPane.Children.Add(new TextBlock { Text = "Manage account identities, SSH keys, passwords, TOTP and authentication confirmation policies.", TextWrapping = TextWrapping.Wrap });
         var identities = new Button { Content = "Manage Identities" };
@@ -58,7 +60,8 @@ public sealed partial class SettingsWindow : Window
             .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.CloseLastTab) ?? LastTabPicker.Items[0];
         _loading = false;
         AppSettings.Changed += ApplyAppearance;
-        SettingsRoot.ActualThemeChanged += (_, _) => UpdateTitleBar();
+        WindowEffects.Observe(this, SettingsRoot, ApplyAppearance);
+        SettingsRoot.ActualThemeChanged += (_, _) => { UpdateBackground(); UpdateTitleBar(); };
         SettingsRoot.Loaded += (_, _) => UpdateTitleBar();
         Closed += (_, _) => { AppSettings.Changed -= ApplyAppearance; _closeFontPreview?.Invoke(); _closeFontPreview = null; };
         ApplyAppearance();
@@ -69,6 +72,13 @@ public sealed partial class SettingsWindow : Window
     {
         _loading = true;
         SettingsRoot.RequestedTheme = Appearance.RequestedTheme;
+        WindowEffects.Apply(this);
+        UpdateBackground();
+        MaterialPicker.SelectedItem = MaterialPicker.Items.Cast<ComboBoxItem>()
+            .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.WindowMaterial) ?? MaterialPicker.Items[0];
+        BackgroundOpacitySlider.Value = double.IsFinite(AppSettings.Current.BackgroundOpacity)
+            ? Math.Clamp(AppSettings.Current.BackgroundOpacity * 100, 50, 100) : 60;
+        BackgroundOpacitySlider.IsEnabled = AppSettings.Current.WindowMaterial != "solid" && WindowEffects.CompositionSurface;
         ThemePicker.SelectedItem = ThemePicker.Items.Cast<ComboBoxItem>()
             .FirstOrDefault(item => (string)item.Tag == AppSettings.Current.Appearance) ?? ThemePicker.Items[0];
         _loading = false;
@@ -87,6 +97,9 @@ public sealed partial class SettingsWindow : Window
             ((SolidColorBrush)SaveProblem.Foreground).Color;
     }
 
+    private void UpdateBackground() => SettingsRoot.Background =
+        Appearance.WorkspaceBackground(TerminalAppearance.Choose(SettingsRoot.ActualTheme == ElementTheme.Dark), SettingsRoot.Background);
+
     private void Section_Changed(NavigationView sender, NavigationViewSelectionChangedEventArgs e)
     {
         if (StartupPane is null || AppearancePane is null || ExtensionsPane is null || TerminalPane is null) return;
@@ -94,7 +107,7 @@ public sealed partial class SettingsWindow : Window
         PageHeading.Text = tag switch
         {
             "terminal" => "Terminal", "appearance" => "Appearance", "extensions" => "Extensions",
-            "keys" => "Key Bindings", "history" => "Session History", "security" => "Security",
+            "quickTerminal" => "Quick Terminal", "keys" => "Key Bindings", "history" => "Session History", "security" => "Security",
             "files" => "Files", "identities" => "Identities", _ => "General",
         };
         StartupPane.Visibility = tag is null or "startup" ? Visibility.Visible : Visibility.Collapsed;
@@ -102,6 +115,7 @@ public sealed partial class SettingsWindow : Window
         AppearancePane.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         TerminalPane.Visibility = tag == "terminal" ? Visibility.Visible : Visibility.Collapsed;
         ExtensionsPane.Visibility = tag == "extensions" ? Visibility.Visible : Visibility.Collapsed;
+        QuickTerminalPane.Visibility = tag == "quickTerminal" ? Visibility.Visible : Visibility.Collapsed;
         KeysPane.Visibility = tag == "keys" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPane.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
         SecurityPane.Visibility = tag == "security" ? Visibility.Visible : Visibility.Collapsed;
@@ -505,6 +519,18 @@ public sealed partial class SettingsWindow : Window
     {
         if (_loading || ThemePicker.SelectedItem is not ComboBoxItem { Tag: string theme }) return;
         ShowSaveResult((AppSettings.Current with { Appearance = theme }).Save());
+    }
+
+    private void Material_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || MaterialPicker.SelectedItem is not ComboBoxItem { Tag: string material }) return;
+        ShowSaveResult((AppSettings.Current with { WindowMaterial = material }).Save());
+    }
+
+    private void Opacity_Changed(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (_loading) return;
+        ShowSaveResult((AppSettings.Current with { BackgroundOpacity = e.NewValue / 100 }).Save());
     }
 
     private void Shell_Changed(object sender, SelectionChangedEventArgs e)

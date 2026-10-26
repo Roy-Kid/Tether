@@ -7,7 +7,7 @@ public sealed record TerminalPreferences
     public string FontFamily { get; init; } = "Consolas";
     public string WideFontFamily { get; init; } = "Microsoft YaHei UI";
     public double FontSize { get; init; } = 14;
-    public double Inset { get; init; } = 12;
+    public double Inset { get; init; } = 16;
     public string ColorScheme { get; init; } = "soft";
     public int PasteThreshold { get; init; } = 4096;
     public string Copy { get; init; } = "Ctrl+Shift+C";
@@ -57,6 +57,7 @@ public readonly record struct Shortcut(VirtualKey Key, bool Shift, bool Control,
         VirtualKey key;
         if (name.Length == 1 && char.IsAsciiLetterOrDigit(name[0])) key = (VirtualKey)name[0];
         else if (name == "EQUALS") key = (VirtualKey)187;
+        else if (name is "BACKQUOTE" or "`") key = (VirtualKey)192;
         else if (name == "MINUS") key = (VirtualKey)189;
         else if (!Enum.TryParse<VirtualKey>(parts[^1], true, out key) ||
             key is not (VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down

@@ -13,6 +13,12 @@ public sealed class TerminalPane : IAsyncDisposable
     public SessionModel Model { get; } = new();
     public TerminalControl Surface { get; }
     public string Title { get; set; } = "localhost";
+    /// <summary>Rename Terminal. While set, activity does not change the chip.</summary>
+    public string? PinnedName { get; set; }
+    /// <summary>Foreground program for the chip. Nil while the shell is at its prompt.</summary>
+    public string? ForegroundCommand { get; set; }
+    /// <summary>Directory last reported for the chip.</summary>
+    public string? LabelPath { get; set; }
     /// <summary>Which inspector plugin this tab has open. Each tab keeps its own; a cluster's files are not another's.</summary>
     public string? OpenInspector { get; set; }
     public Dictionary<string, string> PendingAttachments { get; } = new();

@@ -8,8 +8,7 @@
  <SolidColorBrush x:Key="ChromeSubtleBrush" Color="{ThemeResource TextFillColorSecondary}" />
  <SolidColorBrush x:Key="AccentBrush" Color="{ThemeResource SystemAccentColor}" />
  <SolidColorBrush x:Key="SuccessBrush" Color="{ThemeResource SystemFillColorSuccess}" />
- <!-- Same instance the selected tab uses, so the tab and the canvas stay one surface.
-      ApplyTerminalPalette replaces this color; the initial value matches Palette.Dark. -->
+ <!-- Canvas and selected tab expose the native workspace's single tint. -->
  <SolidColorBrush x:Key="TerminalCanvasBrush" Color="#12141A" />
  <x:Double x:Key="SpaceTight">2</x:Double>
  <x:Double x:Key="SpaceSmall">4</x:Double>
@@ -25,19 +24,26 @@
  <x:Double x:Key="HeaderSize">10</x:Double>
  <x:Double x:Key="InputSize">13</x:Double>
  <x:Double x:Key="SymbolSize">12</x:Double>
- <x:Double x:Key="CompactControlHeight">24</x:Double>
+ <x:Double x:Key="CompactControlHeight">22</x:Double>
  <x:Double x:Key="SplitDividerSize">6</x:Double>
- <x:Double x:Key="TabTitleWidth">180</x:Double>
+ <x:Double x:Key="TabTitleWidth">144</x:Double>
  <!-- Keep an accessible drag target even when tabs overflow. -->
  <x:Double x:Key="TitleBarDragWidth">48</x:Double>
  <x:Double x:Key="PickerWidth">280</x:Double>
  <x:Double x:Key="PickerListHeight">280</x:Double>
+ <x:Double x:Key="PickerRowHeight">28</x:Double>
  <CornerRadius x:Key="RowRadius">4</CornerRadius>
  <CornerRadius x:Key="PanelRadius">10</CornerRadius>
  <x:Double x:Key="StatusDotSize">7</x:Double>
  <!-- Air around the tab strip. Bottom stays 0 so the selected tab still meets the canvas. -->
- <Thickness x:Key="TabViewHeaderPadding">4,4,4,0</Thickness>
- <Thickness x:Key="TerminalInset">16,12,12,10</Thickness>
+ <Thickness x:Key="TabViewHeaderPadding">0</Thickness>
+ <Thickness x:Key="TabViewItemHeaderPadding">12,0,4,0</Thickness>
+ <Thickness x:Key="TabViewSelectedItemHeaderPadding">12,0,4,0</Thickness>
+ <x:Double x:Key="TabViewItemMinHeight">32</x:Double>
+ <x:Double x:Key="TabViewItemHeaderCloseButtonWidth">18</x:Double>
+ <x:Double x:Key="TabViewItemHeaderCloseButtonHeight">24</x:Double>
+ <x:Double x:Key="TabViewItemHeaderCloseButtonSize">9</x:Double>
+ <Thickness x:Key="TerminalInset">0</Thickness>
  <Style x:Key="ChromeButtonStyle" TargetType="Button">
   <Setter Property="Background" Value="Transparent" />
   <Setter Property="BorderThickness" Value="0" />
@@ -69,6 +75,87 @@
   <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
   <Setter Property="FontSize" Value="{StaticResource SymbolSize}" />
  </Style>
+ <!-- Host bar accessories match the 18 x 24 macOS targets and 11pt symbols. -->
+ <Style x:Key="StatusIconButtonStyle" TargetType="Button" BasedOn="{StaticResource ChromeIconButtonStyle}">
+  <Setter Property="Width" Value="18" />
+  <Setter Property="Height" Value="24" />
+  <Setter Property="MinWidth" Value="0" />
+  <Setter Property="MinHeight" Value="0" />
+  <Setter Property="Padding" Value="0" />
+  <Setter Property="FontSize" Value="11" />
+  <Setter Property="Foreground" Value="{ThemeResource ChromeSubtleBrush}" />
+ </Style>
+ <Style x:Key="StatusIconToggleStyle" TargetType="ToggleButton" BasedOn="{StaticResource ChromeIconToggleStyle}">
+  <Setter Property="Width" Value="18" />
+  <Setter Property="Height" Value="24" />
+  <Setter Property="MinWidth" Value="0" />
+  <Setter Property="MinHeight" Value="0" />
+  <Setter Property="Padding" Value="0" />
+  <Setter Property="FontSize" Value="11" />
+  <Setter Property="Foreground" Value="{ThemeResource ChromeSubtleBrush}" />
+ </Style>
+ <!-- Native TabView interaction with the same flat chip/underline treatment as macOS. -->
+ <Style x:Key="WorkspaceTabItemStyle" TargetType="TabViewItem">
+  <Setter Property="Height" Value="32" />
+  <Setter Property="MinHeight" Value="32" />
+  <Setter Property="Margin" Value="0,0,4,0" />
+  <Setter Property="UseSystemFocusVisuals" Value="True" />
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="TabViewItem">
+     <Grid x:Name="LayoutRoot" Background="Transparent">
+      <VisualStateManager.VisualStateGroups>
+       <VisualStateGroup x:Name="CommonStates">
+        <VisualState x:Name="Normal" />
+        <VisualState x:Name="PointerOver"><VisualState.Setters>
+         <Setter Target="HoverWash.Opacity" Value="0.06" />
+         <Setter Target="CloseButton.Opacity" Value="1" />
+        </VisualState.Setters></VisualState>
+        <VisualState x:Name="Pressed"><VisualState.Setters>
+         <Setter Target="HoverWash.Opacity" Value="0.12" />
+         <Setter Target="CloseButton.Opacity" Value="1" />
+        </VisualState.Setters></VisualState>
+        <VisualState x:Name="Selected"><VisualState.Setters>
+         <Setter Target="SelectionWash.Opacity" Value="0.12" />
+         <Setter Target="SelectionRule.Visibility" Value="Visible" />
+         <Setter Target="CloseButton.Opacity" Value="1" />
+        </VisualState.Setters></VisualState>
+        <VisualState x:Name="PointerOverSelected"><VisualState.Setters>
+         <Setter Target="SelectionWash.Opacity" Value="0.12" />
+         <Setter Target="SelectionRule.Visibility" Value="Visible" />
+         <Setter Target="CloseButton.Opacity" Value="1" />
+        </VisualState.Setters></VisualState>
+        <VisualState x:Name="PressedSelected"><VisualState.Setters>
+         <Setter Target="SelectionWash.Opacity" Value="0.12" />
+         <Setter Target="SelectionRule.Visibility" Value="Visible" />
+         <Setter Target="CloseButton.Opacity" Value="1" />
+        </VisualState.Setters></VisualState>
+       </VisualStateGroup>
+       <VisualStateGroup x:Name="DisabledStates">
+        <VisualState x:Name="Enabled" />
+        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="LayoutRoot.Opacity" Value="0.45" /></VisualState.Setters></VisualState>
+       </VisualStateGroup>
+       <VisualStateGroup x:Name="CloseIconStates">
+        <VisualState x:Name="CloseButtonVisible" />
+        <VisualState x:Name="CloseButtonCollapsed"><VisualState.Setters><Setter Target="CloseButton.Visibility" Value="Collapsed" /></VisualState.Setters></VisualState>
+       </VisualStateGroup>
+      </VisualStateManager.VisualStateGroups>
+      <Border x:Name="HoverWash" Background="{ThemeResource ChromeTextBrush}" CornerRadius="4" Opacity="0" />
+      <Border x:Name="SelectionWash" Background="{ThemeResource AccentBrush}" CornerRadius="4" Opacity="0" />
+      <Grid x:Name="TabContainer" Padding="12,0,12,0" ColumnSpacing="6" Background="Transparent">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="18" /></Grid.ColumnDefinitions>
+       <ContentPresenter x:Name="ContentPresenter" Content="" ContentTemplate="{TemplateBinding HeaderTemplate}"
+        VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource ChromeTextBrush}" />
+       <Button x:Name="CloseButton" Grid.Column="1" Content="&#xE711;" Style="{StaticResource ChromeIconButtonStyle}"
+        Width="18" MinWidth="18" Height="32" MinHeight="32" Padding="0" FontSize="9" Opacity="0" IsTabStop="False"
+        AutomationProperties.Name="Close tab" ToolTipService.ToolTip="Close tab" />
+      </Grid>
+      <Border x:Name="SelectionRule" Height="2" VerticalAlignment="Bottom" Background="{ThemeResource AccentBrush}" Visibility="Collapsed" />
+     </Grid>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
  <Style x:Key="SettingsCardStyle" TargetType="Border">
   <Setter Property="Background" Value="{ThemeResource ChromeRaisedBrush}" />
   <Setter Property="CornerRadius" Value="{StaticResource PanelRadius}" />
@@ -83,6 +170,6 @@
  <Style x:Key="EmptyStateTextStyle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
   <Setter Property="Foreground" Value="{ThemeResource ChromeSubtleBrush}" />
  </Style>
- <x:Double x:Key="FilesPaneWidth">380</x:Double>
- <x:Double x:Key="FilesPaneMinWidth">280</x:Double>
+ <x:Double x:Key="FilesPaneWidth">280</x:Double>
+ <x:Double x:Key="FilesPaneMinWidth">240</x:Double>
 </ResourceDictionary>

@@ -45,6 +45,7 @@ __pycache__/
 /artifacts/ios-check/
 
 # Side-by-side Windows trial builds and font-render diagnostics.
+/artifacts/windows/
 /artifacts/windows-*/
 /artifacts/han-*.png
 /artifacts/han-*.ppm

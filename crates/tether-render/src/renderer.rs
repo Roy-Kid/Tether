@@ -356,7 +356,7 @@ impl TerminalRenderer {
     /// The host creates/destroys the live HWND on its owning UI thread, serializes
     /// rendering/resizing, and drops this renderer before destroying the window.
     pub async unsafe fn attach_hwnd(hwnd: isize, size: SurfaceSize) -> Result<Self, RenderError> {
-        let instance = crate::platform::instance();
+        let instance = crate::platform::hwnd_instance(hwnd);
         // SAFETY: forwarded unchanged from this method's host lifetime contract.
         unsafe { Self::from_hwnd(&instance, hwnd, size) }.await
     }
@@ -498,7 +498,16 @@ impl TerminalRenderer {
                     c.alpha_modes
                         .iter()
                         .copied()
-                        .find(|mode| *mode == wgpu::CompositeAlphaMode::PostMultiplied)
+                        .find(|mode| {
+                            *mode
+                                == if cfg!(windows) {
+                                    // Our render pass stores premultiplied RGB. DXGI
+                                    // composition swapchains require matching alpha.
+                                    wgpu::CompositeAlphaMode::PreMultiplied
+                                } else {
+                                    wgpu::CompositeAlphaMode::PostMultiplied
+                                }
+                        })
                         .or_else(|| c.alpha_modes.first().copied())
                 })
                 .unwrap_or(wgpu::CompositeAlphaMode::Opaque),

@@ -45,6 +45,28 @@ try
         Check(workspace.Active == local, "a cross-host quick switch activates the requested workspace");
     }
 
+    await using (var workspace = Create("place"))
+    {
+        workspace.SelectHost(host);
+        var first = await workspace.AddAsync(Connect) ?? throw new Exception("No terminal to split");
+        var group = workspace.ActiveGroup!;
+        var left = await workspace.SplitAsync(SplitEdge.Left) ?? throw new Exception("No left split");
+        Check(group.Layout.First!.Pane == left.Id && group.Layout.Second!.Pane == first.Id && !group.Layout.Vertical,
+            "split left puts the new terminal on the left");
+        var above = await workspace.SplitAsync(SplitEdge.Up) ?? throw new Exception("No up split");
+        Check(group.Layout.First!.Vertical && group.Layout.First.First!.Pane == above.Id && group.Layout.First.Second!.Pane == left.Id,
+            "split up puts the new terminal above the focused one");
+        Check(workspace.Place(first, above, SplitEdge.Right), "a terminal can move onto another edge");
+        Check(group.Layout.Leaves.Contains(first.Id) && group.FocusedPane == first.Id, "the moved terminal stays and is focused");
+        var other = await workspace.AddAsync(Connect) ?? throw new Exception("No second workspace");
+        var otherGroup = workspace.ActiveGroup!;
+        Check(otherGroup != group && workspace.Place(left, other, SplitEdge.Down), "a terminal can join another workspace");
+        Check(!group.Panes.Contains(left) && otherGroup.Panes.Contains(left) && otherGroup.FocusedPane == left.Id,
+            "the terminal leaves its old workspace");
+        Check(otherGroup.Layout.Vertical && otherGroup.Layout.Second!.Pane == left.Id, "it lands on the requested edge");
+        Check(workspace.VisiblePanes.Count == group.Panes.Count + otherGroup.Panes.Count, "every terminal on the host has a chip");
+    }
+
     await using (var workspace = Create("late"))
     {
         var local = await workspace.AddAsync();

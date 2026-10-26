@@ -3,7 +3,8 @@ namespace TetherApp;
 public sealed partial class Workspace
 {
     private ClosedTerminal RecordPane(TerminalPane tab, int index) => new(tab.Id, tab.Title, tab.Model.LocalProfile,
-        tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost), tab.Model.WslDistribution);
+        tab.Model.WorkingDirectory, tab.Model.RemoteHost?.Alias, tab.Model.RemoteHost?.Target, index, tab.OpenInspector, tab.AttachmentStates, Fingerprint(tab.Model.RemoteHost), tab.Model.WslDistribution,
+        PinnedName: tab.PinnedName);
     private ClosedTerminal Record(Tab group, int index) => RecordPane(group.Focused, index) with
     {
         Id = group.Id, Title = group.Title, Layout = group.Layout,
@@ -45,6 +46,7 @@ public sealed partial class Workspace
                     if (connect is null || !await connect(pane, host)) throw new OperationCanceledException("Session restoration was cancelled.");
                 }
                 pane.Title = saved.Title;
+                pane.PinnedName = TerminalLabels.RestoredPin(saved.Title, saved.PinnedName);
                 pane.OpenInspector = saved.Inspector;
             }
         }

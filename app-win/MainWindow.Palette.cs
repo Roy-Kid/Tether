@@ -61,7 +61,7 @@ public sealed partial class MainWindow
             {
                 var chords = string.Join("  ", WorkspaceCommands.Bindings(command, AppSettings.Current));
                 rows.Add(new(CommandTitle(command) + (chords.Length > 0 ? "    " + chords : ""), command.Title + " " + chords,
-                    () => RunCommandAsync(command.Id), WorkspaceCommands.IsEnabled(command.Id, CommandState)));
+                    () => RunCommandAsync(command.Id), CommandEnabled(command.Id)));
             }
             foreach (var plugin in App.Plugins.Plugins.OfType<Plugins.ITabPlugin>().Where(p => App.Plugins.IsEnabled(p.Metadata.Id)))
             {

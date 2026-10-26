@@ -34,6 +34,10 @@ public sealed class TerminalControl : Control
     private ChildHwnd? _child;
     private FontMetrics _metrics = FontMetrics.FromAdvances(13, 8, 16, 16);
     private bool _metricsReady;
+    private Palette _palette = Palette.Dark;
+    private Palette _renderSource = Palette.Dark;
+    private Palette _renderPalette = Palette.Dark;
+    private bool _transparentBackground;
     private bool _autoRetried;
     private bool _failureHeld;
     private bool _ready;
@@ -133,12 +137,13 @@ public sealed class TerminalControl : Control
 
     public async Task BindAsync(SessionModel model)
     {
+        if (_model is not null) _model.FrameChanged -= OnModelFrameChanged;
         _model = model;
         Interlocked.Exchange(ref _frameRedraw, 1);
         SetPalette(model.Palette);
         // Frames arrive on the session's thread; the surface and the
         // pointer state are this control's, so drawing happens here.
-        model.FrameChanged += _ => { Interlocked.Exchange(ref _frameRedraw, 1); RequestRedraw(); };
+        model.FrameChanged += OnModelFrameChanged;
         if (_ready)
         {
             try
@@ -152,9 +157,33 @@ public sealed class TerminalControl : Control
 
     public void SetPalette(Palette palette)
     {
-        Background = Appearance.Background(palette);
+        var transparent = WindowEffects.Opacity < 1;
+        var changed = _palette != palette || _transparentBackground != transparent;
+        _palette = palette;
+        _transparentBackground = transparent;
         if (_model?.Palette != palette) _model?.SetPalette(palette);
+        if (!changed) return;
+        // The workspace already owns the tint, including terminal padding.
+        Background = Appearance.Background(RenderPalette(palette));
+        Interlocked.Exchange(ref _frameRedraw, 1);
         RequestRedraw();
+    }
+
+    private void OnModelFrameChanged(ScreenFrame frame)
+    {
+        if (_disposed) return;
+        Interlocked.Exchange(ref _frameRedraw, 1);
+        RequestRedraw();
+    }
+
+    private Palette RenderPalette(Palette source)
+    {
+        if (_renderSource != source || _renderPalette.Background.Alpha != (_transparentBackground ? 0 : 1))
+        {
+            _renderSource = source;
+            _renderPalette = TerminalAppearance.ForRendering(source, _transparentBackground);
+        }
+        return _renderPalette;
     }
 
     private bool _overlayVisible;
@@ -266,6 +295,7 @@ public sealed class TerminalControl : Control
     public void DisposeSurface()
     {
         _disposed = true;
+        if (_model is not null) _model.FrameChanged -= OnModelFrameChanged;
         _ready = false;
         _autoScroll.Stop();
         _gridResize.Stop();
@@ -442,7 +472,8 @@ public sealed class TerminalControl : Control
             // Pointer-only updates reuse shared row layout. A content frame is
             // paired with the generation sampled under the same lock, so a
             // frame that arrives during the draw is not marked as already drawn.
-            var presented = _surface.DrawUpdate(frame, _model?.Palette ?? Palette.Dark, BuildOverlay(),
+            var renderPalette = RenderPalette(_model?.Palette ?? _palette);
+            var presented = _surface.DrawUpdate(frame, renderPalette, BuildOverlay(),
                 (float)(_fontSize * DpiScale), full ? null : []);
             if (!presented)
             {

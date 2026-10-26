@@ -7,14 +7,14 @@
    <RowDefinition Height="*" />
    <RowDefinition Height="Auto" />
   </Grid.RowDefinitions>
-  <Grid x:Name="WindowHeader" Grid.Row="0">
+  <Grid x:Name="WindowHeader" Grid.Row="0" MinHeight="32">
    <Grid.ColumnDefinitions>
     <ColumnDefinition x:Name="CaptionLeftInset" Width="0" />
     <ColumnDefinition Width="Auto" />
     <ColumnDefinition Width="*" />
     <ColumnDefinition x:Name="CaptionRightInset" Width="0" />
    </Grid.ColumnDefinitions>
-  <StackPanel Grid.Column="1" Orientation="Horizontal">
+  <StackPanel Grid.Column="1" Orientation="Horizontal" Visibility="Collapsed">
    <Button x:Name="WorkspaceMenuButton" Style="{StaticResource ChromeIconButtonStyle}"
     Content="&#xE700;" Click="WorkspaceMenu_Click" ToolTipService.ToolTip="Workspace Menu" AutomationProperties.Name="Workspace Menu" />
    <Button x:Name="TabBarToggleButton" Style="{StaticResource ChromeIconButtonStyle}"
@@ -23,11 +23,11 @@
   </StackPanel>
   <Border x:Name="HiddenTitleBarDragArea" Grid.Column="2" Background="Transparent" Visibility="Collapsed" />
   <!-- Only the empty footer is draggable; tabs remain native interactive controls. -->
-  <TabView x:Name="TabStrip" Grid.Column="2" VerticalAlignment="Bottom" TabWidthMode="SizeToContent"
+  <TabView x:Name="TabStrip" Grid.Column="2" VerticalAlignment="Center" Height="32" Padding="0" TabWidthMode="SizeToContent"
    IsAddTabButtonVisible="True" AddTabButtonClick="Tab_AddRequested" CanDragTabs="False" CanReorderTabs="False"
    CloseButtonOverlayMode="Auto" TabCloseRequested="Tab_CloseRequested" SelectionChanged="Tab_SelectionChanged">
    <TabView.Resources>
-    <StaticResource x:Key="TabViewItemHeaderBackgroundSelected" ResourceKey="TerminalCanvasBrush" />
+    <SolidColorBrush x:Key="TabViewItemHeaderBackgroundSelected" Color="{ThemeResource SystemAccentColor}" Opacity="0.12" />
     <SolidColorBrush x:Key="TabViewItemHeaderBackground" Color="Transparent" />
     <SolidColorBrush x:Key="TabViewBackground" Color="Transparent" />
    </TabView.Resources>
@@ -39,36 +39,52 @@
   </Grid>
   <Grid Grid.Row="1">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <StackPanel x:Name="VerticalTabs" Grid.Column="0" Width="180" Visibility="Collapsed" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}">
-    <ListView x:Name="VerticalTabList" SelectionChanged="VerticalTabs_SelectionChanged" AutomationProperties.Name="Terminal tabs" />
+   <StackPanel x:Name="VerticalTabs" Grid.Column="0" Width="220" MinWidth="180" MaxWidth="320" Visibility="Collapsed" Background="Transparent">
+    <ListView x:Name="VerticalTabList" SelectionChanged="VerticalTabs_SelectionChanged" AutomationProperties.Name="Terminal tabs" Background="Transparent">
+     <ListView.ItemContainerStyle><Style TargetType="ListViewItem">
+      <Setter Property="MinHeight" Value="36" /><Setter Property="Padding" Value="8,0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+     </Style></ListView.ItemContainerStyle>
+     <ListView.ItemTemplate><DataTemplate>
+      <Grid Height="36" ColumnSpacing="6">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <FontIcon Glyph="&#xE756;" FontSize="11" />
+       <StackPanel Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Text="{Binding Title}" FontSize="12" TextTrimming="CharacterEllipsis" />
+        <TextBlock Text="{Binding Subtitle}" FontSize="10" Foreground="{ThemeResource ChromeSubtleBrush}" TextTrimming="CharacterEllipsis" />
+       </StackPanel>
+      </Grid>
+     </DataTemplate></ListView.ItemTemplate>
+    </ListView>
     <Button Content="&#xE710;" Style="{StaticResource ChromeIconButtonStyle}" Click="VerticalAdd_Click" ToolTipService.ToolTip="New Terminal" AutomationProperties.Name="New Terminal" />
    </StackPanel>
+   <Thumb Grid.Column="0" Width="4" HorizontalAlignment="Right" Background="Transparent"
+    Visibility="{Binding Visibility, ElementName=VerticalTabs}" DragDelta="VerticalTabsResize_DragDelta" AutomationProperties.Name="Resize tab sidebar" />
    <Grid x:Name="TerminalHostPlaceholder" Grid.Column="1" Background="{StaticResource TerminalCanvasBrush}"
     Padding="{StaticResource TerminalInset}" />
    <StackPanel x:Name="EmptyWorkspace" Grid.Column="1" Visibility="Collapsed" IsHitTestVisible="False"
     HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="{StaticResource SpaceGroup}"
     AutomationProperties.Name="No open terminals">
-    <FontIcon Glyph="&#xE756;" FontSize="28" Foreground="{ThemeResource ChromeSubtleBrush}"
-     Opacity="0.55" HorizontalAlignment="Center" />
-    <TextBlock Text="No open terminals" Style="{StaticResource EmptyStateTextStyle}" HorizontalAlignment="Center" />
+    <FontIcon Glyph="&#xE756;" FontSize="16" Foreground="{ThemeResource ChromeSubtleBrush}"
+     HorizontalAlignment="Center" />
    </StackPanel>
-   <Border x:Name="InspectorHost" Grid.Column="2" Width="{StaticResource FilesPaneWidth}" Visibility="Collapsed"
+  <Border x:Name="InspectorHost" Grid.Column="2" Width="{StaticResource FilesPaneWidth}" Visibility="Collapsed"
     BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="1,0,0,0"/>
    <Thumb Grid.Column="2" Width="4" HorizontalAlignment="Left" Background="Transparent"
     Visibility="{Binding Visibility, ElementName=InspectorHost}" DragDelta="InspectorResize_DragDelta" AutomationProperties.Name="Resize inspector"/>
   </Grid>
-  <Border x:Name="StatusBar" Grid.Row="2" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
+  <Border x:Name="StatusBar" Grid.Row="2" Height="24" Background="Transparent" RightTapped="WorkspaceMenu_RightTapped"
    BorderBrush="{ThemeResource ChromeStrokeBrush}" BorderThickness="0,1,0,0">
    <Grid Padding="{StaticResource ChromeHorizontalInset}">
     <Grid.ColumnDefinitions>
      <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
     </Grid.ColumnDefinitions>
-    <Button x:Name="HostButton" Style="{StaticResource ChromeButtonStyle}"
+    <Button x:Name="HostButton" Style="{StaticResource ChromeButtonStyle}" Padding="0"
      Click="Connect_Click" AutomationProperties.Name="Host" ToolTipService.ToolTip="Choose host">
      <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceInline}">
       <Ellipse x:Name="StatusDot" Width="{StaticResource StatusDotSize}" Height="{StaticResource StatusDotSize}"
        VerticalAlignment="Center" Fill="{ThemeResource ChromeSubtleBrush}" />
-      <TextBlock x:Name="HostName" FontSize="{StaticResource DetailSize}" VerticalAlignment="Center" Text="Choose host" />
+      <TextBlock x:Name="HostName" FontSize="{StaticResource DetailSize}" VerticalAlignment="Center" Text="Choose host" MaxWidth="240" TextTrimming="CharacterEllipsis" />
       <FontIcon Glyph="&#xE70D;" FontSize="{StaticResource HeaderSize}" Foreground="{ThemeResource ChromeSubtleBrush}" />
      </StackPanel>
     </Button>
@@ -85,7 +101,8 @@
      <FontIcon x:Name="AuthMark" Grid.Column="1" Glyph="&#xE192;" FontSize="{StaticResource SymbolSize}"
       Foreground="{ThemeResource ChromeSubtleBrush}" Visibility="Collapsed"
       AutomationProperties.Name="Needs authentication" ToolTipService.ToolTip="Needs authentication" />
-     <TextBlock x:Name="StatusText" Grid.Column="2" Style="{StaticResource DetailTextStyle}"
+     <FontIcon x:Name="StatusMark" Grid.Column="2" Glyph="&#xE73F;" FontSize="11" HorizontalAlignment="Left" Visibility="Collapsed" Foreground="{ThemeResource ChromeSubtleBrush}" />
+     <TextBlock x:Name="StatusText" Grid.Column="2" Visibility="Collapsed" Style="{StaticResource DetailTextStyle}"
       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
      <Button x:Name="CancelConnectButton" Grid.Column="3" Style="{StaticResource ChromeIconButtonStyle}"
       Content="&#xE711;" Visibility="Collapsed" Click="CancelConnect_Click"
@@ -94,17 +111,29 @@
       Content="&#xE72C;" Visibility="Collapsed" Click="Reconnect_Click"
       ToolTipService.ToolTip="Reconnect" AutomationProperties.Name="Reconnect" />
     </Grid>
-    <StackPanel Grid.Column="2" Orientation="Horizontal">
-     <Button x:Name="SplitRightButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89F;"
-      Click="SplitRight_Click" ToolTipService.ToolTip="Split Left/Right" AutomationProperties.Name="Split Left/Right" />
-     <Button x:Name="SplitDownButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A0;"
-      Click="SplitDown_Click" ToolTipService.ToolTip="Split Top/Bottom" AutomationProperties.Name="Split Top/Bottom" />
-     <Button x:Name="MaximizePaneButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE740;"
+    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
+     <Button x:Name="SplitLeftButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89E;"
+      Click="SplitLeft_Click" ToolTipService.ToolTip="Split Left" AutomationProperties.Name="Split Left" />
+     <Button x:Name="SplitRightButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89F;"
+      Click="SplitRight_Click" ToolTipService.ToolTip="Split Right" AutomationProperties.Name="Split Right" />
+     <Button x:Name="SplitUpButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A1;"
+      Click="SplitUp_Click" ToolTipService.ToolTip="Split Up" AutomationProperties.Name="Split Up" />
+     <Button x:Name="SplitDownButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A0;"
+      Click="SplitDown_Click" ToolTipService.ToolTip="Split Down" AutomationProperties.Name="Split Down" />
+     <Button x:Name="MaximizePaneButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE740;"
       Click="MaximizePane_Click" ToolTipService.ToolTip="Maximize/Restore Pane" AutomationProperties.Name="Maximize/Restore Pane" />
-     <StackPanel x:Name="PluginButtons" Orientation="Horizontal" />
+     <StackPanel x:Name="PluginButtons" Orientation="Horizontal" Spacing="2">
+      <StackPanel.Resources>
+       <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{ThemeResource SystemAccentColor}" />
+       <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{ThemeResource SystemAccentColor}" />
+       <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{ThemeResource SystemAccentColor}" />
+      </StackPanel.Resources>
+     </StackPanel>
     </StackPanel>
-    <Button x:Name="SettingsButton" Grid.Column="3" Style="{StaticResource ChromeIconButtonStyle}"
-     Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings" Content="&#xE713;" />
+    <Button x:Name="SettingsButton" Grid.Column="3" Style="{StaticResource StatusIconButtonStyle}" Margin="2,0,0,0"
+     Click="Settings_Click" ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings">
+     <FontIcon Glyph="&#xE713;" FontSize="11" />
+    </Button>
    </Grid>
   </Border>
  </Grid>

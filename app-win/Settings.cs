@@ -24,6 +24,12 @@ public sealed record AppSettings(string Shell = "pwsh", string Appearance = "sys
     public string DownloadDirectory { get; init; } = "";
     public string? WslDistribution { get; init; }
     public TerminalPreferences Terminal { get; init; } = new();
+    public bool QuickTerminalEnabled { get; init; } = true;
+    public bool QuickTerminalAutoHide { get; init; } = true;
+    public bool QuickTerminalTrayIcon { get; init; } = true;
+    public bool AlwaysOnTop { get; init; }
+    public string WindowMaterial { get; init; } = "acrylic";
+    public double BackgroundOpacity { get; init; } = 0.6;
     public bool PortsAutomatic { get; init; } = true;
     public string PortsIgnored { get; init; } = "";
 

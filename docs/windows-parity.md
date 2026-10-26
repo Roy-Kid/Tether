@@ -105,11 +105,34 @@ defaults to one chord, ⌘⇧O). Web plugins install,
 update and uninstall from Settings → Extensions; a panel can open as an
 inspector beside a terminal or as a full workspace tab in the tab strip.
 
+## October 2026 update
+
+Windows now matches the macOS desktop host for:
+
+- **Close vs Quit:** closing the window hides to the notification area; Quit
+  Tether is the path that ends sessions (same as macOS hide-instead-of-close).
+- **Quick Terminal:** Ctrl+` summons the workspace into the top half of the
+  pointer's monitor; sessions keep running while hidden. The notification-area
+  icon toggles Quick Terminal when enabled, restores the ordinary window, and
+  offers Quit.
+- **Appearance:** Acrylic / Mica / Solid materials with 50–100% workspace tint,
+  Soft/Classic terminal palettes.
+- **tmux chooser:** flyout picker aligned with the Mac popover (sessions →
+  windows, shell rows, Rename/Detach/End wording).
+- **Settings naming:** General, Session History, version footer; Quick Terminal
+  page mirrors macOS General → Quick Terminal controls.
+- **Tab chips:** session name → foreground command → directory → `Terminal N`,
+  with twin numbering and pinned renames.
+
 ## Remaining platform differences
 
 - Apple's CloudKit/iCloud synchronization, Secure Enclave identity management,
-  cross-device approval/pairing, and continuity have no Windows service
-  implementation here. Windows identities and credential protection are local.
+  cross-device approval/pairing, Continuity, and Take Over / Handoff have no
+  Windows service implementation here. Windows identities and credential
+  protection are local.
+- Quick Terminal on Windows reuses the main HWND (top-half geometry) rather than
+  a separate non-activating overlay panel; ordinary-window size is restored on
+  Return to Normal Window.
 - Native Quick Look previews and macOS file-cache/tree performance behavior are
   not fully reproduced by Windows text/external-viewer previews.
 - Windows loads API 1 web panels dynamically through WebView2, with package

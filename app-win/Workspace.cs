@@ -19,6 +19,8 @@ public sealed partial class Workspace : IAsyncDisposable
     public long SelectionVersion { get; private set; }
     private static string HostKey(HostEntry? host) => host is null ? "local" : host.Alias + ":" + Fingerprint(host);
     public IReadOnlyList<Tab> VisibleTabs => _tabs.Where(t => HostKey(t.Host) == HostKey(CurrentHost)).ToArray();
+    /// <summary>One chip per terminal, in workspace order. A split does not hide its panes.</summary>
+    public IReadOnlyList<TerminalPane> VisiblePanes => VisibleTabs.SelectMany(tab => tab.Panes).ToArray();
     public IReadOnlyList<ExtensionTab> Extensions => _extensions;
     public IReadOnlyList<ExtensionTab> VisibleExtensions => _extensions
         .Where(e => e.Host is null || HostKey(e.Host) == HostKey(CurrentHost)).ToArray();
@@ -35,9 +37,54 @@ public sealed partial class Workspace : IAsyncDisposable
     public void Rename(Tab tab, string title) { tab.Title = title; Persist(); Changed?.Invoke(); }
     public void Rename(TerminalPane pane, string title)
     {
-        pane.Title = title;
+        var trimmed = title.Trim();
+        pane.PinnedName = trimmed.Length == 0 ? null : trimmed;
+        pane.Title = trimmed.Length == 0 ? pane.Title : trimmed;
         Persist();
         Changed?.Invoke();
+    }
+
+    /// <summary>Chip text for a terminal, including twin numbers on the same host.</summary>
+    public string DisplayTitle(TerminalPane pane)
+    {
+        RefreshLabels(pane);
+        var host = pane.Model.RemoteHost;
+        var peers = AllPanes.Where(candidate => SameHost(candidate.Model.RemoteHost, host)).ToArray();
+        var home = host is null && !pane.Model.IsWsl ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : null;
+        var titles = TerminalLabels.Titles(peers.Select(peer => LabelFor(peer, home)).ToArray());
+        return titles.GetValueOrDefault(pane.Id, pane.Title);
+    }
+
+    public string DisplayTitle(Tab tab) =>
+        tab.Panes.Count == 1 ? DisplayTitle(tab.Focused) : tab.Title;
+
+    public string RenameSeed(TerminalPane pane)
+    {
+        RefreshLabels(pane);
+        var home = pane.Model.RemoteHost is null && !pane.Model.IsWsl
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : null;
+        return TerminalLabels.Seed(LabelFor(pane, home));
+    }
+
+    private static bool SameHost(HostEntry? left, HostEntry? right) =>
+        left is null && right is null ||
+        left is not null && right is not null && left.Alias == right.Alias && left.Target == right.Target;
+
+    private static TerminalLabel LabelFor(TerminalPane pane, string? home)
+    {
+        var session = pane.Attachments
+            .Select(attachment => attachment.TabTitle?.Trim())
+            .FirstOrDefault(title => !string.IsNullOrEmpty(title));
+        return new(pane.Id, pane.PinnedName, session, pane.ForegroundCommand, TerminalLabels.DirectoryName(pane.LabelPath ?? pane.Model.WorkingDirectory, home), pane.Title);
+    }
+
+    private static void RefreshLabels(TerminalPane pane)
+    {
+        if (!pane.Model.IsLive) return;
+        pane.ForegroundCommand = pane.Model.IsRemote || pane.Model.IsWsl
+            ? null
+            : LocalForeground.Command(pane.Model.LocalProcessId);
+        pane.LabelPath = pane.Model.WorkingDirectory;
     }
 
     public void SelectHost(HostEntry? host)
@@ -190,7 +237,9 @@ public sealed partial class Workspace : IAsyncDisposable
         }
         catch { await pane.DisposeAsync(); throw; }
     }
-    public async Task<TerminalPane?> SplitAsync(bool vertical)
+    public Task<TerminalPane?> SplitAsync(bool vertical) => SplitAsync(vertical ? SplitEdge.Down : SplitEdge.Right);
+
+    public async Task<TerminalPane?> SplitAsync(SplitEdge edge)
     {
         if (ActiveGroup is not { } group || Active is not { } source) return null;
         var pane = new TerminalPane();
@@ -206,11 +255,49 @@ public sealed partial class Workspace : IAsyncDisposable
         pane.OpenInspector = source.OpenInspector;
         pane.Model.SessionChanged += NotifySessionChanged;
         group.Panes.Add(pane);
-        group.Layout = group.Layout.Split(source.Id, pane.Id, vertical);
+        var vertical = edge is SplitEdge.Up or SplitEdge.Down;
+        group.Layout = group.Layout.Split(source.Id, pane.Id, vertical, edge is SplitEdge.Left or SplitEdge.Up);
         group.FocusedPane = pane.Id;
         group.Maximized = false;
         Persist(); Changed?.Invoke();
         return pane;
+    }
+
+    /// <summary>Move an existing terminal onto one edge of another. Same host only.</summary>
+    public bool Place(TerminalPane dragged, TerminalPane target, SplitEdge edge)
+    {
+        if (dragged == target) return false;
+        var source = _tabs.FirstOrDefault(tab => tab.Panes.Contains(dragged));
+        var destination = _tabs.FirstOrDefault(tab => tab.Panes.Contains(target));
+        if (source is null || destination is null || !SameHost(source.Host, destination.Host)) return false;
+        if (source == destination)
+            source.Layout = SplitLayout.PlaceInLayout(source.Layout, dragged.Id, target.Id, edge);
+        else
+        {
+            var rest = source.Layout.Remove(dragged.Id);
+            source.Panes.Remove(dragged);
+            if (source.Panes.Count == 0)
+            {
+                var index = _tabs.IndexOf(source);
+                _tabs.RemoveAt(index);
+                if (_active > index) _active--;
+                else if (_active >= _tabs.Count) _active = _tabs.Count - 1;
+            }
+            else
+            {
+                source.Layout = rest ?? SplitLayout.Leaf(source.Panes[0].Id);
+                if (!source.Layout.Leaves.Contains(source.FocusedPane))
+                    source.FocusedPane = source.Layout.Leaves.First();
+                source.Maximized = false;
+            }
+            destination.Panes.Add(dragged);
+            destination.Layout = SplitLayout.InsertBeside(destination.Layout, target.Id, dragged.Id, edge);
+        }
+        destination.FocusedPane = dragged.Id;
+        destination.Maximized = false;
+        Persist();
+        Activate(destination);
+        return true;
     }
 
     /// <summary>Raised when the tab list or the active tab changes.</summary>

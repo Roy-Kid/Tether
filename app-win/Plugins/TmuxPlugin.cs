@@ -60,6 +60,14 @@ sealed class TmuxAttachment : ITabAttachment
 
     public UIElement View => _panel;
     public string? CloseNote => _session is null ? null : "tmux stays on the host.";
+    public string TabTitle
+    {
+        get
+        {
+            if (_session is null) return "";
+            return _sessions.FirstOrDefault(session => session.Id == _session)?.Name ?? "";
+        }
+    }
     public string? RestorationState => _session;
     public IReadOnlyList<PluginCommand> Commands => _session is null ? [] :
     [

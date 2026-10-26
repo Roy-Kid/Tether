@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Shapes;
 using Tether;
 using TetherApp.Files;
 using TetherApp.Plugins;
@@ -14,6 +15,10 @@ namespace TetherApp;
 public sealed partial class MainWindow : Window
 {
     private TrayHost? _tray;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _workspaceQueue;
+    private int _workspaceRefreshQueued;
+    private volatile bool _windowClosed;
+    private QuickTerminalController? _quickTerminal;
     private bool _refreshingTabs;
     private bool _revealPending;
     private bool _connecting;
@@ -26,12 +31,22 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _workspaceQueue = DispatcherQueue;
+        Closed += (_, _) =>
+        {
+            _windowClosed = true;
+            _workspace.Changed -= RequestWorkspaceRefresh;
+        };
         AppBranding.Apply(this);
         SystemBackdrop = new MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt };
         ExtendsContentIntoTitleBar = true;
-        SetTitleBar(TitleBarDragArea);
+        _dragArea = TitleBarDragArea;
+        SetTitleBar(_dragArea);
         WorkspaceRoot.Loaded += (_, _) =>
         {
+            var scale = WorkspaceRoot.XamlRoot.RasterizationScale;
+            var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+            AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(Math.Min((int)(1100 * scale), area.Width), Math.Min((int)(700 * scale), area.Height)));
             UpdateTitleBar();
             WorkspaceRoot.XamlRoot.Changed += (_, _) => UpdateTitleBar();
         };
@@ -45,10 +60,18 @@ public sealed partial class MainWindow : Window
             if (e.DidSizeChange || e.DidPresenterChange) UpdateTitleBar();
         };
         TabStrip.SizeChanged += (_, _) => QueueSelectedTabReveal();
+        VerticalTabList.ContainerContentChanging += VerticalChipDrag;
         Closed += (_, _) => CompositionTarget.Rendering -= RevealSelectedTab;
         AppWindow.Closing += (sender, e) =>
         {
-            if (_windowCloseApproved || _tray is null) return;
+            if (_windowCloseApproved) return;
+            if (_quickTerminal?.IsQuick == true)
+            {
+                e.Cancel = true;
+                _quickTerminal.Hide();
+                return;
+            }
+            if (_tray is null) return;
             e.Cancel = true;
             AppWindow.Hide();
         };
@@ -60,14 +83,23 @@ public sealed partial class MainWindow : Window
 #if DEBUG
         if (TryShowPreview()) return;
 #endif
-        _tray = new TrayHost(
+        _tray = new TrayHost(AppBranding.IconHandle,
             () => DispatcherQueue.TryEnqueue(ShowFromBackground),
             () => DispatcherQueue.TryEnqueue(() => _ = QuitAsync()));
         AppSettings.Load();
+        WindowEffects.Observe(this, WorkspaceRoot, ApplyAppearance);
+        _quickTerminal = new QuickTerminalController(WinRT.Interop.WindowNative.GetWindowHandle(this),
+            action => DispatcherQueue.TryEnqueue(() => action()),
+            () => _workspace.Active?.Surface.FocusTerminal(),
+            () => _connecting || _checkingWindowClose || _commandPicker is not null || _hostPicker is not null);
+        Closed += (_, _) => _quickTerminal.Dispose();
+        BindTrayQuickTerminal();
+        QuickTerminalController.Changed += BindTrayQuickTerminal;
+        Closed += (_, _) => QuickTerminalController.Changed -= BindTrayQuickTerminal;
         AppSettings.Changed += ApplyAppearance;
         Closed += (_, _) => AppSettings.Changed -= ApplyAppearance;
         ApplyAppearance();
-        _workspace.Changed += () => DispatcherQueue.TryEnqueue(OnWorkspaceChanged);
+        _workspace.Changed += RequestWorkspaceRefresh;
         Content.KeyDown += OnKeyDown;
         // Activation hands focus back to the XAML island; the terminal's
         // input window is where typing goes.
@@ -79,6 +111,14 @@ public sealed partial class MainWindow : Window
                     _workspace.Active?.Surface.FocusTerminal();
             }
         };
+        var labels = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        labels.Tick += (_, _) =>
+        {
+            if (_windowClosed || _connecting) return;
+            RequestWorkspaceRefresh();
+        };
+        labels.Start();
+        Closed += (_, _) => labels.Stop();
         _ = OpenFirstTabAsync();
     }
 
@@ -91,7 +131,9 @@ public sealed partial class MainWindow : Window
 
     private void ApplyAppearance()
     {
+        _quickTerminal?.Apply(AppSettings.Current);
         WorkspaceRoot.RequestedTheme = Appearance.RequestedTheme;
+        WindowEffects.Apply(this);
         ApplyTerminalPalette();
         UpdateTitleBar();
         ApplyWorkspaceVisibility();
@@ -100,8 +142,9 @@ public sealed partial class MainWindow : Window
     private void ApplyTerminalPalette()
     {
         var palette = TerminalAppearance.Choose(WorkspaceRoot.ActualTheme == ElementTheme.Dark);
+        WorkspaceRoot.Background = Appearance.WorkspaceBackground(palette, WorkspaceRoot.Background);
         _workspace.CurrentPalette = palette;
-        Appearance.SetCanvas(palette);
+        Appearance.SetCanvas(TerminalAppearance.ForRendering(palette, WindowEffects.Opacity < 1));
         foreach (var tab in _workspace.AllPanes) tab.Surface.SetPalette(palette);
     }
 
@@ -115,7 +158,7 @@ public sealed partial class MainWindow : Window
         // 150% or 200% the height flutters by a pixel. The window shakes.
         SetInset(CaptionLeftInset, titleBar.LeftInset / scale);
         SetInset(CaptionRightInset, titleBar.RightInset / scale);
-        var header = Math.Ceiling(titleBar.Height / scale) + 8;
+        var header = Math.Max(32, Math.Ceiling(titleBar.Height / scale));
         if (Math.Abs(WindowHeader.MinHeight - header) >= 1)
             WindowHeader.MinHeight = header;
         titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
@@ -143,32 +186,45 @@ public sealed partial class MainWindow : Window
             ? brush.Color
             : ((SolidColorBrush)Application.Current.Resources["ChromeSubtleBrush"]).Color;
 
+    private void RequestWorkspaceRefresh()
+    {
+        if (_windowClosed || Interlocked.Exchange(ref _workspaceRefreshQueued, 1) == 1) return;
+        if (!_workspaceQueue.TryEnqueue(() =>
+        {
+            Interlocked.Exchange(ref _workspaceRefreshQueued, 0);
+            if (!_windowClosed) OnWorkspaceChanged();
+        })) Interlocked.Exchange(ref _workspaceRefreshQueued, 0);
+    }
+
     private void OnWorkspaceChanged()
     {
+        if (_windowClosed) return;
         _refreshingTabs = true;
         try
         {
             // Retain native tab containers and keyboard focus when selection changes.
+            var panes = _workspace.VisiblePanes;
             foreach (var removed in TabStrip.TabItems.OfType<TabViewItem>()
                 .Where(item => item.Tag switch
                 {
-                    Tab tab => !_workspace.VisibleTabs.Contains(tab),
+                    TerminalPane pane => !panes.Contains(pane),
                     ExtensionTab extension => !_workspace.VisibleExtensions.Contains(extension),
                     _ => true,
                 }).ToList())
                 TabStrip.TabItems.Remove(removed);
-            foreach (var tab in _workspace.VisibleTabs)
+            foreach (var pane in panes)
             {
-                var item = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(item => item.Tag == tab);
+                var title = _workspace.DisplayTitle(pane);
+                var item = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(item => item.Tag == pane);
                 if (item is null)
                 {
-                    item = CreateTab(tab.Title);
-                    item.Tag = tab;
+                    item = CreateTab(title);
+                    item.Tag = pane;
                     TabStrip.TabItems.Add(item);
                 }
-                ((WorkspaceTabHeader)item.Header).Update(tab);
-                AutomationProperties.SetName(item, tab.Title);
-                ToolTipService.SetToolTip(item, tab.Title);
+                ((WorkspaceTabHeader)item.Header).Update(title, title, false);
+                AutomationProperties.SetName(item, title);
+                ToolTipService.SetToolTip(item, title);
             }
             foreach (var extension in _workspace.VisibleExtensions)
             {
@@ -182,9 +238,21 @@ public sealed partial class MainWindow : Window
                 AutomationProperties.SetName(item, extension.Title);
                 ToolTipService.SetToolTip(item, extension.Title);
             }
+            var order = panes.Cast<object>().Concat(_workspace.VisibleExtensions.Cast<object>()).ToList();
+            for (var index = 0; index < order.Count; index++)
+            {
+                var item = TabStrip.TabItems.OfType<TabViewItem>().First(candidate => Equals(candidate.Tag, order[index]));
+                var position = TabStrip.TabItems.IndexOf(item);
+                if (position != index)
+                {
+                    TabStrip.TabItems.RemoveAt(position);
+                    TabStrip.TabItems.Insert(index, item);
+                }
+            }
             if (_workspace.ActiveExtension is { } activeExtension)
                 TabStrip.SelectedItem = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(i => i.Tag == activeExtension);
-            else TabStrip.SelectedIndex = _workspace.ActiveIndex;
+            else if (_workspace.Active is { } active)
+                TabStrip.SelectedItem = TabStrip.TabItems.OfType<TabViewItem>().FirstOrDefault(i => i.Tag == active);
             RefreshVerticalTabs();
         }
         finally { _refreshingTabs = false; }
@@ -417,8 +485,8 @@ public sealed partial class MainWindow : Window
         },
         Dismiss = () => HideInspector(tab),
         HostLabel = tab.Model.RemoteHost?.Label ?? "localhost",
-        ShellLabel = string.IsNullOrWhiteSpace(tab.Title) ? "Shell" : tab.Title,
-        Shells = () => _workspace.AllPanes.Select(pane => new ShellChoice(pane.Id, pane.Title, pane == _workspace.Active)).ToArray(),
+        ShellLabel = string.IsNullOrWhiteSpace(_workspace.DisplayTitle(tab)) ? "Shell" : _workspace.DisplayTitle(tab),
+        Shells = () => _workspace.AllPanes.Select(pane => new ShellChoice(pane.Id, _workspace.DisplayTitle(pane), pane == _workspace.Active)).ToArray(),
         OpenShell = id =>
         {
             var pane = _workspace.AllPanes.FirstOrDefault(item => item.Id == id);
@@ -548,39 +616,51 @@ public sealed partial class MainWindow : Window
     private void InspectorResize_DragDelta(object sender, DragDeltaEventArgs e)
     {
         var minimum = (double)Application.Current.Resources["FilesPaneMinWidth"];
-        InspectorHost.Width = Math.Clamp(InspectorHost.ActualWidth - e.HorizontalChange, minimum, Math.Max(minimum, WorkspaceRoot.ActualWidth * 0.7));
+        InspectorHost.Width = Math.Clamp(InspectorHost.ActualWidth - e.HorizontalChange, minimum, Math.Max(minimum, Math.Min(480, WorkspaceRoot.ActualWidth * 0.7)));
     }
+
+    private void VerticalTabsResize_DragDelta(object sender, DragDeltaEventArgs e) =>
+        VerticalTabs.Width = Math.Clamp(VerticalTabs.ActualWidth + e.HorizontalChange, 180, 320);
 
     private TabViewItem CreateTab(string title)
     {
         var header = new WorkspaceTabHeader(title);
-        var item = new TabViewItem { Header = header };
+        var item = new TabViewItem { Header = header, Style = (Style)Application.Current.Resources["WorkspaceTabItemStyle"] };
         AutomationProperties.SetName(item, title);
         ToolTipService.SetToolTip(item, title);
         header.More.Click += (_, e) =>
         {
-            if (item.Tag is Tab group) ShowTabMenu(header, group);
+            if (item.Tag is TerminalPane pane) ShowTerminalMenu(header, pane);
         };
         var selectedBeforePress = false;
         item.PointerPressed += (_, e) =>
         {
+            _suppressChipTap = false;
             selectedBeforePress = ReferenceEquals(TabStrip.SelectedItem, item);
-            if (e.GetCurrentPoint(item).Properties.IsMiddleButtonPressed && item.Tag is Tab group)
+            if (item.Tag is not TerminalPane pane) return;
+            if (e.GetCurrentPoint(item).Properties.IsMiddleButtonPressed)
             {
                 e.Handled = true;
-                _ = CloseTabAsync(group);
+                _ = CloseChipAsync(pane);
+                return;
             }
+            if (e.GetCurrentPoint(item).Properties.IsLeftButtonPressed && !FromButton(e.OriginalSource))
+                BeginChipDrag(item, pane, e);
         };
+        item.PointerMoved += (_, e) => MoveChipDrag(item, e);
+        item.PointerReleased += (_, e) => EndChipDrag(item, e);
+        item.PointerCaptureLost += (_, _) => CancelChipDrag();
         item.Tapped += (_, e) =>
         {
-            if (!selectedBeforePress || item.Tag is not Tab group) return;
+            if (_suppressChipTap) { _suppressChipTap = false; return; }
+            if (!selectedBeforePress || item.Tag is not TerminalPane pane) return;
             for (var parent = e.OriginalSource as DependencyObject; parent is not null; parent = VisualTreeHelper.GetParent(parent))
                 if (parent is Button) return;
-            ShowTabMenu(header, group);
+            ShowTerminalMenu(header, pane);
         };
         item.RightTapped += (_, e) =>
         {
-            if (item.Tag is Tab group) { e.Handled = true; ShowTabMenu(header, group); }
+            if (item.Tag is TerminalPane pane) { e.Handled = true; ShowTerminalMenu(header, pane); }
         };
         return item;
     }
@@ -589,7 +669,7 @@ public sealed partial class MainWindow : Window
     {
         var header = new WorkspaceTabHeader(extension.Title);
         header.UpdateExtension(extension);
-        var item = new TabViewItem { Header = header, Tag = extension };
+        var item = new TabViewItem { Header = header, Tag = extension, Style = (Style)Application.Current.Resources["WorkspaceTabItemStyle"] };
         AutomationProperties.SetName(item, extension.Title);
         ToolTipService.SetToolTip(item, extension.Title);
         header.More.Visibility = Visibility.Collapsed;
@@ -621,12 +701,8 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(_workspace.ActiveExtension, extension)) _workspace.Activate(extension);
             return;
         }
-        if (selected.Tag is Tab tab)
-        {
-            var index = _workspace.VisibleTabs.ToList().IndexOf(tab);
-            if (index >= 0 && (index != _workspace.ActiveIndex || _workspace.ActiveExtension is not null))
-                _workspace.Select(index);
-        }
+        if (selected.Tag is TerminalPane pane && (_workspace.Active != pane || _workspace.ActiveExtension is not null))
+            _workspace.Focus(pane);
     }
 
     private void QueueSelectedTabReveal()
@@ -664,7 +740,7 @@ public sealed partial class MainWindow : Window
         if (_preview) { TabStrip.TabItems.Remove(e.Tab); return; }
 #endif
         if (e.Tab.Tag is ExtensionTab extension) await CloseExtensionAsync(extension);
-        else if (e.Tab.Tag is Tab tab) await CloseTabAsync(tab);
+        else if (e.Tab.Tag is TerminalPane pane) await CloseChipAsync(pane);
     }
 
     private async void Tab_AddRequested(TabView sender, object args)
@@ -679,11 +755,18 @@ public sealed partial class MainWindow : Window
     {
         var model = _workspace.Active?.Model;
         HostName.Text = _workspace.CurrentHostLabel;
+        // A null remote host is the local workspace, whose name is localhost.
+        // Keep its label just as we do for a selected SSH host.
+        HostName.Visibility = Visibility.Visible;
         var bar = model?.Bar ?? RemoteBar.Idle();
         var live = bar.Phase == RemotePhase.Connected;
         StatusDot.Fill = (Brush)Application.Current.Resources[live ? "SuccessBrush" : "ChromeSubtleBrush"];
         StatusText.Text = live ? "" : bar.Status;
         var spoken = model?.LastError ?? model?.Status ?? "Not connected";
+        StatusMark.Visibility = model is not null && !live && !bar.ShowsProgress && !bar.ShowsAuth && model.CanReconnect != true
+            ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(StatusMark, spoken);
+        AutomationProperties.SetName(StatusMark, spoken);
         ToolTipService.SetToolTip(StatusText, spoken);
         AutomationProperties.SetName(StatusText, spoken);
         ConnectProgress.IsActive = bar.ShowsProgress;
@@ -713,21 +796,124 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var query = new TextBox { PlaceholderText = "Find a host…" };
+        var resources = Application.Current.Resources;
+        var rowHeight = (double)resources["PickerRowHeight"];
+        var titleSize = (double)resources["TitleSize"];
+        var symbolSize = (double)resources["SymbolSize"];
+        var statusDot = (double)resources["StatusDotSize"];
+        var spaceTight = (double)resources["SpaceTight"];
+        var spaceInline = (double)resources["SpaceInline"];
+        var spaceGroup = (double)resources["SpaceGroup"];
+        var rowRadius = (CornerRadius)resources["RowRadius"];
+        var textBrush = (Brush)resources["ChromeTextBrush"];
+        var subtleBrush = (Brush)resources["ChromeSubtleBrush"];
+        var raisedBrush = (Brush)resources["ChromeRaisedBrush"];
+        var strokeBrush = (Brush)resources["ChromeStrokeBrush"];
+        var successBrush = (Brush)resources["SuccessBrush"];
+        var accentBrush = (Brush)resources["AccentBrush"];
+        var clear = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+
+        var query = new TextBox
+        {
+            PlaceholderText = "Find a host…",
+            FontSize = titleSize,
+            BorderThickness = new Thickness(0),
+            Background = raisedBrush,
+            Padding = new Thickness(spaceGroup, spaceInline, spaceGroup, spaceInline),
+            CornerRadius = rowRadius,
+        };
         var problem = new TextBlock
         {
             Text = "No matching hosts.",
+            FontSize = titleSize,
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)Application.Current.Resources["ChromeSubtleBrush"],
+            Foreground = subtleBrush,
             Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, spaceTight, 0, 0),
         };
-        var list = new ListView
+        var rows = new StackPanel { Spacing = spaceTight };
+        var scroll = new ScrollViewer
         {
-            MaxHeight = (double)Application.Current.Resources["PickerListHeight"],
-            SelectionMode = ListViewSelectionMode.Single,
-            IsItemClickEnabled = true,
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            MaxHeight = (double)resources["PickerListHeight"],
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = rows,
         };
+        var selectable = new List<HostRow>();
+        var highlights = new List<Border>();
+        var selected = -1;
+
+        void PaintSelection()
+        {
+            for (var index = 0; index < highlights.Count; index++)
+                highlights[index].Opacity = index == selected ? 0.12 : 0;
+        }
+
+        void Select(int index)
+        {
+            if (selectable.Count == 0) { selected = -1; PaintSelection(); return; }
+            selected = Math.Clamp(index, 0, selectable.Count - 1);
+            PaintSelection();
+            if (selected >= 0 && selected < highlights.Count)
+                highlights[selected].StartBringIntoView();
+        }
+
+        Button HostChromeRow(HostRow row, int index)
+        {
+            var live = new Ellipse
+            {
+                Width = statusDot,
+                Height = statusDot,
+                Fill = row.Connected ? successBrush : clear,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var label = new TextBlock
+            {
+                Text = row.Host?.Label ?? "localhost",
+                FontSize = titleSize,
+                Foreground = textBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            var check = new FontIcon
+            {
+                Glyph = "\uE73E",
+                FontSize = 10,
+                Foreground = row.Current ? textBrush : clear,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var content = new Grid { ColumnSpacing = spaceGroup, Padding = new Thickness(spaceInline, 0, spaceInline, 0) };
+            content.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            content.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            content.Children.Add(live);
+            Grid.SetColumn(label, 1); content.Children.Add(label);
+            Grid.SetColumn(check, 2); content.Children.Add(check);
+            var wash = new Border
+            {
+                Background = accentBrush,
+                CornerRadius = rowRadius,
+                Opacity = 0,
+                MinHeight = rowHeight,
+            };
+            var root = new Grid { MinHeight = rowHeight };
+            root.Children.Add(wash);
+            root.Children.Add(content);
+            var button = new Button
+            {
+                Content = root,
+                Style = (Style)resources["ChromeButtonStyle"],
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            };
+            ToolTipService.SetToolTip(button, row.Connected ? (row.Host?.Label ?? "localhost") + " · connected" : row.Host?.Label ?? "localhost");
+            AutomationProperties.SetName(button, row.Host?.Label ?? "localhost");
+            button.Click += async (_, _) => await ChooseHostAsync(row.Host);
+            button.PointerEntered += (_, _) => Select(index);
+            highlights.Add(wash);
+            return button;
+        }
 
         void Reload()
         {
@@ -741,12 +927,17 @@ public sealed partial class MainWindow : Window
             {
                 problem.Text = ex.Message;
                 problem.Visibility = Visibility.Visible;
-                list.Items.Clear();
-                list.Visibility = Visibility.Collapsed;
+                rows.Children.Clear();
+                selectable.Clear();
+                highlights.Clear();
+                selected = -1;
+                scroll.Visibility = Visibility.Collapsed;
                 return;
             }
             problem.Text = "No matching hosts.";
-            list.Items.Clear();
+            rows.Children.Clear();
+            selectable.Clear();
+            highlights.Clear();
             var matches = SshConfig.Filter(all, query.Text).ToList();
             var connected = matches.Where(IsConnectedHost).ToList();
             if (_workspace.CurrentHost is { } current && matches.Any(h => h.Alias == current.Alias))
@@ -754,18 +945,35 @@ public sealed partial class MainWindow : Window
             var connectedAliases = connected.Select(h => h.Alias).ToHashSet();
             var idle = matches.Where(h => !connectedAliases.Contains(h.Alias)).ToList();
             var localMatch = "localhost".Contains(query.Text.Trim(), StringComparison.OrdinalIgnoreCase);
+            var entries = new List<HostRow>();
             if (localMatch && _workspace.CurrentHost is null)
-                list.Items.Add(new HostRow(null, connected: _workspace.AllPanes.Any(p => p.Model.IsLive && p.Model.RemoteHost is null)));
-            foreach (var host in connected) list.Items.Add(new HostRow(host, connected: true));
-            if (connected.Count > 0 && (idle.Count > 0 || (localMatch && _workspace.CurrentHost is not null)))
-                list.Items.Add(new HostRow(null, separator: true));
+                entries.Add(new(null, connected: _workspace.AllPanes.Any(p => p.Model.IsLive && p.Model.RemoteHost is null), current: true));
+            foreach (var host in connected)
+                entries.Add(new(host, connected: true, current: SameHost(host, _workspace.CurrentHost)));
+            var needDivider = connected.Count > 0 && (idle.Count > 0 || (localMatch && _workspace.CurrentHost is not null));
             if (localMatch && _workspace.CurrentHost is not null)
-                list.Items.Add(new HostRow(null));
-            foreach (var host in idle) list.Items.Add(new HostRow(host));
-            var any = list.Items.OfType<HostRow>().Any(r => !r.Separator);
-            list.SelectedIndex = any ? 0 : -1;
+                entries.Add(new(null));
+            foreach (var host in idle) entries.Add(new(host, current: SameHost(host, _workspace.CurrentHost)));
+
+            var liveCount = (localMatch && _workspace.CurrentHost is null ? 1 : 0) + connected.Count;
+            for (var index = 0; index < entries.Count; index++)
+            {
+                if (needDivider && index == liveCount && liveCount > 0)
+                    rows.Children.Add(new Border
+                    {
+                        Height = 1,
+                        Margin = new Thickness(spaceInline, spaceTight, spaceInline, spaceTight),
+                        Background = strokeBrush,
+                    });
+                var row = entries[index];
+                var visual = HostChromeRow(row, selectable.Count);
+                selectable.Add(row);
+                rows.Children.Add(visual);
+            }
+            var any = selectable.Count > 0;
+            Select(any ? 0 : -1);
             problem.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
-            list.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+            scroll.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
         }
 
         query.TextChanged += (_, _) => Reload();
@@ -777,75 +985,95 @@ public sealed partial class MainWindow : Window
             if (control && e.Key >= Windows.System.VirtualKey.Number1 && e.Key <= Windows.System.VirtualKey.Number9)
             {
                 var index = (int)e.Key - (int)Windows.System.VirtualKey.Number1;
-                if (index < list.Items.Count && RowHost(list.Items[index]) is { } numbered) { e.Handled = true; await ChooseHostAsync(numbered.Host); }
+                if (index < selectable.Count) { e.Handled = true; await ChooseHostAsync(selectable[index].Host); }
                 return;
             }
             if (e.Key is Windows.System.VirtualKey.Down or Windows.System.VirtualKey.Up)
             {
-                if (list.Items.Count > 0)
-                {
-                    var step = e.Key == Windows.System.VirtualKey.Down ? 1 : -1;
-                    var next = list.SelectedIndex + step;
-                    while (next >= 0 && next < list.Items.Count && list.Items[next] is HostRow { Separator: true }) next += step;
-                    if (next >= 0 && next < list.Items.Count)
-                    {
-                        list.SelectedIndex = next;
-                        list.ScrollIntoView(list.SelectedItem);
-                    }
-                }
+                if (selectable.Count > 0)
+                    Select(selected + (e.Key == Windows.System.VirtualKey.Down ? 1 : -1));
                 e.Handled = true;
             }
-            else if (e.Key == Windows.System.VirtualKey.Enter && RowHost(list.SelectedItem) is { } selected)
+            else if (e.Key == Windows.System.VirtualKey.Enter && selected >= 0 && selected < selectable.Count)
             {
                 e.Handled = true;
-                await ChooseHostAsync(selected.Host);
+                await ChooseHostAsync(selectable[selected].Host);
             }
         };
-        list.ItemClick += async (_, e) =>
+
+        var panel = new StackPanel
         {
-            if (RowHost(e.ClickedItem) is { } host) await ChooseHostAsync(host.Host);
+            Spacing = spaceGroup,
+            Padding = new Thickness(12),
+            RequestedTheme = WorkspaceRoot.ActualTheme,
+            Background = raisedBrush,
         };
-
-
-        var panel = new StackPanel { Spacing = 8, Padding = new Thickness(12), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
-        var searchRow = new Grid { ColumnSpacing = 8 };
+        var searchRow = new Grid { ColumnSpacing = spaceGroup };
         searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         searchRow.Children.Add(query);
-        var manage = EditorDialog.Icon("\uE70F", "Manage Hosts", () => { _hostPicker?.Close(); _ = RunCommandAsync("manageHosts"); });
-        Grid.SetColumn(manage, 1); searchRow.Children.Add(manage); panel.Children.Add(searchRow);
+        var manage = new Button
+        {
+            Content = "\uE70F",
+            Style = (Style)resources["ChromeIconButtonStyle"],
+            Foreground = subtleBrush,
+        };
+        ToolTipService.SetToolTip(manage, "Manage Hosts");
+        AutomationProperties.SetName(manage, "Manage Hosts");
+        manage.Click += (_, _) => { _hostPicker?.Close(); _ = RunCommandAsync("manageHosts"); };
+        Grid.SetColumn(manage, 1); searchRow.Children.Add(manage);
+        panel.Children.Add(searchRow);
         panel.Children.Add(problem);
-        panel.Children.Add(list);
+        panel.Children.Add(scroll);
 
         var window = new Window { Title = "Hosts", Content = panel };
         AppBranding.Apply(window);
-        window.SystemBackdrop = new DesktopAcrylicBackdrop();
-        var presenter = Microsoft.UI.Windowing.OverlappedPresenter.CreateForDialog();
+        var presenter = Microsoft.UI.Windowing.OverlappedPresenter.Create();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;
         presenter.IsMinimizable = false;
         presenter.IsMaximizable = false;
+        presenter.IsAlwaysOnTop = false;
         window.AppWindow.SetPresenter(presenter);
-        const int width = 320, height = 420;
-        window.AppWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
-        WindowPlacement.Above(this, HostButton, window, width, height);
-        WindowPlacement.Own(window);
-        window.Closed += (_, _) => { if (_hostPicker == window) _hostPicker = null; };
+        var preferredWidth = (int)(double)resources["PickerWidth"];
+        const int preferredHeight = 320;
+        void FitToOwner()
+        {
+            if (_hostPicker != window) return;
+            if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter
+                { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized })
+            {
+                window.Close();
+                return;
+            }
+            var owner = AppWindow.Size;
+            var width = Math.Min(preferredWidth, Math.Max(200, owner.Width - 24));
+            var height = Math.Min(preferredHeight, Math.Max(140, owner.Height - 48));
+            scroll.MaxHeight = Math.Max(80, height - 88);
+            WindowPlacement.Above(this, HostButton, window, width, height);
+        }
+        void OnOwnerChanged(Microsoft.UI.Windowing.AppWindow _, Microsoft.UI.Windowing.AppWindowChangedEventArgs e)
+        {
+            if (e.DidPositionChange || e.DidSizeChange || e.DidPresenterChange) FitToOwner();
+        }
+        AppWindow.Changed += OnOwnerChanged;
+        window.Closed += (_, _) =>
+        {
+            AppWindow.Changed -= OnOwnerChanged;
+            if (_hostPicker == window) _hostPicker = null;
+        };
+        WindowPlacement.Own(window, topmost: false);
         _hostPicker = window;
-        Reload();
+        FitToOwner();
         window.Activate();
         query.Focus(FocusState.Programmatic);
+        Reload();
     }
 
-    /// <summary>The row a click lands on. A <see cref="ListView"/> wraps whatever was added, so the host is not the clicked object itself.</summary>
-    private static HostRow? RowHost(object? item) => item switch
-    {
-        HostRow { Separator: true } => null,
-        HostRow row => row,
-        ListViewItem { Content: HostRow { Separator: true } } => null,
-        ListViewItem { Content: HostRow row } => row,
-        _ => null,
-    };
+    private static bool SameHost(HostEntry? left, HostEntry? right) =>
+        left is null && right is null ||
+        left is not null && right is not null &&
+        IdentityStore.EndpointDigest(left) == IdentityStore.EndpointDigest(right);
 
     private static void RememberRecentHost(HostEntry? host)
     {
@@ -858,11 +1086,11 @@ public sealed partial class MainWindow : Window
         _workspace.AllPanes.Any(pane => pane.Model.IsLive && pane.Model.RemoteHost is { } current &&
             IdentityStore.EndpointDigest(current) == IdentityStore.EndpointDigest(host));
 
-    private sealed class HostRow(HostEntry? host, bool connected = false, bool separator = false)
+    private sealed class HostRow(HostEntry? host, bool connected = false, bool current = false)
     {
         public HostEntry? Host { get; } = host;
-        public bool Separator { get; } = separator;
-        public override string ToString() => Separator ? "────────" : (Host?.Label ?? "localhost") + (connected ? "  · connected" : "");
+        public bool Connected { get; } = connected;
+        public bool Current { get; } = current;
     }
 
     private readonly Dictionary<string, Task> _hostRequests = new();
@@ -972,7 +1200,11 @@ public sealed partial class MainWindow : Window
     private async Task ReconnectSelectedAsync()
     {
         if (_workspace.Active is not { } pane || !pane.Model.CanReconnect) return;
-        if (pane.Model.RemoteHost is { } host) await OpenHostAsync(host, pane);
+        if (pane.Model.RemoteHost is { } host)
+        {
+            await OpenHostAsync(host, pane);
+            await ReportConnectionFailureAsync(pane);
+        }
         else if (!await pane.Model.OpenLocalAsync(pane.Model.LocalProfile,
             directory: pane.Model.WorkingDirectory, wslDistribution: pane.Model.WslDistribution))
             throw new IOException(pane.Model.LastError ?? pane.Model.Status);
@@ -1000,8 +1232,13 @@ public sealed partial class MainWindow : Window
     private void UpdateSplitButtons()
     {
         var state = CommandState;
+        var show = _workspace.Active is not null && !_zen ? Visibility.Visible : Visibility.Collapsed;
+        SplitLeftButton.Visibility = SplitRightButton.Visibility = SplitUpButton.Visibility = SplitDownButton.Visibility = show;
+        SplitLeftButton.IsEnabled = WorkspaceCommands.IsEnabled("splitLeft", state);
         SplitRightButton.IsEnabled = WorkspaceCommands.IsEnabled("splitRight", state);
+        SplitUpButton.IsEnabled = WorkspaceCommands.IsEnabled("splitUp", state);
         SplitDownButton.IsEnabled = WorkspaceCommands.IsEnabled("splitDown", state);
+        MaximizePaneButton.Visibility = show == Visibility.Visible && state.VisibleTerminals > 1 ? Visibility.Visible : Visibility.Collapsed;
         MaximizePaneButton.IsEnabled = WorkspaceCommands.IsEnabled("maximizePane", state);
         UpdateWorkspaceMenu();
         UpdateTabBarToggle();
@@ -1017,14 +1254,15 @@ public sealed partial class MainWindow : Window
 
     private void TabBarToggle_Click(object sender, RoutedEventArgs e) => _ = RunCommandAsync("toggleTabBar");
 
-    private async Task SplitSelectedAsync(bool vertical)
+    private async Task SplitSelectedAsync(SplitEdge edge)
     {
+        var vertical = edge is SplitEdge.Up or SplitEdge.Down;
         if (_splitting || _connecting || _workspace.Active is not { } source || (vertical ? source.Surface.ActualHeight < 205 : source.Surface.ActualWidth < 325)) return;
         _splitting = true;
         UpdateSplitButtons();
         try
         {
-        var pane = await _workspace.SplitAsync(vertical);
+        var pane = await _workspace.SplitAsync(edge);
         if (pane is null) return;
         if (source.Model.RemoteHost is { } host)
         {
@@ -1060,9 +1298,143 @@ public sealed partial class MainWindow : Window
         if (_workspace.Active is not { } pane) return;
         if (_workspace.ActiveGroup?.Panes.Count == 1) { await CloseTabAsync(_workspace.ActiveGroup); return; }
         var note = await CloseNotesAsync(pane);
-        if (note is not null && await Alerts.ContentAsync("Close Pane?", note, "Close", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
+        if (note is not null && await Alerts.ContentAsync("Close Terminal?", note, "Close", null, WorkspaceRoot.ActualTheme, _ => { }) != ContentDialogResult.Primary) return;
         await _workspace.ClosePaneAsync(pane);
         _workspace.Active?.Surface.FocusTerminal();
+    }
+
+    private async Task CloseChipAsync(TerminalPane pane)
+    {
+        var group = _workspace.Tabs.FirstOrDefault(tab => tab.Panes.Contains(pane));
+        if (group is null) return;
+        if (group.Panes.Count == 1)
+        {
+            await CloseTabAsync(group);
+            return;
+        }
+        _workspace.Focus(pane);
+        await CloseSelectedAsync();
+    }
+
+    private static bool FromButton(object source)
+    {
+        for (var parent = source as DependencyObject; parent is not null; parent = VisualTreeHelper.GetParent(parent))
+            if (parent is Button) return true;
+        return false;
+    }
+
+    private TerminalPane? _dragging;
+    private bool _dragArmed, _suppressChipTap;
+    private FrameworkElement? _dropMark;
+    private Windows.Foundation.Point _dragOrigin;
+
+    private readonly HashSet<ListViewItem> _chipDragWired = [];
+
+    private void VerticalChipDrag(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer is not ListViewItem row || !_chipDragWired.Add(row)) return;
+        row.PointerPressed += (_, e) =>
+        {
+            _suppressChipTap = false;
+            if (row.DataContext is not VerticalPaneRow item || !e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) return;
+            BeginChipDrag(row, item.Pane, e);
+        };
+        row.PointerMoved += (_, e) => MoveChipDrag(row, e);
+        row.PointerReleased += (_, e) => EndChipDrag(row, e);
+        row.PointerCaptureLost += (_, _) => CancelChipDrag();
+    }
+
+    private void BeginChipDrag(UIElement element, TerminalPane pane, PointerRoutedEventArgs e)
+    {
+        _dragging = pane;
+        _dragArmed = false;
+        _dragOrigin = e.GetCurrentPoint(WorkspaceRoot).Position;
+        element.CapturePointer(e.Pointer);
+    }
+
+    private void MoveChipDrag(UIElement element, PointerRoutedEventArgs e)
+    {
+        if (_dragging is null || !element.PointerCaptures.Contains(e.Pointer)) return;
+        var point = e.GetCurrentPoint(WorkspaceRoot).Position;
+        var dx = point.X - _dragOrigin.X;
+        var dy = point.Y - _dragOrigin.Y;
+        if (!_dragArmed && dx * dx + dy * dy <= 36) return;
+        _dragArmed = true;
+        e.Handled = true;
+        if (ChipAt(point, _dragging) is { } hit) ShowDropMark(hit.Element, hit.Edge);
+        else ClearDropMark();
+    }
+
+    private void EndChipDrag(UIElement element, PointerRoutedEventArgs e)
+    {
+        var dragged = _dragging;
+        var armed = _dragArmed;
+        _dragging = null;
+        _dragArmed = false;
+        if (armed) _suppressChipTap = true;
+        if (element.PointerCaptures.Contains(e.Pointer)) element.ReleasePointerCapture(e.Pointer);
+        var hit = armed && dragged is not null ? ChipAt(e.GetCurrentPoint(WorkspaceRoot).Position, dragged) : null;
+        ClearDropMark();
+        if (hit is { } target && dragged is not null && _workspace.Place(dragged, target.Pane, target.Edge))
+            _workspace.Active?.Surface.FocusTerminal();
+    }
+
+    private void CancelChipDrag()
+    {
+        _dragging = null;
+        _dragArmed = false;
+        ClearDropMark();
+    }
+
+    private (TerminalPane Pane, FrameworkElement Element, SplitEdge Edge)? ChipAt(Windows.Foundation.Point point, TerminalPane dragged)
+    {
+        foreach (var hit in VisualTreeHelper.FindElementsInHostCoordinates(point, WorkspaceRoot))
+        {
+            for (var node = hit as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
+            {
+                FrameworkElement? element = node switch
+                {
+                    TabViewItem item when item.Tag is TerminalPane pane && pane != dragged => item,
+                    ListViewItem row when row.DataContext is VerticalPaneRow vertical && vertical.Pane != dragged => row,
+                    _ => null,
+                };
+                if (element is null) continue;
+                var targetPane = element is TabViewItem tab ? (TerminalPane)tab.Tag : ((VerticalPaneRow)element.DataContext).Pane;
+                var origin = element.TransformToVisual(WorkspaceRoot).TransformPoint(new Windows.Foundation.Point(0, 0));
+                var edge = SplitEdges.DropOnChip(point.X - origin.X, point.Y - origin.Y, element.ActualWidth, element.ActualHeight);
+                return (targetPane, element, edge);
+            }
+        }
+        return null;
+    }
+
+    private void ShowDropMark(FrameworkElement element, SplitEdge edge)
+    {
+        if (!ReferenceEquals(_dropMark, element)) ClearDropMark();
+        _dropMark = element;
+        if (element is TabViewItem item && item.Header is WorkspaceTabHeader header) header.ShowDrop(edge);
+        else
+        {
+            element.SetValue(Control.BorderBrushProperty, Application.Current.Resources["AccentBrush"]);
+            element.SetValue(Control.BorderThicknessProperty, edge switch
+            {
+                SplitEdge.Left => new Thickness(3, 0, 0, 0),
+                SplitEdge.Right => new Thickness(0, 0, 3, 0),
+                SplitEdge.Up => new Thickness(0, 3, 0, 0),
+                _ => new Thickness(0, 0, 0, 3),
+            });
+        }
+    }
+
+    private void ClearDropMark()
+    {
+        if (_dropMark is TabViewItem item && item.Header is WorkspaceTabHeader header) header.ShowDrop(null);
+        else if (_dropMark is not null)
+        {
+            _dropMark.ClearValue(Control.BorderBrushProperty);
+            _dropMark.ClearValue(Control.BorderThicknessProperty);
+        }
+        _dropMark = null;
     }
 
     private async Task CloseTabAsync(Tab tab)

@@ -2,7 +2,7 @@
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Settings">
  <NavigationView x:Name="SettingsRoot" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed"
-  IsSettingsVisible="False" IsPaneToggleButtonVisible="False" OpenPaneLength="220"
+  IsSettingsVisible="False" IsPaneToggleButtonVisible="False" OpenPaneLength="184"
   Background="Transparent" SelectionChanged="Section_Changed">
   <NavigationView.Resources>
    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
@@ -13,6 +13,7 @@
    <NavigationViewItem Content="General" Tag="startup" Icon="Play" IsSelected="True" />
    <NavigationViewItem Content="Appearance" Tag="appearance" Icon="FontColor" />
    <NavigationViewItem Content="Terminal" Tag="terminal" Icon="Keyboard" />
+   <NavigationViewItem Content="Quick Terminal" Tag="quickTerminal" Icon="DockTop" />
    <NavigationViewItem Content="Key Bindings" Tag="keys" Icon="Keyboard" />
    <NavigationViewItem Content="Session History" Tag="history" Icon="Clock" />
    <NavigationViewItem Content="Security" Tag="security" Icon="ProtectedDocument" />
@@ -83,9 +84,21 @@
        <ComboBoxItem Content="Dark" Tag="dark" />
        <ComboBoxItem Content="Light" Tag="light" />
       </ComboBox>
+      <ComboBox x:Name="MaterialPicker" Header="Window material" HorizontalAlignment="Stretch"
+       AutomationProperties.Name="Window material" SelectionChanged="Material_Changed">
+       <ComboBoxItem Content="Frosted glass (Acrylic)" Tag="acrylic" />
+       <ComboBoxItem Content="Mica" Tag="mica" />
+       <ComboBoxItem Content="Solid" Tag="solid" />
+      </ComboBox>
+      <Slider x:Name="BackgroundOpacitySlider" Header="Background opacity (%)" Minimum="50" Maximum="100"
+       StepFrequency="5" TickFrequency="25" Value="60" AutomationProperties.Name="Background opacity"
+       ValueChanged="Opacity_Changed" />
+      <TextBlock Text="Lower opacity reveals more of the material behind the workspace. Text stays crisp. Windows may use a solid background when transparency effects are unavailable."
+       Foreground="{ThemeResource ChromeSubtleBrush}" TextWrapping="Wrap" />
      </StackPanel>
     </Border>
     <StackPanel x:Name="TerminalPane" Visibility="Collapsed" Spacing="12" />
+    <StackPanel x:Name="QuickTerminalPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="KeysPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="HistoryPane" Visibility="Collapsed" Spacing="12" />
     <StackPanel x:Name="SecurityPane" Visibility="Collapsed" Spacing="12" />

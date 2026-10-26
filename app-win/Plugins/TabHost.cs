@@ -64,6 +64,8 @@ public interface ITabAttachment : IAsyncDisposable
     Task RestoreAsync(string state) => Task.CompletedTask;
     /// <summary>One line under a close confirmation, when closing would stop work.</summary>
     string? CloseNote { get; }
+    /// <summary>Session name worn on the terminal chip while this attachment owns the shell.</summary>
+    string TabTitle => "";
     Task ShownAsync();
     /// <summary>Files dropped on the tab. <c>true</c> takes them.</summary>
     bool Receive(IReadOnlyList<string> paths);

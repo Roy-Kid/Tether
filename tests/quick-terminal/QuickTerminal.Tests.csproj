@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../dotnet/Tether/Tether.csproj" />
+    <Compile Include="../../app-win/QuickTerminalController.cs" Link="QuickTerminalController.cs" />
+    <Compile Include="../../app-win/QuickTerminalGeometry.cs" Link="QuickTerminalGeometry.cs" />
+    <Compile Include="../../app-win/NativeContextMenu.cs" Link="NativeContextMenu.cs" />
+    <Compile Include="../../app-win/WorkspacePreferences.cs" Link="WorkspacePreferences.cs" />
+    <Compile Include="../../app-win/TerminalPreferences.cs" Link="TerminalPreferences.cs" />
+    <Compile Include="../../app-win/Settings.cs" Link="Settings.cs" />
+  </ItemGroup>
+</Project>

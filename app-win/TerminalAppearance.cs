@@ -5,8 +5,16 @@ namespace TetherApp;
 internal static class TerminalAppearance
 {
     public static Palette Choose(bool dark) => AppSettings.Current.Terminal.ColorScheme == "classic"
-        ? (dark ? Palette.Dark : Palette.Light)
-        : (dark ? SoftDark : SoftLight);
+        ? (dark ? Palette.Dark : Palette.Light) : (dark ? SoftDark : SoftLight);
+
+    // Native hosts tint the entire workspace once. wgpu only clears default
+    // terminal backgrounds, matching WgpuTerminal.swift's renderPalette call.
+    public static Palette ForRendering(Palette palette, bool transparentBackground)
+    {
+        var alpha = transparentBackground ? 0 : 1;
+        return palette.Background.Alpha == alpha ? palette
+            : palette with { Background = palette.Background with { Alpha = alpha } };
+    }
 
     private static Rgba Color(uint rgb) => new(
         ((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f, 1f);

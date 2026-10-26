@@ -15,7 +15,15 @@ internal static class RenderEvaluationWindow
         output = Path.GetFullPath(output);
         Directory.CreateDirectory(output);
         var window = new Window { Title = "Tether WinUI renderer evaluation" };
+        WindowEffects.Apply(window);
         var grid = new Grid { RequestedTheme = ElementTheme.Dark };
+        grid.Background = Appearance.WorkspaceBackground(TerminalAppearance.Choose(dark: true));
+        WindowEffects.Observe(window, grid, () =>
+        {
+            grid.Background = Appearance.WorkspaceBackground(TerminalAppearance.Choose(dark: true), grid.Background);
+            foreach (var control in grid.Children.OfType<TerminalControl>())
+                control.SetPalette(TerminalAppearance.Choose(dark: true));
+        });
         grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         window.Content = grid;
@@ -26,6 +34,7 @@ internal static class RenderEvaluationWindow
         TerminalControl Add(int column)
         {
             var control = new TerminalControl { WantsFocus = () => false };
+            control.SetPalette(TerminalAppearance.Choose(dark: true));
             control.EvaluationFailure = error => failures.Add(error.ToString());
             Grid.SetColumn(control, column);
             grid.Children.Add(control);

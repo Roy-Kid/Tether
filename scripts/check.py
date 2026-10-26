@@ -152,6 +152,7 @@ def windows():
     run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
         "--all-targets", "--", "-D", "warnings")
     run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
+    run("dotnet", "build", "tests/windows-layout", "-c", "Debug", "-p:Platform=x64", "-warnaserror")
     run("dotnet", "run", "--project", "tests/render-evaluation", "-c", "Release", "--no-build", "--", "--validate-fixtures")
     run("dotnet", "build", "app-win/TetherApp.Windows.csproj", "-c", "Debug",
         "-p:Platform=x64", "-warnaserror")

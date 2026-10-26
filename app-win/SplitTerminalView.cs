@@ -12,6 +12,7 @@ public sealed class SplitTerminalView : Grid
     private readonly Workspace _workspace;
     private SplitLayout? _layout;
     private readonly Dictionary<Guid, Border> _leaves = [];
+    private readonly Brush _clear = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     public SplitTerminalView(Tab group, Workspace workspace) { _group = group; _workspace = workspace; Update(); }
     public void Update()
     {
@@ -25,14 +26,17 @@ public sealed class SplitTerminalView : Grid
             Children.Add(Build(effective));
         }
         foreach (var (id, border) in _leaves)
-            border.BorderBrush = id == _group.FocusedPane ? (Brush)Application.Current.Resources["AccentBrush"] : (Brush)Application.Current.Resources["ChromeWindowBrush"];
+        {
+            var brush = id == _group.FocusedPane ? (Brush)Application.Current.Resources["AccentBrush"] : _clear;
+            if (!ReferenceEquals(border.BorderBrush, brush)) border.BorderBrush = brush;
+        }
     }
     private FrameworkElement Build(SplitLayout node)
     {
         if (node.Pane is { } id)
         {
             var pane = _group.Panes.First(p => p.Id == id);
-            var border = new Border { BorderThickness = new Thickness(1), Child = pane.Surface };
+            var border = new Border { BorderThickness = new Thickness(0, _group.Panes.Count > 1 && !_group.Maximized ? 2 : 0, 0, 0), Child = pane.Surface };
             _leaves[id] = border;
             return border;
         }

@@ -55,6 +55,27 @@ byte-for-byte in `molab-apple`, a consumer.
 The native macOS app now includes a modular frontend and an optional tmux workspace.
 See [frontend extensions and tmux](docs/plugins.md) for building, extending and using it.
 
+### Window appearance (Windows)
+
+**Settings → Appearance** offers Frosted glass (Acrylic), Mica and Solid.
+Background opacity controls one tint across the entire workspace while keeping text and the cursor
+opaque. The default tint is 60%, adjustable from 50% to 100%, matching macOS.
+Windows uses Acrylic and can fall back to solid
+when transparency effects are unavailable. See [Windows appearance](docs/windows-appearance.md).
+
+### Quick Terminal (Windows)
+
+Press **Ctrl+Backquote** (Ctrl + the OEM backquote key) to summon the existing
+workspace into the top half of the pointer's monitor. Press it again to hide;
+sessions keep running. The notification-area icon also shows/hides it; its menu
+restores the normal window or quits through the existing close confirmation.
+
+**Settings → Quick Terminal** controls enabling, auto-hide, notification-area icon
+and normal-window topmost behavior. Change the primary/secondary global shortcut
+under **Settings → Key Bindings → Toggle Quick Terminal**. Conflicts with another
+application are reported in Settings. The workspace menu and command palette
+also offer Toggle Quick Terminal, Restore Window and Keep Window on Top.
+
 ### Quick Terminal (macOS)
 
 Press **Control + `** or click the terminal icon in the macOS menu bar to show

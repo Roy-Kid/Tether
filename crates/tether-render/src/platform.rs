@@ -65,6 +65,30 @@ pub(crate) fn instance() -> wgpu::Instance {
     wgpu::Instance::new(descriptor)
 }
 
+/// A host opts into alpha composition with WS_EX_NOREDIRECTIONBITMAP. Ordinary
+/// HWNDs retain the existing backend policy. This target needs DX12/DComp;
+/// Vulkan/GL HWND swapchains cannot composite its transparent pixels.
+#[cfg(windows)]
+pub(crate) fn hwnd_instance(hwnd: isize) -> wgpu::Instance {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+    }
+    // SAFETY: attach_hwnd's caller supplies a live HWND for initialization.
+    if unsafe { GetWindowLongPtrW(hwnd, -20) } & 0x0020_0000 == 0 {
+        return instance();
+    }
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::DX12;
+    descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+    wgpu::Instance::new(descriptor)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn hwnd_instance(_hwnd: isize) -> wgpu::Instance {
+    instance()
+}
+
 /// # Safety
 /// The HWND must remain live until the returned surface is dropped.
 #[cfg(windows)]

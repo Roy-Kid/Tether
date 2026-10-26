@@ -8,13 +8,30 @@ namespace TetherApp;
 
 public sealed partial class MainWindow
 {
+    private FrameworkElement? _dragArea;
     private readonly HashSet<Tab> _closingTabs = [];
     private bool _zen;
     private bool _windowCloseApproved, _checkingWindowClose;
     private void ShowFromBackground()
     {
+        if (_quickTerminal?.IsQuick == true) _quickTerminal.Restore();
         AppWindow.Show();
         Activate();
+    }
+
+    private void BindTrayQuickTerminal()
+    {
+        _tray?.BindQuickTerminal(
+            () => DispatcherQueue.TryEnqueue(ShowFromBackground),
+            () => DispatcherQueue.TryEnqueue(() => _ = QuitAsync()),
+            () => DispatcherQueue.TryEnqueue(() => _quickTerminal?.Toggle()),
+            () => DispatcherQueue.TryEnqueue(() => _quickTerminal?.Restore()),
+            () => DispatcherQueue.TryEnqueue(() =>
+                (AppSettings.Current with { AlwaysOnTop = !AppSettings.Current.AlwaysOnTop }).Save()),
+            () => _quickTerminal?.IsVisible == true,
+            () => _quickTerminal?.IsQuick == true,
+            () => AppSettings.Current.AlwaysOnTop,
+            () => AppSettings.Current.QuickTerminalEnabled && AppSettings.Current.QuickTerminalTrayIcon);
     }
 
     private WorkspaceCommandState CommandState => new(_workspace.VisibleTabs.Count + _workspace.VisibleExtensions.Count,
@@ -27,20 +44,37 @@ public sealed partial class MainWindow
 
     private string CommandTitle(WorkspaceCommand command) => command.Id switch
     {
+        "alwaysOnTop" => AppSettings.Current.AlwaysOnTop ? "Stop Keeping Window on Top" : command.Title,
         "zen" => _zen ? "Exit Zen Mode" : "Zen Mode",
         "toggleTabBar" => AppSettings.Current.ShowsTabBar ? "Hide Tab Bar" : "Show Tab Bar",
         "reconnect" => _workspace.Active?.Model.RemoteHost is null ? "Restart" : "Reconnect",
         _ => command.Title,
     };
 
+    private bool CommandEnabled(string id) => WorkspaceCommands.IsEnabled(id, CommandState) && id switch
+    {
+        "quickTerminal" => AppSettings.Current.QuickTerminalEnabled,
+        "restoreWindow" => _quickTerminal?.IsQuick == true,
+        _ => true,
+    };
+
     private async Task<bool> ConnectPaneAsync(TerminalPane pane, HostEntry host)
     {
         await OpenHostAsync(host, pane);
+        // A failed new pane is disposed before entering the workspace. Report
+        // its error here, while it still exists, rather than losing it with
+        // the pane and leaving an apparently unresponsive host picker.
+        await ReportConnectionFailureAsync(pane);
         return pane.Model.IsLive;
     }
 
     /// Quit from the notification area: the question the window's close asks.
     private Task QuitAsync() => RequestWindowCloseAsync();
+
+    private Task ReportConnectionFailureAsync(TerminalPane pane) =>
+        !pane.Model.IsLive && pane.Model.RemoteHost is { } host && pane.Model.LastError is { Length: > 0 } error
+            ? Alerts.ConnectionErrorAsync(DispatcherQueue, host.Label, error)
+            : Task.CompletedTask;
 
     private async Task RequestWindowCloseAsync()
     {
@@ -63,7 +97,9 @@ public sealed partial class MainWindow
         }
         finally { _checkingWindowClose = false; _connecting = false; }
     }
+    private async void SplitLeft_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitLeft");
     private async void SplitRight_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitRight");
+    private async void SplitUp_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitUp");
     private async void SplitDown_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("splitDown");
     private async void MaximizePane_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("maximizePane");
     private Window? _commandPicker;
@@ -87,31 +123,42 @@ public sealed partial class MainWindow
         TabStrip.Visibility = shows && !vertical ? Visibility.Visible : Visibility.Collapsed;
         VerticalTabs.Visibility = shows && vertical ? Visibility.Visible : Visibility.Collapsed;
         HiddenTitleBarDragArea.Visibility = TabStrip.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
-        SetTitleBar(TabStrip.Visibility == Visibility.Visible ? TitleBarDragArea : HiddenTitleBarDragArea);
+        var dragArea = TabStrip.Visibility == Visibility.Visible ? TitleBarDragArea : HiddenTitleBarDragArea;
+        if (!ReferenceEquals(_dragArea, dragArea))
+        {
+            SetTitleBar(dragArea);
+            _dragArea = dragArea;
+        }
         var attention = _workspace.Active?.Model.Bar.Phase is RemotePhase.Connecting or RemotePhase.Authenticating or RemotePhase.Lost or RemotePhase.Failed;
         StatusBar.Visibility = !_zen || attention ? Visibility.Visible : Visibility.Collapsed;
         if (_zen) InspectorHost.Visibility = Visibility.Collapsed;
         UpdateTabBarToggle();
     }
 
-    private abstract record VerticalItem(string Title) { public override string ToString() => Title; }
-    private sealed record VerticalTabRow(Tab Tab) : VerticalItem(Tab.Title);
-    private sealed record VerticalExtensionRow(ExtensionTab Extension) : VerticalItem(Extension.Title);
+    private abstract record VerticalItem(string Title)
+    {
+        public virtual string Subtitle => "";
+        public override string ToString() => Title;
+    }
+    private sealed record VerticalPaneRow(TerminalPane Pane, string Title) : VerticalItem(Title);
+    private sealed record VerticalExtensionRow(ExtensionTab Extension) : VerticalItem(Extension.Title)
+    {
+        public override string Subtitle => Extension.Subtitle;
+    }
     private void RefreshVerticalTabs()
     {
-        var rows = _workspace.VisibleTabs.Select(t => (VerticalItem)new VerticalTabRow(t))
+        var rows = _workspace.VisiblePanes.Select(pane => (VerticalItem)new VerticalPaneRow(pane, _workspace.DisplayTitle(pane)))
             .Concat(_workspace.VisibleExtensions.Select(e => new VerticalExtensionRow(e))).ToArray();
         VerticalTabList.ItemsSource = rows;
         VerticalTabList.SelectedItem = _workspace.ActiveExtension is { } extension
             ? rows.OfType<VerticalExtensionRow>().FirstOrDefault(r => r.Extension == extension)
-            : rows.OfType<VerticalTabRow>().ElementAtOrDefault(_workspace.ActiveIndex);
+            : rows.OfType<VerticalPaneRow>().FirstOrDefault(r => r.Pane == _workspace.Active);
     }
     private void VerticalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_refreshingTabs) return;
         if (VerticalTabList.SelectedItem is VerticalExtensionRow extension) _workspace.Activate(extension.Extension);
-        else if (VerticalTabList.SelectedItem is VerticalTabRow row)
-            _workspace.Select(_workspace.VisibleTabs.ToList().IndexOf(row.Tab));
+        else if (VerticalTabList.SelectedItem is VerticalPaneRow row) _workspace.Focus(row.Pane);
     }
     private async void VerticalAdd_Click(object sender, RoutedEventArgs e) => await RunCommandAsync("newTab");
 
@@ -136,6 +183,11 @@ public sealed partial class MainWindow
         foreach (var command in WorkspaceCommands.All)
         {
             if (!WorkspaceCommands.Matches(command, AppSettings.Current, shortcut)) continue;
+            if (command.Id == "quickTerminal")
+            {
+                if (!AppSettings.Current.QuickTerminalEnabled) continue;
+                if (_quickTerminal?.OwnsShortcut(shortcut) == true) return true; // WM_HOTKEY owns this chord.
+            }
             _ = RunCommandAsync(command.Id);
             return true;
         }
@@ -158,7 +210,7 @@ public sealed partial class MainWindow
 
     private async Task RunCommandAsync(string id)
     {
-        if (!WorkspaceCommands.IsEnabled(id, CommandState)) return;
+        if (!CommandEnabled(id)) return;
         try
         {
             switch (id)
@@ -173,8 +225,10 @@ public sealed partial class MainWindow
                 case "previousTerminal": _workspace.CycleTerminal(false); break;
                 case "nextTerminal": _workspace.CycleTerminal(true); break;
                 case "reconnect": await ReconnectSelectedAsync(); break;
-                case "splitRight": await SplitSelectedAsync(false); break;
-                case "splitDown": await SplitSelectedAsync(true); break;
+                case "splitLeft": await SplitSelectedAsync(SplitEdge.Left); break;
+                case "splitRight": await SplitSelectedAsync(SplitEdge.Right); break;
+                case "splitUp": await SplitSelectedAsync(SplitEdge.Up); break;
+                case "splitDown": await SplitSelectedAsync(SplitEdge.Down); break;
                 case "maximizePane":
                     if (_workspace.ActiveGroup is { } active) { active.Maximized = !active.Maximized; OnWorkspaceChanged(); _workspace.Active?.Surface.FocusTerminal(); }
                     break;
@@ -190,6 +244,9 @@ public sealed partial class MainWindow
                         _workspace.Rename(restored.Tab, title);
                     }
                     break;
+                case "quickTerminal": _quickTerminal?.Toggle(); break;
+                case "restoreWindow": _quickTerminal?.Restore(); break;
+                case "alwaysOnTop": (AppSettings.Current with { AlwaysOnTop = !AppSettings.Current.AlwaysOnTop }).Save(); break;
                 case "commandMenu": ShowCommandPicker(false); break;
                 case "quickSwitch": ShowCommandPicker(true); break;
                 case "previousTab": CycleWorkspaceTab(false); break;
@@ -197,7 +254,8 @@ public sealed partial class MainWindow
                 case "renameTerminal":
                 case "renameTab":
                     if (_workspace.Active is not { } tab) break;
-                    var name = new TextBox { Text = id == "renameTab" ? _workspace.ActiveGroup?.Title : tab.Title, MinWidth = 260 };
+                    var seed = id == "renameTab" ? _workspace.DisplayTitle(_workspace.ActiveGroup!) : _workspace.RenameSeed(tab);
+                    var name = new TextBox { Text = seed, MinWidth = 260 };
                     name.Loaded += (_, _) => { name.Focus(FocusState.Programmatic); name.SelectAll(); };
                     _connecting = true;
                     try

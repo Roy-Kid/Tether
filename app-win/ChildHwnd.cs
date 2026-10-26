@@ -105,9 +105,9 @@ public sealed class ChildHwnd : IDisposable
         RegisterClass();
         var child = new ChildHwnd(onText, onKey, onPointer);
         child._hwnd = CreateWindowEx(
-            // Not WS_EX_NOREDIRECTIONBITMAP. Vulkan and GL present to
-            // nowhere under that style.
-            0,
+            // This opts the Rust attachment into DX12 DirectComposition. The
+            // opaque compatibility path retains redirection for Vulkan/GL.
+            WindowEffects.CompositionSurface ? 0x0020_0000 : 0,
             "TetherTerminal",
             "",
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -220,7 +220,7 @@ public sealed class ChildHwnd : IDisposable
             lpfnWndProc = Marshal.GetFunctionPointerForDelegate<WndProc>(_proc),
             hInstance = _module,
             hCursor = LoadCursor(0, IDC_IBEAM),
-            hbrBackground = TerminalBrush,
+            hbrBackground = WindowEffects.CompositionSurface ? 0 : TerminalBrush,
             lpszClassName = "TetherTerminal",
         };
         var atom = RegisterClass(ref wc);

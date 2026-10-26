@@ -8,6 +8,8 @@ internal static class AppBranding
 {
     private static readonly Lazy<nint> Icon = new(LoadIcon);
 
+    internal static nint IconHandle => Icon.Value;
+
     public static void Initialize() =>
         Marshal.ThrowExceptionForHR(SetCurrentProcessExplicitAppUserModelID("Roy-Kid.Tether"));
 

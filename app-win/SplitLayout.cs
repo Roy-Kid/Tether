@@ -6,9 +6,38 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
 {
     public static SplitLayout Leaf(Guid id) => new(id);
     public IEnumerable<Guid> Leaves => Pane is { } id ? [id] : First!.Leaves.Concat(Second!.Leaves);
-    public SplitLayout Split(Guid id, Guid added, bool vertical) => Pane == id
-        ? new(null, vertical, .5, this, Leaf(added))
-        : Pane is not null ? this : this with { First = First!.Split(id, added, vertical), Second = Second!.Split(id, added, vertical) };
+    /// <summary><paramref name="before"/> puts the new pane on the left or the top.</summary>
+    public SplitLayout Split(Guid id, Guid added, bool vertical, bool before = false) => Pane == id
+        ? before ? new(null, vertical, .5, Leaf(added), this) : new(null, vertical, .5, this, Leaf(added))
+        : Pane is not null ? this : this with
+        {
+            First = First!.Split(id, added, vertical, before),
+            Second = Second!.Split(id, added, vertical, before),
+        };
+
+    /// <summary>Move <paramref name="dragged"/> onto one edge of <paramref name="target"/>.</summary>
+    public static SplitLayout PlaceInLayout(SplitLayout layout, Guid dragged, Guid target, SplitEdge edge)
+    {
+        if (dragged == target) return layout;
+        var remaining = layout.Remove(dragged) ?? Leaf(target);
+        if (!remaining.Leaves.Contains(target)) remaining = Leaf(target);
+        return InsertBeside(remaining, target, dragged, edge);
+    }
+
+    public static SplitLayout InsertBeside(SplitLayout layout, Guid target, Guid added, SplitEdge edge)
+    {
+        var rooted = layout.Leaves.Contains(target) ? layout : Leaf(target);
+        var before = edge is SplitEdge.Left or SplitEdge.Up;
+        var vertical = edge is SplitEdge.Up or SplitEdge.Down;
+        var panes = before
+            ? new SplitLayout(null, vertical, .5, Leaf(added), Leaf(target))
+            : new SplitLayout(null, vertical, .5, Leaf(target), Leaf(added));
+        return Replace(rooted, target, panes);
+    }
+
+    public static SplitLayout Replace(SplitLayout layout, Guid id, SplitLayout replacement) =>
+        layout.Pane == id ? replacement : layout.Pane is not null ? layout
+        : layout with { First = Replace(layout.First!, id, replacement), Second = Replace(layout.Second!, id, replacement) };
     public SplitLayout RestoreBeside(IReadOnlySet<Guid> neighbors, Guid pane, bool vertical, bool before, double ratio)
     {
         if (Pane is null)
@@ -43,4 +72,32 @@ public sealed record SplitLayout(Guid? Pane, bool Vertical = false, double Ratio
         var b = Second!.Remove(id);
         return a is null ? b : b is null ? a : this with { First = a, Second = b };
     }
+}
+
+public enum SplitEdge { Left, Right, Up, Down }
+
+/// <summary>Which side of a chip or a pane a drop landed on. Same rule as the Mac tab strip.</summary>
+public static class SplitEdges
+{
+    public static SplitEdge? Drop(double x, double y, double width, double height, double? band)
+    {
+        if (width <= 0 || height <= 0 || !double.IsFinite(x) || !double.IsFinite(y)) return null;
+        if (band is { } limit)
+        {
+            var left = x / width;
+            var right = 1 - left;
+            var top = y / height;
+            var bottom = 1 - top;
+            (SplitEdge Edge, double Distance) nearest = (SplitEdge.Left, left);
+            foreach (var candidate in new[] { (SplitEdge.Right, right), (SplitEdge.Up, top), (SplitEdge.Down, bottom) })
+                if (candidate.Item2 < nearest.Distance) nearest = candidate;
+            return nearest.Distance <= limit ? nearest.Edge : null;
+        }
+        if (height > width) return y < height / 2 ? SplitEdge.Up : SplitEdge.Down;
+        return x < width / 2 ? SplitEdge.Left : SplitEdge.Right;
+    }
+
+    /// <summary>An edge band wins. The middle of a wide chip is left or right; a tall chip is up or down.</summary>
+    public static SplitEdge DropOnChip(double x, double y, double width, double height) =>
+        Drop(x, y, width, height, 0.28) ?? Drop(x, y, width, height, null) ?? SplitEdge.Right;
 }

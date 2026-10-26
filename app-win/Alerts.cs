@@ -16,6 +16,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Tether;
 using Windows.Graphics;
@@ -80,6 +81,9 @@ public static class Alerts
     public static Task<bool> ClipboardErrorAsync(DispatcherQueue queue, string detail) =>
         OnUi(queue, () => Ask("Clipboard unavailable", detail, null, "Close"));
 
+    public static Task<bool> ConnectionErrorAsync(DispatcherQueue queue, string host, string detail) =>
+        OnUi(queue, () => Ask("Could not connect to " + host, detail, null, "Close"));
+
     public static Task<bool> TrustAsync(
         DispatcherQueue queue, HostIdentity host, TrustQuestion question, CancellationToken cancellationToken = default)
     {
@@ -141,45 +145,94 @@ public static class Alerts
     private static async Task<IReadOnlyList<string>> AskPrompts(
         string instruction, IReadOnlyList<AuthPrompt> prompts, CancellationToken cancellationToken = default)
     {
+        var resources = Application.Current.Resources;
         var title = TitleFor(prompts[0]);
         var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var window = NewDialog(title, 440, 320);
+        var window = NewDialog(title, 360, 220);
+        var spaceGroup = (double)resources["SpaceGroup"];
+        var spaceInline = (double)resources["SpaceInline"];
+        var titleSize = (double)resources["TitleSize"];
+        var inputSize = (double)resources["InputSize"];
+        var controlHeight = (double)resources["CompactControlHeight"] + 6;
+        var rowRadius = (CornerRadius)resources["RowRadius"];
+        var raised = (Brush)resources["ChromeRaisedBrush"];
+        var textBrush = (Brush)resources["ChromeTextBrush"];
+        var subtle = (Brush)resources["ChromeSubtleBrush"];
+        var chromeButton = (Style)resources["ChromeButtonStyle"];
         var layout = new Grid
         {
-            Padding = new Thickness(24),
-            RowSpacing = 20,
+            Padding = new Thickness(12),
+            RowSpacing = spaceGroup,
             RequestedTheme = Appearance.RequestedTheme,
-            Background = (Brush)Application.Current.Resources["ChromeWindowBrush"],
+            Background = raised,
         };
         layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var heading = new TextBlock
         {
-            Text = title, FontSize = 20,
+            Text = title,
+            FontSize = 14,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = textBrush,
             TextWrapping = TextWrapping.Wrap,
         };
         layout.Children.Add(heading);
-        var panel = new StackPanel { Spacing = 16 };
-        if (instruction.Length > 0 && instruction != title)
-            panel.Children.Add(new TextBlock { Text = instruction, TextWrapping = TextWrapping.Wrap });
+        var panel = new StackPanel { Spacing = spaceGroup };
+        var words = instruction.Trim();
+        if (words.Length > 0 && !string.Equals(words, title, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(words, prompts[0].Text.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = words,
+                FontSize = titleSize,
+                Foreground = subtle,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
 
         var boxes = new PasswordBox[prompts.Count];
         var plains = new TextBox[prompts.Count];
         for (var i = 0; i < prompts.Count; i++)
         {
-            var field = new StackPanel { Spacing = 6 };
-            field.Children.Add(new TextBlock { Text = prompts[i].Text.Trim(), TextWrapping = TextWrapping.Wrap });
+            var label = PromptLabel(prompts[i]);
+            var field = new StackPanel { Spacing = spaceInline };
+            if (!string.Equals(label, title, StringComparison.OrdinalIgnoreCase) && label.Length > 0)
+            {
+                field.Children.Add(new TextBlock
+                {
+                    Text = label,
+                    FontSize = titleSize,
+                    Foreground = subtle,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
             if (prompts[i].Echo)
             {
-                plains[i] = new TextBox { MinHeight = 36 };
+                plains[i] = new TextBox
+                {
+                    MinHeight = controlHeight,
+                    FontSize = inputSize,
+                    BorderThickness = new Thickness(0),
+                    Background = (Brush)resources["ChromeWindowBrush"],
+                    CornerRadius = rowRadius,
+                    Padding = new Thickness(spaceGroup, spaceInline, spaceGroup, spaceInline),
+                };
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(plains[i], prompts[i].Text);
                 field.Children.Add(plains[i]);
             }
             else
             {
-                boxes[i] = new PasswordBox { MinHeight = 36 };
+                boxes[i] = new PasswordBox
+                {
+                    MinHeight = controlHeight,
+                    FontSize = inputSize,
+                    BorderThickness = new Thickness(0),
+                    Background = (Brush)resources["ChromeWindowBrush"],
+                    CornerRadius = rowRadius,
+                    Padding = new Thickness(spaceGroup, spaceInline, spaceGroup, spaceInline),
+                };
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(boxes[i], prompts[i].Text);
                 field.Children.Add(boxes[i]);
             }
@@ -189,23 +242,45 @@ public static class Alerts
         var row = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = spaceGroup,
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         var ok = new Button
         {
-            Content = "Continue", MinWidth = 100,
-            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Content = "Continue",
+            MinWidth = 88,
+            Style = chromeButton,
+            Background = (Brush)resources["AccentBrush"],
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
         };
-        ok.Click += (_, _) =>
+        void Submit()
         {
             var answers = new string[prompts.Count];
             for (var i = 0; i < prompts.Count; i++)
                 answers[i] = prompts[i].Echo ? plains[i].Text : boxes[i].Password;
-            done.TrySetResult(answers);
-            window.Close();
-        };
-        var cancel = new Button { Content = "Cancel", MinWidth = 100 };
+            if (done.TrySetResult(answers)) window.Close();
+        }
+        ok.Click += (_, _) => Submit();
+        // PasswordBox can consume a routed key before it reaches the layout.
+        // Listen on each field even when handled, using the same submission
+        // path as Continue. Do not intercept Enter on the Cancel button.
+        for (var i = 0; i < prompts.Count; i++)
+        {
+            Control field = prompts[i].Echo ? plains[i] : boxes[i];
+            field.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, e) =>
+            {
+                if (e.Key != Windows.System.VirtualKey.Enter) return;
+                e.Handled = true;
+                Submit();
+            }), true);
+        }
+        layout.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Escape) return;
+            e.Handled = true;
+            if (done.TrySetResult(Array.Empty<string>())) window.Close();
+        }), true);
+        var cancel = new Button { Content = "Cancel", MinWidth = 88, Style = chromeButton };
         cancel.Click += (_, _) => { done.TrySetResult(Array.Empty<string>()); window.Close(); };
         row.Children.Add(cancel);
         row.Children.Add(ok);
@@ -224,13 +299,21 @@ public static class Alerts
         {
             var scale = layout.XamlRoot.RasterizationScale;
             var area = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
-            var width = Math.Min(440, Math.Max(1, area.Width / scale - 32));
-            var contentWidth = Math.Max(1, width - 48);
+            var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
+            var maxWidth = area.Width / scale - 32;
+            var maxHeight = area.Height / scale - 64;
+            if (owner != 0 && GetOwnerSize(owner, out var ownerWidth, out var ownerHeight))
+            {
+                maxWidth = Math.Min(maxWidth, ownerWidth / scale - 24);
+                maxHeight = Math.Min(maxHeight, ownerHeight / scale - 48);
+            }
+            var width = Math.Min(360, Math.Max(280, maxWidth));
+            var contentWidth = Math.Max(1, width - 24);
             heading.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
             panel.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
             row.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
-            var desired = 48 + 40 + heading.DesiredSize.Height + panel.DesiredSize.Height + row.DesiredSize.Height;
-            var height = Math.Min(Math.Max(260, desired), Math.Max(1, area.Height / scale - 64));
+            var desired = 24 + spaceGroup * 2 + heading.DesiredSize.Height + panel.DesiredSize.Height + row.DesiredSize.Height;
+            var height = Math.Min(Math.Max(160, desired), Math.Max(1, maxHeight));
             window.AppWindow.ResizeClient(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
             WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
             Control first = prompts[0].Echo ? plains[0] : boxes[0];
@@ -259,17 +342,35 @@ public static class Alerts
     {
         var window = new Window { Title = title };
         AppBranding.Apply(window);
-        var presenter = OverlappedPresenter.CreateForDialog();
+        var presenter = OverlappedPresenter.Create();
         presenter.SetBorderAndTitleBar(true, false);
         presenter.IsResizable = false;
         presenter.IsMinimizable = false;
         presenter.IsMaximizable = false;
+        presenter.IsAlwaysOnTop = false;
         window.AppWindow.SetPresenter(presenter);
         window.AppWindow.Resize(new SizeInt32(width, height));
         WindowPlacement.Center(window, width, height);
-        WindowPlacement.Own(window);
+        // Owned by the main window so it stays above the terminal HWND, but
+        // not system-wide topmost — other apps can still come in front.
+        WindowPlacement.Own(window, topmost: false);
         return window;
     }
+
+    private static bool GetOwnerSize(nint owner, out int width, out int height)
+    {
+        width = height = 0;
+        if (!GetWindowRect(owner, out var rect)) return false;
+        width = Math.Max(0, rect.Right - rect.Left);
+        height = Math.Max(0, rect.Bottom - rect.Top);
+        return width > 0 && height > 0;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
     private static async Task<T> OnUi<T>(DispatcherQueue queue, Func<Task<T>> work)
     {
@@ -291,20 +392,33 @@ public static class Alerts
 
     private static string TitleFor(AuthPrompt prompt)
     {
+        var text = PromptLabel(prompt);
+        if (text.Length == 0) return "Continue";
+        if (text.Contains("verification", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("one-time", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("otp", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("passcode", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("authenticator", StringComparison.OrdinalIgnoreCase))
+            return "Verification code";
+        if (text.Equals("password", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("password ", StringComparison.OrdinalIgnoreCase)
+            || text.EndsWith(" password", StringComparison.OrdinalIgnoreCase))
+            return "Password";
+        return text.Length > 28 ? text[..28] : text;
+    }
+
+    /// <summary>Server prompt text without a trailing colon, for titles and labels.</summary>
+    private static string PromptLabel(AuthPrompt prompt)
+    {
         var text = prompt.Text.Trim();
-        return text.Length switch
-        {
-            0 => "Continue",
-            _ when text.Contains("password", StringComparison.OrdinalIgnoreCase) => "Password",
-            _ when text.Contains("verification", StringComparison.OrdinalIgnoreCase) => "Verification code",
-            _ => text.Length > 24 ? text[..24] : text,
-        };
+        while (text.EndsWith(':') || text.EndsWith('：')) text = text[..^1].TrimEnd();
+        return text;
     }
 }
 
 static class WindowPlacement
 {
-    public static void Own(Window popup)
+    public static void Own(Window popup, bool topmost = true)
     {
         var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
         if (owner == 0) return;
@@ -312,7 +426,7 @@ static class WindowPlacement
         SetWindowLongPtr(hwnd, -8 /* GWLP_HWNDPARENT */, owner);
         // Above the terminal's child window, which otherwise takes the click
         // the person aimed at this list.
-        SetWindowPos(hwnd, -1 /* HWND_TOPMOST */, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
+        if (topmost) SetWindowPos(hwnd, -1 /* HWND_TOPMOST */, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
     }
 
     public static void Center(Window popup, int width, int height)

@@ -17,6 +17,7 @@ internal static class Program
 
     private static int Run(string[] args)
     {
+        if (args.SequenceEqual(new[] { "--composition-check" })) return CompositionCheck.Run();
         if (args.SequenceEqual(new[] { "--validate-fixtures" }))
         {
             Frames.VerifyFixtures();

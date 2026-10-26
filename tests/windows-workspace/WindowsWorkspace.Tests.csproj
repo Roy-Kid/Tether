@@ -13,5 +13,7 @@
     <Compile Include="../../app-win/SplitLayout.cs" Link="SplitLayout.cs" />
     <Compile Include="../../app-win/SessionHistoryStore.cs" Link="SessionHistoryStore.cs" />
     <Compile Include="../../app-win/SshConfig.cs" Link="SshConfig.cs" />
+    <Compile Include="../../app-win/TerminalLabels.cs" Link="TerminalLabels.cs" />
+    <Compile Include="../../app-win/LocalForeground.cs" Link="LocalForeground.cs" />
   </ItemGroup>
 </Project>
