@@ -79,9 +79,10 @@ struct WorkspaceTabBar: View {
             ForEach(page.terminalIDs, id: \.self) { terminalID in
               if let terminal = tabs.tabs.first(where: { $0.id == terminalID }) {
                 let title = tabs.displayTitle(for: terminal.id)
+                let handingOff = terminal.handoff && !terminal.isLive
                 tabChip(
                   id: terminal.id, title: title,
-                  note: terminal.name == title ? "" : terminal.name,
+                  note: handingOff ? "Take Over" : (terminal.name == title ? "" : terminal.name),
                   subtitle: terminal.subtitle,
                   symbol: symbol(for: terminal), disconnected: terminal.isDisconnected)
                   .id(terminal.id)
@@ -138,6 +139,7 @@ struct WorkspaceTabBar: View {
   /// in for the shell. Otherwise it is a terminal: the same mark for every
   /// host, because a local shell is a host like any other.
   private func symbol(for tab: SessionTab) -> String {
+    if tab.handoff, !tab.isLive { return "arrow.left.arrow.right" }
     if let identity = tab.pluginTerminalIdentity {
       for host in LocalMachine.lookupNames(for: identity.host) {
         let candidate = PluginTerminalIdentity(host: host, terminal: identity.terminal)

@@ -38,6 +38,19 @@ struct ClosedTerminal: Identifiable, Equatable, Codable {
       entry.attachment.restorationState.map { Attachment(pluginID: entry.pluginID, state: $0) }
     }
   }
+
+  /// A page rebuilt from a handoff. No history id: the sender's scrollback
+  /// stays where it was recorded.
+  init(id: UUID, host: Host, name: String, pinnedName: String?, directory: String?, index: Int, attachments: [Attachment]) {
+    self.id = id
+    self.historyID = nil
+    self.host = host
+    self.name = name
+    self.pinnedName = pinnedName
+    self.directory = directory
+    self.index = index
+    self.attachments = attachments
+  }
 }
 
 extension TabSet {
@@ -62,11 +75,18 @@ extension TabSet {
 
   func restoration(for id: UUID) -> ClosedTerminal? {
     guard restoringTab == id else { return nil }
+    if handoffPages.first?.id == id { return handoffPages.first }
     return closedTabs.first { $0.id == id }
   }
 
   func cancelRestore(_ id: UUID) {
+    if handoffPages.first?.id == id {
+      handoffPages.removeFirst()
+      advanceHandoff()
+      return
+    }
     if restoringTab == id { restoringTab = nil }
+    if restoringTab == nil, !handoffPages.isEmpty { advanceHandoff() }
   }
 
   /// Consume history once the replacement tab is ready to begin connecting.
@@ -84,6 +104,7 @@ extension TabSet {
       cancelRestore(id)
       return false
     }
+    let handoff = handoffPages.first?.id == id
     tab.historyID = record.historyID
     tab.pinnedName = TerminalLabels.restoredPin(name: record.name, pinned: record.pinnedName)
     adopt(tab, at: record.index)
@@ -102,8 +123,24 @@ extension TabSet {
       workspaces[index].focused = record.focusedTerminal.flatMap { mapping[$0] } ?? tab.id
       select(workspaces[index].focused)
     }
-    closedTabs.removeAll { $0.id == id }
-    restoringTab = nil
+    if handoff {
+      for restored in mapping.values {
+        tabs.first { $0.id == restored }?.handoff = true
+      }
+      for member in record.members {
+        guard let restored = mapping[member.id] else { continue }
+        for attachment in member.attachments {
+          handoffRestores.append(HandoffRestore(tab: restored, pluginID: attachment.pluginID, state: attachment.state))
+        }
+      }
+      if let focus = handoffFocusID, record.members.contains(where: { $0.id == focus }) {
+        pendingHandoffSelection = mapping[focus]
+      }
+      if handoffPages.first?.id == id { handoffPages.removeFirst() }
+    } else {
+      closedTabs.removeAll { $0.id == id }
+    }
+    advanceHandoff()
     persistHistory()
     return true
   }
@@ -135,8 +172,86 @@ extension TabSet {
       record.host.isManaged && !hosts.contains { $0.sameSessionTarget(as: record.host) }
     }
     persistHistory()
-    if let restoringTab, !closedTabs.contains(where: { $0.id == restoringTab }) {
+    if let restoringTab, handoffPages.first?.id != restoringTab,
+      !closedTabs.contains(where: { $0.id == restoringTab }) {
       cancelRestore(restoringTab)
     }
+  }
+
+  /// The open workspaces, as another of this person's devices can reopen them.
+  /// Nil when nothing is open. The selected page is the one holding the
+  /// terminal in front, not a name: names collide.
+  func captureHandoff() -> HandoffSnapshot? {
+    var records: [ClosedTerminal] = []
+    var selectedIndex = 0
+    for (index, workspace) in workspaces.enumerated() {
+      guard let record = snapshot(workspace, index: index) else { continue }
+      if let selected, workspace.terminalIDs.contains(selected) { selectedIndex = records.count }
+      records.append(record)
+    }
+    guard !records.isEmpty else { return nil }
+    return HandoffSnapshot(records: records, selected: selectedIndex)
+  }
+
+  /// Queue the pages this device can dial. An unknown host is skipped, and
+  /// so is this machine when `allowLocal` is false — a phone has no local shell.
+  /// Returns false when nothing was queued, so a saved snapshot is kept until
+  /// the library can answer it.
+  @discardableResult
+  func prepareHandoff(_ snapshot: HandoffSnapshot, hosts: [Host],
+    allowLocal: Bool = TerminalSession.isLocalAvailable) -> Bool {
+    let chosen = snapshot.pages.indices.contains(snapshot.selected) ? snapshot.selected : nil
+    var focus: UUID?
+    var pages: [ClosedTerminal] = []
+    for (index, page) in snapshot.pages.enumerated() {
+      guard let host = hosts.first(where: { $0.id == page.hostID }) else { continue }
+      if host.isLocal && !allowLocal { continue }
+      guard let record = page.record(host: host) else { continue }
+      if index == chosen { focus = page.focused }
+      pages.append(record)
+    }
+    guard !pages.isEmpty else { return false }
+    if handoffFocusID == nil { handoffFocusID = focus }
+    let begin = handoffPages.isEmpty && restoringTab == nil
+    handoffPages.append(contentsOf: pages)
+    if begin, let first = handoffPages.first {
+      restoringTab = first.id
+      intent = .restoreTab(first.id)
+    }
+    return true
+  }
+
+  /// What a test uses instead of the window: prepare, then finish each page
+  /// without dialling. The window's own path is `prepareHandoff` and the
+  /// password question it already asks.
+  func acceptHandoff(_ snapshot: HandoffSnapshot, hosts: [Host],
+    allowLocal: Bool = TerminalSession.isLocalAvailable) -> Bool {
+    guard prepareHandoff(snapshot, hosts: hosts, allowLocal: allowLocal) else { return false }
+    for _ in 0..<20 {
+      guard let id = restoringTab, let record = restoration(for: id) else { break }
+      let tab = SessionTab(preview: record.host, known: known, name: record.name, live: false)
+      guard completeRestore(id, with: tab, makeTerminal: { member in
+        SessionTab(preview: member.host, known: self.known, name: member.name, live: false)
+      }) else { continue }
+    }
+    return restoringTab == nil && !tabs.isEmpty
+  }
+
+  /// A workspace another device can dial: not this machine, and not empty.
+  var hasTransferableWorkspace: Bool {
+    workspaces.contains { !$0.host.isLocal && !$0.terminalIDs.isEmpty }
+  }
+
+  private func advanceHandoff() {
+    if let next = handoffPages.first {
+      restoringTab = next.id
+      intent = .restoreTab(next.id)
+      return
+    }
+    let pending = pendingHandoffSelection
+    pendingHandoffSelection = nil
+    handoffFocusID = nil
+    restoringTab = nil
+    if let pending { select(pending) }
   }
 }

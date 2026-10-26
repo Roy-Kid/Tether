@@ -449,6 +449,33 @@ struct RootView: View {
     }
   }
 
+  /// Take Over runs on the device being left. One nearby device is handed
+  /// the workspace immediately. Several are named, and Cancel keeps it here.
+  private func offerTakeOver() async {
+    let peers = store.handoff.nearby
+    guard !peers.isEmpty, let snapshot = tabs.captureHandoff() else { return }
+    if peers.count == 1 {
+      store.handoff.send(snapshot, to: peers[0].id)
+      return
+    }
+    var actions = [Dialog.Action.cancel()]
+    for peer in peers {
+      actions.append(Dialog.Action(peer.name) { _ in
+        store.handoff.send(snapshot, to: peer.id)
+      })
+    }
+    _ = await DialogPresenter.ask(Dialog(title: "Take Over", actions: actions))
+  }
+
+  /// The last workspace handed to this device, opened when nothing else is.
+  /// A library that does not yet hold those hosts leaves the file alone.
+  private func resumeSavedHandoff() {
+    guard tabs.tabs.isEmpty, tabs.restoringTab == nil else { return }
+    let archive = HandoffArchive()
+    guard let snapshot = archive.load() else { return }
+    if tabs.prepareHandoff(snapshot, hosts: store.listed) { archive.consume() }
+  }
+
   private func restoreTab(_ id: UUID) {
     guard let record = tabs.restoration(for: id) else { return }
     let host = latest(record.host)
@@ -1038,6 +1065,8 @@ extension RootView {
       case .connect(let host): open(host)
       case .reconnect(let id):
         if let report = tabs.reconnectReport(for: id) { retry(report) }
+      case .takeOver:
+        Task { await offerTakeOver() }
       case .edit(let host):
         tabs.hostPicker = false
         route.show(store.hosts.contains { $0.id == host.id } ? .edit(host.id) : .newHost)
@@ -1105,6 +1134,22 @@ extension RootView {
         tabs.closePlugin(id)
         PluginLive.end(id)
       }
+      store.handoff.start(store)
+      tabs.takeOverReady = !store.handoff.nearby.isEmpty
+      resumeSavedHandoff()
+    }
+    .onChange(of: store.handoff.nearby.map(\.id)) { _, ids in
+      tabs.takeOverReady = !ids.isEmpty
+    }
+    .onChange(of: store.handoff.receivedToken) { _, _ in
+      guard isFront, let snapshot = store.handoff.takeReceived() else { return }
+      _ = tabs.prepareHandoff(snapshot, hosts: store.listed)
+    }
+    .onChange(of: store.hosts.map(\.id)) { _, _ in
+      resumeSavedHandoff()
+    }
+    .onChange(of: store.snapshot.trust.local?.id) { _, _ in
+      store.handoff.start(store)
     }
     .onChange(of: pluginStatusItems.map(\.id)) { _, ids in
       PluginLive.retain(Set(ids))

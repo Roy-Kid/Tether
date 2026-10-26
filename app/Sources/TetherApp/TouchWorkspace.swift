@@ -45,7 +45,7 @@ enum TouchLayout {
 /// buttons and Close — which the view adds around these sections.
 enum TouchCommands {
   static func sections(wide: Bool) -> [[WorkspaceAction]] {
-    var sections: [[WorkspaceAction]] = [[.renameTerminal, .reconnect], [.manageHosts]]
+    var sections: [[WorkspaceAction]] = [[.renameTerminal, .reconnect, .takeOver], [.manageHosts]]
     if wide {
       sections.append([.splitLeft, .splitRight, .splitUp, .splitDown])
       sections.append([.joinGroups])

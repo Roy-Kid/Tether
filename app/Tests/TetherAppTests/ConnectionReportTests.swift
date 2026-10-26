@@ -183,7 +183,7 @@ extension ConnectionReportTests {
     defer { tabs.closeAll() }
     _ = try await shell.connectionReady()
     let identity = try #require(shell.pluginTerminalIdentity)
-    #expect(identity.host == ProcessInfo.processInfo.hostName.lowercased())
+    #expect(identity.host == LocalMachine.kernelName)
     #expect(identity.terminal == shell.terminalName)
     shell.name = "renamed"
     #expect(shell.pluginTerminalIdentity == identity, "display names cannot change task association")

@@ -61,6 +61,8 @@ enum WorkspaceIntent: Equatable {
   case launchPlugin(String)
   /// Dial a disconnected terminal again, in place.
   case reconnect(UUID)
+  /// Hand the open workspace to one paired device nearby.
+  case takeOver
 }
 
 /// The open sessions, grouped by the host the window is showing.
@@ -81,6 +83,14 @@ final class TabSet {
   private var workspaceCloseNotes: [String] = []
   /// Recent user closes, newest last; persisted when a history store is supplied.
   var closedTabs: [ClosedTerminal] = []
+  /// Pages from another device, restored one at a time through the same path
+  /// as a reopened tab. Not history: closing the app does not file them here.
+  var handoffPages: [ClosedTerminal] = []
+  var handoffFocusID: UUID?
+  var pendingHandoffSelection: UUID?
+  var handoffRestores: [HandoffRestore] = []
+  /// A paired device is on the local link. Take Over stays disabled without one.
+  var takeOverReady = false
   var restoringTab: UUID?
   static let closedTabLimit = 20
   var extensions: [WorkspaceEntry] = []

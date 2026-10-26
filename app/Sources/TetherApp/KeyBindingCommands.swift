@@ -8,6 +8,7 @@ enum WorkspaceAction: String, CaseIterable {
   case restoreTab
   case splitLeft, splitRight, splitUp, splitDown, joinGroups
   case reconnect
+  case takeOver
   case quickTerminal, alwaysOnTop
 
   /// The tab bar, zen and closing the window belong to a Mac window. The inspector and splits
@@ -61,6 +62,7 @@ enum WorkspaceAction: String, CaseIterable {
     case .splitDown: definition("Split Down", "Terminal", KeyBinding("\\", [.command, .shift]))
     case .joinGroups: definition("Join All Splits", "Terminal")
     case .reconnect: definition("Reconnect", "Terminal")
+    case .takeOver: definition("Take Over", "Terminal")
     }
   }
 
@@ -201,6 +203,7 @@ extension TabSet {
       wide && (current.map { $0.isLive || $0.host.isLocal } ?? false)
     case .joinGroups: workspaceSplit != nil
     case .reconnect: current?.canReconnect == true
+    case .takeOver: takeOverReady && hasTransferableWorkspace
     case .inspector: !zen && wide
     case .previousTab, .nextTab: !visibleIDs.isEmpty
     default: true
@@ -247,6 +250,7 @@ extension TabSet {
       if let id = current?.id { intent = .splitTerminal(id, .down) }
     case .joinGroups: joinSplits()
     case .reconnect: if let id = current?.id { intent = .reconnect(id) }
+    case .takeOver: intent = .takeOver
     }
   }
 }

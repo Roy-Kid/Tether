@@ -212,6 +212,9 @@ final class HostStore {
   private var cloud: HostCloudSync?
   private(set) var keyBindings: KeyBindingStore?
   private(set) var continuity: ContinuityService?
+  /// Nearby handoff. Not started here: a test builds many stores, and a
+  /// listener belongs to a window that has appeared.
+  let handoff = HandoffService()
   private let allowCloud: Bool
   private var swept = false
   /// Whether `config` is the file as read, rather than the empty stand-in
@@ -302,6 +305,21 @@ final class HostStore {
     if cloud == nil { await startSync() } else { await cloud?.resynchronize() }
   }
 
+  /// This device's signing key, for a handoff that does not go through iCloud.
+  /// Nil when the identity is missing or has been revoked.
+  func handoffLocal() -> HandoffPrincipal? {
+    guard !snapshot.trust.localRevoked, let card = snapshot.trust.local, let secretID = snapshot.trust.secretID,
+      let stored = try? credentials.read(secretID),
+      let keys = try? JSONDecoder().decode(DeviceKeyMaterial.self, from: Data(stored.utf8)) else { return nil }
+    return HandoffPrincipal(card: card, keys: keys, peers: snapshot.trust.peers)
+  }
+
+  /// A paired device that has not been revoked. This device is not its own peer.
+  func handoffPeer(_ id: UUID) -> TrustedPeer? {
+    guard id != snapshot.trust.local?.id, let peer = snapshot.trust.peers[id], !peer.revoked else { return nil }
+    return peer
+  }
+
   func switchAccount(_ account: String) throws {
     guard account != scope else { return }
     guard let database else { throw IdentityError.storage("Identity database unavailable.") }
@@ -311,6 +329,7 @@ final class HostStore {
     continuity = nil
     scope = account
     snapshot = next
+    handoff.refresh()
     keyBindings?.switchAccount(account)
     accountGeneration += 1
     rebuildHosts()

@@ -103,6 +103,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         <string>ASCredentialExchangeActivity</string>
         <string>ASCredentialExchangeActivityType</string>
     </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Tether finds another of your devices nearby to open the terminals you have open here.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_tether-handoff._tcp</string>
+    </array>
     <!-- A path dragged out of a plugin (TetherPluginKit's DroppedPath). Undeclared,
          SwiftUI drops it from a drop's item providers and the terminal never sees it. -->
     <key>UTExportedTypeDeclarations</key>

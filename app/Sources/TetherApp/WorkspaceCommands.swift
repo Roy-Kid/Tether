@@ -76,6 +76,7 @@ struct WorkspaceCommands: Commands {
       command(.newTerminal)
       command(.renameTerminal)
       command(.reconnect)
+      command(.takeOver)
       Divider()
       command(.previousTerminal)
       command(.nextTerminal)

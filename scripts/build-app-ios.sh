@@ -176,6 +176,12 @@ cat > "$APP/Info.plist" <<PLIST
         <string>ASCredentialExchangeActivity</string>
         <string>ASCredentialExchangeActivityType</string>
     </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Tether finds another of your devices nearby to open the terminals you have open here.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_tether-handoff._tcp</string>
+    </array>
     <key>MinimumOSVersion</key><string>26.0</string>
     <key>UILaunchScreen</key><dict/>
     <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>

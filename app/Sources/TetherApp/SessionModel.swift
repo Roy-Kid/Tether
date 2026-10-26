@@ -72,6 +72,8 @@ final class SessionTab: Identifiable {
   private(set) var problemRaised = false
   /// A password that has just worked and could be kept, until answered.
   private(set) var passwordOffer: PasswordOffer?
+  /// Opened from another device's workspace. The chip marks it until the shell is up.
+  var handoff = false
   /// Whether a working password may be offered to be kept. Off once the
   /// person has said no for this host.
   var offersToSave = true {
@@ -134,6 +136,8 @@ final class SessionTab: Identifiable {
   private var dialTask: Task<Void, Never>?
   private var authentication: AuthenticationCoordinator?
   private var startingDirectory: String?
+  /// A directory a preview tab stands in for. A live session reports its own.
+  private var previewDirectory: String?
 
   private var columns: UInt16 = 80
   private var rows: UInt16 = 24
@@ -203,10 +207,11 @@ final class SessionTab: Identifiable {
   }
 
   /// A tab that does not dial. Ownership tests need the object, not a PTY.
-  init(preview host: Host, known: KnownHosts, name: String, live: Bool) {
+  init(preview host: Host, known: KnownHosts, name: String, live: Bool, directory: String? = nil) {
     self.host = host
     self.known = known
     self.name = name
+    self.previewDirectory = directory
     self.stage = live ? .connected : .ended(nil)
   }
 
@@ -615,7 +620,7 @@ final class SessionTab: Identifiable {
   }
 
   /// The directory the shell last reported, if it reports one.
-  var workingDirectory: String? { session?.workingDirectory }
+  var workingDirectory: String? { session?.workingDirectory ?? previewDirectory }
 
   /// Reads the local foreground program and the shell's directory into the
   /// fields the chip names itself from. A remote shell leaves the program nil.
