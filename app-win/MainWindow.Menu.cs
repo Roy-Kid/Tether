@@ -67,37 +67,67 @@ public sealed partial class MainWindow
 
     private void ShowMenu(FrameworkElement anchor, IReadOnlyList<NativeMenuItem> items)
     {
-        var point = anchor.TransformToVisual(WorkspaceRoot).TransformPoint(new(0, anchor.ActualHeight));
-        var scale = WorkspaceRoot.XamlRoot?.RasterizationScale ?? 1;
-        NativeContextMenu.Show(WinRT.Interop.WindowNative.GetWindowHandle(this),
-            (int)(point.X * scale), (int)(point.Y * scale), items);
+        try
+        {
+            var point = anchor.TransformToVisual(WorkspaceRoot).TransformPoint(new(0, anchor.ActualHeight));
+            var scale = WorkspaceRoot.XamlRoot?.RasterizationScale ?? 1;
+            NativeContextMenu.Show(WinRT.Interop.WindowNative.GetWindowHandle(this),
+                (int)(point.X * scale), (int)(point.Y * scale), items);
+        }
+        catch { /* header may already be detached after a tab rebuild */ }
     }
 
     private void ShowTerminalMenu(FrameworkElement anchor, TerminalPane pane)
     {
-        var group = _workspace.Tabs.FirstOrDefault(tab => tab.Panes.Contains(pane));
-        if (group is null) return;
-        _workspace.Focus(pane);
-        var items = new List<NativeMenuItem>
+        // Read the point now; the queued menu runs after Focus may have rebuilt the tab strip.
+        int x, y;
+        try
         {
-            new("New Terminal", () => _ = RunCommandAsync("newTerminal")),
-            new(""),
-        };
-        items.AddRange(group.Panes.Select(other => new NativeMenuItem(_workspace.DisplayTitle(other), () =>
-        {
-            _workspace.Focus(other);
-            other.Surface.FocusTerminal();
-        }, Checked: other.Id == group.FocusedPane)));
-        items.Add(new(""));
-        foreach (var id in new[] { "splitLeft", "splitRight", "splitUp", "splitDown", "joinGroups" })
-        {
-            var command = WorkspaceCommands.All.Single(c => c.Id == id);
-            items.Add(new(CommandTitle(command), () => _ = RunCommandAsync(id), CommandEnabled(id)));
+            var local = anchor.TransformToVisual(WorkspaceRoot).TransformPoint(new(anchor.ActualWidth / 2, anchor.ActualHeight));
+            var scale = WorkspaceRoot.XamlRoot?.RasterizationScale ?? 1;
+            x = (int)Math.Round(local.X * scale);
+            y = (int)Math.Round(local.Y * scale);
         }
-        items.Add(new(""));
-        items.Add(new("Rename Terminal", () => _ = RunCommandAsync("renameTerminal")));
-        items.Add(new("Close Terminal", () => _ = CloseChipAsync(pane)));
-        ShowMenu(anchor, items);
+        catch { return; }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_windowClosed || !_workspace.Contains(pane)) return;
+            var group = _workspace.Tabs.FirstOrDefault(tab => tab.Panes.Contains(pane));
+            if (group is null) return;
+            var items = new List<NativeMenuItem>
+            {
+                new("New Terminal", () => _ = RunCommandAsync("newTerminal")),
+                new(""),
+            };
+            foreach (var other in group.Panes.ToArray())
+            {
+                string title;
+                try { title = _workspace.DisplayTitle(other); }
+                catch { title = other.Title; }
+                if (string.IsNullOrWhiteSpace(title)) title = "Terminal";
+                var target = other;
+                items.Add(new(title, () =>
+                {
+                    _workspace.Focus(target);
+                    target.Surface.FocusTerminal();
+                }, Checked: target.Id == group.FocusedPane));
+            }
+            items.Add(new(""));
+            foreach (var id in new[] { "splitLeft", "splitRight", "splitUp", "splitDown", "joinGroups" })
+            {
+                var command = WorkspaceCommands.All.FirstOrDefault(c => c.Id == id);
+                if (command is null) continue;
+                items.Add(new(CommandTitle(command), () => _ = RunCommandAsync(id), CommandEnabled(id)));
+            }
+            items.Add(new(""));
+            items.Add(new("Rename Terminal", () => _ = RunCommandAsync("renameTerminal")));
+            items.Add(new("Close Terminal", () => _ = CloseChipAsync(pane)));
+            try
+            {
+                NativeContextMenu.Show(WinRT.Interop.WindowNative.GetWindowHandle(this), x, y, items);
+            }
+            catch { /* ignore popup failures */ }
+        });
     }
 
     private sealed class WorkspaceTabHeader : Grid

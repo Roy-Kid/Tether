@@ -32,7 +32,6 @@ sealed class FilesAttachment : ITabAttachment
     {
         _tab = tab;
         _pane = new Files.FilesPane(tab.Model);
-        _pane.HideRequested += tab.Dismiss;
         _pane.DialogRoot = tab.DialogRoot;
         _pane.WindowHandle = tab.WindowHandle();
         _pane.OpenWebViewer = tab.OpenWebViewer;
@@ -106,7 +105,6 @@ sealed class FilesAttachment : ITabAttachment
 
     public async ValueTask DisposeAsync()
     {
-        _pane.HideRequested -= _tab.Dismiss;
         await _pane.DisposeAsync();
     }
 }

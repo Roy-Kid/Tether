@@ -1,58 +1,153 @@
 <UserControl x:Class="TetherApp.Files.FilesPane"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
- <Grid Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" Padding="{StaticResource ContentInset}" RowSpacing="{StaticResource SpaceGroup}">
+ <!-- macOS MacHeader: icon toolbar + silent list; no address bar chrome, no item-count footer. -->
+ <Grid Background="Transparent" Padding="{StaticResource SpaceGroup}" RowSpacing="0">
   <Grid.RowDefinitions>
-   <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/>
+   <RowDefinition Height="*"/>
+   <RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
-  <TextBox x:Name="Address" Grid.Row="0" KeyDown="Address_KeyDown" AutomationProperties.Name="Directory" FontSize="{StaticResource InputSize}"/>
-  <TextBox x:Name="Filter" Grid.Row="1" Visibility="Collapsed" PlaceholderText="Filter names…" TextChanged="Filter_Changed" KeyDown="Filter_KeyDown" AutomationProperties.Name="Filter file names" ToolTipService.ToolTip="Filter this folder by name (Ctrl+F); Esc to close"/>
+
+  <Grid x:Name="Toolbar" Grid.Row="0" Height="{StaticResource CompactControlHeight}" Margin="0,0,0,8" ColumnSpacing="{StaticResource SpaceTight}">
+   <Grid.ColumnDefinitions>
+    <ColumnDefinition Width="Auto"/>
+    <ColumnDefinition Width="Auto"/>
+    <ColumnDefinition Width="*"/>
+    <ColumnDefinition Width="Auto"/>
+    <ColumnDefinition Width="Auto"/>
+   </Grid.ColumnDefinitions>
+   <Button x:Name="BackButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE76B;"
+    Click="Back_Click" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
+   <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE74A;"
+    Click="Up_Click" ToolTipService.ToolTip="Enclosing Folder" AutomationProperties.Name="Enclosing Folder"/>
+   <Grid x:Name="MiddleSlot" Grid.Column="2" MinWidth="0">
+    <Grid x:Name="PathSlot" ColumnSpacing="{StaticResource SpaceTight}">
+     <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto"/>
+      <ColumnDefinition Width="*"/>
+     </Grid.ColumnDefinitions>
+     <Button x:Name="ShellButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE756;"
+      Click="TerminalDirectory_Click" ToolTipService.ToolTip="Shell" AutomationProperties.Name="Shell"
+      Visibility="Collapsed"/>
+     <Button x:Name="PathButton" Grid.Column="1" Style="{StaticResource ChromeButtonStyle}"
+      HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="4,0"
+      Click="PathButton_Click" AutomationProperties.Name="Directory">
+      <Grid>
+       <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+       </Grid.ColumnDefinitions>
+       <TextBlock x:Name="PathLabel" TextTrimming="CharacterEllipsis" FontSize="{StaticResource TitleSize}"
+        Foreground="{ThemeResource ChromeTextBrush}" VerticalAlignment="Center"/>
+       <FontIcon Grid.Column="1" Glyph="&#xE70D;" FontSize="9" Margin="4,0,0,0"
+        Foreground="{ThemeResource ChromeSubtleBrush}" VerticalAlignment="Center"/>
+      </Grid>
+     </Button>
+    </Grid>
+    <TextBox x:Name="Filter" Visibility="Collapsed" Style="{StaticResource ChromeFieldStyle}"
+     TextChanged="Filter_Changed" KeyDown="Filter_KeyDown"
+     AutomationProperties.Name="Find" ToolTipService.ToolTip="Find names in this folder"/>
+    <TextBox x:Name="Address" Visibility="Collapsed" Style="{StaticResource ChromeFieldStyle}"
+     KeyDown="Address_KeyDown" AutomationProperties.Name="Directory path"/>
+   </Grid>
+   <Grid Grid.Column="3" Width="{StaticResource CompactControlHeight}" Height="{StaticResource CompactControlHeight}">
+    <Button x:Name="RefreshButton" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE72C;"
+     Click="Refresh_Click" ToolTipService.ToolTip="Refresh" AutomationProperties.Name="Refresh"/>
+    <ProgressRing x:Name="BusyRing" Width="14" Height="14" IsActive="False" Visibility="Collapsed"
+     AutomationProperties.Name="Loading files"/>
+   </Grid>
+   <Button x:Name="AddButton" Grid.Column="4" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE710;"
+    ToolTipService.ToolTip="Add files or folder" AutomationProperties.Name="Add files or folder">
+    <Button.Flyout>
+     <MenuFlyout>
+      <MenuFlyoutItem Text="New Folder" Click="NewFolder_Click"/>
+      <MenuFlyoutItem Text="Upload Files…" Click="Upload_Click"/>
+      <MenuFlyoutItem Text="Upload Folder…" Click="UploadFolder_Click"/>
+     </MenuFlyout>
+    </Button.Flyout>
+   </Button>
+  </Grid>
+
+  <Border Grid.Row="1" Height="1" Background="{ThemeResource ChromeStrokeBrush}" Margin="0,0,0,4"/>
+
   <Grid Grid.Row="2">
    <ListView x:Name="Entries" SelectionMode="Extended" DoubleTapped="Entries_DoubleTapped" KeyDown="Entries_KeyDown"
-    AllowDrop="True" DragOver="Entries_DragOver" Drop="Entries_Drop" RightTapped="Entries_RightTapped" AutomationProperties.Name="Files">
-    <ListView.ItemTemplate><DataTemplate>
-     <Grid ColumnSpacing="{StaticResource SpaceGroup}" Margin="{Binding Indent}" Padding="0,4">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Button Content="{Binding ExpandGlyph}" IsEnabled="{Binding CanExpand}" Tag="{Binding Entry.Path}" Click="Expand_Click" DoubleTapped="Expand_DoubleTapped"
-       Padding="2" MinWidth="16" MinHeight="20" FontFamily="Segoe Fluent Icons" Background="Transparent" BorderThickness="0" AutomationProperties.Name="Expand or collapse folder"/>
-      <FontIcon Grid.Column="1" Glyph="{Binding Glyph}" FontSize="{StaticResource SymbolSize}"/>
-      <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="{StaticResource InputSize}" ToolTipService.ToolTip="{Binding Name}"/>
-      <TextBlock Grid.Column="3" Text="{Binding Size}" Style="{StaticResource DetailTextStyle}" VerticalAlignment="Center"/>
-     </Grid>
-    </DataTemplate></ListView.ItemTemplate>
-    <ListView.ContextFlyout><MenuFlyout>
-     <MenuFlyoutItem Text="Open" Click="Open_Click"/>
-     <MenuFlyoutItem Text="Edit Text…" Click="Edit_Click"/>
-     <MenuFlyoutItem Text="Preview" Click="Preview_Click"/>
-     <MenuFlyoutItem Text="Save As…" Click="Download_Click"/>
-     <MenuFlyoutItem Text="Copy Path" Click="CopyPath_Click"/>
-     <MenuFlyoutItem Text="Insert Path" Click="InsertPath_Click"/>
-     <MenuFlyoutSeparator/>
-     <MenuFlyoutItem Text="Rename…" Click="Rename_Click"/>
-     <MenuFlyoutItem Text="Move To…" Click="Move_Click"/>
-     <MenuFlyoutItem Text="Delete…" Click="Delete_Click"/>
-     <MenuFlyoutSeparator/>
-     <MenuFlyoutItem Text="Back" Click="Back_Click"/>
-     <MenuFlyoutItem Text="Forward" Click="Forward_Click"/>
-     <MenuFlyoutItem Text="Up" Click="Up_Click"/>
-     <MenuFlyoutItem Text="Home" Click="Home_Click"/>
-     <MenuFlyoutItem Text="Refresh" Click="Refresh_Click"/>
-     <MenuFlyoutItem Text="Go to Terminal Directory" Click="TerminalDirectory_Click"/>
-     <MenuFlyoutItem Text="New Folder" Click="NewFolder_Click"/>
-     <MenuFlyoutItem Text="Upload Files…" Click="Upload_Click"/>
-     <MenuFlyoutItem Text="Upload Folder…" Click="UploadFolder_Click"/>
-     <ToggleMenuFlyoutItem x:Name="HiddenToggle" Text="Show Hidden Files" Click="Hidden_Click"/>
-    </MenuFlyout></ListView.ContextFlyout>
+    AllowDrop="True" DragOver="Entries_DragOver" Drop="Entries_Drop" RightTapped="Entries_RightTapped"
+    AutomationProperties.Name="Files" Padding="0" Margin="0">
+    <ListView.ItemContainerStyle>
+     <Style TargetType="ListViewItem">
+      <Setter Property="MinHeight" Value="{StaticResource CompactControlHeight}"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+     </Style>
+    </ListView.ItemContainerStyle>
+    <ListView.ItemTemplate>
+     <DataTemplate>
+      <Grid ColumnSpacing="{StaticResource SpaceInline}" Margin="{Binding Indent}" Height="{StaticResource CompactControlHeight}">
+       <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+       </Grid.ColumnDefinitions>
+       <Button Content="{Binding ExpandGlyph}" IsEnabled="{Binding CanExpand}" Tag="{Binding Entry.Path}"
+        Click="Expand_Click" DoubleTapped="Expand_DoubleTapped" Padding="2" MinWidth="16" MinHeight="20"
+        FontFamily="Segoe Fluent Icons" FontSize="9" Background="Transparent" BorderThickness="0"
+        Foreground="{ThemeResource ChromeSubtleBrush}" AutomationProperties.Name="Expand or collapse folder"/>
+       <FontIcon Grid.Column="1" Glyph="{Binding Glyph}" FontSize="{StaticResource SymbolSize}"
+        Foreground="{Binding IconBrush}" VerticalAlignment="Center"/>
+       <TextBlock Grid.Column="2" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+        FontSize="{StaticResource TitleSize}" VerticalAlignment="Center"
+        ToolTipService.ToolTip="{Binding Detail}"/>
+      </Grid>
+     </DataTemplate>
+    </ListView.ItemTemplate>
+    <ListView.ContextFlyout>
+     <MenuFlyout>
+      <MenuFlyoutItem Text="Open" Click="Open_Click"/>
+      <MenuFlyoutItem Text="Edit Text…" Click="Edit_Click"/>
+      <MenuFlyoutItem Text="Preview" Click="Preview_Click"/>
+      <MenuFlyoutItem Text="Save As…" Click="Download_Click"/>
+      <MenuFlyoutItem Text="Copy Path" Click="CopyPath_Click"/>
+      <MenuFlyoutItem Text="Insert Path" Click="InsertPath_Click"/>
+      <MenuFlyoutSeparator/>
+      <MenuFlyoutItem Text="Rename…" Click="Rename_Click"/>
+      <MenuFlyoutItem Text="Move To…" Click="Move_Click"/>
+      <MenuFlyoutItem Text="Delete…" Click="Delete_Click"/>
+      <MenuFlyoutSeparator/>
+      <MenuFlyoutItem Text="Back" Click="Back_Click"/>
+      <MenuFlyoutItem Text="Forward" Click="Forward_Click"/>
+      <MenuFlyoutItem Text="Up" Click="Up_Click"/>
+      <MenuFlyoutItem Text="Home" Click="Home_Click"/>
+      <MenuFlyoutItem Text="Refresh" Click="Refresh_Click"/>
+      <MenuFlyoutItem Text="Go to Terminal Directory" Click="TerminalDirectory_Click"/>
+      <MenuFlyoutItem Text="New Folder" Click="NewFolder_Click"/>
+      <MenuFlyoutItem Text="Upload Files…" Click="Upload_Click"/>
+      <MenuFlyoutItem Text="Upload Folder…" Click="UploadFolder_Click"/>
+      <ToggleMenuFlyoutItem x:Name="HiddenToggle" Text="Show Hidden Files" Click="Hidden_Click"/>
+     </MenuFlyout>
+    </ListView.ContextFlyout>
    </ListView>
-   <TextBlock x:Name="Empty" Text="This folder is empty." IsHitTestVisible="False" HorizontalAlignment="Center" VerticalAlignment="Center" Style="{StaticResource DetailTextStyle}" Visibility="Collapsed"/>
+   <TextBlock x:Name="Empty" Text="This folder is empty." IsHitTestVisible="False"
+    HorizontalAlignment="Center" VerticalAlignment="Center" Style="{StaticResource EmptyStateTextStyle}" Visibility="Collapsed"/>
   </Grid>
-  <StackPanel Grid.Row="3" Spacing="{StaticResource SpaceGroup}">
-   <TextBlock x:Name="ItemCount" Style="{StaticResource DetailTextStyle}" AutomationProperties.LiveSetting="Polite"/>
-   <TextBlock x:Name="Problem" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" AutomationProperties.LiveSetting="Polite"/>
-   <ProgressBar x:Name="ProgressBar" Visibility="Collapsed" IsIndeterminate="True"/>
-   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBlock x:Name="Activity" TextWrapping="Wrap" Style="{StaticResource DetailTextStyle}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite"/>
-    <Button x:Name="CancelButton" Grid.Column="1" Content="Cancel" Click="Cancel_Click" Visibility="Collapsed"/>
+
+  <StackPanel Grid.Row="3" Spacing="{StaticResource SpaceSmall}" Margin="0,4,0,0">
+   <TextBlock x:Name="Problem" TextWrapping="Wrap" FontSize="{StaticResource DetailSize}"
+    Foreground="{ThemeResource ChromeSubtleBrush}" AutomationProperties.LiveSetting="Polite"/>
+   <Grid x:Name="TransferRow" Visibility="Collapsed" ColumnSpacing="{StaticResource SpaceInline}">
+    <Grid.ColumnDefinitions>
+     <ColumnDefinition Width="*"/>
+     <ColumnDefinition Width="Auto"/>
+     <ColumnDefinition Width="Auto"/>
+    </Grid.ColumnDefinitions>
+    <TextBlock x:Name="Activity" TextTrimming="CharacterEllipsis" FontSize="{StaticResource DetailSize}"
+     Foreground="{ThemeResource ChromeSubtleBrush}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite"/>
+    <ProgressBar x:Name="ProgressBar" Grid.Column="1" Width="72" Height="3" VerticalAlignment="Center"
+     IsIndeterminate="True"/>
+    <Button x:Name="CancelButton" Grid.Column="2" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE711;"
+     Click="Cancel_Click" ToolTipService.ToolTip="Cancel" AutomationProperties.Name="Cancel"/>
    </Grid>
   </StackPanel>
  </Grid>

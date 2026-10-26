@@ -24,15 +24,17 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     private readonly Dictionary<string, IReadOnlyList<FileEntry>> _children = new();
     private readonly HashSet<string> _expanded = new();
     private string? _directory;
+    private string? _terminalDirectory;
+    private int _generation;
     private bool _busy, _disposed, _resetting;
     private Window? _dialog;
+    private readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     public nint WindowHandle { get; set; }
     /// <summary>Dialogs need a root even before this pane is on screen.</summary>
     public Func<XamlRoot?>? DialogRoot { get; set; }
     /// <summary>Web plugin viewer routing. True means a viewer took the file.</summary>
     public Func<string, byte[], string, CancellationToken, Task<bool>>? OpenWebViewer { get; set; }
     public bool HasWork => _busy;
-    public event Action? HideRequested;
 
     public FilesPane(SessionModel model)
     {
@@ -40,11 +42,15 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         _model = model;
         _model.SessionChanged += SessionChanged;
         PreviewKeyDown += Browse_KeyDown;
+        // macOS Browser.task: while Files is visible, follow the shell cwd.
+        _followTimer.Tick += (_, _) => _ = FollowTerminalDirectoryAsync();
+        Loaded += (_, _) => { if (!_disposed) _followTimer.Start(); };
+        Unloaded += (_, _) => _followTimer.Stop();
     }
     public Task ShowAsync() => RunAsync(async token =>
     {
         await EnsureSourceAsync(token);
-        if (_directory is null) await NavigateAsync(await InitialDirectoryAsync(), false, token);
+        if (_directory is null) await NavigateAsync(await InitialDirectoryAsync(token), false, token);
     });
     private async Task EnsureSourceAsync(CancellationToken token)
     {
@@ -53,12 +59,38 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
             : await LocalFileSource.CreateAsync(IsWsl, token, _model.WslDistribution);
     }
     private bool IsWsl => _model.IsWsl;
-    private async Task<string> InitialDirectoryAsync()
+    private async Task<string> InitialDirectoryAsync(CancellationToken token)
     {
-        var path = _model.WorkingDirectory;
+        var path = await _model.ResolveWorkingDirectoryAsync(token) ?? _model.WorkingDirectory;
         if (path is null) return await _source!.HomeAsync();
+        path = NormalizeTerminalPath(path);
+        _terminalDirectory = path;
+        return path;
+    }
+
+    private string NormalizeTerminalPath(string path)
+    {
         if (Uri.TryCreate(path, UriKind.Absolute, out var uri) && uri.IsFile) path = uri.LocalPath;
         return _source is LocalFileSource local ? local.NativePath(path) : path;
+    }
+
+    /// <summary>
+    /// macOS <c>followTerminalDirectory</c>: only while visible; only when the
+    /// shell cwd actually changed; ignore answers overtaken by manual navigate.
+    /// </summary>
+    private async Task FollowTerminalDirectoryAsync()
+    {
+        if (_disposed || _busy || _resetting || !IsLoaded || _source is null) return;
+        var mine = _generation;
+        string? working;
+        try { working = await _model.ResolveWorkingDirectoryAsync(CancellationToken.None); }
+        catch { return; }
+        if (_disposed || mine != _generation || working is null) return;
+        working = NormalizeTerminalPath(working);
+        var previous = _terminalDirectory;
+        _terminalDirectory = working;
+        if (previous == working || _directory == working) return;
+        await RunAsync(token => NavigateAsync(working, false, token));
     }
     private void SessionChanged()
     {
@@ -76,7 +108,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
             _source = null;
             try { await previous.DisposeAsync(); } catch (Exception ex) { Problem.Text = ex.Message; }
         }
-        _directory = null; _entries = []; _back.Clear(); _forward.Clear(); RenderEntries();
+        _directory = null; _terminalDirectory = null; _entries = []; _back.Clear(); _forward.Clear(); RenderEntries();
         _resetting = false;
         if (!_disposed && IsLoaded) await ShowAsync();
     }
@@ -100,20 +132,59 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     {
         using var cancellation = new CancellationTokenSource();
         _cancellation = cancellation; _busy = true;
-        Problem.Text = ""; Activity.Text = "Working…";
-        ProgressBar.Visibility = CancelButton.Visibility = Visibility.Visible;
-        ProgressBar.IsIndeterminate = true;
-        try { await EnsureSourceAsync(cancellation.Token); await action(cancellation.Token); Activity.Text = ""; }
-        catch (OperationCanceledException) { Activity.Text = "Cancelled. Completed changes are kept."; }
-        catch (Exception ex) { Problem.Text = ex.Message; Activity.Text = ""; }
+        Problem.Text = "";
+        SetBusyChrome(true);
+        try { await EnsureSourceAsync(cancellation.Token); await action(cancellation.Token); ClearTransfer(); }
+        catch (OperationCanceledException) { ClearTransfer(); }
+        catch (Exception ex) { Problem.Text = ex.Message; ClearTransfer(); }
         finally
         {
-            ProgressBar.Visibility = CancelButton.Visibility = Visibility.Collapsed;
+            SetBusyChrome(false);
             _cancellation = null; _busy = false;
+            UpdateToolbar();
         }
+    }
+
+    private void SetBusyChrome(bool busy)
+    {
+        RefreshButton.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+        BusyRing.IsActive = busy;
+        BusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        BackButton.IsEnabled = !busy && _back.Count > 0;
+        UpButton.IsEnabled = !busy && _directory is not null;
+        AddButton.IsEnabled = !busy && _directory is not null;
+        PathButton.IsEnabled = !busy;
+    }
+
+    private void ClearTransfer()
+    {
+        Activity.Text = "";
+        TransferRow.Visibility = Visibility.Collapsed;
+    }
+
+    private void UpdateToolbar()
+    {
+        if (BackButton is null) return;
+        BackButton.IsEnabled = !_busy && _back.Count > 0;
+        UpButton.IsEnabled = !_busy && _directory is not null;
+        AddButton.IsEnabled = !_busy && _directory is not null;
+        var shell = _terminalDirectory;
+        var away = shell is not null && _directory is not null
+            && !string.Equals(_directory, shell, StringComparison.OrdinalIgnoreCase)
+            && Filter.Visibility != Visibility.Visible
+            && Address.Visibility != Visibility.Visible;
+        ShellButton.Visibility = away ? Visibility.Visible : Visibility.Collapsed;
+        if (_directory is not null && _source is not null)
+        {
+            var shellPath = _source.ShellPath(_directory);
+            PathLabel.Text = Path.GetFileName(shellPath.TrimEnd('/', '\\')) is { Length: > 0 } name ? name : shellPath;
+            ToolTipService.SetToolTip(PathButton, shellPath);
+        }
+        else PathLabel.Text = "";
     }
     private async Task NavigateAsync(string path, bool remember, CancellationToken token)
     {
+        _generation++;
         var entries = await _source!.ListAsync(path, token);
         token.ThrowIfCancellationRequested();
         if (remember && _directory is not null && _directory != path)
@@ -125,6 +196,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         _directory = path; _entries = entries; Address.Text = _source.ShellPath(path);
         _children.Clear(); _expanded.Clear();
         RenderEntries();
+        UpdateToolbar();
     }
     private void RenderEntries()
     {
@@ -133,8 +205,8 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         Entries.ItemsSource = rows;
         foreach (var row in rows.Where(r => selected.Contains(r.Entry.Path))) Entries.SelectedItems.Add(row);
         Empty.Visibility = rows.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Empty.Text = string.IsNullOrWhiteSpace(Filter.Text) ? "This folder is empty." : "No matching names in this folder.";
-        ItemCount.Text = $"{rows.Length} item(s) shown";
+        Empty.Text = string.IsNullOrWhiteSpace(Filter.Text) ? "This folder is empty." : "No matching names.";
+        UpdateToolbar();
     }
     private IEnumerable<Row> Rows(IReadOnlyList<FileEntry> entries, int depth)
     {
@@ -163,12 +235,22 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     }
     private sealed record Row(FileEntry Entry, int Depth = 0, bool Expanded = false)
     {
-        public Thickness Indent => new(Depth * (double)Application.Current.Resources["SpaceSection"], 0, 0, 0);
+        // macOS FileRow: 12pt per level, not SpaceSection.
+        public Thickness Indent => new(Depth * 12, 0, 0, 0);
         public bool CanExpand => Entry.Kind == FileKind.Directory;
         public string ExpandGlyph => !CanExpand ? "" : Expanded ? "\uE70D" : "\uE76C";
         public string Name => string.Concat(Entry.Name.Select(c => char.IsControl(c) ? '\uFFFD' : c));
         public string Glyph => Entry.Kind switch { FileKind.Directory => "\uE8B7", FileKind.Link => "\uE71B", _ => "\uE7C3" };
-        public string Size => Entry.Kind == FileKind.File ? FormatSize(Entry.Size) : "";
+        public Brush IconBrush => (Brush)Application.Current.Resources[
+            Entry.Kind == FileKind.Directory ? "AccentBrush" : "ChromeSubtleBrush"];
+        public string Detail
+        {
+            get
+            {
+                var size = Entry.Kind == FileKind.File ? FormatSize(Entry.Size) : Entry.Kind.ToString();
+                return Name + (string.IsNullOrEmpty(size) ? "" : " · " + size);
+            }
+        }
     }
     private static string FormatSize(ulong size) => size < 1024 ? $"{size} B" : size < 1048576 ? $"{size / 1024d:0.#} KB" : $"{size / 1048576d:0.#} MB";
     private FileEntry[] Selected() => Entries.SelectedItems.OfType<Row>().Select(r => r.Entry).ToArray();
@@ -188,12 +270,30 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
     }
     private void Filter_Changed(object sender, TextChangedEventArgs e)
     {
-        if (Entries is not null && ItemCount is not null) RenderEntries();
+        if (Entries is not null) RenderEntries();
     }
     private void Filter_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key != VirtualKey.Escape) return;
-        Filter.Text = ""; Filter.Visibility = Visibility.Collapsed; Entries.Focus(FocusState.Programmatic); e.Handled = true;
+        CloseFind(); e.Handled = true;
+    }
+    private void CloseFind()
+    {
+        Filter.Text = "";
+        Filter.Visibility = Visibility.Collapsed;
+        Address.Visibility = Visibility.Collapsed;
+        PathSlot.Visibility = Visibility.Visible;
+        UpdateToolbar();
+        Entries.Focus(FocusState.Programmatic);
+    }
+    private void ShowMiddle(FrameworkElement field)
+    {
+        PathSlot.Visibility = Visibility.Collapsed;
+        Filter.Visibility = field == Filter ? Visibility.Visible : Visibility.Collapsed;
+        Address.Visibility = field == Address ? Visibility.Visible : Visibility.Collapsed;
+        ShellButton.Visibility = Visibility.Collapsed;
+        field.Focus(FocusState.Programmatic);
+        if (field is TextBox box) box.SelectAll();
     }
     private async void Browse_KeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -204,9 +304,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         if (control && e.Key is VirtualKey.F or VirtualKey.L)
         {
             e.Handled = true;
-            if (e.Key == VirtualKey.F) Filter.Visibility = Visibility.Visible;
-            var input = e.Key == VirtualKey.F ? Filter : Address;
-            input.Focus(FocusState.Programmatic); input.SelectAll();
+            ShowMiddle(e.Key == VirtualKey.F ? Filter : Address);
         }
         else if (alt && e.Key is VirtualKey.Left or VirtualKey.Right)
         {
@@ -214,18 +312,53 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
             await RunAsync(t => HistoryAsync(e.Key == VirtualKey.Right, t));
         }
     }
+    private void PathButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directory is null || _source is null) return;
+        var menu = new MenuFlyout();
+        var homeItem = new MenuFlyoutItem { Text = "Home" };
+        homeItem.Click += Home_Click;
+        menu.Items.Add(homeItem);
+        if (_terminalDirectory is not null)
+        {
+            var shellItem = new MenuFlyoutItem { Text = "Shell" };
+            shellItem.Click += TerminalDirectory_Click;
+            menu.Items.Add(shellItem);
+        }
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var cursor = _directory;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!string.IsNullOrEmpty(cursor) && seen.Add(cursor))
+        {
+            var path = cursor;
+            var label = Path.GetFileName(_source.ShellPath(path).TrimEnd('/', '\\'));
+            if (string.IsNullOrEmpty(label)) label = _source.ShellPath(path);
+            var item = new MenuFlyoutItem { Text = label };
+            item.Click += async (_, _) => await RunAsync(t => NavigateAsync(path, true, t));
+            menu.Items.Add(item);
+            var parent = _source.Parent(path);
+            if (parent == path) break;
+            cursor = parent;
+        }
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var hidden = new ToggleMenuFlyoutItem { Text = "Show Hidden Files", IsChecked = HiddenToggle.IsChecked == true };
+        hidden.Click += (_, _) => { HiddenToggle.IsChecked = hidden.IsChecked; RenderEntries(); };
+        menu.Items.Add(hidden);
+        menu.ShowAt(PathButton);
+    }
     private async void Up_Click(object sender, RoutedEventArgs e) => await RunAsync(t => _directory is null ? Task.CompletedTask : NavigateAsync(_source!.Parent(_directory), true, t));
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RunAsync(RefreshAsync);
     private async void Home_Click(object sender, RoutedEventArgs e) => await RunAsync(async t => await NavigateAsync(await _source!.HomeAsync(), true, t));
-    private async void TerminalDirectory_Click(object sender, RoutedEventArgs e) => await RunAsync(async t => await NavigateAsync(await InitialDirectoryAsync(), true, t));
+    private async void TerminalDirectory_Click(object sender, RoutedEventArgs e) => await RunAsync(async t => await NavigateAsync(await InitialDirectoryAsync(t), true, t));
     private void Hidden_Click(object sender, RoutedEventArgs e) => RenderEntries();
-    private void Close_Click(object sender, RoutedEventArgs e) => HideRequested?.Invoke();
     private void Cancel_Click(object sender, RoutedEventArgs e) { _cancellation?.Cancel(); _dialog?.Close(); }
     private async void Address_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Key == VirtualKey.Escape) { CloseFind(); e.Handled = true; return; }
         if (e.Key != VirtualKey.Enter) return;
         e.Handled = true;
         var path = Address.Text;
+        CloseFind();
         await RunAsync(t => NavigateAsync(_source is LocalFileSource local ? local.NativePath(path) : path, true, t));
     }
     private async void Entries_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -351,7 +484,11 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
         await RefreshAsync(t);
     });
     private IProgress<ulong> TransferProgress(string name) => new Progress<ulong>(bytes =>
-    { if (!_disposed && _busy) Activity.Text = $"{name} · {FormatSize(bytes)}"; });
+    {
+        if (_disposed || !_busy) return;
+        TransferRow.Visibility = Visibility.Visible;
+        Activity.Text = name + " · " + FormatSize(bytes);
+    });
     private async Task<(string Path, bool Replace)?> UploadTargetAsync(string directory, string name, bool folder, CancellationToken token)
     {
         var target = _source!.Combine(directory, name);
@@ -695,7 +832,7 @@ public sealed partial class FilesPane : UserControl, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _disposed = true; _model.SessionChanged -= SessionChanged;
+        _disposed = true; _followTimer.Stop(); _model.SessionChanged -= SessionChanged;
         _cancellation?.Cancel(); _dialog?.Close(); await _operation;
         if (_source is { } source) { _source = null; await source.DisposeAsync(); }
     }

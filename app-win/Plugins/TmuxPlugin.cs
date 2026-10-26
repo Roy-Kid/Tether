@@ -8,13 +8,15 @@ using Windows.System;
 
 namespace TetherApp.Plugins;
 
-// The same chooser the Mac popover draws: one level at a time, shell rows,
-// then tmux sessions. Windows shows it in a flyout. The session itself is
-// whatever tmux draws in the terminal.
+// Same chooser as macOS: one level at a time, shell rows, then tmux sessions.
+// On Windows this is a trailing inspector (macOS SF Symbol rectangle.3.offgrid).
 public sealed class TmuxPlugin : ITabPlugin
 {
-    public PluginMetadata Metadata { get; } = new("dev.tether.tmux", "tmux", "\uE8A7", "Persistent sessions, in the terminal itself.");
-    public TabAccessory Accessory { get; } = new("\uE8A7", "tmux sessions", AccessoryPlacement.Popover);
+    // Segoe Fluent Icons GridViewSmall — the closest multi-pane glyph to
+    // macOS rectangle.3.offgrid. OpenInNewWindow (\uE8A7) was wrong.
+    private const string Glyph = "\uF232";
+    public PluginMetadata Metadata { get; } = new("dev.tether.tmux", "tmux", Glyph, "Persistent sessions, in the terminal itself.");
+    public TabAccessory Accessory { get; } = new(Glyph, "tmux sessions", AccessoryPlacement.Inspector);
     public IReadOnlyList<PluginCommandDescriptor> CommandDescriptors =>
     [
         new("detach", "Detach Session"),
@@ -31,11 +33,15 @@ public sealed class TmuxPlugin : ITabPlugin
 sealed class TmuxAttachment : ITabAttachment
 {
     private readonly TabContext _tab;
-    private readonly StackPanel _panel = new() { Width = 260, Padding = new Thickness(8), Spacing = 2 };
-    private readonly TextBlock _host = new() { Opacity = 0.7, FontSize = 10, Margin = new Thickness(6, 2, 6, 2) };
+    private readonly StackPanel _panel = new() { Padding = new Thickness(8), Spacing = 0 };
+    private readonly TextBlock _host;
     private readonly StackPanel _rows = new() { Spacing = 2 };
-    private readonly TextBlock _problem = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.7, Margin = new Thickness(6, 2, 6, 2) };
-    private readonly ProgressRing _busyMark = new() { Width = 16, Height = 16, IsActive = false, Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _problem;
+    private readonly ProgressRing _busyMark = new()
+    {
+        Width = 14, Height = 14, IsActive = false, Visibility = Visibility.Collapsed,
+        HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 4),
+    };
     private readonly CancellationTokenSource _lifetime = new();
     private readonly List<Row> _keyboard = [];
     private IReadOnlyList<TmuxSessionInfo> _sessions = [];
@@ -47,6 +53,21 @@ sealed class TmuxAttachment : ITabAttachment
     public TmuxAttachment(TabContext tab)
     {
         _tab = tab;
+        var resources = Application.Current.Resources;
+        _host = new TextBlock
+        {
+            Text = "",
+            FontSize = (double)resources["HeaderSize"],
+            Foreground = (Brush)resources["ChromeSubtleBrush"],
+            Margin = new Thickness(4, 0, 4, 6),
+        };
+        _problem = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = (double)resources["DetailSize"],
+            Foreground = (Brush)resources["ChromeSubtleBrush"],
+            Margin = new Thickness(4, 6, 4, 0),
+        };
         _panel.Children.Add(_host);
         _panel.Children.Add(_busyMark);
         _panel.Children.Add(_rows);
@@ -106,7 +127,16 @@ sealed class TmuxAttachment : ITabAttachment
     private async Task RefreshAsync()
     {
         _missing = false;
+        _error = null;
         if (!_tab.Model.IsLive) { _sessions = []; return; }
+        // Local Windows shells have no RemoteConnection — tmux only runs in WSL
+        // or over SSH. Do not surface the internal "No live connection" string.
+        if (!_tab.Model.IsRemote && !_tab.Model.IsWsl)
+        {
+            _sessions = [];
+            _missing = true;
+            return;
+        }
         try
         {
             _sessions = await _tab.Model.TmuxSessionsAsync(_lifetime.Token);
@@ -117,14 +147,17 @@ sealed class TmuxAttachment : ITabAttachment
         {
             _sessions = [];
             var text = ex.Message;
+            // Match macOS TmuxTab.refresh: only treat a missing binary as "isn't installed".
+            // "No live session/connection" is not that — never map it to the install hint.
             _missing = text.Contains("not installed", StringComparison.OrdinalIgnoreCase)
                 || text.Contains("Install tmux", StringComparison.OrdinalIgnoreCase)
-                || text.Contains("No live session", StringComparison.OrdinalIgnoreCase)
-                || text.Contains("not found", StringComparison.OrdinalIgnoreCase);
+                || text.Contains("no such file", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("No live connection", StringComparison.OrdinalIgnoreCase);
             if (!_missing) throw;
         }
         if (_pendingRestore is { } id && _sessions.FirstOrDefault(s => s.Id == id) is { } saved)
-        { _pendingRestore = null; await OpenAsync(saved, null); _dismiss(); }
+        { _pendingRestore = null; await OpenAsync(saved, null); }
     }
 
     private sealed record Row(string Id, string Title, bool Mark, bool Chevron, Action? Run, string? EndTitle, Action? End, Action<MenuFlyout>? Menu);
@@ -162,7 +195,8 @@ sealed class TmuxAttachment : ITabAttachment
             Add(new($"session:{session.Id}", line, owned, deeper, () =>
             {
                 if (deeper) { _opened = session.Id; Render(); }
-                else _ = RunAsync(async () => { await OpenAsync(session, windows.FirstOrDefault()); _dismiss(); });
+                // macOS inspector stays open after choose — pick another without reopening.
+                else _ = RunAsync(async () => await OpenAsync(session, windows.FirstOrDefault()));
             }, "End session", () => _ = ConfirmEndSession(session), menu => SessionMenu(menu, session, owned)));
         }
         Add(new("new-session", "New session…", false, false, () => _ = RunAsync(CreateAsync), null, null, null));
@@ -176,7 +210,7 @@ sealed class TmuxAttachment : ITabAttachment
             var line = $"{window.Index}: {window.Name}{(window.Active ? "*" : "")} ({window.Panes} panes)";
             var end = session.Windows.Count > 1;
             Add(new($"window:{window.Id}", line, window.Active && _session == session.Id, false,
-                () => _ = RunAsync(async () => { await OpenAsync(session, window); _dismiss(); }),
+                () => _ = RunAsync(async () => await OpenAsync(session, window)),
                 end ? "End window" : null, end ? () => _ = ConfirmEndWindow(window) : null,
                 menu => WindowMenu(menu, window, end)));
         }
@@ -184,28 +218,105 @@ sealed class TmuxAttachment : ITabAttachment
             Add(new("new-window", "New window", false, false, () => _ = PerformAsync("new-window"), null, null, null));
     }
 
-    private void AddHeader(string text) => _rows.Children.Add(new TextBlock { Text = text, Opacity = 0.7, FontSize = 10, Margin = new Thickness(6, 8, 6, 2) });
+    private void AddHeader(string text)
+    {
+        var resources = Application.Current.Resources;
+        _rows.Children.Add(new Border
+        {
+            Height = 1,
+            Background = (Brush)resources["ChromeStrokeBrush"],
+            Margin = new Thickness(4, 8, 4, 4),
+        });
+        _rows.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontSize = (double)resources["HeaderSize"],
+            Foreground = (Brush)resources["ChromeSubtleBrush"],
+            Margin = new Thickness(4, 2, 4, 4),
+        });
+    }
 
     private void Add(Row row)
     {
         if (row.Run is not null) _keyboard.Add(row);
-        var button = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(6, 4, 6, 4), IsEnabled = !_busy || row.Id == "back" };
-        var grid = new Grid { ColumnSpacing = 8 };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var mark = new TextBlock { Text = row.Mark ? "\u2713" : "", Width = 12, VerticalAlignment = VerticalAlignment.Center };
-        var title = new TextBlock { Text = row.Title, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(title, 1);
-        grid.Children.Add(mark); grid.Children.Add(title);
-        if (row.Chevron)
+        var resources = Application.Current.Resources;
+        var rowHeight = (double)resources["CompactControlHeight"];
+        var spaceInline = (double)resources["SpaceInline"];
+        var spaceGroup = (double)resources["SpaceGroup"];
+        var textBrush = (Brush)resources["ChromeTextBrush"];
+        var subtleBrush = (Brush)resources["ChromeSubtleBrush"];
+        var accentBrush = (Brush)resources["AccentBrush"];
+        var clear = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        var selected = row.Id == _highlight;
+
+        var isBack = row.Id == "back";
+        var leading = isBack
+            ? (UIElement)new FontIcon { Glyph = "\uE76B", FontSize = 10, Foreground = subtleBrush, VerticalAlignment = VerticalAlignment.Center }
+            : new FontIcon
+            {
+                Glyph = "\uE73E",
+                FontSize = 10,
+                Foreground = row.Mark ? textBrush : clear,
+                VerticalAlignment = VerticalAlignment.Center,
+                Width = 12,
+            };
+        var title = new TextBlock
         {
-            var chevron = new TextBlock { Text = "\uE76C", FontFamily = new FontFamily("Segoe Fluent Icons"), Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(chevron, 2); grid.Children.Add(chevron);
-        }
-        button.Content = grid;
-        if (row.Id == _highlight && Application.Current?.Resources["ChromeRaisedBrush"] is Brush highlight) button.Background = highlight;
+            Text = row.Title,
+            FontSize = (double)resources[isBack ? "HeaderSize" : "TitleSize"],
+            Foreground = isBack ? subtleBrush : textBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var end = new Button
+        {
+            Content = "\uE711",
+            Style = (Style)resources["ChromeIconButtonStyle"],
+            Visibility = Visibility.Collapsed,
+            IsEnabled = row.End is not null,
+        };
+        if (row.EndTitle is not null) ToolTipService.SetToolTip(end, row.EndTitle);
+        if (row.End is { } endAction) end.Click += (_, _) => endAction();
+
+        FrameworkElement trailing = row.Chevron
+            ? new FontIcon { Glyph = "\uE76C", FontSize = 9, Foreground = subtleBrush, VerticalAlignment = VerticalAlignment.Center }
+            : end;
+
+        var content = new Grid { ColumnSpacing = spaceGroup, Padding = new Thickness(spaceInline, 0, spaceInline, 0) };
+        content.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        if (leading is FrameworkElement lead) content.Children.Add(lead);
+        Grid.SetColumn(title, 1); content.Children.Add(title);
+        Grid.SetColumn(trailing, 2); content.Children.Add(trailing);
+
+        var wash = new Border
+        {
+            Background = accentBrush,
+            CornerRadius = (CornerRadius)resources["RowRadius"],
+            Opacity = selected ? 0.12 : 0,
+            MinHeight = rowHeight,
+        };
+        var root = new Grid { MinHeight = rowHeight };
+        root.Children.Add(wash);
+        root.Children.Add(content);
+
+        var button = new Button
+        {
+            Content = root,
+            Style = (Style)resources["ChromeButtonStyle"],
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            IsEnabled = !_busy || row.Id == "back",
+        };
         button.Click += (_, _) => { _highlight = row.Id; row.Run?.Invoke(); };
+        if (row.End is not null)
+        {
+            button.PointerEntered += (_, _) => end.Visibility = Visibility.Visible;
+            button.PointerExited += (_, _) => end.Visibility = Visibility.Collapsed;
+        }
         if (row.Menu is not null)
         {
             var menu = new MenuFlyout();
@@ -256,7 +367,8 @@ sealed class TmuxAttachment : ITabAttachment
 
     private async Task OpenAsync(TmuxSessionInfo selected, TmuxWindow? window)
     {
-        if (_session == selected.Id && window is null) { _dismiss(); return; }
+        // Already on this session with no window change — leave the inspector open.
+        if (_session == selected.Id && window is null) return;
         if (_tty is null) throw new IOException("Unable to identify this terminal.");
         var target = SessionId(selected.Id);
         var current = await _tab.Model.TmuxSessionForClientAsync(_tty);

@@ -40,9 +40,16 @@ public sealed class ChildHwnd : IDisposable
     private const int WM_RBUTTONUP = 0x0205;
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int WM_KEYDOWN = 0x0100;
+    private const int WM_KEYUP = 0x0101;
     private const int WM_CHAR = 0x0102;
     private const int WM_SYSKEYDOWN = 0x0104;
+    private const int WM_SYSKEYUP = 0x0105;
     private const int WM_SYSCHAR = 0x0106;
+    private const int WM_IME_STARTCOMPOSITION = 0x010D;
+    private const int WM_IME_ENDCOMPOSITION = 0x010E;
+    private const int WM_IME_COMPOSITION = 0x010F;
+    private const int WM_IME_CHAR = 0x0286;
+    private const int GCS_RESULTSTR = 0x0800;
     private const int WM_POINTERUPDATE = 0x0245;
     private const int WM_POINTERDOWN = 0x0246;
     private const int WM_POINTERUP = 0x0247;
@@ -74,7 +81,13 @@ public sealed class ChildHwnd : IDisposable
     /// <summary>WinUI delivers the mouse as pointer messages and suppresses the mouse ones. Once a pointer message has arrived, the mouse copies are ignored so a click is not counted twice.</summary>
     private bool _pointerInput;
     private char _highSurrogate;
-    private bool _keyTaken;
+    /// <summary>
+    /// Suppress the next translated <c>WM_CHAR</c> when a keydown was taken as a
+    /// chord. Cleared on that char, on keyup (chords with no char), and before
+    /// IME result text — otherwise a prior Ctrl+C leaves Chinese commits dropped.
+    /// </summary>
+    private bool _suppressChar;
+    private bool _imeComposing;
 
     private ChildHwnd(Action<string> onText, Func<VirtualKey, bool> onKey, Action<ChildPointer>? onPointer)
     {
@@ -299,10 +312,42 @@ public sealed class ChildHwnd : IDisposable
                 return 0;
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
-                child._keyTaken = child._onKey((VirtualKey)(int)(wParam & 0xFFFF));
-                if (child._keyTaken) return 0;
+                // While the IME is composing, leave letter/space/enter to it —
+                // do not send chords into the shell under the candidate window.
+                if (child._imeComposing) break;
+                child._suppressChar = child._onKey((VirtualKey)(int)(wParam & 0xFFFF));
+                if (child._suppressChar) return 0;
                 break;
+            case WM_KEYUP:
+            case WM_SYSKEYUP:
+                // Taken chords often produce no WM_CHAR; clear so a later IME
+                // commit is not still suppressed.
+                child._suppressChar = false;
+                break;
+            case WM_IME_STARTCOMPOSITION:
+                child._imeComposing = true;
+                child._suppressChar = false;
+                break;
+            case WM_IME_ENDCOMPOSITION:
+                child._imeComposing = false;
+                child._suppressChar = false;
+                break;
+            case WM_IME_COMPOSITION:
+                if (((int)lParam & GCS_RESULTSTR) != 0)
+                {
+                    child._suppressChar = false;
+                    child.CommitImeResult(hWnd);
+                    return 0;
+                }
+                break;
+            case WM_IME_CHAR:
+                child._suppressChar = false;
+                child.Text((char)(wParam & 0xFFFF));
+                return 0;
             case WM_CHAR:
+                if (child._suppressChar) { child._suppressChar = false; return 0; }
+                // Intermediate Latin from IME composition must not reach the shell.
+                if (child._imeComposing) return 0;
                 child.Text((char)(wParam & 0xFFFF));
                 return 0;
             case WM_SYSCHAR:
@@ -335,9 +380,7 @@ public sealed class ChildHwnd : IDisposable
     private enum PointerButtonKind { Left, Right, Middle }
 
     /// <summary>
-    /// One UTF-16 unit of typed text. A control character whose key press
-    /// was taken was already sent as that key; one that was not — Ctrl+[,
-    /// say — goes through as it is. Surrogate halves are joined so the
+    /// One UTF-16 unit of typed text. Surrogate halves are joined so the
     /// session is handed a whole scalar (spec §12).
     /// </summary>
     private void Text(char ch)
@@ -354,8 +397,26 @@ public sealed class ChildHwnd : IDisposable
             return;
         }
         _highSurrogate = '\0';
-        if (_keyTaken) return;
+        if (ch < ' ' || ch == '\x7F') return;
         _onText(ch.ToString());
+    }
+
+    /// <summary>Committed IME result (Chinese/Japanese/Korean), as Unicode text.</summary>
+    private void CommitImeResult(nint hwnd)
+    {
+        var context = ImmGetContext(hwnd);
+        if (context == 0) return;
+        try
+        {
+            var bytes = ImmGetCompositionString(context, GCS_RESULTSTR, null, 0);
+            if (bytes <= 0) return;
+            var buffer = new char[(bytes + 1) / 2];
+            var written = ImmGetCompositionString(context, GCS_RESULTSTR, buffer, bytes);
+            if (written <= 0) return;
+            var text = new string(buffer, 0, written / 2);
+            if (text.Length > 0) _onText(text);
+        }
+        finally { ImmReleaseContext(hwnd, context); }
     }
 
     private delegate nint WndProc(nint hWnd, uint msg, nint wParam, nint lParam);
@@ -386,10 +447,10 @@ public sealed class ChildHwnd : IDisposable
     [DllImport("user32.dll")]
     private static extern bool ScreenToClient(nint hwnd, ref Point point);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("user32.dll", EntryPoint = "RegisterClassW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern ushort RegisterClass(ref WndClass lpWndClass);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern nint CreateWindowEx(
         int dwExStyle, string lpClassName, string lpWindowName, int dwStyle,
         int x, int y, int nWidth, int nHeight,
@@ -401,8 +462,18 @@ public sealed class ChildHwnd : IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetClientRect(nint hWnd, out Rect lpRect);
 
-    [DllImport("user32.dll")]
+    // Must be W: a Unicode window + DefWindowProcA breaks CJK IME commits.
+    [DllImport("user32.dll", EntryPoint = "DefWindowProcW")]
     private static extern nint DefWindowProc(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [DllImport("imm32.dll")]
+    private static extern nint ImmGetContext(nint hwnd);
+
+    [DllImport("imm32.dll")]
+    private static extern bool ImmReleaseContext(nint hwnd, nint himc);
+
+    [DllImport("imm32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ImmGetCompositionString(nint himc, int index, char[]? buffer, int bufLen);
 
     [DllImport("user32.dll")]
     private static extern nint SetFocus(nint hWnd);

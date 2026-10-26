@@ -30,44 +30,41 @@ public static class Alerts
         ElementTheme theme, Action<Window?> active)
     {
         var done = new TaskCompletionSource<ContentDialogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var window = NewDialog(title, 480, 340);
-        var panel = new StackPanel
+        var window = NewDialog(title, 360, 200);
+        var (panel, _) = ChromeShell(theme);
+        panel.Children.Add(ChromeTitle(title));
+        var body = content as UIElement ?? new TextBlock
         {
-            Spacing = 16, Padding = new Thickness(24), RequestedTheme = theme,
-            Background = (Brush)Application.Current.Resources["ChromeWindowBrush"],
+            Text = content.ToString(),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = (double)Application.Current.Resources["TitleSize"],
+            Foreground = (Brush)Application.Current.Resources["ChromeTextBrush"],
         };
-        panel.Children.Add(new TextBlock { Text = title, FontSize = 20, TextWrapping = TextWrapping.Wrap });
-        var body = content as UIElement ?? new TextBlock { Text = content.ToString(), TextWrapping = TextWrapping.Wrap };
         panel.Children.Add(new ScrollViewer
         {
-            Content = body, MaxHeight = 240,
+            Content = body,
+            MaxHeight = 220,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         });
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        Button Add(string label, ContentDialogResult result)
+        var buttons = ChromeActions();
+        Button Add(string label, ContentDialogResult result, bool primaryButton)
         {
-            var button = new Button { Content = label, MinWidth = 80 };
+            var button = ChromeAction(label, primaryButton);
             button.Click += (_, _) => { done.TrySetResult(result); window.Close(); };
             buttons.Children.Add(button);
             return button;
         }
-        var cancel = Add("Cancel", ContentDialogResult.None);
-        if (secondary is not null) Add(secondary, ContentDialogResult.Secondary);
-        Add(primary, ContentDialogResult.Primary);
+        var cancel = Add("Cancel", ContentDialogResult.None, false);
+        if (secondary is not null) Add(secondary, ContentDialogResult.Secondary, false);
+        Add(primary, ContentDialogResult.Primary, true);
         panel.Children.Add(buttons);
         panel.KeyDown += (_, e) =>
         {
             if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; window.Close(); }
         };
-        panel.Loaded += (_, _) =>
-        {
-            var scale = panel.XamlRoot.RasterizationScale;
-            panel.Measure(new Windows.Foundation.Size(480, double.PositiveInfinity));
-            window.AppWindow.ResizeClient(new SizeInt32((int)(480 * scale), (int)(Math.Max(180, panel.DesiredSize.Height) * scale)));
-            WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
-            if (body is not TextBox) cancel.Focus(FocusState.Programmatic);
-        };
+        FitOnLoad(window, panel, preferredWidth: 360, minHeight: 140);
+        panel.Loaded += (_, _) => { if (body is not TextBox) cancel.Focus(FocusState.Programmatic); };
         window.Content = panel;
         window.Closed += (_, _) => done.TrySetResult(ContentDialogResult.None);
         active(window);
@@ -108,33 +105,31 @@ public static class Alerts
         string title, string body, string? primary, string close, CancellationToken cancellationToken = default)
     {
         var done = new TaskCompletionSource<bool>();
-        var window = NewDialog(title, 420, 200);
-        var panel = new StackPanel { Spacing = 12, Padding = new Thickness(16) };
-        panel.Children.Add(new TextBlock { Text = title, FontSize = 16, TextWrapping = TextWrapping.Wrap });
+        var window = NewDialog(title, 360, 180);
+        var (panel, _) = ChromeShell(Appearance.RequestedTheme);
+        panel.Children.Add(ChromeTitle(title));
         panel.Children.Add(new TextBlock
         {
             Text = body,
             FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+            FontSize = (double)Application.Current.Resources["TitleSize"],
+            Foreground = (Brush)Application.Current.Resources["ChromeTextBrush"],
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
         });
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Right,
-        };
+        var buttons = ChromeActions();
         if (primary is not null)
         {
-            var yes = new Button { Content = primary };
+            var yes = ChromeAction(primary, true);
             yes.Click += (_, _) => { done.TrySetResult(true); window.Close(); };
             buttons.Children.Add(yes);
         }
-        var no = new Button { Content = close };
+        var no = ChromeAction(close, primary is null);
         no.Loaded += (_, _) => no.Focus(FocusState.Programmatic);
         no.Click += (_, _) => { done.TrySetResult(false); window.Close(); };
         buttons.Children.Add(no);
         panel.Children.Add(buttons);
+        FitOnLoad(window, panel, preferredWidth: 360, minHeight: 140);
         window.Content = panel;
         window.Closed += (_, _) => done.TrySetResult(false);
         CloseWhen(window, cancellationToken);
@@ -148,125 +143,97 @@ public static class Alerts
         var resources = Application.Current.Resources;
         var title = TitleFor(prompts[0]);
         var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var window = NewDialog(title, 360, 220);
-        var spaceGroup = (double)resources["SpaceGroup"];
-        var spaceInline = (double)resources["SpaceInline"];
-        var titleSize = (double)resources["TitleSize"];
-        var inputSize = (double)resources["InputSize"];
-        var controlHeight = (double)resources["CompactControlHeight"] + 6;
-        var rowRadius = (CornerRadius)resources["RowRadius"];
-        var raised = (Brush)resources["ChromeRaisedBrush"];
-        var textBrush = (Brush)resources["ChromeTextBrush"];
-        var subtle = (Brush)resources["ChromeSubtleBrush"];
-        var chromeButton = (Style)resources["ChromeButtonStyle"];
-        var layout = new Grid
-        {
-            Padding = new Thickness(12),
-            RowSpacing = spaceGroup,
-            RequestedTheme = Appearance.RequestedTheme,
-            Background = raised,
-        };
-        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var heading = new TextBlock
-        {
-            Text = title,
-            FontSize = 14,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = textBrush,
-            TextWrapping = TextWrapping.Wrap,
-        };
-        layout.Children.Add(heading);
-        var panel = new StackPanel { Spacing = spaceGroup };
+        var window = NewDialog(title, 320, 180);
+        var (layout, spaceGroup) = ChromeShell(Appearance.RequestedTheme);
+        layout.Children.Add(ChromeTitle(title));
+
+        var fields = new StackPanel { Spacing = spaceGroup };
         var words = instruction.Trim();
-        if (words.Length > 0 && !string.Equals(words, title, StringComparison.OrdinalIgnoreCase)
+        var firstLabel = PromptLabel(prompts[0]);
+        if (words.Length > 0
+            && !string.Equals(words, title, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(words, firstLabel, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(words, prompts[0].Text.Trim(), StringComparison.OrdinalIgnoreCase))
         {
-            panel.Children.Add(new TextBlock
+            fields.Children.Add(new TextBlock
             {
                 Text = words,
-                FontSize = titleSize,
-                Foreground = subtle,
+                FontSize = (double)resources["TitleSize"],
+                Foreground = (Brush)resources["ChromeSubtleBrush"],
                 TextWrapping = TextWrapping.Wrap,
             });
         }
 
-        var boxes = new PasswordBox[prompts.Count];
-        var plains = new TextBox[prompts.Count];
+        // Values are read through these holders so verification codes can use
+        // a plain TextBox (macOS .code) while passwords stay in PasswordBox.
+        var readers = new Func<string>[prompts.Count];
+        Control? firstField = null;
         for (var i = 0; i < prompts.Count; i++)
         {
-            var label = PromptLabel(prompts[i]);
-            var field = new StackPanel { Spacing = spaceInline };
+            var prompt = prompts[i];
+            var label = PromptLabel(prompt);
+            var group = new StackPanel { Spacing = (double)resources["SpaceInline"] };
             if (!string.Equals(label, title, StringComparison.OrdinalIgnoreCase) && label.Length > 0)
             {
-                field.Children.Add(new TextBlock
+                group.Children.Add(new TextBlock
                 {
                     Text = label,
-                    FontSize = titleSize,
-                    Foreground = subtle,
+                    FontSize = (double)resources["TitleSize"],
+                    Foreground = (Brush)resources["ChromeSubtleBrush"],
                     TextWrapping = TextWrapping.Wrap,
                 });
             }
-            if (prompts[i].Echo)
+
+            Control field;
+            if (prompt.Echo)
             {
-                plains[i] = new TextBox
+                var box = new TextBox
                 {
-                    MinHeight = controlHeight,
-                    FontSize = inputSize,
-                    BorderThickness = new Thickness(0),
-                    Background = (Brush)resources["ChromeWindowBrush"],
-                    CornerRadius = rowRadius,
-                    Padding = new Thickness(spaceGroup, spaceInline, spaceGroup, spaceInline),
+                    Style = (Style)resources["ChromeFieldStyle"],
+                    PlaceholderText = PromptLabel(prompt),
                 };
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(plains[i], prompts[i].Text);
-                field.Children.Add(plains[i]);
+                readers[i] = () => box.Text;
+                field = box;
             }
             else
             {
-                boxes[i] = new PasswordBox
+                // macOS Dialog.Field.Kind.code/password are both secure; keep
+                // codes hidden the same way so the box still looks like an input.
+                var box = new PasswordBox
                 {
-                    MinHeight = controlHeight,
-                    FontSize = inputSize,
-                    BorderThickness = new Thickness(0),
-                    Background = (Brush)resources["ChromeWindowBrush"],
-                    CornerRadius = rowRadius,
-                    Padding = new Thickness(spaceGroup, spaceInline, spaceGroup, spaceInline),
+                    Style = (Style)resources["ChromeSecretFieldStyle"],
+                    PlaceholderText = IsVerificationCode(prompt) ? "Code" : PromptLabel(prompt),
                 };
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(boxes[i], prompts[i].Text);
-                field.Children.Add(boxes[i]);
+                readers[i] = () => box.Password;
+                field = box;
             }
-            panel.Children.Add(field);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(field, prompt.Text);
+            group.Children.Add(field);
+            fields.Children.Add(group);
+            firstField ??= field;
         }
 
-        var row = new StackPanel
+        var actions = ChromeActions();
+        var ok = ChromeAction("Continue", true);
+        var cancel = ChromeAction("Cancel", false);
+        actions.Children.Add(cancel);
+        actions.Children.Add(ok);
+        layout.Children.Add(fields);
+        layout.Children.Add(actions);
+        var finished = false;
+        void Finish(IReadOnlyList<string> answers)
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = spaceGroup,
-            HorizontalAlignment = HorizontalAlignment.Right,
-        };
-        var ok = new Button
-        {
-            Content = "Continue",
-            MinWidth = 88,
-            Style = chromeButton,
-            Background = (Brush)resources["AccentBrush"],
-            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
-        };
-        void Submit()
-        {
-            var answers = new string[prompts.Count];
-            for (var i = 0; i < prompts.Count; i++)
-                answers[i] = prompts[i].Echo ? plains[i].Text : boxes[i].Password;
-            if (done.TrySetResult(answers)) window.Close();
+            if (finished) return;
+            finished = true;
+            done.TrySetResult(answers);
+            window.Close();
         }
+        void Submit() => Finish(readers.Select(read => read()).ToArray());
         ok.Click += (_, _) => Submit();
-        // PasswordBox can consume a routed key before it reaches the layout.
-        // Listen on each field even when handled, using the same submission
-        // path as Continue. Do not intercept Enter on the Cancel button.
-        for (var i = 0; i < prompts.Count; i++)
+        cancel.Click += (_, _) => Finish([]);
+        foreach (var child in fields.Children.OfType<StackPanel>())
         {
-            Control field = prompts[i].Echo ? plains[i] : boxes[i];
+            if (child.Children.OfType<Control>().LastOrDefault() is not { } field) continue;
             field.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, e) =>
             {
                 if (e.Key != Windows.System.VirtualKey.Enter) return;
@@ -278,52 +245,76 @@ public static class Alerts
         {
             if (e.Key != Windows.System.VirtualKey.Escape) return;
             e.Handled = true;
-            if (done.TrySetResult(Array.Empty<string>())) window.Close();
+            Finish([]);
         }), true);
-        var cancel = new Button { Content = "Cancel", MinWidth = 88, Style = chromeButton };
-        cancel.Click += (_, _) => { done.TrySetResult(Array.Empty<string>()); window.Close(); };
-        row.Children.Add(cancel);
-        row.Children.Add(ok);
-        var scroll = new ScrollViewer
-        {
-            Content = panel,
-            HorizontalScrollMode = ScrollMode.Disabled,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
-        Grid.SetRow(scroll, 1);
-        Grid.SetRow(row, 2);
-        layout.Children.Add(scroll);
-        layout.Children.Add(row);
-        layout.Loaded += (_, _) =>
-        {
-            var scale = layout.XamlRoot.RasterizationScale;
-            var area = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
-            var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
-            var maxWidth = area.Width / scale - 32;
-            var maxHeight = area.Height / scale - 64;
-            if (owner != 0 && GetOwnerSize(owner, out var ownerWidth, out var ownerHeight))
-            {
-                maxWidth = Math.Min(maxWidth, ownerWidth / scale - 24);
-                maxHeight = Math.Min(maxHeight, ownerHeight / scale - 48);
-            }
-            var width = Math.Min(360, Math.Max(280, maxWidth));
-            var contentWidth = Math.Max(1, width - 24);
-            heading.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
-            panel.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
-            row.Measure(new Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
-            var desired = 24 + spaceGroup * 2 + heading.DesiredSize.Height + panel.DesiredSize.Height + row.DesiredSize.Height;
-            var height = Math.Min(Math.Max(160, desired), Math.Max(1, maxHeight));
-            window.AppWindow.ResizeClient(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
-            WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
-            Control first = prompts[0].Echo ? plains[0] : boxes[0];
-            first.Focus(FocusState.Programmatic);
-        };
+        FitOnLoad(window, layout, preferredWidth: 320, minHeight: 150, clampToOwner: true);
+        layout.Loaded += (_, _) => firstField?.Focus(FocusState.Programmatic);
         window.Content = layout;
-        window.Closed += (_, _) => done.TrySetResult(Array.Empty<string>());
+        window.Closed += (_, _) => Finish([]);
         CloseWhen(window, cancellationToken);
         window.Activate();
         return await done.Task;
+    }
+
+    private static (StackPanel Panel, double SpaceGroup) ChromeShell(ElementTheme theme)
+    {
+        var resources = Application.Current.Resources;
+        var spaceGroup = (double)resources["SpaceGroup"];
+        var panel = new StackPanel
+        {
+            Spacing = spaceGroup,
+            Padding = new Thickness(12),
+            RequestedTheme = theme,
+            Background = (Brush)resources["ChromeRaisedBrush"],
+        };
+        return (panel, spaceGroup);
+    }
+
+    private static TextBlock ChromeTitle(string title) => new()
+    {
+        Text = title,
+        FontSize = (double)Application.Current.Resources["TitleSize"],
+        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        Foreground = (Brush)Application.Current.Resources["ChromeTextBrush"],
+        TextWrapping = TextWrapping.Wrap,
+    };
+
+    private static StackPanel ChromeActions() => new()
+    {
+        Orientation = Orientation.Horizontal,
+        Spacing = (double)Application.Current.Resources["SpaceGroup"],
+        HorizontalAlignment = HorizontalAlignment.Right,
+    };
+
+    private static Button ChromeAction(string label, bool primary) => new()
+    {
+        Content = label,
+        Style = (Style)Application.Current.Resources[primary ? "ChromePrimaryButtonStyle" : "ChromeSecondaryButtonStyle"],
+    };
+
+    private static void FitOnLoad(Window window, FrameworkElement root, double preferredWidth, double minHeight, bool clampToOwner = false)
+    {
+        root.Loaded += (_, _) =>
+        {
+            var scale = root.XamlRoot.RasterizationScale;
+            var area = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+            var maxWidth = area.Width / scale - 32;
+            var maxHeight = area.Height / scale - 64;
+            if (clampToOwner)
+            {
+                var owner = (Application.Current as App)?.MainWindowHandle ?? 0;
+                if (owner != 0 && GetOwnerSize(owner, out var ownerWidth, out var ownerHeight))
+                {
+                    maxWidth = Math.Min(maxWidth, ownerWidth / scale - 24);
+                    maxHeight = Math.Min(maxHeight, ownerHeight / scale - 48);
+                }
+            }
+            var width = Math.Min(preferredWidth, Math.Max(280, maxWidth));
+            root.Measure(new Windows.Foundation.Size(Math.Max(1, width - 24), double.PositiveInfinity));
+            var height = Math.Min(Math.Max(minHeight, root.DesiredSize.Height + 8), Math.Max(1, maxHeight));
+            window.AppWindow.ResizeClient(new SizeInt32((int)Math.Ceiling(width * scale), (int)Math.Ceiling(height * scale)));
+            WindowPlacement.Center(window, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
+        };
     }
 
     /// <summary>Cancel or the connect deadline closes the question. The handshake is parked until the window goes.</summary>
@@ -347,13 +338,14 @@ public static class Alerts
         presenter.IsResizable = false;
         presenter.IsMinimizable = false;
         presenter.IsMaximizable = false;
-        presenter.IsAlwaysOnTop = false;
+        // Stay above the terminal's child HWND for the whole answer; without
+        // this, Continue clicks land on the shell underneath and the dial
+        // never receives the code.
+        presenter.IsAlwaysOnTop = true;
         window.AppWindow.SetPresenter(presenter);
         window.AppWindow.Resize(new SizeInt32(width, height));
         WindowPlacement.Center(window, width, height);
-        // Owned by the main window so it stays above the terminal HWND, but
-        // not system-wide topmost — other apps can still come in front.
-        WindowPlacement.Own(window, topmost: false);
+        WindowPlacement.Own(window, topmost: true);
         return window;
     }
 
@@ -394,16 +386,8 @@ public static class Alerts
     {
         var text = PromptLabel(prompt);
         if (text.Length == 0) return "Continue";
-        if (text.Contains("verification", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("one-time", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("otp", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("passcode", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("authenticator", StringComparison.OrdinalIgnoreCase))
-            return "Verification code";
-        if (text.Equals("password", StringComparison.OrdinalIgnoreCase)
-            || text.StartsWith("password ", StringComparison.OrdinalIgnoreCase)
-            || text.EndsWith(" password", StringComparison.OrdinalIgnoreCase))
-            return "Password";
+        if (IsVerificationCode(prompt)) return "Verification code";
+        if (IsAccountPassword(prompt)) return "Password";
         return text.Length > 28 ? text[..28] : text;
     }
 
@@ -413,6 +397,29 @@ public static class Alerts
         var text = prompt.Text.Trim();
         while (text.EndsWith(':') || text.EndsWith('：')) text = text[..^1].TrimEnd();
         return text;
+    }
+
+    /// <summary>Matches macOS Dialog.Field.Kind.code — a one-time code, not an account password.</summary>
+    private static bool IsVerificationCode(AuthPrompt prompt)
+    {
+        if (prompt.Echo) return false;
+        var folded = prompt.Text.ToLowerInvariant();
+        return folded.Contains("verification", StringComparison.Ordinal)
+            || folded.Contains("one-time", StringComparison.Ordinal)
+            || folded.Contains("otp", StringComparison.Ordinal)
+            || folded.Contains("token", StringComparison.Ordinal)
+            || folded.Contains("passcode", StringComparison.Ordinal)
+            || folded.Contains("authenticator", StringComparison.Ordinal)
+            || folded.Contains("challenge", StringComparison.Ordinal);
+    }
+
+    private static bool IsAccountPassword(AuthPrompt prompt)
+    {
+        if (prompt.Echo || IsVerificationCode(prompt)) return false;
+        var text = PromptLabel(prompt);
+        return text.Equals("password", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("password ", StringComparison.OrdinalIgnoreCase)
+            || text.EndsWith(" password", StringComparison.OrdinalIgnoreCase);
     }
 }
 

@@ -17,7 +17,9 @@ public sealed partial class Workspace : IAsyncDisposable
     public HostEntry? CurrentHost { get; private set; }
     public string CurrentHostLabel => CurrentHost?.Label ?? "localhost";
     public long SelectionVersion { get; private set; }
-    private static string HostKey(HostEntry? host) => host is null ? "local" : host.Alias + ":" + Fingerprint(host);
+    // Alias+Target — not a full JSON fingerprint — so a host from a fresh
+    // ssh config load still matches the tab opened from a previous pick.
+    private static string HostKey(HostEntry? host) => host is null ? "local" : host.Alias + "\n" + host.Target;
     public IReadOnlyList<Tab> VisibleTabs => _tabs.Where(t => HostKey(t.Host) == HostKey(CurrentHost)).ToArray();
     /// <summary>One chip per terminal, in workspace order. A split does not hide its panes.</summary>
     public IReadOnlyList<TerminalPane> VisiblePanes => VisibleTabs.SelectMany(tab => tab.Panes).ToArray();
@@ -306,12 +308,18 @@ public sealed partial class Workspace : IAsyncDisposable
     public async Task<TerminalPane?> AddAsync(Func<TerminalPane, HostEntry, Task<bool>>? connect = null)
     {
         var host = CurrentHost;
-        var version = SelectionVersion;
         var pane = await PrepareAsync(host, connect);
         if (pane is null) return null;
         pane.Model.SessionChanged += NotifySessionChanged;
-        _tabs.Add(new Tab(pane));
-        if (version == SelectionVersion) _active = _tabs.Count - 1;
+        var tab = new Tab(pane) { Host = host ?? pane.Model.RemoteHost };
+        _tabs.Add(tab);
+        // Always land on the tab we just dialed. A focus steal from the local
+        // shell while the auth dialog closes used to bump SelectionVersion and
+        // leave this session orphaned under localhost.
+        CurrentHost = tab.Host;
+        _active = _tabs.IndexOf(tab);
+        _activeExtension = null;
+        SelectionVersion++;
         RememberSelection();
         Persist(); Changed?.Invoke();
         return pane;

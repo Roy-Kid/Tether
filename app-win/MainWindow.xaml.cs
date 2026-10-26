@@ -22,7 +22,20 @@ public sealed partial class MainWindow : Window
     private bool _refreshingTabs;
     private bool _revealPending;
     private bool _connecting;
+    private int _connectGate;
     private bool _splitting;
+
+    private void EnterConnect()
+    {
+        _connectGate++;
+        _connecting = true;
+    }
+
+    private void LeaveConnect()
+    {
+        if (_connectGate > 0) _connectGate--;
+        _connecting = _connectGate > 0;
+    }
     private readonly HashSet<TerminalPane> _wiredPanes = [];
     private readonly Dictionary<Tab, SplitTerminalView> _splitViews = [];
     private Window? _hostPicker;
@@ -339,7 +352,6 @@ public sealed partial class MainWindow : Window
         var context = Context(tab, plugin);
         context = context with { Dismiss = () => flyout.Hide() };
         var attachment = tab.Attach(plugin, context);
-        if (attachment is TmuxAttachment tmux) tmux.UseDismiss(() => flyout.Hide());
         flyout.Content = null;
         flyout.Content = attachment.View;
         flyout.ShowAt(button);
@@ -551,7 +563,14 @@ public sealed partial class MainWindow : Window
         if (_wiredPanes.Add(tab)) tab.Surface.SizeChanged += (_, _) => UpdateSplitButtons();
         tab.Surface.WorkspaceShortcut = HandleWorkspaceShortcut;
         tab.Surface.WantsFocus = () => _workspace.Active == tab;
-        tab.Surface.TerminalFocused = () => _workspace.Focus(tab);
+        tab.Surface.TerminalFocused = () =>
+        {
+            // Auth dialogs deactivate this window; when they close, the local
+            // child HWND can grab focus and Focus() would flip CurrentHost back
+            // to localhost mid-dial. Ignore until the connect finishes.
+            if (_connecting || !_workspace.Contains(tab)) return;
+            _workspace.Focus(tab);
+        };
         tab.Surface.QueryLink = link => QueryLinkAsync(tab, link);
         tab.Surface.TryOpenLink = link => TryOpenLink(tab, link);
         tab.Surface.LinkCommands = link => LinkCommands(tab, link);
@@ -685,9 +704,7 @@ public sealed partial class MainWindow : Window
         {
             if (item.Tag is not ExtensionTab open) return;
             e.Handled = true;
-            ShowMenu(header, [
-                new("Close", () => _ = CloseExtensionAsync(open)),
-            ]);
+            ShowMenu(header, [new("Close", () => _ = CloseExtensionAsync(open))]);
         };
         return item;
     }
@@ -1111,12 +1128,25 @@ public sealed partial class MainWindow : Window
 
     private async Task ChooseHostCoreAsync(HostEntry? host, string key, TaskCompletionSource completion)
     {
+        EnterConnect();
         try
         {
             RememberRecentHost(host);
             _workspace.SelectHost(host);
-            if (_workspace.VisibleTabs.Count == 0) await _workspace.AddAsync(ConnectPaneAsync);
-            if (_workspace.CurrentHost == host) _workspace.Active?.Surface.FocusTerminal();
+            if (_workspace.VisibleTabs.Count == 0)
+                await _workspace.AddAsync(ConnectPaneAsync);
+            else if (host is not null && _workspace.Active is { Model.IsLive: false } pane)
+            {
+                // A prior dial left the host selected with a dead pane — dial again
+                // instead of stranding the person on an empty Arrhenius workspace.
+                await OpenHostAsync(host, pane);
+                await ReportConnectionFailureAsync(pane);
+            }
+            // Re-assert the host after dial: dialog teardown can otherwise leave
+            // the window showing localhost while the remote tab sits invisible.
+            _workspace.SelectHost(host);
+            if (_workspace.Active is { Model.IsLive: true } live)
+                live.Surface.FocusTerminal();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -1124,7 +1154,13 @@ public sealed partial class MainWindow : Window
             await Alerts.ContentAsync(host?.Label ?? "localhost", ex.Message, "Close", null,
                 WorkspaceRoot.ActualTheme, _ => { });
         }
-        finally { _hostRequests.Remove(key); completion.TrySetResult(); }
+        finally
+        {
+            LeaveConnect();
+            _hostRequests.Remove(key);
+            completion.TrySetResult();
+            OnWorkspaceChanged();
+        }
     }
 
     private async Task OpenHostAsync(HostEntry host, TerminalPane? target = null)
@@ -1142,7 +1178,7 @@ public sealed partial class MainWindow : Window
         tab.Model.Begin(host);
         var dial = tab.Model.DialToken;
         var generation = tab.Model.Generation;
-        _connecting = true;
+        EnterConnect();
         try
         {
             var store = IdentityStore.Current;
@@ -1180,15 +1216,22 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            _connecting = false;
+            LeaveConnect();
             if (tab.Model.IsLive && tab.StartingDirectory is { } directory && !directory.Any(char.IsControl))
             {
                 var quoted = "'" + directory.Replace("'", "'\"'\"'") + "'";
                 if (Tether.KeyInput.FromVirtualKey(Windows.System.VirtualKey.None, false, false, false, "cd -- " + quoted + "\r") is { } input) tab.Model.Send(input);
                 tab.StartingDirectory = null;
             }
-            OnWorkspaceChanged();
-            if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null) tab.Surface.FocusTerminal();
+            // Tab may not be in the workspace yet (AddAsync parents after connect).
+            // A direct refresh here would paint the empty Arrhenius host; the
+            // workspace Changed event after AddAsync is the one that sticks.
+            if (_workspace.Contains(tab))
+            {
+                OnWorkspaceChanged();
+                if (_workspace.Active == tab && tab.Model.IsLive && tab.OpenInspector is null)
+                    tab.Surface.FocusTerminal();
+            }
         }
     }
 
@@ -1231,14 +1274,10 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSplitButtons()
     {
+        // Split is only on the tab context menu (macOS parity) — not status-bar icons.
         var state = CommandState;
-        var show = _workspace.Active is not null && !_zen ? Visibility.Visible : Visibility.Collapsed;
-        SplitLeftButton.Visibility = SplitRightButton.Visibility = SplitUpButton.Visibility = SplitDownButton.Visibility = show;
-        SplitLeftButton.IsEnabled = WorkspaceCommands.IsEnabled("splitLeft", state);
-        SplitRightButton.IsEnabled = WorkspaceCommands.IsEnabled("splitRight", state);
-        SplitUpButton.IsEnabled = WorkspaceCommands.IsEnabled("splitUp", state);
-        SplitDownButton.IsEnabled = WorkspaceCommands.IsEnabled("splitDown", state);
-        MaximizePaneButton.Visibility = show == Visibility.Visible && state.VisibleTerminals > 1 ? Visibility.Visible : Visibility.Collapsed;
+        var show = _workspace.Active is not null && !_zen && state.VisibleTerminals > 1;
+        MaximizePaneButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         MaximizePaneButton.IsEnabled = WorkspaceCommands.IsEnabled("maximizePane", state);
         UpdateWorkspaceMenu();
         UpdateTabBarToggle();
@@ -1354,7 +1393,7 @@ public sealed partial class MainWindow : Window
 
     private void MoveChipDrag(UIElement element, PointerRoutedEventArgs e)
     {
-        if (_dragging is null || !element.PointerCaptures.Contains(e.Pointer)) return;
+        if (_dragging is null || element.PointerCaptures?.Contains(e.Pointer) != true) return;
         var point = e.GetCurrentPoint(WorkspaceRoot).Position;
         var dx = point.X - _dragOrigin.X;
         var dy = point.Y - _dragOrigin.Y;
@@ -1372,7 +1411,8 @@ public sealed partial class MainWindow : Window
         _dragging = null;
         _dragArmed = false;
         if (armed) _suppressChipTap = true;
-        if (element.PointerCaptures.Contains(e.Pointer)) element.ReleasePointerCapture(e.Pointer);
+        // PointerCaptures is null, not empty, when nothing was captured (a right click).
+        if (element.PointerCaptures?.Contains(e.Pointer) == true) element.ReleasePointerCapture(e.Pointer);
         var hit = armed && dragged is not null ? ChipAt(e.GetCurrentPoint(WorkspaceRoot).Position, dragged) : null;
         ClearDropMark();
         if (hit is { } target && dragged is not null && _workspace.Place(dragged, target.Pane, target.Edge))

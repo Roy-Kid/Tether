@@ -71,10 +71,14 @@ public sealed partial class MainWindow
     /// Quit from the notification area: the question the window's close asks.
     private Task QuitAsync() => RequestWindowCloseAsync();
 
-    private Task ReportConnectionFailureAsync(TerminalPane pane) =>
-        !pane.Model.IsLive && pane.Model.RemoteHost is { } host && pane.Model.LastError is { Length: > 0 } error
-            ? Alerts.ConnectionErrorAsync(DispatcherQueue, host.Label, error)
-            : Task.CompletedTask;
+    private Task ReportConnectionFailureAsync(TerminalPane pane)
+    {
+        if (pane.Model.IsLive || pane.Model.RemoteHost is not { } host) return Task.CompletedTask;
+        var detail = pane.Model.LastError;
+        if (string.IsNullOrWhiteSpace(detail)) detail = pane.Model.Status;
+        if (string.IsNullOrWhiteSpace(detail) || detail is "Connected" or "Cancelled") return Task.CompletedTask;
+        return Alerts.ConnectionErrorAsync(DispatcherQueue, host.Label, detail);
+    }
 
     private async Task RequestWindowCloseAsync()
     {

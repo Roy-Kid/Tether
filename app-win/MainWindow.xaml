@@ -112,14 +112,6 @@
       ToolTipService.ToolTip="Reconnect" AutomationProperties.Name="Reconnect" />
     </Grid>
     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
-     <Button x:Name="SplitLeftButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89E;"
-      Click="SplitLeft_Click" ToolTipService.ToolTip="Split Left" AutomationProperties.Name="Split Left" />
-     <Button x:Name="SplitRightButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE89F;"
-      Click="SplitRight_Click" ToolTipService.ToolTip="Split Right" AutomationProperties.Name="Split Right" />
-     <Button x:Name="SplitUpButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A1;"
-      Click="SplitUp_Click" ToolTipService.ToolTip="Split Up" AutomationProperties.Name="Split Up" />
-     <Button x:Name="SplitDownButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE8A0;"
-      Click="SplitDown_Click" ToolTipService.ToolTip="Split Down" AutomationProperties.Name="Split Down" />
      <Button x:Name="MaximizePaneButton" Visibility="Collapsed" Style="{StaticResource ChromeIconButtonStyle}" Content="&#xE740;"
       Click="MaximizePane_Click" ToolTipService.ToolTip="Maximize/Restore Pane" AutomationProperties.Name="Maximize/Restore Pane" />
      <StackPanel x:Name="PluginButtons" Orientation="Horizontal" Spacing="2">
