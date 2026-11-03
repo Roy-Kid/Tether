@@ -20,6 +20,8 @@ public enum TerminalFonts {
   private(set) static var failure: RenderingError?
   private static var revision = 0
   private static var cachedMetrics: [String: RenderFontMetrics] = [:]
+  /// The Mac's CJK face, decided against the catalogue last loaded.
+  private static var chosenSystemWide: String?
 
   public static let defaultPrimary = "system"
   private static let systemAlias = "Tether System Monospace"
@@ -37,8 +39,25 @@ public enum TerminalFonts {
     #if os(iOS)
       DownloadedWideFont.face
     #else
-      "PingFang SC"
+      macWide
     #endif
+  }
+
+  /// Built into every Mac, in /System/Library/Fonts, with all of GB2312 as
+  /// TrueType outlines. (Hiragino Sans GB sits beside it, but the renderer
+  /// cannot shape 中 with it.)
+  static let builtInWide = "Heiti SC"
+
+  /// PingFang when the renderer has it. It is a downloadable asset on a
+  /// current Mac, so one that never fetched it — a fresh account, a CI
+  /// image — has no such face, and the terminal could neither measure a cell
+  /// nor draw.
+  private static var macWide: String {
+    let faces = faces()
+    if let chosen = chosenSystemWide { return chosen }
+    let chosen = faces.contains { $0.family == storedSystemWide } ? storedSystemWide : builtInWide
+    chosenSystemWide = chosen
+    return chosen
   }
   public static var wide: String {
     resolvedWide(UserDefaults.standard.string(forKey: wideKey) ?? defaultWide)
@@ -80,6 +99,7 @@ public enum TerminalFonts {
     let announce = revision > 0 || !cachedMetrics.isEmpty
     loaded = true
     failure = nil
+    chosenSystemWide = nil
     UserDefaults.standard.removeObject(forKey: "terminalDrawing")
     let collection = CTFontCollectionCreateFromAvailableFonts(nil)
     let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []

@@ -360,6 +360,9 @@ fn a_new_terminal_can_begin_checkpoint_and_reopen_without_a_disk_error() {
     assert_eq!(reopened.error(), None);
 }
 
+// Unix lets a directory go while its files are open; Windows refuses the
+// removal itself (os error 32), so there is no unlinked archive to write to.
+#[cfg(unix)]
 #[test]
 fn unlinking_an_open_archive_reports_disk_io_error() {
     let dir = ArchiveDir::new();
