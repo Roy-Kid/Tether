@@ -234,11 +234,13 @@
         model.selection = ["/home/ada/notes.txt"]
         try await Task.sleep(for: .milliseconds(100))
 
+        // A runner under load answers a key later than any fixed sleep allows;
+        // each step waits for what it expects, up to two seconds.
         press("\u{0e}", code: 45, in: window, base: "n", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/plot.png"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/plot.png"])
         press("\u{10}", code: 35, in: window, base: "p", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/notes.txt"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/notes.txt"])
 
         model.selection = ["/home/ada/src"]
@@ -249,33 +251,40 @@
         }
         #expect(model.rows.contains { $0.entry.path == "/home/ada/src/main.swift" })
         press("\u{06}", code: 3, in: window, base: "f", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/src/main.swift"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/src/main.swift"])
         press("\u{02}", code: 11, in: window, base: "b", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/src"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/src"])
         press("\u{02}", code: 11, in: window, base: "b", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(!model.rows.contains { $0.entry.path == "/home/ada/src/main.swift" }) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(!model.rows.contains { $0.entry.path == "/home/ada/src/main.swift" })
         press("\u{f72b}", code: 119, in: window)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/plot.png"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/plot.png"])
         press("v", code: 9, in: window, flags: .option)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/src"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/src"])
         press("\u{16}", code: 9, in: window, base: "v", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.selection == ["/home/ada/plot.png"]) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.selection == ["/home/ada/plot.png"])
         press("\u{0d}", code: 46, in: window, base: "m", flags: .control)
-        try await Task.sleep(for: .milliseconds(100))
+        // Renaming starts first; the field takes the keys a moment later.
+        for _ in 0..<100 where !(model.renaming == "/home/ada/plot.png" && window.firstResponder is NSTextView) {
+          try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(model.renaming == "/home/ada/plot.png")
+        // The field has the keyboard before SwiftUI's own focus catches up
+        // with it. A key in that gap lands on the list once the focus sync
+        // runs, and the rename never ends; wait the sync out.
+        try await Task.sleep(for: .milliseconds(300))
         let editor = try #require(window.firstResponder as? NSTextView)
         editor.setSelectedRange(NSRange(location: 2, length: 0))
         press("\u{02}", code: 11, in: window, base: "b", flags: .control)
         #expect(editor.selectedRange().location == 1)
         #expect(model.selection == ["/home/ada/plot.png"])
         press("\u{1b}", code: 53, in: window)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where !(model.renaming == nil) { try await Task.sleep(for: .milliseconds(20)) }
         #expect(model.renaming == nil)
       }
 

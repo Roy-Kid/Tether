@@ -4332,8 +4332,8 @@ static class _UniFFILib {
         }
         {
             var checksum = _UniFFILib.uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding();
-            if (checksum != 62672) {
-                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding` checksum `62672`, library returned `{checksum}`");
+            if (checksum != 7622) {
+                throw new UniffiContractChecksumException($"uniffi.tether_ffi: uniffi bindings expected function `uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding` checksum `7622`, library returned `{checksum}`");
             }
         }
         {
@@ -7058,12 +7058,13 @@ internal interface IRenderSurface {
     void SetCellBackgroundOpacity(float @opacity);
     void SetFonts(string @primary, string @wide);
     /// <summary>
-    /// The least margin round the grid, in physical pixels, drawn by the
-    /// surface itself: the grid is centred in what is left, and each edge
-    /// cell's background carries on to the surface's edge, so a program that
-    /// paints its own background is not framed by the page's. A negative
-    /// value, the default, leaves the grid at the corner for a consumer that
-    /// lays out its own margin.
+    /// The least margin at the sides of the grid, in physical pixels, drawn
+    /// by the surface itself: the grid is centred across what that margin
+    /// leaves and rests on the bottom edge, so a status line meets the
+    /// window. Each edge cell's background carries on to the surface's edge,
+    /// so a program that paints its own background is not framed by the
+    /// page's. A negative value, the default, leaves the grid at the corner
+    /// for a consumer that lays out its own margin.
     /// </summary>
     void SetGridPadding(float @padding);
     /// <exception cref="RenderFailure"></exception>
@@ -7279,12 +7280,13 @@ internal class RenderSurface : IRenderSurface, IDisposable {
     
     
     /// <summary>
-    /// The least margin round the grid, in physical pixels, drawn by the
-    /// surface itself: the grid is centred in what is left, and each edge
-    /// cell's background carries on to the surface's edge, so a program that
-    /// paints its own background is not framed by the page's. A negative
-    /// value, the default, leaves the grid at the corner for a consumer that
-    /// lays out its own margin.
+    /// The least margin at the sides of the grid, in physical pixels, drawn
+    /// by the surface itself: the grid is centred across what that margin
+    /// leaves and rests on the bottom edge, so a status line meets the
+    /// window. Each edge cell's background carries on to the surface's edge,
+    /// so a program that paints its own background is not framed by the
+    /// page's. A negative value, the default, leaves the grid at the corner
+    /// for a consumer that lays out its own margin.
     /// </summary>
     public void SetGridPadding(float @padding) {
         CallWithPointer(thisPtr =>
