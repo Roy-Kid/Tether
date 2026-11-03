@@ -31,6 +31,7 @@ entry points; normal commits run the full checks available on their host.
 | Test compiled by Xcode 27.1 here, "unable to type-check in reasonable time" on CI's Xcode 26.6 | `.xcode-version`: CI selects it on the `xcode-27` image; the Apple gate refuses any other Xcode |
 | Lint on CI's newer `stable` Rust, absent from this machine's | `rust-toolchain.toml` names an exact version; CI runs `rustup toolchain install` from it |
 | App resolved a sibling `../nerve` checkout that CI does not have | Apple gate builds with `TETHER_HERMETIC=1`; the manifest links Nerve only outside it |
+| A Mac-only test trait in a suite shared with iOS failed only on CI's iPhone run | The Apple gate builds the frontend's tests for the iOS simulator (`build-for-testing`) |
 | The hook's iOS link used the macOS SDK: `/usr/bin/git` exports `SDKROOT` to the hooks it runs | The gate drops an inherited `SDKROOT` before building; each target finds its own SDK |
 | Every failure surfaced after merge, then again each night on the same commit | CI runs on pushes to `dev` as well as `master` |
 | App and Files test processes exited 0 mid-run — no summary, a failure already printed — and the gate passed them | The gate judges each `swift test` by its report: any `✘`, or a run that never prints its summary, blocks. UI suites declare `.appKitEventLoop` |

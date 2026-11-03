@@ -29,9 +29,11 @@ swift/Artifacts/
 .vs/
 /.check-deps/
 /app-win/bin/
+/app-win/Tray/bin/
 /dotnet/**/bin/
 /tests/**/bin/
 /app-win/obj/
+/app-win/Tray/obj/
 /dotnet/**/obj/
 /tests/**/obj/
 /dotnet/Tether/runtimes/

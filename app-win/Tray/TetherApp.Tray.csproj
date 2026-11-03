@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The notification-area icon, and the only WinForms in the Windows host.
+    It lives apart from the WinUI project because WinForms there brings WPF's
+    markup targets, which take WinUI's XAML for WPF pages and stop the build
+    (MC6000; WindowsAppSDK#3211). Referenced by TetherApp.Windows.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
+    <RootNamespace>TetherApp</RootNamespace>
+    <AssemblyName>TetherApp.Tray</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Platforms>x64;arm64</Platforms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>

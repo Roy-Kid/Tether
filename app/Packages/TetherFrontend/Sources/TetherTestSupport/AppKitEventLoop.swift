@@ -94,4 +94,16 @@
   extension Trait where Self == AppKitEventLoopTrait {
     public static var appKitEventLoop: Self { Self() }
   }
+#else
+  import Testing
+
+  /// A phone has no AppKit event loop to keep alive. Suites shared with the
+  /// Mac declare the trait all the same, so it is here, and does nothing.
+  public struct AppKitEventLoopTrait: SuiteTrait, TestTrait {
+    public var isRecursive: Bool { true }
+  }
+
+  extension Trait where Self == AppKitEventLoopTrait {
+    public static var appKitEventLoop: Self { Self() }
+  }
 #endif

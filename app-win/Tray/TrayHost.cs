@@ -1,4 +1,6 @@
+using System;
 using System.Drawing;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace TetherApp;
@@ -7,7 +9,7 @@ namespace TetherApp;
 /// Notification-area icon on its own message loop. Closing the window hides
 /// Tether; this is how it comes back. Quit is the path that ends sessions.
 /// </summary>
-sealed class TrayHost : IDisposable
+public sealed class TrayHost : IDisposable
 {
     private readonly Thread _thread;
     private readonly ManualResetEvent _ready = new(false);

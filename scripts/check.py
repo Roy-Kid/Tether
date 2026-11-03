@@ -213,6 +213,11 @@ def apple(build=True):
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build",
         cwd=ROOT / "app", env=hermetic)
+    # CI runs the frontend's tests on a phone. They compile there or nowhere:
+    # a Mac-only trait in a shared suite passed here and failed only on CI.
+    run("xcodebuild", "-scheme", "TetherFrontend-Package", "-destination", "generic/platform=iOS Simulator",
+        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES",
+        "build-for-testing", cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
         swift_test("--package-path", "app/Plugins/Files", "--filter", "BrowserUITests", env=hermetic)

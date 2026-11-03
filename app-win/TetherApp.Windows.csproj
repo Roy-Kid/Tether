@@ -41,11 +41,6 @@
     -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <UseWinUI>true</UseWinUI>
-    <UseWindowsForms>true</UseWindowsForms>
-    <!-- WinForms is here for the tray icon only. Its SDK also brings WPF's
-         markup targets, which take WinUI's XAML for WPF pages and stop the
-         build (MC6000). WinUI compiles its own XAML. -->
-    <ImportFrameworkWinFXTargets>false</ImportFrameworkWinFXTargets>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -63,6 +58,13 @@
   <ItemGroup>
     <!-- The façade is the only Tether surface a host names (0004). -->
     <ProjectReference Include="..\dotnet\Tether\Tether.csproj" />
+    <!-- The tray icon is WinForms, in a project of its own: WinForms in this
+         project brings WPF's markup targets, which take WinUI's XAML for WPF
+         pages and stop the build (MC6000; WindowsAppSDK#3211). -->
+    <ProjectReference Include="Tray\TetherApp.Tray.csproj" />
+    <Compile Remove="Tray\**" />
+    <None Remove="Tray\**" />
+    <Content Remove="Tray\**" />
     <Compile Include="..\tests\render-evaluation\Frames.cs" Link="EvaluationFrames.cs" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
