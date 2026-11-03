@@ -1,17 +1,19 @@
-# The gate that would have caught `tether-core` calling two functions that no
-# longer existed: the workspace compiled per-crate, but nothing ever built it
-# whole. Every check here is one CLAUDE.md or the specification already claims
-# is true — a claim nothing runs is a claim that drifts.
+# Every job is setup, then one `scripts/check.py --job <name>`: the commit gate
+# runs the same function for every job its host can, so a job here is a check
+# that already ran before the push, or one this host cannot run (Windows).
+# `scripts/test-check.py` holds this file to that shape.
 name: CI
 
 on:
-  # dev too: a failure found only after merging is found a day late, and
-  # then again every night on the same commit.
+  # `scripts/ship.py` pushes a commit to `ci/<sha>` and promotes it to dev or
+  # master only once every workflow passed there; the pre-push hook refuses
+  # anything else. master is checked again as the release branch.
   push:
-    branches: [master, dev, windows-app]
+    branches: [master, 'ci/**']
   pull_request:
-  # The fuzzers find in an hour what they will not find in a minute. Every
-  # push gets a short pass; the night gets a long one.
+  workflow_dispatch:
+  # A short fuzz pass on a push replays every recorded crash; the night's ten
+  # minutes a target is where something new is found.
   schedule:
     - cron: "0 3 * * *"
 
@@ -20,42 +22,34 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    name: build, test, boundaries
+  linux:
+    name: linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # rust-toolchain.toml names the compiler the commit gate used.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python3 -m pip install -r scripts/check-requirements.txt
-
+      - name: Install check dependencies
+        run: python3 -m pip install -r scripts/check-requirements.txt
       - uses: Swatinem/rust-cache@v2
-
-      # The shaping regression exercises actual CJK glyph advances. Minimal
-      # Linux runners otherwise shape missing-glyph placeholders at zero width.
+      # The shaping regression measures actual CJK glyph advances.
       - name: Install fonts for terminal shaping tests
         run: |
           sudo apt-get update
           sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
-
-      - name: Shared source, Rust and boundary gate
-        run: python3 scripts/check.py --common-only
+      - name: Check
+        run: python3 scripts/check.py --job linux
 
   apple:
-    name: aws-lc-rs for Apple targets
-    # macos-latest's Xcode 26.6 could not type-check a test Xcode 27.1
-    # compiled. The image is chosen for the Xcode it carries, and that Xcode
-    # is the one `.xcode-version` names — the one the commit gate requires.
+    name: apple
+    # The image carries the Xcode `.xcode-version` names; the gate refuses
+    # any other.
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
-
       # The image may carry a version as a release candidate,
       # `Xcode_<version>_Release_Candidate.app`; that is still the version
       # the gate checks. A version the image lacks fails here, by name.
@@ -70,70 +64,71 @@ jobs:
           fi
           sudo xcode-select -s "$app"
           xcodebuild -version
-
       - name: Install the pinned Rust toolchain and iOS targets
         run: |
           rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
+      - name: Install check dependencies
+        run: python3 -m pip install -r scripts/check-requirements.txt
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-
-      # Phase 0 asks whether `aws-lc-rs` builds for Apple targets from cargo
-      # alone. That question is answered by trying, on every change, not once.
-      - name: Build for device and simulator
-        run: |
-          cargo build -p tether-ffi --features render --target aarch64-apple-ios
-          cargo build -p tether-ffi --features render --target aarch64-apple-ios-sim
-
-      - name: Build Apple artifacts and generated bindings
-        run: ./scripts/tether.sh --build-xcframework
-
-      # Everything Swift the repository holds: the facade, the frontend, the
-      # built-in plugins — how the plugin seam is exercised by something real
-      # (Decisions/0012) — and the app, which links nothing from outside.
-      - name: Swift facade, frontend, plugin and app tests
-        run: |
-          python3 scripts/check.py --apple-only
-
-      # The phone's own frontend tests are `#if os(iOS)`: `swift test` on a
-      # Mac compiles them out, so they run here or nowhere.
-      - name: Frontend tests on an iPhone simulator
-        run: |
-          udid=$(xcrun simctl list devices available | grep -E '^ +iPhone' | head -1 \
-            | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
-          [ -n "$udid" ] || { echo "no iPhone simulator available" >&2; exit 1; }
-          cd app/Packages/TetherFrontend
-          xcodebuild test -scheme TetherFrontend-Package -destination "platform=iOS Simulator,id=$udid"
+      # Swift and Xcode rebuilt everything from nothing on every run: most of
+      # this job's time. The last run's build directories are restored and
+      # only what changed compiles.
+      - name: Restore Swift and Xcode builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/.build
+            app/.build
+            app/Packages/*/.build
+            app/Plugins/*/.build
+            artifacts/ios-check
+          key: swift-${{ hashFiles('.xcode-version') }}-${{ github.sha }}
+          restore-keys: swift-${{ hashFiles('.xcode-version') }}-
+      - name: Restore the C# binding generator
+        id: bindgen
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs
+          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}
+      - name: Install the C# binding generator
+        if: steps.bindgen.outputs.cache-hit != 'true'
+        run: cargo install --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
+      - name: Check
+        run: python3 scripts/check.py --job apple
 
   fuzz:
-    name: fuzz the parsers
+    name: fuzz
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # `cargo-fuzz` needs nightly and a sanitizer; the rest of this workspace
-      # stays on stable, which is why `fuzz/` is its own workspace.
-      - name: Install nightly and cargo-fuzz
-        run: |
-          rustup toolchain install nightly --profile minimal --component llvm-tools-preview
-          cargo +nightly install cargo-fuzz --locked
-
+      # `cargo-fuzz` needs nightly and a sanitizer; `fuzz/` is its own workspace.
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+      - name: Restore cargo-fuzz
+        id: cargofuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-0.13
+      - name: Install cargo-fuzz
+        if: steps.cargofuzz.outputs.cache-hit != 'true'
+        run: cargo +nightly install cargo-fuzz --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target\nfuzz -> target"
-
-      # A minute a target on a push — enough to replay every input that has
-      # failed before and to catch a regression. Ten on the nightly schedule,
-      # which is where something new is actually found.
-      - name: Fuzz
-        run: ./scripts/tether.sh --fuzz ${{ github.event_name == 'schedule' && 600 || 60 }}
-
+      - name: Check
+        env:
+          TETHER_FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '10' }}
+        run: python3 scripts/check.py --job fuzz
       # A crash is worth keeping even when the job fails: it is the input a
       # fix has to be written against.
       - name: Keep whatever crashed

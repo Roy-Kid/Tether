@@ -59,10 +59,14 @@ struct QuickTerminalTests {
     let alert = NSAlert()
     alert.messageText = "End this session?"
     alert.beginSheetModal(for: window) { _ in }
+    // The sheet attaches on a later turn of the run loop, later still on a
+    // busy machine: wait for it, then take the key away.
+    for _ in 0..<250 where window.attachedSheet == nil { try await Task.sleep(for: .milliseconds(20)) }
+    #expect(window.attachedSheet != nil)
     window.reportsKey = false
     NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+    // Nothing should happen; give it the time it would take to.
     try await Task.sleep(for: .milliseconds(250))
-    #expect(window.attachedSheet != nil)
     #expect(controller.isShown)
     #expect(window.frame == summoned)
   }

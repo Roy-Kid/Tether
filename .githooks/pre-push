@@ -1,0 +1,10 @@
+#!/bin/sh
+# dev and master take only commits every workflow passed (scripts/ship.py).
+set -eu
+root=$(git rev-parse --show-toplevel)
+python=$(git config --get tether.python || true)
+if [ -z "$python" ]; then
+  echo 'Install hooks first: python scripts/install-hooks.py' >&2
+  exit 1
+fi
+exec "$python" "$root/scripts/ship.py" --pre-push "$@"

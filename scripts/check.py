@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import queue
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -110,8 +112,10 @@ def common():
         languages = run("fc-match", "--format=%{lang}", ":lang=zh-cn", capture=True)
         require("zh" in languages, "Install fonts-dejavu-core and fonts-noto-cjk before checking.")
     run("cargo", "fmt", "--all", "--check")
+    # Clippy over every target compiles the whole workspace at once (what
+    # once caught two calls to functions that no longer existed); the tests
+    # build what they link. A separate full build added a minute and nothing.
     run("cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings")
-    run("cargo", "build", "--locked", "--workspace", "--all-targets")
     run("cargo", "test", "--locked", "--workspace")
     for crate, backend in (("tether-terminal", "russh"), ("tether-local", "russh"),
                            ("tether-ssh", "portable-pty")):
@@ -148,18 +152,19 @@ def windows():
         "$tokens=$null; $problems=$null; "
         "[Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$problems) | Out-Null; "
         "if($problems.Count) { throw ($problems | Out-String) } }")
-    verify_bindings(stage_native())
+    # One native build, the release one the portable package ships: the
+    # bindings, the regressions and the publish all use it.
+    verify_bindings(stage_native(release=True))
     run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
         "--all-targets", "--", "-D", "warnings")
     run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
     run("dotnet", "run", "--project", "tests/render-evaluation", "-c", "Release", "--no-build", "--", "--validate-fixtures")
-    run("dotnet", "build", "app-win/TetherApp.Windows.csproj", "-c", "Debug",
-        "-p:Platform=x64", "-warnaserror")
     for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):
         run("dotnet", "run", "--project", "tests/" + name)
     for name in ("ssh-config", "plugins"):
         run("dotnet", "test", "tests/" + name, "-warnaserror")
-    stage_native(release=True)
+    # The app compiles here, in Release with warnings as errors, and must
+    # still publish as one executable.
     run("pwsh", "-NoProfile", "-File", "scripts/publish-windows.ps1", "-SkipNativeBuild")
 
 
@@ -175,6 +180,11 @@ def require_test_report(output: str) -> None:
     require(started or "Executed " in output, "No test ran.")
 
 
+# A test run that prints nothing this long is stuck, not slow: two gates once
+# sat for eighty minutes on each other's windows with no line printed.
+SILENCE_MINUTES = 10
+
+
 def swift_test(*args: str, env: dict) -> None:
     """`swift test`, shown as it runs, and judged on what it reported."""
     command = ["swift", "test", *args]
@@ -182,7 +192,17 @@ def swift_test(*args: str, env: dict) -> None:
     lines = []
     with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding="utf-8", errors="replace") as process:
-        for line in process.stdout:
+        heard = queue.Queue()
+        threading.Thread(target=lambda: [heard.put(line) for line in process.stdout] + [heard.put(None)],
+                         daemon=True).start()
+        while True:
+            try:
+                line = heard.get(timeout=SILENCE_MINUTES * 60)
+            except queue.Empty:
+                process.kill()
+                raise RuntimeError(f"swift test {' '.join(args)} printed nothing for {SILENCE_MINUTES} minutes.")
+            if line is None:
+                break
             print(line, end="", flush=True)
             lines.append(line)
     if process.returncode:
@@ -207,22 +227,52 @@ def apple(build=True):
     hermetic = {**os.environ, "TETHER_HERMETIC": "1"}
     if build:
         run("bash", "scripts/build-xcframework.sh")
+    # The C# bindings come from the library's metadata, the same on every
+    # platform: a Rust change made here shows up here, not first on Windows.
+    verify_bindings(ROOT / "target/aarch64-apple-darwin/release/libtether_ffi.dylib")
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
                     "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
         swift_test("--package-path", package, env=hermetic)
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build",
         cwd=ROOT / "app", env=hermetic)
-    # CI runs the frontend's tests on a phone. They compile there or nowhere:
-    # a Mac-only trait in a shared suite passed here and failed only on CI.
-    run("xcodebuild", "-scheme", "TetherFrontend-Package", "-destination", "generic/platform=iOS Simulator",
-        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES",
-        "build-for-testing", cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
+    # The phone's own frontend tests are `#if os(iOS)`: `swift test` on a Mac
+    # compiles them out, so they run on a simulator or nowhere.
+    run("xcodebuild", "test", "-scheme", "TetherFrontend-Package",
+        "-destination", f"platform=iOS Simulator,id={iphone_simulator()}",
+        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO",
+        cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
         swift_test("--package-path", "app/Plugins/Files", "--filter", "BrowserUITests", env=hermetic)
         swift_test("--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession", env=hermetic)
         swift_test("--package-path", "app", "--filter", "ShellActivityTests", env=hermetic)
+
+
+def iphone_simulator():
+    """The first available iPhone, as CI picks one."""
+    listing = run("xcrun", "simctl", "list", "devices", "available", capture=True)
+    found = re.search(r"^\s+iPhone[^\n]*\(([0-9A-F-]{36})\)", listing, re.M)
+    require(found is not None, "No iPhone simulator is available.")
+    return found.group(1)
+
+
+def fuzz():
+    """Every recorded crash replayed, then a short pass per target. The night's
+    long run sets TETHER_FUZZ_SECONDS; finding something new is its job."""
+    seconds = os.environ.get("TETHER_FUZZ_SECONDS", "10")
+    run("bash", "scripts/fuzz-targets.sh", "--seconds", seconds)
+
+
+# A CI job is one of these, and runs nothing else (test-check.py holds the
+# workflows to it). The commit gate runs every job its host can.
+JOBS = {
+    "linux": lambda: common(),
+    "apple": lambda: apple(),
+    "windows": lambda: (common(), windows()),
+    "fuzz": lambda: fuzz(),
+}
+HOST_JOBS = {"darwin": ("linux", "apple", "fuzz"), "win32": ("windows",)}
 
 
 def drop_inherited_sdk():
@@ -233,33 +283,42 @@ def drop_inherited_sdk():
     os.environ.pop("SDKROOT", None)
 
 
+def one_at_a_time():
+    """Two gates in one checkout share its build directories, and two app
+    test runs share the window server; a second one waits for nothing."""
+    path = ROOT / "target" / "check.lock"
+    path.parent.mkdir(exist_ok=True)
+    lock = open(path, "a+")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise RuntimeError("Another check is already running in this checkout.")
+    return lock
+
+
 def main():
     drop_inherited_sdk()
+    held = one_at_a_time()  # released when the process ends
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--staged", action="store_true")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--common-only", action="store_true")
-    group.add_argument("--windows-only", action="store_true")
-    group.add_argument("--apple-only", action="store_true")
+    parser.add_argument("--job", choices=sorted(JOBS), action="append",
+                        help="the CI job to run; repeatable. Default: every job this host can run")
     args = parser.parse_args()
     if args.staged:
         checked_tree = staged_clean()
-    if args.windows_only:
-        windows()
-    elif args.apple_only:
-        apple(build=False)
-    else:
-        common()
-        if not args.common_only:
-            if sys.platform == "win32":
-                windows()
-            elif sys.platform == "darwin":
-                apple()
-            else:
-                run("bash", "scripts/fuzz-targets.sh", "--seconds", "60")
+    jobs = args.job or HOST_JOBS.get(sys.platform, ("linux", "fuzz"))
+    for job in jobs:
+        print(f"== job {job}", flush=True)
+        JOBS[job]()
     if args.staged:
         require(staged_clean() == checked_tree, "The staged tree changed during validation; run the checks again.")
-    print("PASS: all requested checks completed. Other platforms remain required CI gates.")
+    others = sorted(set(JOBS) - set(jobs))
+    print("PASS: " + ", ".join(jobs) + (". Left to CI: " + ", ".join(others) if others else "") + ".")
 
 
 if __name__ == "__main__":

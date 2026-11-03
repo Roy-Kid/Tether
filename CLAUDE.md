@@ -84,7 +84,11 @@ Install the repository-local commit gate once per clone with
 `python scripts/install-hooks.py`. It rejects partial staging and runs the same
 host-platform checks as CI. See `docs/commit-checks.md` for tool requirements,
 the audited failure history and cross-platform coverage. Run
-`python scripts/check.py` to check the working tree before staging.
+`python scripts/check.py` to check the working tree before staging. Push with
+`python scripts/ship.py` (dev) or `--to master`: it runs CI on `ci/<sha>` and
+promotes the commit only once every workflow passed; a plain push to dev or
+master is refused by the pre-push hook. Each CI job is one
+`check.py --job <name>`, the same function a commit runs.
 
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place
