@@ -23,7 +23,7 @@ entry points; normal commits run the full checks available on their host.
 | Missing Linux CJK fonts | Fontconfig language check before glyph shaping tests; CI installs fonts |
 | Swift modifier Hashable and missing frame mouse argument | All six Swift package test builds on macOS |
 | CRLF paste incorrectly treated as one Character | Existing Swift paste regression; Windows paste tests |
-| Asynchronous file close checked after a fixed sleep | Files tests plus two extra executions of the close regression |
+| Asynchronous file close checked after a fixed sleep (again on a loaded `xcode-27` runner) | The close regression waits for the close, up to five seconds; Files tests plus two extra executions of it |
 | PTY foreground/background cleanup and padded ps commands | App tests plus two extra ShellActivity executions |
 | Broken directory/project references | XML input validation and real Windows build |
 | Release packaging adds loose files | Real Release publish; exactly one EXE required |

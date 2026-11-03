@@ -42,6 +42,10 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <UseWinUI>true</UseWinUI>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- WinForms is here for the tray icon only. Its SDK also brings WPF's
+         markup targets, which take WinUI's XAML for WPF pages and stop the
+         build (MC6000). WinUI compiles its own XAML. -->
+    <ImportFrameworkWinFXTargets>false</ImportFrameworkWinFXTargets>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

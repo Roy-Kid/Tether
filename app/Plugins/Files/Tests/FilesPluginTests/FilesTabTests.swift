@@ -757,7 +757,9 @@ struct FilesTabTests {
     let model = browser(source)
     await model.go(to: "/home/ada")
     model.close()
-    try await Task.sleep(for: .milliseconds(50))
+    // The session closes on a task of its own. A fixed sleep was a guess at
+    // how long a loaded runner takes; this waits for it, up to five seconds.
+    for _ in 0..<500 where !source.closed { try await Task.sleep(for: .milliseconds(10)) }
     #expect(source.closed)
   }
 
