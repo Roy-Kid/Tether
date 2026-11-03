@@ -2,6 +2,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import TetherTestSupport
 import Observation
 import TetherPluginKit
 import TetherUI
@@ -35,7 +36,7 @@ private struct PermissionHost: View {
   }
 }
 
-@MainActor @Suite("Plugin permission presentation", .serialized)
+@MainActor @Suite("Plugin permission presentation", .serialized, .appKitEventLoop)
 struct PluginPanelPopoverTests {
   @Test func permissionSheetDoesNotDismissThePluginPanel() async throws {
     _ = NSApplication.shared

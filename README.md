@@ -57,19 +57,25 @@ See [frontend extensions and tmux](docs/plugins.md) for building, extending and 
 
 ### Quick Terminal (macOS)
 
-Press **Control + `** or click the terminal icon in the macOS menu bar to show
-or hide the current workspace at the top of the display under the pointer.
-Hiding keeps terminals and splits running. The shortcut works while another app
-is active and can be changed under **Settings → Key Bindings → Toggle Quick
-Terminal** (two bindings are supported). Right-click the menu-bar icon for Show/Hide Quick Terminal,
-Restore Window, Close Window, and Quit Tether. Closing the window keeps its
-sessions; Quit uses the normal live-terminal confirmation.
+Press **Control + `** to show the workspace window at the top of the display
+under the pointer, whichever screen that window was on. Press it again and the
+window goes back to its previous size, position, and visibility. The two
+sizes are remembered apart, and the terminal is laid out again for whichever
+one is showing, so it fills that window. The Dock and
+the menu-bar icon open the window there; only the shortcut summons it onto the
+pointer's display. Hiding keeps terminals and splits running. The shortcut
+works while another app is active and can be changed under **Settings → Key
+Bindings → Toggle Quick Terminal** (two bindings are supported). Right-click
+the menu-bar icon for Show Main Window and Quit Tether. **Settings → General
+→ When the Window Closes** chooses what the close button does. Quit ends
+Tether, and still asks when a terminal is live. Hide keeps the sessions,
+removes the Dock icon, and leaves the menu-bar icon.
 
 **Settings → General → Quick Terminal** controls the menu-bar button and global
 hotkey, plus automatic hiding when switching apps. Turn off **Hide When
-Switching Apps** to keep the floating terminal visible. **Keep Window on Top**
-also applies to the ordinary window. **Window → Return to Normal Window** restores
-its previous size and position. Shortcut registration conflicts appear in General
-settings; choose another combination there rather than changing another app.
+Switching Apps** to keep the summoned window up until the shortcut closes it.
+**Keep Window on Top** applies while the window is in its ordinary place.
+Shortcut registration conflicts appear in General settings; choose another
+combination there rather than changing another app.
 
 MIT licensed.

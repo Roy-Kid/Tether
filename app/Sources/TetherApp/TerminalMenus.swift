@@ -28,6 +28,8 @@ extension TabSet {
     var result = [TerminalMenuItem("Switch Terminal", children: choices), .separator,
       item(.newTerminal), item(.newTab)]
     #if os(macOS)
+      // A touch screen has no second column. There a split is New Terminal,
+      // and Switch Terminal is how the other one is reached.
       result += [item(.splitLeft, enabled: canSplit), item(.splitRight, enabled: canSplit),
         item(.splitUp, enabled: canSplit), item(.splitDown, enabled: canSplit),
         item(.joinGroups, enabled: page.layout != nil)]

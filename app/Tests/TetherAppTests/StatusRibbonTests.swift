@@ -1,5 +1,6 @@
 import Testing
 import TetherPluginKit
+import TetherUI
 
 @testable import TetherApp
 

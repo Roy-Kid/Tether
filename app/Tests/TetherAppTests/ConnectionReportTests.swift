@@ -57,6 +57,7 @@ struct ConnectionReportTests {
     #expect(dialog.title == "Could Not Connect to Arrhenius")
     #expect(dialog.message == "Authentication failed. The server accepts: publickey, keyboard-interactive.")
     #expect(dialog.actions.map(\.title) == ["Close", "Retry"])
+    #expect(report.coversTerminal, "the failure covers that terminal")
     #expect(report.problem.refusedLogin, "Retry asks rather than sending what was refused")
 
     tab.acknowledge()
@@ -97,6 +98,7 @@ struct ConnectionReportTests {
     let dialog = ConnectionDialog.problem(report, close: { Issue.record("Escape must not close") }, again: {})
     #expect(dialog.actions.map(\.title) == ["Not Now", "Reconnect"])
     #expect(dialog.cancelAction == 0)
+    #expect(report.coversTerminal)
 
     tab.setProblemAside()
     #expect(tabs.problem == nil, "not now leaves the tab as it is")
@@ -143,6 +145,10 @@ struct ConnectionReportTests {
     #expect(dialog.message == "ada@login.example.org")
     #expect(dialog.fields == [Dialog.Field("Password", kind: .password)])
     #expect(dialog.actions.map(\.title) == ["Cancel", "Connect"])
+    #expect(!ConnectRequest(host: host).coversTerminal, "a new connection has no terminal to cover")
+    var retry = ConnectRequest(host: host)
+    retry.retrying = UUID()
+    #expect(retry.coversTerminal)
   }
 
   @Test("a password that worked is offered once, and a no holds for the host")
@@ -183,7 +189,7 @@ extension ConnectionReportTests {
     defer { tabs.closeAll() }
     _ = try await shell.connectionReady()
     let identity = try #require(shell.pluginTerminalIdentity)
-    #expect(identity.host == LocalMachine.kernelName)
+    #expect(identity.host == LocalMachine.name)
     #expect(identity.terminal == shell.terminalName)
     shell.name = "renamed"
     #expect(shell.pluginTerminalIdentity == identity, "display names cannot change task association")

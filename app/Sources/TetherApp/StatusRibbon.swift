@@ -9,40 +9,6 @@ import TetherUI
 /// Drawn by the host, so a plugin can report status as data alone —
 /// `PluginStatusSegment` — without importing a UI framework, and so the lamp
 /// looks the same on a Mac and on a phone.
-/// One clock for the status ribbon and the tab mark of the same colour.
-enum StatusMotion {
-  /// Gray stays still. A saturated colour breathes; the same colour always
-  /// shares one period, so a tab mark and its ribbon band stay in phase.
-  nonisolated static func period(for color: UInt32) -> Double? {
-    let r = Double((color >> 16) & 0xFF)
-    let g = Double((color >> 8) & 0xFF)
-    let b = Double(color & 0xFF)
-    let maxC = max(r, g, b)
-    let minC = min(r, g, b)
-    let chroma = maxC - minC
-    guard chroma >= 28, maxC > 0 else { return nil }
-    let hue: Double
-    if r == maxC { hue = (g - b) / chroma }
-    else if g == maxC { hue = 2 + (b - r) / chroma }
-    else { hue = 4 + (r - g) / chroma }
-    let unit = ((hue.truncatingRemainder(dividingBy: 6)) + 6).truncatingRemainder(dividingBy: 6) / 6
-    return 0.9 + unit * 1.7
-  }
-
-  /// 0.72...1, or 1 when the colour does not move.
-  nonisolated static func pulse(color: UInt32, time: TimeInterval) -> Double {
-    guard let period = period(for: color), period > 0 else { return 1 }
-    let phase = (time / period).truncatingRemainder(dividingBy: 1)
-    return 0.72 + 0.28 * (0.5 + 0.5 * sin(phase * 2 * Double.pi))
-  }
-
-  /// 0...1 position of the glint, one trip every 1.8s.
-  nonisolated static func shimmer(time: TimeInterval) -> Double {
-    let phase = (time / 1.8).truncatingRemainder(dividingBy: 1)
-    return phase < 0 ? phase + 1 : phase
-  }
-}
-
 struct StatusRibbon: View {
   let segments: [PluginStatusSegment]
   @Environment(\.colorScheme) private var colorScheme

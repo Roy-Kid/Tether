@@ -157,8 +157,8 @@ is an independently running service, not code loaded or launched by the plugin.
 ## Tab indicator contribution (2026-10-19)
 
 `tabIndicator` grants `host.tabIndicators`: a complete replacement array of
-`{target:{host,terminal},color,label}`. The target is a lowercase actual hostname
-and controlling TTY path, not a user-facing host alias or tab title. The generic
+`{target:{host,terminal},color,label}`. The target is a machine and controlling
+TTY path, never a tab title (see the 2026-11-03 revision below). The generic
 TetherPluginKit types are `PluginTerminalIdentity` and `PluginTabIndicator`;
 native plugins expose their set through `TetherPlugin.tabIndicators`.
 
@@ -170,7 +170,24 @@ background page without creating a ribbon. Competing enabled plugins use registr
 order; task priority remains the provider's business.
 
 The app draws one 6pt circle before the tab title, in both Mac tab layouts, for
-the focused terminal of a workspace. Local identity reuses the producer TTY and
-ProcessInfo.hostName; remote identity reuses ShellTTY and executes hostname over
-the current authenticated lease. An unknown/disconnected identity yields no mark.
-This slot conveys data only and adds no terminal-input capability.
+the focused terminal of a workspace. An unknown/disconnected identity yields no
+mark. This slot conveys data only and adds no terminal-input capability.
+
+**Revised 2026-11-03: one name per machine.** A terminal's host is named once,
+the same way by the app and by every producer, and compared by one function
+(`PluginTerminalIdentity.matches`): tab marks, tab symbols, row landing
+(`TabSet.focusSession`) and tmux's pane claim all use it.
+
+- A remote shell's machine is the `~/.ssh/config` Host it was opened with
+  (`Host.sshTarget`). That file is the single source: the stanza decides where
+  `ssh` lands, and Nerve's hub reaches the same machine through the same stanza
+  and names its jobs by it. The far side's own `hostname` is not used.
+- A local shell's machine is this Mac's Bonjour name, `<LocalHostName>.local`
+  (`LocalMachine.name`). The kernel hostname is not used: a Mac takes it from
+  the network, so after a reconnect a tab and the agent in it named two
+  machines, and the mark vanished.
+- No spelling tolerance (`.local` stripping, short names, "the tty is unique
+  so any host will do"): with one name there is nothing to tolerate, and a
+  tolerant rule in one caller let a click land where the mark would not.
+- A folder is matched only against local tabs: a remote tab in a folder of the
+  same name is somewhere else.

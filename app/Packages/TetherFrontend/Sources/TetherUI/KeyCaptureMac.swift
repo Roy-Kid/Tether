@@ -29,6 +29,7 @@ struct MacKeyCapture: NSViewRepresentable {
   var selection: GridSelection?
   var mouse: MouseTracking = .off
   var menuItems: [TerminalMenuItem] = []
+  var drop: TerminalDropHandler?
 
   func makeNSView(context: Context) -> KeyCaptureView {
     let view = KeyCaptureView()
@@ -57,6 +58,7 @@ struct MacKeyCapture: NSViewRepresentable {
     view.selection = selection
     view.mouse = mouse
     view.menuItems = menuItems
+    view.drop = drop
   }
 }
 
@@ -96,6 +98,15 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
   var selection: GridSelection?
   /// What the far side asked to hear. `off` keeps selection and local history.
   var menuItems: [TerminalMenuItem] = []
+  /// Registered for its types whenever they change; none, and nothing drops here.
+  var drop: TerminalDropHandler? {
+    didSet {
+      let types = drop?.types ?? []
+      guard types != oldValue?.types ?? [] else { return }
+      unregisterDraggedTypes()
+      if !types.isEmpty { registerForDraggedTypes(types) }
+    }
+  }
   var mouse: MouseTracking = .off {
     didSet {
       if mouse != oldValue { window?.invalidateCursorRects(for: self) }
@@ -166,6 +177,23 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     } else if event.stage < 2 {
       forced = false
     }
+  }
+
+  // MARK: - Drops
+
+  override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { dropOperation(sender) }
+
+  override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { dropOperation(sender) }
+
+  /// A copy for anything carrying a type the handler takes.
+  func dropOperation(_ sender: NSDraggingInfo) -> NSDragOperation {
+    guard let types = drop?.types, sender.draggingPasteboard.availableType(from: types) != nil
+    else { return [] }
+    return .copy
+  }
+
+  override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    drop?.perform(sender.draggingPasteboard) ?? false
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
@@ -340,7 +368,15 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     if event.clickCount >= 3 {
       begin(.line, at: point)
     } else if event.clickCount == 2 {
-      begin(.word, at: point)
+      if let link = link(at: event.locationInWindow), let covered = GridText.covering(link) {
+        dragKind = .character
+        dragAnchor = covered.start
+        dragHead = covered.end
+        dragArmed = true
+        onSelection(.highlight(.character, covered.start, covered.end))
+      } else {
+        begin(.word, at: point)
+      }
     } else if event.modifierFlags.contains(.shift), let selection {
       dragKind = .character
       dragAnchor = selection.anchor

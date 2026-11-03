@@ -2,6 +2,7 @@
   import AppKit
   import SwiftUI
   import Testing
+  import TetherTestSupport
   import Tether
   import TetherPluginKit
   import UniformTypeIdentifiers
@@ -18,7 +19,7 @@
 
   extension BrowserUITests {
     @MainActor
-    @Suite("dragging a file row", .serialized)
+    @Suite("dragging a file row", .serialized, .appKitEventLoop)
     struct DragTests {
       init() { _ = NSApplication.shared }
 
@@ -206,9 +207,9 @@
         #expect(source.downloads.isEmpty)
       }
 
-      /// SwiftUI reads an item holding a promise as the promise alone, so the
-      /// path the terminal pastes cannot ride on it.
-      @Test("a file is a promise and nothing else; the paths travel on an item of their own")
+      /// The terminal reads the pasteboard itself, so a file's path rides on
+      /// its promise, as data Finder passes over.
+      @Test("a file is a promise carrying its path; a folder is its path")
       func pasteboardTypes() async throws {
         let source = StubSource(tree)
         let model = try await browser(source)
@@ -229,9 +230,14 @@
         }
         #expect(promise.fileType == UTType.plainText.identifier)
 
-        let paths = DraggedRow.paths([file, folder])
-        #expect(paths.types == [.droppedPath], "a path item is no string and no file")
-        #expect(paths.data(forType: .droppedPath) == Data("/home/ada/b.txt\n/home/ada/runs".utf8))
+        #expect(types.filter { $0 == .droppedPath }.count == 1)
+        board.clearContents()
+        #expect(board.writeObjects([promise]))
+        #expect(board.pasteboardItems?.first?.data(forType: .droppedPath) == Data("/home/ada/b.txt".utf8))
+
+        let path = DraggedRow.path(of: folder)
+        #expect(path.types == [.droppedPath], "a path item is no string and no file")
+        #expect(path.data(forType: .droppedPath) == Data("/home/ada/runs".utf8))
 
         #expect(FilePromise.fileType(for: "plot.png") == .png)
         #expect(FilePromise.fileType(for: "Makefile") == .data)
@@ -276,6 +282,12 @@
         #expect(!other.claims(try press(.leftMouseDown, at: center, in: window)), "another row's press")
         #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .control)),
           "a control click is the menu")
+        // A selection is not held to see whether it drags: held, each shift
+        // or ⌘ click waited for the button to come up before the list saw it.
+        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .shift)),
+          "a shift click extends the selection at once")
+        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .command)),
+          "a ⌘ click toggles a row at once")
         #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, count: 2)),
           "a double-click opens")
         model.renaming = "/home/ada/c.txt"
@@ -299,7 +311,7 @@
         #expect(source.downloadsOnMain.isEmpty, "pressing fetches nothing")
       }
 
-      @Test("a drag is a promise per file and one item with every path, drawn with the folders")
+      @Test("a drag is one item a row, drawn as that row: one file counts as one")
       func draggingItems() async throws {
         let source = StubSource(tree)
         let model = try await browser(source)
@@ -313,18 +325,18 @@
         model.selection = ["/home/ada/b.txt", "/home/ada/c.txt", "/home/ada/runs"]
         let mixed = row.draggingItems(model.draggedEntries(b), model: model)
         #expect(mixed.count == 3)
-        #expect(mixed.prefix(2).allSatisfy { $0.item is FilePromise })
-        let paths = try #require(mixed.last?.item as? NSPasteboardItem)
-        let text = "/home/ada/b.txt\n/home/ada/c.txt\n/home/ada/runs"
-        #expect(paths.data(forType: .droppedPath) == Data(text.utf8))
-        #expect(drawn(mixed.last), "the folder is drawn")
-        #expect(mixed.prefix(2).allSatisfy(drawn), "each file is drawn")
+        let promised = mixed.compactMap { ($0.item as? FilePromise)?.writer.fetch.entry.path }
+        #expect(promised.sorted() == ["/home/ada/b.txt", "/home/ada/c.txt"])
+        let folderItem = try #require(mixed.compactMap { $0.item as? NSPasteboardItem }.first)
+        #expect(folderItem.data(forType: .droppedPath) == Data("/home/ada/runs".utf8))
+        #expect(mixed.allSatisfy(drawn), "each row is drawn")
 
+        // The count a drag shows is its items: one file used to show two.
         model.selection = []
         let single = row.draggingItems(model.draggedEntries(b), model: model)
-        #expect(single.count == 2)
+        #expect(single.count == 1)
+        #expect(single.first?.item is FilePromise)
         #expect(drawn(single.first))
-        #expect(!drawn(single.last), "a path item with no folder is not drawn")
         let folder = row.draggingItems(model.draggedEntries(runs), model: model)
         #expect(folder.count == 1)
         #expect(folder.first?.item is NSPasteboardItem)

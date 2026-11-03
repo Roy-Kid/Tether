@@ -35,6 +35,15 @@ struct TabProblem: Hashable {
   let problem: SessionProblem
   /// The tab still shows its last screen: closing it would lose something.
   var keepsScreen = false
+
+  /// A connection question covers the terminal it belongs to. Saving history
+  /// is the window's.
+  var coversTerminal: Bool {
+    switch problem.kind {
+    case .lost, .couldNotConnect: true
+    case .history: false
+    }
+  }
 }
 
 /// A tab's password offer, with what the dialog needs to name it.
@@ -52,6 +61,10 @@ struct ConnectRequest: Hashable {
   var workspaceID: UUID? = nil
   var retrying: SessionTab.ID?
   var restoring: UUID?
+
+  /// A password for a terminal already on screen. The question covers that
+  /// terminal; a new connection has no terminal to cover yet.
+  var coversTerminal: Bool { retrying != nil }
 }
 
 extension Host {

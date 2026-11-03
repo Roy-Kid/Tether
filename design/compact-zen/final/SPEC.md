@@ -78,7 +78,7 @@ tmux 重新附加同一 session ID；消失时明确让用户另选或显式创�
 
 显式 Detach session 只脱离指定 attachment，返回原始 shell；若原始 shell 已结束则显示该状态，不偷偷新建。End pane/window/session 是独立的远端破坏操作，系统确认标题为 End this window/pane/session?，按钮为 End。普通 tab 关闭不等于 kill tmux window。
 
-关闭后选择同 host 最近使用 tab；没有则保留该 host 的空状态，不写教程句、不放操作按钮。原生窗口关闭与应用退出不能绕过 live-shell 确认；OS 无法取消的终止按现有生命周期尽力清理。窗口关闭只是收起，会话都在，无需确认。有 live terminal 时退出（⌘Q、Dock、注销或关机）先问：标题 Quit Tether?，按钮 Cancel / Quit，一行 “N terminals will stop.”；Return 不退出，再按一次 ⌘Q 即确认。没有 live terminal 时直接退出。
+关闭后选择同 host 最近使用 tab；没有则保留该 host 的空状态，不写教程句、不放操作按钮。原生窗口关闭与应用退出不能绕过 live-shell 确认；OS 无法取消的终止按现有生命周期尽力清理。窗口关闭由 Settings → General → When the Window Closes 决定：Quit 退出；Hide 收起窗口并离开 Dock，只留菜单栏图标，会话都在，无需确认。有 live terminal 时退出（⌘Q、关闭按钮选了 Quit、注销或关机）先问：标题 Quit Tether?，按钮 Cancel / Quit，一行 “N terminals will stop.”；Return 不退出，再按一次 ⌘Q 即确认。没有 live terminal 时直接退出。
 
 ## 7. 配套界面与外观
 

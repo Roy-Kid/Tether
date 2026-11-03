@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import Foundation
 import Testing
+import TetherTestSupport
 import Tether
 import TetherPluginKit
 @testable import TetherApp
@@ -16,7 +17,22 @@ import struct TetherApp.Host
   func launch(in context: PluginContext) {}
 }
 
-@MainActor @Suite("Tab indicator rendering", .serialized)
+/// A tab plugin showing another tty in this tab, as tmux shows a pane.
+@MainActor private final class PaneAttachment: TabAttachment {
+  var shownTerminals: [String] = []
+  var isShowing: Bool { false }
+  var subtitle: String { "" }
+  var isDisconnected: Bool { false }
+  var closeNote: String? { nil }
+  var commands: [PluginCommand] { [] }
+  func content() -> AnyView { AnyView(EmptyView()) }
+  func inspector() -> AnyView { AnyView(EmptyView()) }
+  func accessoryContent() -> AnyView { AnyView(EmptyView()) }
+  func connectionChanged(_ connection: RemoteConnection) {}
+  func close() {}
+}
+
+@MainActor @Suite("Tab indicator rendering", .serialized, .appKitEventLoop)
 struct TabIndicatorTests {
   @Test(.enabled(if: TerminalSession.isLocalAvailable))
   func marksFollowActualTerminalIdentity() async throws {
@@ -34,7 +50,7 @@ struct TabIndicatorTests {
     let plugin = MarkPlugin()
     registry.register(plugin)
     plugin.tabIndicators = [.init(target: identity, color: 0x0A84FF, label: "Running")]
-    #expect(registry.tabIndicator(for: identity)?.label == "Running")
+    #expect(registry.indicator(on: shell)?.label == "Running")
     if let prefix = ProcessInfo.processInfo.environment["TETHER_TAB_INDICATOR_SNAPSHOT"] {
       for layout in [TabLayout.horizontal, .vertical] {
         let size = layout == .horizontal ? NSSize(width: 640, height: 42) : NSSize(width: 220, height: 160)
@@ -55,8 +71,20 @@ struct TabIndicatorTests {
         try data.write(to: URL(fileURLWithPath: "\(prefix)-\(layout == .horizontal ? "horizontal" : "vertical").png"))
       }
     }
+    // A pane the tab is showing marks the tab too, and the same lookup
+    // answers a plugin asking for that pane alone.
+    let pane = "/dev/ttys999"
+    plugin.tabIndicators = [.init(
+      target: .init(host: identity.host, terminal: pane), color: 0xFF9F0A, label: "Needs you")]
+    #expect(registry.indicator(on: shell) == nil)
+    let attachment = PaneAttachment()
+    attachment.shownTerminals = [pane]
+    shell.attach(attachment, for: "test.panes")
+    #expect(registry.indicator(on: shell)?.label == "Needs you")
+    #expect(registry.indicator(on: shell, terminals: [pane])?.label == "Needs you")
+    #expect(registry.indicator(on: shell, terminals: []) == nil)
     registry.setEnabled(false, id: plugin.metadata.id)
-    #expect(registry.tabIndicator(for: identity) == nil)
+    #expect(registry.indicator(on: shell) == nil)
   }
 }
 #endif

@@ -5,6 +5,7 @@ import TetherUI
 /// Notes a plugin asked the host to show. The host owns them.
 struct PluginNoteStack: View {
   let plugins: PluginAPI
+  var onOpen: (String) -> Void = { _ in }
   /// Long enough to read a line, short enough that it does not stay over the terminal.
   private static let stays: Duration = .seconds(6)
 
@@ -13,16 +14,7 @@ struct PluginNoteStack: View {
       VStack(alignment: .leading, spacing: UIStyle.Space.small) {
         ForEach(plugins.notes) { note in
           HStack(alignment: .firstTextBaseline, spacing: UIStyle.Space.inline) {
-            VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
-              if !note.source.isEmpty {
-                Text(note.source).font(UIStyle.detail).foregroundStyle(Theme.subtle).lineLimit(1)
-              }
-              Text(note.title).font(UIStyle.title).lineLimit(1)
-              if !note.body.isEmpty {
-                Text(note.body).font(UIStyle.detail).foregroundStyle(Theme.subtle).lineLimit(2)
-              }
-            }
-            Spacer(minLength: UIStyle.Space.inline)
+            noteBody(note)
             Button {
               plugins.dismiss(note.id)
             } label: {
@@ -45,6 +37,29 @@ struct PluginNoteStack: View {
       #else
         .frame(maxWidth: UIStyle.menuWidth, alignment: .trailing)
       #endif
+    }
+  }
+
+  @ViewBuilder
+  private func noteBody(_ note: PluginNote) -> some View {
+    let text = VStack(alignment: .leading, spacing: UIStyle.Space.tight) {
+      if !note.source.isEmpty {
+        Text(note.source).font(UIStyle.detail).foregroundStyle(Theme.subtle).lineLimit(1)
+      }
+      Text(note.title).font(UIStyle.title).lineLimit(1)
+      if !note.body.isEmpty {
+        Text(note.body).font(UIStyle.detail).foregroundStyle(Theme.subtle).lineLimit(2)
+      }
+    }
+    if note.pluginID.isEmpty {
+      text.frame(maxWidth: .infinity, alignment: .leading)
+    } else {
+      Button {
+        onOpen(note.pluginID)
+      } label: {
+        text.frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .buttonStyle(.plain)
     }
   }
 }

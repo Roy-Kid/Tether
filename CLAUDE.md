@@ -113,7 +113,17 @@ swift test --package-path app                          # the app's own state
 
 CI runs everything above. The app links nothing from outside this repository;
 its plugins are the built-in ones. Nothing in any suite touches the system
-keychain.
+keychain. Nerve's native panel is linked only on a Mac with `../nerve` beside
+this checkout, and never under `TETHER_HERMETIC=1`, which the commit gate sets.
+
+The compilers are pinned: `rust-toolchain.toml` and `.xcode-version`. CI uses
+both, and the Apple gate refuses another Xcode — a pass on a different
+compiler is not a pass. Change the file to upgrade.
+
+A Swift test suite that touches a window or an AppKit event declares
+`.appKitEventLoop` (`TetherTestSupport`). Without it a stray window-server
+event can end the test process with status 0 mid-run; the gate blocks any
+`swift test` run that does not print its summary.
 
 iOS targets are not installed by default:
 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
@@ -210,19 +220,21 @@ library through iCloud again.
 
 On a Mac the workspace window is the app's own `NSPanel`
 (`WorkspaceWindow`), hosting the SwiftUI root, not a SwiftUI scene. The
-quick terminal is another of them over the same tabs, always shown as a
-non-activating overlay — key without making Tether the active app, on
-every Space, another app's full-screen one on another display included —
-and only a panel can be that. The two do not touch: the shortcut and the
-menu bar show and hide the overlay, the Dock means the ordinary window,
-and neither moves, hides or restyles the other. Both show every tab and
-session; the one in front — last key while shown — sizes the sessions and
-answers intents, the host picker and the palette, and the other keeps the
-size it wants until it is in front again (`TabSet.note`). The overlay is
-made the first time it is asked for, opens on the display holding the
-frontmost app's window, and hiding or closing it closes no session. Its size is
-remembered on its own: dragged once, it comes back that size, hung from
-the top and centred. Menu enabling reads the model (`TabSet.menuShortcuts`);
+quick terminal is that same window. The shortcut shows it on the display
+under the pointer, as a non-activating overlay — key without making Tether
+the active app, on every Space, another app's full-screen one on another
+display included — and only a panel can be that. Closing it puts the window
+back at the frame it had, and at the visibility it had. The Dock and the
+menu-bar icon open that window where it was; only the shortcut summons it
+onto the pointer's display. Settings → General → When the Window Closes
+chooses Quit or Hide. Hide orders the window out, leaves the Dock, and keeps
+the menu-bar icon; that icon brings the window and the Dock icon back. Quit
+still confirms live terminals. Summoning closes no session. Its summoned size
+and the ordinary frame are remembered apart: dragged in either place, that
+place comes back that size. Returning to either lays the terminal out again,
+so the grid fills the window it is in. The grid rests on the bottom edge,
+and a status line meets the status bar. Hung from the top and centred while
+summoned. Menu enabling reads the model (`TabSet.menuShortcuts`);
 a focused value does not leave an `NSHostingView`.
 
 tmux is a tab plugin: an accessory on every terminal tab,

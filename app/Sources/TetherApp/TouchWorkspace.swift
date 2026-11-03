@@ -43,14 +43,12 @@ enum TouchLayout {
 /// stay bound to their shortcuts through the scene's commands. On a phone
 /// the menu also carries what its bar has no room for — the plugins'
 /// buttons and Close — which the view adds around these sections.
+///
+/// A split is not a second column. On a touch screen it is another terminal,
+/// opened from the terminal's own menu and switched from the title.
 enum TouchCommands {
-  static func sections(wide: Bool) -> [[WorkspaceAction]] {
-    var sections: [[WorkspaceAction]] = [[.renameTerminal, .reconnect, .takeOver], [.manageHosts]]
-    if wide {
-      sections.append([.splitLeft, .splitRight, .splitUp, .splitDown])
-      sections.append([.joinGroups])
-    }
-    return sections
+  static func sections(wide _: Bool) -> [[WorkspaceAction]] {
+    [[.renameTerminal, .reconnect, .takeOver], [.manageHosts]]
   }
 }
 

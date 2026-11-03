@@ -80,6 +80,9 @@ public struct TabContext {
   /// knows it at once. A remote one is learned after connect, so a name
   /// copied when the plugin attached would stay empty.
   public let terminalName: () -> String?
+  /// The machine this shell is on, as a `PluginTerminalIdentity` names it.
+  /// Nil while the shell is not connected.
+  public let terminalHost: () -> String?
   /// Brings this tab to the front.
   public let focus: () -> Void
   /// Closes this plugin's accessory, wherever the host drew it.
@@ -94,9 +97,9 @@ public struct TabContext {
   /// Types `text` at this tab's prompt, as a paste: the person still presses
   /// return. The host owns the terminal; a plugin never writes to it.
   public let insertText: (String) -> Void
-  /// Types `line` at the prompt and presses Return, so it runs in the
-  /// terminal on screen. One line, with no newline of its own: the host
-  /// sends the Return.
+  /// Clears the prompt's unfinished input, types `line` and presses Return,
+  /// so it runs in the terminal on screen. One line, with no newline of its
+  /// own: the host sends the Return.
   public let runInTerminal: (String) -> Void
   /// The directory the tab's shell last reported, if it reports one. What
   /// a relative path printed in the terminal is most likely relative to.
@@ -117,6 +120,8 @@ public struct TabContext {
   public let openShell: (UUID) -> Void
   /// Opens another shell on this host.
   public let newShell: () -> Void
+  /// Renames one shell from this host's list. The host keeps the name on that terminal.
+  public let renameShell: (UUID, String) -> Void
   /// Moves the shell's own history by this many lines. Positive goes back.
   /// A plugin holds a wheel while it learns whose it is, and gives the
   /// lines back when they belong to the shell.
@@ -129,9 +134,16 @@ public struct TabContext {
   /// A wheel held while a client is being identified is reported when this
   /// is on, and returned to the terminal's history when it is off.
   public let mouseTracking: () -> MouseTracking
+  /// The mark a status plugin reports on any of these ttys of this tab's
+  /// machine, in that plugin's own order — the dot a tab would wear, for a
+  /// terminal this plugin draws: a tmux pane behind a session's row. Read it
+  /// while drawing; the host draws again when the marks change. Nil until
+  /// the shell has said which machine it is on.
+  public let terminalIndicator: ([String]) -> PluginTabIndicator?
 
   public init(
     id: UUID, plugin: PluginContext, terminalName: @escaping () -> String? = { nil },
+    terminalHost: @escaping () -> String? = { nil },
     focus: @escaping () -> Void, dismissAccessory: @escaping () -> Void,
     present: @escaping (AnyView) -> Void, dismissSheet: @escaping () -> Void,
     insertText: @escaping (String) -> Void = { _ in },
@@ -143,13 +155,16 @@ public struct TabContext {
     shells: @escaping () -> [ShellChoice] = { [] },
     openShell: @escaping (UUID) -> Void = { _ in },
     newShell: @escaping () -> Void = {},
+    renameShell: @escaping (UUID, String) -> Void = { _, _ in },
     scrollBy: @escaping (Int32) -> Void = { _ in },
     reportWheel: @escaping (Int32, UInt16, UInt16) -> Void = { _, _, _ in },
-    mouseTracking: (() -> MouseTracking)? = nil
+    mouseTracking: (() -> MouseTracking)? = nil,
+    terminalIndicator: @escaping ([String]) -> PluginTabIndicator? = { _ in nil }
   ) {
     self.id = id
     self.plugin = plugin
     self.terminalName = terminalName
+    self.terminalHost = terminalHost
     self.focus = focus
     self.dismissAccessory = dismissAccessory
     self.present = present
@@ -163,9 +178,11 @@ public struct TabContext {
     self.shells = shells
     self.openShell = openShell
     self.newShell = newShell
+    self.renameShell = renameShell
     self.scrollBy = scrollBy
     self.reportWheel = reportWheel
     self.mouseTracking = mouseTracking ?? { .off }
+    self.terminalIndicator = terminalIndicator
   }
 }
 
@@ -225,6 +242,10 @@ public protocol TabAttachment: AnyObject {
   /// SF Symbol in front of the tab's name while this stands in for the shell.
   /// Empty leaves the host's terminal mark, or a `tabSymbols` entry.
   var symbol: String { get }
+  /// Ttys on the shell's machine that this tab is showing besides its own:
+  /// the panes of the tmux session its shell is a client of. A status mark
+  /// on any of them is the tab's.
+  var shownTerminals: [String] { get }
   /// What is showing lost its connection. The host words it, once, in its
   /// own status bar.
   var isDisconnected: Bool { get }
@@ -278,6 +299,7 @@ public protocol TabAttachment: AnyObject {
 extension TabAttachment {
   public var tabTitle: String { "" }
   public var symbol: String { "" }
+  public var shownTerminals: [String] { [] }
   public var requiresCloseConfirmation: Bool { false }
   public var restorationState: Data? { nil }
   public func restore(from state: Data) {}

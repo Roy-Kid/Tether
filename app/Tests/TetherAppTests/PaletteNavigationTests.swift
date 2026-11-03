@@ -2,18 +2,19 @@
 import AppKit
 import SwiftUI
 import Testing
+import TetherTestSupport
 import TetherUI
 @testable import TetherApp
 
 // SwiftUI windows share AppKit focus and keyboard shortcuts. Tests that host
 // real windows run one at a time, so none takes focus from another.
 @MainActor
-@Suite("macOS UI", .serialized)
+@Suite("macOS UI", .serialized, .appKitEventLoop)
 struct MacUITests {}
 
 extension MacUITests {
 @MainActor
-@Suite("Unix picker navigation", .serialized)
+@Suite("Unix picker navigation", .serialized, .appKitEventLoop)
 struct PaletteNavigationTests {
   /// Lets SwiftUI apply what just changed. Run with the whole suite, the
   /// main thread is shared with other window tests, so a fixed pause is a

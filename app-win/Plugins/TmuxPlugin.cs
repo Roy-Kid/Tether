@@ -256,6 +256,7 @@ sealed class TmuxAttachment : ITabAttachment
             await _tab.Model.ExecuteAsync("tmux switch-client -c " + Quote(_tty) + " -t " + target, _lifetime.Token);
         else
         {
+            _tab.Model.Send(new TerminalInput.Key(new KeyPress.Char("e"), new KeyModifiers(Control: true)));
             _tab.Model.Send(new TerminalInput.Key(new KeyPress.Char("u"), new KeyModifiers(Control: true)));
             _tab.Model.Send(new TerminalInput.Paste("tmux attach-session -t " + target));
             _tab.Model.Send(new TerminalInput.Key(new KeyPress.Enter(), new KeyModifiers()));

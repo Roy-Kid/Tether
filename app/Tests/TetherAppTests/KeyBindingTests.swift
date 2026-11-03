@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Testing
+import TetherTestSupport
 import TetherPluginKit
 @testable import TetherApp
 #if os(macOS)
@@ -8,7 +9,7 @@ import AppKit
 #endif
 
 @MainActor
-@Suite("Key bindings")
+@Suite("Key bindings", .appKitEventLoop)
 struct KeyBindingTests {
   @Test("shared SwiftUI shortcuts keep their key and modifiers on either platform")
   func sharedShortcut() {
@@ -48,6 +49,12 @@ struct KeyBindingTests {
       #expect(store.command(for: KeyBinding("`", .control), in: commands) == "quickTerminal")
       #expect(store.command(for: KeyBinding("`", [.control, .shift]), in: commands) == nil)
       #expect(store.command(for: KeyBinding("t"), in: commands) == "newTab")
+      #expect(store.command(for: KeyBinding("1"), in: commands) == "switchHost1")
+      #expect(store.command(for: KeyBinding("4"), in: commands) == "switchHost4")
+      #expect(store.command(for: KeyBinding("1", .option), in: commands) == nil)
+      let tabs = TabSet()
+      tabs.perform(.switchHost2)
+      #expect(tabs.intent == .switchHost(1))
       #expect(store.command(for: KeyBinding("t", [.command, .shift]), in: commands) == "restoreTab")
       #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
       let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }

@@ -326,6 +326,52 @@ async fn restored_display_never_becomes_pty_input_or_terminal_replies() {
 }
 
 #[test]
+fn a_new_terminal_can_begin_checkpoint_and_reopen_without_a_disk_error() {
+    let dir = ArchiveDir::new();
+    let archive = HistoryArchive::create(&dir.0, Some(10_000)).unwrap();
+    archive.begin_session().expect("begin on a fresh archive");
+    assert_eq!(archive.tail(10).unwrap().len(), 0);
+    assert_eq!(archive.error(), None);
+    archive.flush();
+    assert_eq!(archive.error(), None, "checkpoint after the first session");
+    let mode: String = rusqlite::Connection::open(dir.0.join("history.sqlite"))
+        .unwrap()
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+
+    let mut terminal = terminal(80, 24, 100);
+    let payload = "row ".repeat(40);
+    for i in 0..20_000 {
+        terminal.feed(format!("{payload}{i}\r\n").as_bytes());
+        if i % 200 == 0 {
+            commit(&mut terminal, &archive);
+        }
+    }
+    commit(&mut terminal, &archive);
+    archive.flush();
+    assert_eq!(archive.error(), None, "checkpoint after the wal passes the autocheckpoint");
+    drop(archive);
+
+    let reopened = HistoryArchive::reopen(&dir.0, Some(10_000)).unwrap();
+    reopened.begin_session().expect("begin on a restored archive");
+    assert_eq!(reopened.error(), None);
+    reopened.flush();
+    assert_eq!(reopened.error(), None);
+}
+
+#[test]
+fn unlinking_an_open_archive_reports_disk_io_error() {
+    let dir = ArchiveDir::new();
+    let archive = HistoryArchive::create(&dir.0, Some(10_000)).unwrap();
+    std::fs::remove_dir_all(&dir.0).unwrap();
+    let error = archive.begin_session().expect_err("a removed archive cannot begin");
+    assert_eq!(error.to_string(), "disk I/O error");
+    // The caller records this. begin_session itself only returns it.
+    assert_eq!(archive.error(), None);
+}
+
+#[test]
 fn a_failed_disk_transaction_preserves_the_previous_checkpoint_and_reports_failure() {
     let dir = ArchiveDir::new();
     let archive = HistoryArchive::create(&dir.0, None).unwrap();

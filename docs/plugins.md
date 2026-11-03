@@ -31,7 +31,8 @@ A plugin takes one of two shapes.
    close confirmation, and its commands. It supplies content, an inspector and
    what opens behind the accessory, and it releases everything in `close()`.
 3. Use `TabContext` for what only the host can do: focus the tab, dismiss the
-   accessory, present a sheet. Anything that spans tabs belongs to the
+   accessory, present a sheet, read another plugin's status mark on a terminal
+   it draws (see [Tab indicators](#tab-indicators)). Anything that spans tabs belongs to the
    plugin, which is the one party that knows every tab it is attached to.
 
 For either shape:
@@ -149,8 +150,8 @@ if it still exists, and Files restores its browser directory. Active transfers
 are not restarted. Quitting or switching accounts clears this history.
 Tab plugins can implement `restorationState` and `restore(from:)` to save
 nonsecret metadata and apply it to a new attachment after authentication.
-Rename Terminal defaults to Cmd+R and renames the selected terminal.
-In its dialog, Return or keypad Enter saves the name; Escape cancels.
+Rename Terminal defaults to Cmd+R and renames the selected terminal
+in its tab. Return or keypad Enter saves the name; Escape cancels.
 Common Unix Control keys, including Ctrl+N/T, and Alt+B/F/D remain available to the terminal.
 Unassigned Control letters are sent unchanged as control input;
 the shell or editor decides what they do, including when cursor-key mode changes.
@@ -349,6 +350,8 @@ Open a local shell or connect to a host. On a Mac, the tmux button at the bottom
 The machine running that shell must have `tmux` on its command path. Select an existing
 session or name a new one. The session is attached in that same terminal: tmux draws
 its own windows, panes and status line. The plugin does not replace the terminal.
+Session and window rows keep their positions across refreshes and renames. New
+rows are appended; ended sessions and windows are removed.
 
 The picker and the Terminal menu create windows, split the current pane and zoom it.
 Window and session menus rename or end them. Detach, or the shell row, leaves tmux
@@ -405,6 +408,20 @@ workspace shows the mark for its focused terminal. Disabled plugins contribute n
 plugins, registration order wins; each plugin must resolve its own domain priority
 before reporting. An empty array clears that session's marks. Unloading a session
 clears only its own marks; closing a panel does not erase a background page's set.
+
+A mark belongs to a terminal, not to a tab, and is found one way: the registry's
+`tabIndicator(onAnyOf:)` over ttys of one machine, the first mark in the reporting
+plugin's own order. Everything that draws a mark asks it:
+
+- A tab, for its shell and for `TabAttachment.shownTerminals` — ttys the tab is
+  showing besides its own. tmux reports the panes of the session its shell is a
+  client of, so a job in a pane marks the tab in front of it.
+- A tab plugin, for terminals it draws, through `TabContext.terminalIndicator(ttys)`,
+  drawn with TetherUI's `StatusDot` — the same dot and pulse as the tab. tmux puts
+  it before a session's name for that session's panes.
+
+Neither plugin names the other, and no surface selects between jobs: that is the
+reporting plugin's. Ask while drawing; the host draws again when marks change.
 
 The RPC requires the contribution and accepts at most 512 unique terminal targets,
 24-bit integer colors and nonempty labels of at most 256 characters. Invalid updates

@@ -1,5 +1,6 @@
 import Foundation
 import TetherPluginKit
+import TetherUI
 #if os(iOS)
   import ActivityKit
 #endif
@@ -26,6 +27,16 @@ enum PluginLiving {
 /// The system draws it; this only publishes the plugin's name, label and colour.
 @MainActor
 enum PluginLive {
+  /// One line when an activity cannot start. The next status still tries.
+  static var onUnavailable: (@MainActor (String) -> Void)?
+  private static var toldUnavailable = false
+
+  static func reportUnavailable(_ reason: String) {
+    guard !toldUnavailable else { return }
+    toldUnavailable = true
+    onUnavailable?(reason)
+  }
+
   static func note(pluginID: String, name: String, label: String, segments: [PluginStatusSegment]) {
     #if os(iOS)
       switch PluginLiving.presence(of: segments) {
@@ -134,14 +145,19 @@ enum PluginLive {
     }
 
     nonisolated private static func show(_ pluginID: String, state: PluginLiveAttributes.ContentState) async {
-      guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+      guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+        await PluginLive.reportUnavailable("Off")
+        return
+      }
       let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(15 * 60))
       guard let activity = activities.removeValue(forKey: pluginID) else {
         let attributes = PluginLiveAttributes(pluginID: pluginID)
-        guard let created = try? Activity.request(attributes: attributes, content: content, pushType: nil) else {
-          return
+        do {
+          let created = try await Activity.request(attributes: attributes, content: content, pushType: nil)
+          activities[pluginID] = created
+        } catch {
+          await PluginLive.reportUnavailable("Couldn't start")
         }
-        activities[pluginID] = created
         return
       }
       if activity.content.state == state {

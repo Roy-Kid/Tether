@@ -2461,12 +2461,13 @@ public protocol RenderSurfaceProtocol: AnyObject, Sendable {
     func setFonts(primary: String, wide: String) 
     
     /**
-     * The least margin round the grid, in physical pixels, drawn by the
-     * surface itself: the grid is centred in what is left, and each edge
-     * cell's background carries on to the surface's edge, so a program that
-     * paints its own background is not framed by the page's. A negative
-     * value, the default, leaves the grid at the corner for a consumer that
-     * lays out its own margin.
+     * The least margin at the sides of the grid, in physical pixels, drawn
+     * by the surface itself: the grid is centred across what that margin
+     * leaves and rests on the bottom edge, so a status line meets the
+     * window. Each edge cell's background carries on to the surface's edge,
+     * so a program that paints its own background is not framed by the
+     * page's. A negative value, the default, leaves the grid at the corner
+     * for a consumer that lays out its own margin.
      */
     func setGridPadding(padding: Float) 
     
@@ -2698,12 +2699,13 @@ open func setFonts(primary: String, wide: String)  {try! rustCall() {
 }
     
     /**
-     * The least margin round the grid, in physical pixels, drawn by the
-     * surface itself: the grid is centred in what is left, and each edge
-     * cell's background carries on to the surface's edge, so a program that
-     * paints its own background is not framed by the page's. A negative
-     * value, the default, leaves the grid at the corner for a consumer that
-     * lays out its own margin.
+     * The least margin at the sides of the grid, in physical pixels, drawn
+     * by the surface itself: the grid is centred across what that margin
+     * leaves and rests on the bottom edge, so a status line meets the
+     * window. Each edge cell's background carries on to the surface's edge,
+     * so a program that paints its own background is not framed by the
+     * page's. A negative value, the default, leaves the grid at the corner
+     * for a consumer that lays out its own margin.
      */
 open func setGridPadding(padding: Float)  {try! rustCall() {
     uniffi_tether_ffi_fn_method_rendersurface_set_grid_padding(
@@ -9980,7 +9982,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tether_ffi_checksum_method_rendersurface_set_fonts() != 45006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding() != 62672) {
+    if (uniffi_tether_ffi_checksum_method_rendersurface_set_grid_padding() != 7622) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tether_ffi_checksum_method_rendersurface_wait_idle() != 2605) {

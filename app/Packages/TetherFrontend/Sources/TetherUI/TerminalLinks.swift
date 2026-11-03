@@ -71,9 +71,9 @@ public struct LinkMenu {
 struct CellGeometry: Equatable {
   var cellWidth: CGFloat
   var lineHeight: CGFloat
-  /// The grid's top-left corner. Not the inset alone: the renderer centres
-  /// the grid in what the inset leaves, and a click has to land where the
-  /// cell was drawn.
+  /// The grid's top-left corner. Across, the renderer centres the grid in
+  /// what the inset leaves. Down, the grid rests on the bottom edge. A click
+  /// has to land where the cell was drawn.
   var originX: CGFloat
   var originY: CGFloat
   var columns: UInt16
@@ -96,21 +96,30 @@ struct CellGeometry: Equatable {
   /// Where the renderer puts a grid on a surface of `size` points given
   /// `inset` (`RenderSurface.setGridPadding`): the same arithmetic, in the
   /// same device pixels, so the cell under the pointer is the cell drawn.
+  /// Across, spare pixels split around the inset. Down, the grid rests on
+  /// the bottom edge and the spare pixels sit above the first row.
   static func placed(
     size: CGSize, scale: CGFloat, inset: CGFloat, cellWidth: CGFloat, lineHeight: CGFloat,
     columns: UInt16, rows: UInt16
   ) -> CellGeometry {
     let scale = scale > 0 ? scale : 1
     let insetPixels = gridPadding(inset: inset, scale: scale)
-    func origin(_ points: CGFloat, _ pitch: CGFloat, _ count: UInt16) -> CGFloat {
+    // The renderer keeps fractional row pitches. Rounding each pitch before
+    // multiplying moves the origin by the rounding error times the row count.
+    func across(_ points: CGFloat, _ pitch: CGFloat, _ count: UInt16) -> CGFloat {
       let available = (points * scale).rounded()
-      let used = CGFloat(count) * (pitch * scale).rounded()
+      let used = CGFloat(count) * pitch * scale
       let spare = max(0, available - 2 * insetPixels - used)
       return (insetPixels + (spare / 2).rounded(.down)) / scale
     }
+    func down(_ points: CGFloat, _ pitch: CGFloat, _ count: UInt16) -> CGFloat {
+      let available = (points * scale).rounded()
+      let used = CGFloat(count) * pitch * scale
+      return max(0, available - used) / scale
+    }
     return CellGeometry(
       cellWidth: cellWidth, lineHeight: lineHeight,
-      originX: origin(size.width, cellWidth, columns), originY: origin(size.height, lineHeight, rows),
+      originX: across(size.width, cellWidth, columns), originY: down(size.height, lineHeight, rows),
       columns: columns, rows: rows)
   }
 

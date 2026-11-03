@@ -187,6 +187,13 @@ public protocol TetherPlugin: AnyObject {
   func settings() -> AnyView
   /// The host's ribbon, reported through ``PluginServices/reportStatus(_:)``.
   func receiveStatus(_ item: PluginStatusBarItem)
+  /// A click named this tty. `true` when the plugin brought its tab forward.
+  /// The host asks after its own shells, so a pane behind a shell can still
+  /// land on the tab that is showing it.
+  func claimTerminal(host: String, terminal: String) -> Bool
+  /// Tells the host when `tabIndicators` or `tabSymbols` change. The host
+  /// does not observe a plugin's stored properties through `any TetherPlugin`.
+  func observeTabMarks(_: @escaping @MainActor () -> Void)
 }
 extension TetherPlugin {
   public var tabIndicators: [PluginTabIndicator] { [] }
@@ -202,6 +209,8 @@ extension TetherPlugin {
   public func deactivate() {}
   public func settings() -> AnyView { AnyView(Text("No additional settings")) }
   public func receiveStatus(_ item: PluginStatusBarItem) {}
+  public func claimTerminal(host: String, terminal: String) -> Bool { false }
+  public func observeTabMarks(_: @escaping @MainActor () -> Void) {}
 }
 
 /// Namespaced, nonsecret preferences. Plugins never receive the host's credential store.
@@ -234,6 +243,7 @@ public final class PluginRegistry {
     precondition(!plugins.contains { $0.metadata.id == plugin.metadata.id }, "Duplicate plugin ID")
     plugins.append(plugin)
     if isEnabled(plugin.metadata.id) { plugin.activate() }
+    observe(plugin)
   }
   /// Dynamic extensions leave through the same close-before-deactivate path.
   public func unregister(id: String) {
@@ -243,20 +253,28 @@ public final class PluginRegistry {
     plugins.removeAll { $0.metadata.id == id }
     disabled.remove(id)
     defaults.set(Array(disabled).sorted(), forKey: "disabledPlugins")
+    noteTabIndicatorsChanged()
   }
   public func isEnabled(_ id: String) -> Bool { !disabled.contains(id) }
 
   public func noteTabIndicatorsChanged() { tabIndicatorEpoch &+= 1 }
-  /// Registration order breaks ties between enabled plugins; domain priority
-  /// within a plugin belongs to that plugin, not to the host.
-  public func tabIndicator(for terminal: PluginTerminalIdentity) -> PluginTabIndicator? {
-    plugins.lazy.filter { self.isEnabled($0.metadata.id) }
-      .compactMap { $0.tabIndicators.first { $0.target == terminal } }.first
+  /// The one way a mark is found: the first on any of these terminals. One
+  /// terminal is a tab's shell; several are a tab and the panes it shows, or
+  /// a tmux session's panes. Registration order breaks ties between enabled
+  /// plugins; within a plugin its own order decides, as it does between its jobs.
+  public func tabIndicator(onAnyOf terminals: [PluginTerminalIdentity]) -> PluginTabIndicator? {
+    guard !terminals.isEmpty else { return nil }
+    return plugins.lazy.filter { self.isEnabled($0.metadata.id) }
+      .compactMap { plugin in
+        plugin.tabIndicators.first { mark in terminals.contains { $0.matches(mark.target) } }
+      }.first
   }
   /// The first enabled plugin's symbol for this terminal, registration order.
   public func tabSymbol(for terminal: PluginTerminalIdentity) -> String? {
     plugins.lazy.filter { self.isEnabled($0.metadata.id) }
-      .compactMap { $0.tabSymbols.first { $0.target == terminal }?.symbol }
+      .compactMap { plugin in
+        plugin.tabSymbols.first { $0.target.matches(terminal) }?.symbol
+      }
       .first { !$0.isEmpty }
   }
   public func setEnabled(_ enabled: Bool, id: String) {
@@ -271,5 +289,16 @@ public final class PluginRegistry {
       plugin.deactivate()
     }
     defaults.set(Array(disabled).sorted(), forKey: "disabledPlugins")
+    noteTabIndicatorsChanged()
+  }
+
+  /// One watch for the plugin's life. A disabled plugin's callback is ignored;
+  /// enabling draws the marks it already has.
+  private func observe(_ plugin: any TetherPlugin) {
+    let id = plugin.metadata.id
+    plugin.observeTabMarks { [weak self] in
+      guard let self, self.isEnabled(id), self.plugins.contains(where: { $0.metadata.id == id }) else { return }
+      self.noteTabIndicatorsChanged()
+    }
   }
 }

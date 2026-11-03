@@ -940,9 +940,10 @@ impl TerminalRenderer {
         Ok(true)
     }
 
-    /// The least margin round the grid, in pixels: `Some` centres the grid
-    /// and carries its edge backgrounds to the surface's edges. A margin that
-    /// is not a finite, non-negative number of pixels is none.
+    /// The least margin at the sides of the grid, in pixels: `Some` centres
+    /// the grid across and rests it on the bottom edge, and carries its edge
+    /// backgrounds to the surface's edges. A margin that is not a finite,
+    /// non-negative number of pixels is none.
     pub fn set_padding(&mut self, padding: Option<f32>) {
         self.padding = padding.filter(|value| value.is_finite() && *value >= 0.0);
     }

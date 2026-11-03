@@ -41,6 +41,10 @@ struct TerminalWorkspaceTests {
     tabs.select(page.id)
     #expect(tabs.current?.id == second.id)
     #expect(tabs.tabs.count == 3)
+    let host = try #require(tabs.currentHost?.id)
+    let listed = tabs.hostShells(host, current: second.id)
+    #expect(listed.map(\.id) == [first.id, second.id, tabs.tabs.last?.id])
+    #expect(listed.map(\.current) == [false, true, false])
   }
 
   @Test("a page's caption is what stands in for its shell — not the host, not a count")

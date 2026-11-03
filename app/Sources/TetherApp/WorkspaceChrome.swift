@@ -22,6 +22,11 @@ struct WorkspaceTabBar: View {
   /// strip with a way to close a tab.
   @State private var hovering: UUID?
   @State private var addTabID = UUID()
+  @State private var draft = ""
+  @State private var editingKind = ""
+  @State private var suppressRenameCommit = false
+  @FocusState private var renamingFocus: Bool
+  @Environment(\.isFrontWindow) private var isFront
 
   @ViewBuilder
   var body: some View {
@@ -81,7 +86,7 @@ struct WorkspaceTabBar: View {
                 let title = tabs.displayTitle(for: terminal.id)
                 let handingOff = terminal.handoff && !terminal.isLive
                 tabChip(
-                  id: terminal.id, title: title,
+                  id: terminal.id, workspace: page.id, title: title,
                   note: handingOff ? "Take Over" : (terminal.name == title ? "" : terminal.name),
                   subtitle: terminal.subtitle,
                   symbol: symbol(for: terminal), disconnected: terminal.isDisconnected)
@@ -106,6 +111,7 @@ struct WorkspaceTabBar: View {
               frames: anchors.reduce(into: [:]) { $0[$1.key] = proxy[$1.value] },
               closeable: Set([tabs.selected, hovering].compactMap { $0 }),
               closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
+              editing: inlineRenameID,
               onPrimary: { id in
                 if id == addTabID { tabs.perform(.newTab) }
                 else { tabs.handleTabClick(id) }
@@ -139,27 +145,21 @@ struct WorkspaceTabBar: View {
   /// in for the shell. Otherwise it is a terminal: the same mark for every
   /// host, because a local shell is a host like any other.
   private func symbol(for tab: SessionTab) -> String {
+    // A symbol lives on the plugin. Reading the epoch is what draws a new one.
+    _ = registry?.tabIndicatorEpoch
     if tab.handoff, !tab.isLive { return "arrow.left.arrow.right" }
-    if let identity = tab.pluginTerminalIdentity {
-      for host in LocalMachine.lookupNames(for: identity.host) {
-        let candidate = PluginTerminalIdentity(host: host, terminal: identity.terminal)
-        if let symbol = registry?.tabSymbol(for: candidate), !symbol.isEmpty { return symbol }
-      }
+    if let identity = tab.pluginTerminalIdentity,
+      let symbol = registry?.tabSymbol(for: identity), !symbol.isEmpty
+    {
+      return symbol
     }
     if let shown = tab.shown, !shown.symbol.isEmpty { return shown.symbol }
     return "terminal"
   }
 
-  /// The status circle for this terminal. Reads `tabIndicatorEpoch` so a mark
-  /// that arrives after the tab is drawn still replaces the terminal glyph.
+  /// The status circle for this terminal, or for a pane it is showing.
   private func indicator(for tab: SessionTab) -> PluginTabIndicator? {
-    _ = registry?.tabIndicatorEpoch
-    guard let identity = tab.pluginTerminalIdentity, let registry else { return nil }
-    for host in LocalMachine.lookupNames(for: identity.host) {
-      let candidate = PluginTerminalIdentity(host: host, terminal: identity.terminal)
-      if let mark = registry.tabIndicator(for: candidate) { return mark }
-    }
-    return nil
+    registry?.indicator(on: tab)
   }
 
   /// The tab's symbol, or — when the terminal is down — the mark that says
@@ -179,8 +179,36 @@ struct WorkspaceTabBar: View {
     }
   }
 
+  /// The chip whose name is being edited, when this window is the one in front.
+  private var inlineRenameID: UUID? {
+    guard isFront else { return nil }
+    if let id = tabs.renaming { return id }
+    if let workspace = tabs.renamingWorkspace,
+      let page = tabs.workspaces.first(where: { $0.id == workspace })
+    {
+      return page.focused
+    }
+    return nil
+  }
+
+  private func commitRename() {
+    suppressRenameCommit = true
+    if let id = tabs.renaming {
+      tabs.rename(id, to: draft)
+    } else if let id = tabs.renamingWorkspace {
+      tabs.rename(id, to: draft)
+    }
+  }
+
+  private func cancelRename() {
+    suppressRenameCommit = true
+    tabs.renaming = nil
+    tabs.renamingWorkspace = nil
+  }
+
   private func tabChip(
-    id: UUID, title: String, note: String = "", subtitle: String, symbol: String?, disconnected: Bool = false
+    id: UUID, workspace: UUID? = nil, title: String, note: String = "", subtitle: String,
+    symbol: String?, disconnected: Bool = false
   ) -> some View {
     let selected = tabs.selected == id
     let focused = tabs.workspaces.first { $0.id == id }?.focused ?? id
@@ -188,40 +216,26 @@ struct WorkspaceTabBar: View {
     let indicator = tab.flatMap { indicator(for: $0) }
     let titleColor: Color = selected ? Theme.text : Theme.subtle
     let secondary = Theme.subtle
+    let editing = inlineRenameID == id
     return HStack(spacing: UIStyle.Space.inline) {
+      if editing {
+        chipFace(
+          editing: true, title: title, subtitle: subtitle, symbol: symbol, disconnected: disconnected,
+          indicator: indicator, titleColor: titleColor, secondary: secondary, workspace: workspace)
+          .frame(maxWidth: layout == .vertical ? .infinity : Chrome.tabTitleWidth,
+                 alignment: layout == .vertical ? .leading : .center)
+          .frame(height: rowHeight)
+      } else {
       Button {
         tabs.handleTabClick(id)
       } label: {
-        HStack(spacing: UIStyle.Space.inline) {
-          // One mark in front of the name. A live status dot takes the
-          // icon's place; the terminal glyph is not drawn beside it.
-          if let indicator, !disconnected {
-            TabStatusMark(color: indicator.color, label: indicator.label)
-          } else {
-            chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
-          }
-          let labels = layout == .vertical
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
-            : AnyLayout(HStackLayout(spacing: UIStyle.Space.inline))
-          labels {
-            Text(title)
-              .font(layout == .horizontal ? UIStyle.title.weight(.medium) : UIStyle.title)
-              .foregroundStyle(titleColor)
-              .lineLimit(1)
-              // The name is the tab's handle; the caption gives way first.
-              .layoutPriority(1)
-            if !subtitle.isEmpty {
-              Text(subtitle)
-                .font(UIStyle.header)
-                .foregroundStyle(secondary)
-                .lineLimit(1)
-            }
-          }
-        }
-        .frame(maxWidth: layout == .vertical ? .infinity : Chrome.tabTitleWidth,
-               alignment: layout == .vertical ? .leading : .center)
-        .frame(height: rowHeight)
-        .contentShape(Rectangle())
+        chipFace(
+          editing: false, title: title, subtitle: subtitle, symbol: symbol, disconnected: disconnected,
+          indicator: indicator, titleColor: titleColor, secondary: secondary, workspace: workspace)
+          .frame(maxWidth: layout == .vertical ? .infinity : Chrome.tabTitleWidth,
+                 alignment: layout == .vertical ? .leading : .center)
+          .frame(height: rowHeight)
+          .contentShape(Rectangle())
       }
       .buttonStyle(ChromeButtonStyle(hoverOpacity: 0))
       #if !os(macOS)
@@ -230,6 +244,7 @@ struct WorkspaceTabBar: View {
       .help([title, note, subtitle, indicator?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
       .accessibilityAddTraits(selected ? .isSelected : [])
       .accessibilityValue(disconnected ? "Disconnected" : (indicator?.label ?? ""))
+      }
       // The space is held whether or not the cross is drawn: a tab that
       // grew by 18pt under the pointer would push the strip along.
       Button {
@@ -289,6 +304,82 @@ struct WorkspaceTabBar: View {
     })
   }
 
+  private func chipFace(
+    editing: Bool, title: String, subtitle: String, symbol: String?, disconnected: Bool,
+    indicator: PluginTabIndicator?, titleColor: Color, secondary: Color, workspace: UUID?
+  ) -> some View {
+    HStack(spacing: UIStyle.Space.inline) {
+      // One mark in front of the name. A live status dot takes the
+      // icon's place; the terminal glyph is not drawn beside it.
+      if let indicator, !disconnected {
+        StatusDot(color: indicator.color, label: indicator.label)
+      } else {
+        chipMark(symbol: symbol, disconnected: disconnected, color: titleColor)
+      }
+      let labels = layout == .vertical
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+        : AnyLayout(HStackLayout(spacing: UIStyle.Space.inline))
+      labels {
+        if editing {
+          TextField("Name", text: $draft)
+            .textFieldStyle(.plain)
+            .font(layout == .horizontal ? UIStyle.title.weight(.medium) : UIStyle.title)
+            .focused($renamingFocus)
+            .onAppear {
+              editingKind = tabs.renaming != nil ? "terminal" : "tab"
+              if let id = tabs.renaming {
+                draft = tabs.renameSeed(for: id)
+              } else if let workspace, tabs.renamingWorkspace == workspace {
+                draft = tabs.workspaces.first { $0.id == workspace }?.name ?? ""
+              }
+              renamingFocus = true
+              #if os(macOS)
+                DispatchQueue.main.async {
+                  (NSApp.keyWindow?.firstResponder as? NSText)?.selectAll(nil)
+                }
+              #endif
+            }
+            .onSubmit { commitRename() }
+            .onChange(of: renamingFocus) { _, on in
+              if suppressRenameCommit {
+                if !on { suppressRenameCommit = false }
+                return
+              }
+              let kind = tabs.renaming != nil ? "terminal" : (tabs.renamingWorkspace != nil ? "tab" : "")
+              guard !on, kind == editingKind, !kind.isEmpty else { return }
+              commitRename()
+            }
+            #if os(macOS)
+              .onExitCommand { cancelRename() }
+            #endif
+            .onKeyPress(.escape) {
+              cancelRename()
+              return .handled
+            }
+            #if os(iOS)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .submitLabel(.done)
+            #endif
+            .id(tabs.renaming?.uuidString ?? tabs.renamingWorkspace?.uuidString ?? "")
+        } else {
+          Text(title)
+            .font(layout == .horizontal ? UIStyle.title.weight(.medium) : UIStyle.title)
+            .foregroundStyle(titleColor)
+            .lineLimit(1)
+            // The name is the tab's handle; the caption gives way first.
+            .layoutPriority(1)
+        }
+        if !editing, !subtitle.isEmpty {
+          Text(subtitle)
+            .font(UIStyle.header)
+            .foregroundStyle(secondary)
+            .lineLimit(1)
+        }
+      }
+    }
+  }
+
   #if os(macOS)
     private func tabMenu(_ id: UUID) -> NSMenu {
       let menu = NSMenu()
@@ -312,7 +403,7 @@ struct WorkspaceTabBar: View {
           menu.addItem(item)
         }
         menu.addItem(.separator())
-        menu.addItem(ActionMenuItem("Rename Terminal…") { tabs.renaming = terminalID })
+        menu.addItem(ActionMenuItem("Rename Terminal") { tabs.beginRenamingTerminal(terminalID) })
         menu.addItem(ActionMenuItem("Close Terminal") { onClose(terminalID) })
       } else {
         menu.addItem(ActionMenuItem("Close Tab") { onClose(id) })
@@ -350,7 +441,7 @@ struct WorkspaceTabBar: View {
         }
       }
       Section {
-        Button("Rename Terminal…") { tabs.renaming = terminalID }
+        Button("Rename Terminal") { tabs.beginRenamingTerminal(terminalID) }
         Button("Close Terminal") { onClose(terminalID) }
       }
     } else {
@@ -399,6 +490,7 @@ private struct TabStripCatcher: NSViewRepresentable {
   var frames: [UUID: CGRect]
   var closeable: Set<UUID>
   var closeWidth: CGFloat
+  var editing: UUID?
   var onPrimary: (UUID) -> Void
   var onClose: (UUID) -> Void
   var onPlace: (UUID, UUID, SplitDirection) -> Void
@@ -414,6 +506,7 @@ private struct TabStripCatcher: NSViewRepresentable {
     view.frames = frames
     view.closeable = closeable
     view.closeWidth = closeWidth
+    view.editing = editing
     view.onPrimary = onPrimary
     view.onClose = onClose
     view.onPlace = onPlace
@@ -424,6 +517,7 @@ private struct TabStripCatcher: NSViewRepresentable {
     var frames: [UUID: CGRect] = [:]
     var closeable: Set<UUID> = []
     var closeWidth: CGFloat = 18
+    var editing: UUID?
     var onPrimary: ((UUID) -> Void)?
     var onClose: ((UUID) -> Void)?
     var onPlace: ((UUID, UUID, SplitDirection) -> Void)?
@@ -439,7 +533,14 @@ private struct TabStripCatcher: NSViewRepresentable {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
       let local = convert(point, from: superview)
-      return bounds.contains(local) ? self : nil
+      guard bounds.contains(local) else { return nil }
+      // The field is under this overlay. A press on the name being edited
+      // belongs to it, so the cursor can be placed in the word.
+      if let editing, let frame = frames[editing] {
+        let flipped = NSPoint(x: local.x, y: bounds.height - local.y)
+        if frame.contains(local) || frame.contains(flipped) { return nil }
+      }
+      return self
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -873,12 +974,7 @@ struct HostPicker: View {
 
   private func choose(_ host: Host) {
     tabs.hostPicker = false
-    if tabs.tabs.contains(where: { $0.host.id == host.id })
-      || tabs.extensions.contains(where: { $0.hostID == host.id }) {
-      tabs.show(host)
-    } else {
-      tabs.intent = .connect(host)
-    }
+    if let next = tabs.reveal(host), case .connect(let host) = next { tabs.intent = .connect(host) }
   }
 
   private var filtered: [Host] {
@@ -949,28 +1045,6 @@ struct HostPicker: View {
   }
 }
 
-/// The status dot in the tab icon's place. Its opacity uses the same clock as
-/// the status ribbon, so a running tab and that colour on the lamp breathe together.
-private struct TabStatusMark: View {
-  let color: UInt32
-  let label: String
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    let moving = !reduceMotion && StatusMotion.period(for: color) != nil
-    TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !moving)) { timeline in
-      let alpha = moving
-        ? StatusMotion.pulse(color: color, time: timeline.date.timeIntervalSinceReferenceDate) : 1
-      Circle()
-        .fill(Color(hex: color).opacity(alpha))
-        .frame(width: 8, height: 8)
-    }
-    .frame(width: 11, height: 11)
-    .help(label)
-    .accessibilityLabel(label)
-  }
-}
-
 /// The host's row chrome behind a generic lamp. A plugin that draws its own
 /// ribbon is already the control, and a second fill behind it stretches the row.
 private struct RibbonButtonChrome: ViewModifier {
@@ -1005,9 +1079,8 @@ private struct PluginStatusRibbon: View {
     Button {
       if isPresented {
         isPresented = false
-      } else if let workspace = makeWorkspace() {
-        presentation = StatusRibbonPopover(workspace: workspace)
-        isPresented = true
+      } else {
+        _ = showPanel()
       }
     } label: {
       if let label {
@@ -1045,6 +1118,21 @@ private struct PluginStatusRibbon: View {
     .onReceive(NotificationCenter.default.publisher(for: .closePluginPanel)) { _ in
       isPresented = false
     }
+    .onReceive(NotificationCenter.default.publisher(for: .openPluginPanel)) { note in
+      guard PluginOpen.id(from: note) == item.id, showPanel() else { return }
+      PluginOpen.pending = nil
+    }
+    .onAppear {
+      guard PluginOpen.pending == item.id, showPanel() else { return }
+      PluginOpen.pending = nil
+    }
+  }
+
+  private func showPanel() -> Bool {
+    guard let workspace = makeWorkspace() else { return false }
+    presentation = StatusRibbonPopover(workspace: workspace)
+    isPresented = true
+    return true
   }
 }
 
@@ -1129,8 +1217,8 @@ struct EmptyWorkspace: View {
       }
 
       /// The red button asks the window to close, and a `Window` scene that
-      /// closes takes its views with it. This one is hidden instead, and the
-      /// Dock brings it back (`HideInsteadOfClose`). Quit is still the menu.
+      /// closes takes its views with it. This one follows When the Window
+      /// Closes (`HideInsteadOfClose`): Quit, or Hide with the menu-bar icon.
       private func installCloseGuard(on window: NSWindow) {
         guard hidesOnClose, !(window.delegate is HideInsteadOfClose) else { return }
         let proxy = HideInsteadOfClose(forwarding: window.delegate)

@@ -46,7 +46,8 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/src" "$work/provider" "$work/live"
 echo 'print("provision")' >"$work/src/main.swift"
 cp app/Extensions/CredentialProvider/*.swift "$work/provider/"
-cp app/Sources/TetherApp/PluginLiveAttributes.swift app/Extensions/LiveActivity/PluginLiveWidget.swift "$work/live/"
+cp app/Sources/TetherApp/PluginLiveAttributes.swift app/Sources/TetherApp/PluginReturn.swift \
+  app/Extensions/LiveActivity/PluginLiveWidget.swift "$work/live/"
 cat >"$work/live/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

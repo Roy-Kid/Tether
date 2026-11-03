@@ -39,6 +39,8 @@ enum LocalCopies {
   /// A placeholder or a received file still here after this was left behind
   /// by a run that ended early.
   static let leftoverAge: TimeInterval = 60 * 60
+  /// How often a running app looks again. The first pass does not wait.
+  static let sweepEvery: TimeInterval = 10 * 60
 
   /// Makes `url` and any missing parent, closed to every other account.
   @discardableResult
@@ -65,10 +67,19 @@ enum LocalCopies {
 
   /// What launch clears, once per run and off the main actor: old previews,
   /// leftovers, and the shared `/tmp` folders earlier versions used — which
-  /// any account on the Mac could read.
+  /// any account on the Mac could read. The same pass runs again while the
+  /// app stays open, so a preview that ages or grows past the limit does not
+  /// wait for the next launch. Editing copies are not in this root.
   static func sweepOnce() {
     guard sweptOnce.claim() else { return }
-    Task.detached(priority: .utility) { sweep() }
+    Task.detached(priority: .utility) {
+      sweep()
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(sweepEvery))
+        guard !Task.isCancelled else { return }
+        sweep()
+      }
+    }
   }
 
   static func sweep(base: URL = disposable, now: Date = Date()) {

@@ -1,6 +1,7 @@
 import QuartzCore
 import SwiftUI
 import Testing
+import TetherTestSupport
 import Tether
 @testable import TetherUI
 #if os(macOS)
@@ -10,7 +11,7 @@ import UIKit
 #endif
 
 @MainActor
-@Suite("Native shared-renderer lifecycle", .serialized)
+@Suite("Native shared-renderer lifecycle", .serialized, .appKitEventLoop)
 struct NativeSurfaceTests {
   private func frame() -> ScreenFrame {
     ScreenFrame(columns: 12, rows: 2, cursorRow: 0, cursorColumn: 0, cursorShape: .block,
@@ -48,10 +49,15 @@ struct NativeSurfaceTests {
     window.orderFrontRegardless()
     defer { view.shutdown(); window.orderOut(nil); window.contentView = nil }
     let metrics = FontMetrics(size: 13)
+    // The window server says a window is visible a moment after it is
+    // ordered front, through the running event loop. Read before that, a
+    // visible window took the hidden branch and then drew.
+    for _ in 0..<40 where !window.occlusionState.contains(.visible) {
+      try await Task.sleep(for: .milliseconds(50))
+    }
     view.update(frame: frame(), dirtyRows: [], damageEpoch: 0, metrics: metrics, palette: .dark, overlay: nil)
-    // A command-line test process often never receives the visible occlusion
-    // bit. The host must then submit nothing. A window the server calls
-    // visible still has to attach, ignore hidden updates, resize and reattach.
+    // A window the server never calls visible must submit nothing. One it
+    // does still has to attach, ignore hidden updates, resize and reattach.
     guard window.occlusionState.contains(.visible) else {
       try await Task.sleep(for: .milliseconds(200))
       #expect(view.submittedFrames == 0)

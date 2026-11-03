@@ -2,6 +2,7 @@
   import AppKit
   import SwiftUI
   import Testing
+  import TetherTestSupport
   import Tether
   import TetherPluginKit
 
@@ -48,7 +49,7 @@
     /// the list. AppKit then hands every file the table, which only knows the
     /// drops its rows and their `ForEach` declare.
     @MainActor
-    @Suite("dropping files from Finder on the list", .serialized)
+    @Suite("dropping files from Finder on the list", .serialized, .appKitEventLoop)
     struct UploadDropTests {
       init() { _ = NSApplication.shared }
 
@@ -162,7 +163,7 @@
         let entry = try #require(model.entry("/home/ada/b.txt"))
         let point = table.convert(NSPoint(x: table.bounds.midX, y: table.bounds.maxY - 4), to: nil)
         _ = drop(
-          [DraggedRow.promise(for: entry, model: model), DraggedRow.paths([entry])],
+          [DraggedRow.promise(for: entry, model: model)],
           on: table, at: point, in: window)
         try await Task.sleep(for: .milliseconds(300))
         #expect(source.downloads.isEmpty)

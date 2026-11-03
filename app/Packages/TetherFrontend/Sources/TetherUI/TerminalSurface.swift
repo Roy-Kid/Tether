@@ -172,7 +172,8 @@ public struct TerminalSurface: View {
         // History is not the live grid. A click there selects text here
         // rather than landing on a cell the program is no longer showing.
         let tracking: MouseTracking = frame.viewportOffset == 0 ? frame.mouse : .off
-        terminal(metrics: metrics, palette: palette, padding: CellGeometry.gridPadding(inset: inset, scale: scale))
+        terminal(metrics: metrics, palette: palette, padding: CellGeometry.gridPadding(inset: inset, scale: scale),
+          onBounds: { noteSize($0, metrics) })
         capture(cells: cells, metrics: metrics, tracking: tracking)
 
         if frame.viewportOffset > 0 {
@@ -220,9 +221,10 @@ public struct TerminalSurface: View {
       }
     }
   }
-  private func terminal(metrics: FontMetrics, palette: Palette, padding: CGFloat) -> some View {
+  private func terminal(metrics: FontMetrics, palette: Palette, padding: CGFloat, onBounds: @escaping (CGSize) -> Void) -> some View {
     WgpuTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette,
-      padding: padding, overlay: renderOverlay, onPresented: onPresented, onScale: { layerScale = $0 })
+      padding: padding, overlay: renderOverlay, onPresented: onPresented, onScale: { layerScale = $0 },
+      onBounds: onBounds)
   }
 
   private var renderOverlay: RenderOverlay {
@@ -245,16 +247,49 @@ public struct TerminalSurface: View {
     let source = shown.frame ?? frame
     switch update {
     case .highlight(let kind, let from, let to):
-      selection = GridText.selection(kind, from: from, to: to, in: source)
+      selection = resolved(kind, from: from, to: to, in: source)
     case .copy(let kind, let from, let to):
-      let resolved = GridText.selection(kind, from: from, to: to, in: source)
-      selection = resolved
-      if let resolved { Clipboard.write(GridText.string(in: source, selection: resolved)) }
+      let chosen = resolved(kind, from: from, to: to, in: source)
+      selection = chosen
+      if let chosen { Clipboard.write(copied(chosen, in: source)) }
     case .copyExisting(let existing):
-      Clipboard.write(GridText.string(in: source, selection: existing))
+      Clipboard.write(copied(existing, in: source))
     case .clear:
       selection = nil
     }
+  }
+
+  /// A double click on a path takes the whole path, including the rows a
+  /// newline broke it over. A drag still uses the gesture's own range.
+  private func resolved(
+    _ kind: SelectionKind, from: GridPoint, to: GridPoint, in frame: ScreenFrame
+  ) -> GridSelection? {
+    if kind == .word, from == to, let link = link(at: from), let covered = GridText.covering(link) {
+      return covered
+    }
+    return GridText.selection(kind, from: from, to: to, in: frame)
+  }
+
+  private func copied(_ selection: GridSelection, in frame: ScreenFrame) -> String {
+    GridText.string(in: frame, selection: selection) { row in
+      sameLink(across: row, selection)
+    }
+  }
+
+  /// The row and the one under it are a single path, so the copy joins them.
+  private func sameLink(across row: Int, _ selection: GridSelection) -> Bool {
+    let next = row + 1
+    guard row >= selection.start.row, next <= selection.end.row, next <= Int(UInt16.max) else {
+      return false
+    }
+    guard let link = links.find(UInt16(next), 0) else { return false }
+    return link.spans.contains { $0.row == UInt16(row) }
+  }
+
+  private func link(at point: GridPoint) -> TerminalLink? {
+    guard point.row >= 0, point.column >= 0, point.row <= Int(UInt16.max), point.column <= Int(UInt16.max)
+    else { return nil }
+    return links.find(UInt16(point.row), UInt16(point.column))
   }
 
   /// Underlines a hovered link at once, dotted, and asks whether it is
@@ -310,8 +345,11 @@ public struct TerminalSurface: View {
 
   private func fit(_ size: CGSize, _ metrics: FontMetrics) {
     guard metrics.cellWidth > 0, metrics.lineHeight > 0 else { return }
+    // The side margin lines the first column up with the chrome. Down, the
+    // grid uses the whole height and rests on the bottom edge, so the last
+    // row — a tmux status line — meets the status bar.
     onResize(
       metrics.columns(fitting: size.width - inset * 2),
-      metrics.rows(fitting: size.height - inset * 2))
+      metrics.rows(fitting: size.height))
   }
 }

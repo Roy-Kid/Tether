@@ -3,6 +3,7 @@ import TetherPluginKit
 enum WorkspaceAction: String, CaseIterable {
   case newTab, closeTerminal, previousTerminal, nextTerminal, renameTab
   case newTerminal, changeHost, closeTab, closeWindow, commandMenu, quickSwitch, inspector, zen
+  case switchHost1, switchHost2, switchHost3, switchHost4
   case previousTab, nextTab, renameTerminal, manageHosts
   case toggleTabBar
   case restoreTab
@@ -10,6 +11,7 @@ enum WorkspaceAction: String, CaseIterable {
   case reconnect
   case takeOver
   case quickTerminal, alwaysOnTop
+  case openPath
 
   /// The tab bar, zen and closing the window belong to a Mac window. The inspector and splits
   /// are here everywhere, and `TabSet.canPerform` keeps them to a window
@@ -18,7 +20,10 @@ enum WorkspaceAction: String, CaseIterable {
     #if os(macOS)
       allCases
     #else
-      allCases.filter { $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow && $0 != .quickTerminal && $0 != .alwaysOnTop }
+      allCases.filter {
+        $0 != .toggleTabBar && $0 != .zen && $0 != .closeWindow && $0 != .quickTerminal
+          && $0 != .alwaysOnTop && $0 != .openPath
+      }
     #endif
   }
 
@@ -35,8 +40,13 @@ enum WorkspaceAction: String, CaseIterable {
     case .closeTerminal: definition("Close Terminal", "File", KeyBinding("w"))
     case .previousTerminal: definition("Previous Terminal", "Terminal", KeyBinding("up", [.command, .option]))
     case .nextTerminal: definition("Next Terminal", "Terminal", KeyBinding("down", [.command, .option]))
-    case .renameTab: definition("Rename Tab…", "File")
+    case .renameTab: definition("Rename Tab", "File")
     case .changeHost: definition("Change Host…", "Host", KeyBinding("h", [.command, .shift]))
+    // The library's order, this machine first. ⌘1 is that first host.
+    case .switchHost1: definition("Host 1", "Host", KeyBinding("1"))
+    case .switchHost2: definition("Host 2", "Host", KeyBinding("2"))
+    case .switchHost3: definition("Host 3", "Host", KeyBinding("3"))
+    case .switchHost4: definition("Host 4", "Host", KeyBinding("4"))
     case .closeTab: definition("Close Tab", "File", KeyBinding("w", [.command, .option]))
     case .closeWindow: definition("Close Window", "File", KeyBinding("w", [.command, .shift]))
     case .restoreTab: definition("Reopen Closed Tab", "File", KeyBinding("t", [.command, .shift]))
@@ -54,7 +64,7 @@ enum WorkspaceAction: String, CaseIterable {
       definition("Previous Tab", "Window", KeyBinding("left", [.command, .option]), KeyBinding("[", [.command, .shift]))
     case .nextTab:
       definition("Next Tab", "Window", KeyBinding("right", [.command, .option]), KeyBinding("]", [.command, .shift]))
-    case .renameTerminal: definition("Rename Terminal…", "Terminal", KeyBinding("r"))
+    case .renameTerminal: definition("Rename Terminal", "Terminal", KeyBinding("r"))
     case .manageHosts: definition("Manage Hosts…", "Host")
     case .splitLeft: definition("Split Left", "Terminal")
     case .splitUp: definition("Split Up", "Terminal")
@@ -63,8 +73,22 @@ enum WorkspaceAction: String, CaseIterable {
     case .joinGroups: definition("Join All Splits", "Terminal")
     case .reconnect: definition("Reconnect", "Terminal")
     case .takeOver: definition("Take Over", "Terminal")
+    case .openPath: definition("Open Path…", "File", KeyBinding("o"))
     }
   }
+
+  /// Where ⌘1…⌘4 land in the host library. Nil for every other command.
+  var hostSlot: Int? {
+    switch self {
+    case .switchHost1: 0
+    case .switchHost2: 1
+    case .switchHost3: 2
+    case .switchHost4: 3
+    default: nil
+    }
+  }
+
+  static let hostSwitches: [Self] = [.switchHost1, .switchHost2, .switchHost3, .switchHost4]
 
   /// The commands a chord still reaches while a text field is being edited.
   /// The palettes are opened, swapped and closed from inside their own
@@ -200,7 +224,13 @@ extension TabSet {
     case .renameTab: currentWorkspace != nil
     case .previousTerminal, .nextTerminal: currentTerminals.count > 1
     case .splitLeft, .splitRight, .splitUp, .splitDown:
-      wide && (current.map { $0.isLive || $0.host.isLocal } ?? false)
+      // A touch screen never draws two terminals at once. The same command
+      // opens another terminal on that host, which the title switches to.
+      #if os(iOS)
+        current.map { $0.isLive || $0.host.isLocal } ?? false
+      #else
+        wide && (current.map { $0.isLive || $0.host.isLocal } ?? false)
+      #endif
     case .joinGroups: workspaceSplit != nil
     case .reconnect: current?.canReconnect == true
     case .takeOver: takeOverReady && hasTransferableWorkspace
@@ -226,7 +256,7 @@ extension TabSet {
     case .closeTerminal: requestCloseFocused()
     case .previousTerminal: cycleTerminal(forward: false)
     case .nextTerminal: cycleTerminal(forward: true)
-    case .renameTab: renamingWorkspace = currentWorkspace?.id
+    case .renameTab: if let id = currentWorkspace?.id { beginRenamingTab(id) }
     case .changeHost: hostPicker = true
     case .closeTab: requestCloseSelected()
     case .closeWindow: requestWindowClose()
@@ -238,19 +268,26 @@ extension TabSet {
     case .zen: toggleZen()
     case .previousTab: cycleTab(forward: false)
     case .nextTab: cycleTab(forward: true)
-    case .renameTerminal: renaming = current?.id
+    case .renameTerminal: if let id = current?.id { beginRenamingTerminal(id) }
     case .manageHosts: SettingsRoute.shared.show()
-    case .splitLeft:
-      if let id = current?.id { intent = .splitTerminal(id, .left) }
-    case .splitUp:
-      if let id = current?.id { intent = .splitTerminal(id, .up) }
-    case .splitRight:
-      if let id = current?.id { intent = .splitTerminal(id, .right) }
-    case .splitDown:
-      if let id = current?.id { intent = .splitTerminal(id, .down) }
+    case .splitLeft, .splitUp, .splitRight, .splitDown:
+      #if os(iOS)
+        intent = currentWorkspace.map { .addTerminal($0.id) } ?? .newTerminal
+      #else
+        let direction: SplitDirection = switch action {
+        case .splitLeft: .left
+        case .splitUp: .up
+        case .splitRight: .right
+        default: .down
+        }
+        if let id = current?.id { intent = .splitTerminal(id, direction) }
+      #endif
     case .joinGroups: joinSplits()
     case .reconnect: if let id = current?.id { intent = .reconnect(id) }
     case .takeOver: intent = .takeOver
+    case .openPath: intent = .openPath
+    case .switchHost1, .switchHost2, .switchHost3, .switchHost4:
+      if let slot = action.hostSlot { intent = .switchHost(slot) }
     }
   }
 }

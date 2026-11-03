@@ -82,20 +82,29 @@ struct SharedRenderTests {
     // not just fully opaque color blocks or the fully transparent clear.
     let textWidth = Int(metrics.cellWidth * 6)
     let textHeight = Int(metrics.lineHeight)
-    let edgePixels = (0..<textHeight).flatMap { y in
-      (0..<textWidth).map { x in (y * 800 + x) * 4 }
-    }.filter { transparent[$0 + 3] > 32 && transparent[$0 + 3] < 224 }
-    #expect(!edgePixels.isEmpty)
-    #expect(edgePixels.allSatisfy { index in
-      (0..<3).allSatisfy { Int(transparent[index + $0]) <= Int(transparent[index + 3]) + 1 }
-    }, "translucent glyph edges must not add a bright color fringe to the native backdrop")
-    let ink = [remote.foreground.red, remote.foreground.green, remote.foreground.blue]
-    #expect(edgePixels.allSatisfy { index in
-      let alpha = Int(transparent[index + 3])
-      return (0..<3).allSatisfy { channel in
-        abs(Int(transparent[index + channel]) * 255 - Int(ink[channel]) * alpha) <= 510
+    // Typed a step at a time: Xcode 26.6 gave up inferring this as one expression.
+    var edgePixels: [Int] = []
+    for y in 0..<textHeight {
+      for x in 0..<textWidth {
+        let index: Int = (y * 800 + x) * 4
+        let alpha: UInt8 = transparent[index + 3]
+        if alpha > 32 && alpha < 224 { edgePixels.append(index) }
       }
-    }, "antialiased text must retain the palette's sRGB hue and brightness after unpremultiplication")
+    }
+    #expect(!edgePixels.isEmpty)
+    let premultiplied: Bool = edgePixels.allSatisfy { (index: Int) -> Bool in
+      let alpha: Int = Int(transparent[index + 3])
+      return (0..<3).allSatisfy { (channel: Int) -> Bool in Int(transparent[index + channel]) <= alpha + 1 }
+    }
+    #expect(premultiplied, "translucent glyph edges must not add a bright color fringe to the native backdrop")
+    let ink: [Int] = [Int(remote.foreground.red), Int(remote.foreground.green), Int(remote.foreground.blue)]
+    let keepsHue: Bool = edgePixels.allSatisfy { (index: Int) -> Bool in
+      let alpha: Int = Int(transparent[index + 3])
+      return (0..<3).allSatisfy { (channel: Int) -> Bool in
+        abs(Int(transparent[index + channel]) * 255 - ink[channel] * alpha) <= 510
+      }
+    }
+    #expect(keepsHue, "antialiased text must retain the palette's sRGB hue and brightness after unpremultiplication")
     #expect(Palette.dark.remoteForm == remote, "window presentation never changes remote color responses")
     _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: 26, dirtyRows: [])
     #expect(try renderer.readPixels() == first, "turning glass off restores the opaque frame")
@@ -151,6 +160,43 @@ struct SharedRenderTests {
     }
   }
 
+  @Test("pointer cells and the caret match rendered pixels at fractional row heights")
+  func pointerMatchesCaretPixels() async throws {
+    TerminalFonts.prepare()
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+      let size = CGSize(width: 800.5, height: 805)
+      let width = Int((size.width * scale).rounded())
+      let height = Int((size.height * scale).rounded())
+      let metrics = FontMetrics(size: 13, scale: scale)
+      let cells = CellGeometry.placed(
+        size: size, scale: scale, inset: 8, cellWidth: metrics.cellWidth,
+        lineHeight: metrics.lineHeight, columns: 80, rows: 50)
+      let renderer = try await TerminalRenderer.offscreen(width: UInt32(width), height: UInt32(height))
+      defer { renderer.close() }
+      renderer.setFonts(primary: metrics.primary, wide: metrics.wide)
+      renderer.setGridPadding(Float(CellGeometry.gridPadding(inset: 8, scale: scale)))
+      for row in [0, 25, 49] {
+        let frame = ScreenFrame(
+          columns: 80, rows: 50, cursorRow: UInt32(row), cursorColumn: 37, cursorShape: .beam,
+          cursorVisible: true, alternateScreen: false, mouse: .off, viewportOffset: 0,
+          historyLines: 0, title: "", lines: Array(repeating: ScreenRow(runs: []), count: 50))
+        _ = try renderer.draw(frame: frame, palette: Palette.dark.renderPalette(), fontSize: Float(13 * scale))
+        let pixels = try renderer.readPixels()
+        let x = Int(((cells.originX + 37 * metrics.cellWidth) * scale).rounded()) + 1
+        let background = Array(pixels[0..<4])
+        let top = try #require((0..<height).first { y in
+          let index = (y * width + x) * 4
+          return Array(pixels[index..<index + 4]) != background
+        })
+        let expectedY = (cells.originY + CGFloat(row) * cells.lineHeight) * scale
+        #expect(abs(Double(top) - expectedY) <= 1, "caret row \(row), scale \(scale)")
+        let point = CGPoint(x: Double(x) / scale, y: Double(top) / scale + metrics.lineHeight / 2)
+        #expect(cells.cell(at: point)?.row == UInt16(row))
+        #expect(cells.cell(at: point)?.column == 37)
+      }
+    }
+  }
+
   @Test("invalid imports preserve the catalogue and selected font")
   func invalidFont() {
     let before = TerminalFonts.faces()
@@ -203,7 +249,7 @@ struct SharedRenderTests {
   }
 
 
-  @Test("a placed grid is centred and a program's own background reaches every edge")
+  @Test("a placed grid rests on the bottom and a program's own background reaches every edge")
   func placedGrid() async throws {
     TerminalFonts.prepare()
     let renderer = try await TerminalRenderer.offscreen(width: 300, height: 120)

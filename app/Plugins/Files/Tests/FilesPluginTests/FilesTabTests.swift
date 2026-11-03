@@ -437,7 +437,7 @@ struct FilesTabTests {
     #expect(model.draggedPathText(folder) == "/home/ada/runs", "a row outside the selection is only itself")
 
     let dragged = DraggedFile(
-      text: model.draggedPathText(image), file: model.fetch(image))
+      paths: DragPaths(model: model, entry: image), file: model.fetch(image))
     let provider = NSItemProvider()
     provider.register(dragged)
     #expect(provider.registeredTypeIdentifiers.contains(DroppedPath.contentType.identifier))
@@ -1098,6 +1098,51 @@ struct FileCacheTests {
     LocalCopies.sweep(base: base)
     #expect(!FileManager.default.fileExists(atPath: old.path))
     #expect(FileManager.default.fileExists(atPath: new.path))
+  }
+
+  /// The pass launch repeats. A preview still inside the age and the limit
+  /// stays; one that ages afterwards goes on the next pass, and so does the
+  /// least recently looked at once the copies no longer fit. An editing copy
+  /// is not in this root.
+  @Test("a later sweep removes what aged, and what no longer fits")
+  func sweepsAgain() throws {
+    #expect(LocalCopies.sweepEvery == 10 * 60)
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("files-again-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let cache = FileCache(host: UUID(), base: base)
+    let kept = entry("/kept.bin")
+    try Data(count: 10).write(to: cache.location(for: kept))
+    let editing = base.appendingPathComponent("Editing/note.txt")
+    try FileManager.default.createDirectory(
+      at: editing.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("keep".utf8).write(to: editing)
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.previewAge)], ofItemAtPath: editing.path)
+
+    LocalCopies.sweep(base: base)
+    #expect(cache.cached(kept) != nil)
+    #expect(FileManager.default.fileExists(atPath: editing.path))
+
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-2 * LocalCopies.previewAge)],
+      ofItemAtPath: cache.location(for: kept).deletingLastPathComponent().path)
+    LocalCopies.sweep(base: base)
+    #expect(cache.cached(kept) == nil)
+    #expect(FileManager.default.fileExists(atPath: editing.path))
+
+    let older = entry("/older.bin"), newer = entry("/newer.bin")
+    try Data(count: 800).write(to: cache.location(for: older))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-120)],
+      ofItemAtPath: cache.location(for: older).deletingLastPathComponent().path)
+    try Data(count: 800).write(to: cache.location(for: newer))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-30)],
+      ofItemAtPath: cache.location(for: newer).deletingLastPathComponent().path)
+    LocalCopies.trimPreviews(
+      in: LocalCopies.previews(in: base), limit: 1000, maxAge: LocalCopies.previewAge)
+    #expect(cache.cached(older) == nil)
+    #expect(cache.cached(newer) != nil)
   }
 
   @Test("moving a copy takes it out of the cache")

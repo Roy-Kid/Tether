@@ -28,6 +28,12 @@ entry points; normal commits run the full checks available on their host.
 | Broken directory/project references | XML input validation and real Windows build |
 | Release packaging adds loose files | Real Release publish; exactly one EXE required |
 | Hook returns success after a failed check | Negative controls including a real commit in a disposable Git repository |
+| Test compiled by Xcode 27.1 here, "unable to type-check in reasonable time" on CI's Xcode 26.6 | `.xcode-version`: CI selects it on the `xcode-27` image; the Apple gate refuses any other Xcode |
+| Lint on CI's newer `stable` Rust, absent from this machine's | `rust-toolchain.toml` names an exact version; CI runs `rustup toolchain install` from it |
+| App resolved a sibling `../nerve` checkout that CI does not have | Apple gate builds with `TETHER_HERMETIC=1`; the manifest links Nerve only outside it |
+| The hook's iOS link used the macOS SDK: `/usr/bin/git` exports `SDKROOT` to the hooks it runs | The gate drops an inherited `SDKROOT` before building; each target finds its own SDK |
+| Every failure surfaced after merge, then again each night on the same commit | CI runs on pushes to `dev` as well as `master` |
+| App and Files test processes exited 0 mid-run — no summary, a failure already printed — and the gate passed them | The gate judges each `swift test` by its report: any `✘`, or a run that never prints its summary, blocks. UI suites declare `.appKitEventLoop` |
 
 Windows commits run common source/boundary checks, Rust format, Clippy, full
 build/tests, native Debug/Release builds, WinUI build, four application regression
@@ -56,6 +62,28 @@ hook configuration when cloning a repository.
 Linux commits run common checks and all fuzz targets for 60 seconds each,
 including replay of stored regressions. They require CJK fonts, nightly Rust,
 and cargo-fuzz. The scheduled CI fuzz run retains its longer 600-second budget.
+
+A local pass counts only on CI's compilers and inputs. Both compilers are
+pinned in the repository: `rust-toolchain.toml` (cargo obeys it here and on
+CI) and `.xcode-version` (CI selects it; the Apple gate checks the selected
+Xcode against it). To move to a new compiler, change the file; CI moves with
+it. The gate compares the version only: the `xcode-27` image's 27.2 is a
+release candidate (build 27B48) where this Mac has the release (27B52), until
+the image catches up. The Apple gate builds every Swift package with `TETHER_HERMETIC=1`, which
+leaves out anything checked out beside this repository — Nerve's native
+panel, today — so it compiles what CI compiles. Builds outside the gate still
+link Nerve when `../nerve` exists (`TETHER_NERVE`).
+
+A `swift test` process idles in the run loop of Swift's async `main` and exits
+0 when that run loop returns. Once a test pulls an AppKit event — a close
+button's `performClick:`, a control's mouse tracking — HIToolbox wakes the
+main thread for every later window-server event by stopping the main run
+loop. With nothing but `main` there to receive it, the run ended early with
+status 0, depending on whether a mouse moved. A suite that touches windows or
+events declares `.appKitEventLoop` (`TetherTestSupport`), which runs
+`NSApp.run()` for the process before its tests start;
+`EventLoopTests` queues those stops on purpose. The gate no longer takes a
+status of 0 on trust: a `✘` or a missing summary blocks.
 
 The CI workflows use these same entry points on Windows, Linux and macOS.
 The common checks include renderer-evidence parser regressions. Windows checks

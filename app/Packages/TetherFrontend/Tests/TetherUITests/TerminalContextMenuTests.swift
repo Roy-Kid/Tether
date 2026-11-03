@@ -1,11 +1,12 @@
 #if os(macOS)
 import AppKit
 import Testing
+import TetherTestSupport
 import Tether
 @testable import TetherUI
 
 @MainActor
-@Suite("Native terminal context menus")
+@Suite("Native terminal context menus", .appKitEventLoop)
 struct TerminalContextMenuTests {
   private func event(shift: Bool = false) throws -> NSEvent {
     try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 16, y: 16),

@@ -128,6 +128,52 @@ class GateTests(unittest.TestCase):
             self.git("add", ".")
             self.assertNotEqual(before, gate.staged_clean())
 
+    def apple_commands(self, xcode):
+        """Runs the Apple gate with every command recorded, not executed."""
+        calls = []
+
+        def command(*args, **kwargs):
+            calls.append((args, kwargs.get("env")))
+            return f"Xcode {xcode}\nBuild version 27A9275\n" if args[:2] == ("xcodebuild", "-version") else ""
+        (self.root / ".xcode-version").write_text("27.1\n")
+        def tests(*args, env):
+            calls.append((("swift", "test", *args), env))
+        with patch.object(gate, "ROOT", self.root), patch.object(gate, "run", side_effect=command), \
+                patch.object(gate, "swift_test", side_effect=tests):
+            gate.apple(build=False)
+        return calls
+
+    def test_an_sdk_git_exported_to_the_hook_is_not_used(self):
+        os.environ["SDKROOT"] = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+        gate.drop_inherited_sdk()
+        self.assertNotIn("SDKROOT", os.environ)
+
+    def test_another_xcode_blocks_before_anything_compiles(self):
+        # CI's Xcode 26.6 failed to type-check a test Xcode 27.1 compiled.
+        with self.assertRaisesRegex(RuntimeError, r"\.xcode-version"):
+            self.apple_commands("26.6")
+
+    def test_swift_builds_without_sibling_checkouts(self):
+        # A sibling checkout resolved here and nowhere else.
+        calls = self.apple_commands("27.1")
+        builds = [env for args, env in calls if args[0] in ("swift", "xcodebuild") and "-version" not in args]
+        self.assertTrue(builds)
+        for env in builds:
+            self.assertEqual((env or {}).get("TETHER_HERMETIC"), "1")
+
+    def test_a_test_run_must_finish_and_pass(self):
+        finished = '◇ Test "a" started.\n✔ Test "a" passed.\n✔ Test run with 1 test in 1 suite passed.\n'
+        gate.require_test_report(finished)
+        gate.require_test_report("\t Executed 3 tests, with 0 failures (0 unexpected)\n")
+        # The process ended mid-run with status 0: 398 started, no summary.
+        with self.assertRaisesRegex(RuntimeError, "ended before"):
+            gate.require_test_report('◇ Test "a" started.\n✔ Test "a" passed.\n◇ Test "b" started.\n')
+        # A failure is a failure whatever the status said.
+        with self.assertRaisesRegex(RuntimeError, "failed"):
+            gate.require_test_report(finished + '✘ Test "b" recorded an issue\n')
+        with self.assertRaisesRegex(RuntimeError, "failed"):
+            gate.require_test_report("\t Executed 3 tests, with 1 failure (0 unexpected)\n")
+
     def test_failed_checker_really_prevents_git_commit(self):
         (self.root / ".githooks").mkdir()
         hook = self.root / ".githooks/pre-commit"

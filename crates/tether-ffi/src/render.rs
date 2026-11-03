@@ -202,12 +202,13 @@ impl RenderSurface {
             value;
     }
 
-    /// The least margin round the grid, in physical pixels, drawn by the
-    /// surface itself: the grid is centred in what is left, and each edge
-    /// cell's background carries on to the surface's edge, so a program that
-    /// paints its own background is not framed by the page's. A negative
-    /// value, the default, leaves the grid at the corner for a consumer that
-    /// lays out its own margin.
+    /// The least margin at the sides of the grid, in physical pixels, drawn
+    /// by the surface itself: the grid is centred across what that margin
+    /// leaves and rests on the bottom edge, so a status line meets the
+    /// window. Each edge cell's background carries on to the surface's edge,
+    /// so a program that paints its own background is not framed by the
+    /// page's. A negative value, the default, leaves the grid at the corner
+    /// for a consumer that lays out its own margin.
     pub fn set_grid_padding(&self, padding: f32) {
         let value = (padding.is_finite() && padding >= 0.0).then_some(padding);
         *self.grid_padding.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = value;

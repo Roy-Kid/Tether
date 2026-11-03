@@ -15,6 +15,30 @@ struct GridSelectionTests {
     #expect(GridText.string(in: frame, selection: backward) == "ell")
   }
 
+  @Test("a path broken over rows copies as one path when those rows are one link")
+  func brokenPathCopiesWhole() throws {
+    let frame = screen([
+      row("/home/ada/sessions/"),
+      row("%2Fwork/plot-"),
+      row("1.png"),
+    ], columns: 20)
+    let link = TerminalLink(
+      text: "/home/ada/sessions/%2Fwork/plot-1.png",
+      kind: .path(path: "/home/ada/sessions/%2Fwork/plot-1.png", line: nil, column: nil),
+      spans: [
+        LinkSpan(row: 0, start: 0, end: 19),
+        LinkSpan(row: 1, start: 0, end: 14),
+        LinkSpan(row: 2, start: 0, end: 5),
+      ])
+    let selection = try #require(GridText.covering(link))
+    #expect(selection.start == point(0, 0))
+    #expect(selection.end == point(2, 4))
+    let whole = GridText.string(in: frame, selection: selection) { _ in true }
+    #expect(whole == "/home/ada/sessions/%2Fwork/plot-1.png")
+    let broken = GridText.string(in: frame, selection: selection)
+    #expect(broken == "/home/ada/sessions/\n%2Fwork/plot-\n1.png")
+  }
+
   @Test("a drag across two rows keeps the line break and the rest of each line")
   func acrossRows() throws {
     let frame = screen([row("abc"), row("def")], columns: 3)

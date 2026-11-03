@@ -120,6 +120,9 @@ final class Latch {
 public struct KeyCapture: View {
   @Environment(\.terminalInputEnabled) private var inputEnabled
   @Environment(\.terminalMenuItems) private var menuItems
+  #if os(macOS)
+    @Environment(\.terminalDrop) private var drop
+  #endif
   let onInput: (TerminalInput) -> Void
   var latch: Latch
   var active: Bool
@@ -192,7 +195,8 @@ public struct KeyCapture: View {
         onInput: onInput, active: active && inputEnabled, onFocus: onFocus,
         onScroll: onScroll, claimsWheel: claimsWheel, lineHeight: lineHeight,
         links: links, geometry: geometry, cursorRect: cursorRect, onHover: onHover,
-        onSelection: onSelection, selection: selection, mouse: mouse, menuItems: menuItems)
+        onSelection: onSelection, selection: selection, mouse: mouse, menuItems: menuItems,
+        drop: drop)
     #else
       // A phone drags the screen itself; the capture view owns that gesture
       // for the same reason the Mac's owns the wheel.
@@ -200,7 +204,8 @@ public struct KeyCapture: View {
         onInput: onInput, active: active && inputEnabled, lineHeight: lineHeight,
         onFocus: onFocus, onScroll: onScroll, claimsWheel: claimsWheel, links: links,
         geometry: geometry, cursorRect: cursorRect,
-        latch: latch, mouse: mouse, onSelection: onSelection, selection: selection)
+        latch: latch, mouse: mouse, onSelection: onSelection, selection: selection,
+        menuItems: menuItems)
     #endif
   }
 }

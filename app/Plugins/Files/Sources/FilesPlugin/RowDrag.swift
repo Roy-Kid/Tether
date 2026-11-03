@@ -36,7 +36,6 @@
   final class RowDragView: NSView, NSDraggingSource {
     weak var model: FilesTab?
     var entry: FileEntry?
-    private var monitor: Any?
     /// Whether the drag in flight carries a file, which is all a drop
     /// outside this app can take.
     private var carriesFiles = false
@@ -44,6 +43,10 @@
     /// How far the pointer travels before a press is a drag. AppKit has no
     /// public value; its tables start about here.
     static let threshold: CGFloat = 4
+
+    /// Rows painted on the drag. The rest are still dragged; drawing every
+    /// selected row before the drag moved froze a large selection.
+    static let drawnRows = 8
 
     /// The press's next movement or release, left where it is unless taken.
     /// The application's queue; a test hands its own, since posting to that
@@ -57,27 +60,50 @@
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      stop()
-      guard window != nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-        guard let self, self.claims(event), self.becomesDrag(event) else { return event }
-        self.beginDrag(from: event)
-        return nil
+    /// The row under this press. The list has one monitor; each row used to
+    /// have its own, so a click walked every row that had ever been shown.
+    static func under(_ event: NSEvent) -> RowDragView? {
+      guard let content = event.window?.contentView,
+        let hit = content.hitTest(event.locationInWindow)
+      else { return nil }
+      var current: NSView? = hit
+      while let view = current, !(view is NSTableView) {
+        if let row = find(in: view, event: event) { return row }
+        current = view.superview
       }
+      return nil
     }
 
-    func stop() {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-      monitor = nil
+    private static func find(in view: NSView, event: NSEvent) -> RowDragView? {
+      if let row = view as? RowDragView,
+        row.visibleRect.contains(row.convert(event.locationInWindow, from: nil))
+      {
+        return row
+      }
+      for subview in view.subviews {
+        if let row = find(in: subview, event: event) { return row }
+      }
+      return nil
     }
+
+    /// A drag consumes the press. A click is left for the list, which is
+    /// what extends the selection.
+    func consumePress(_ event: NSEvent) -> Bool {
+      guard claims(event), becomesDrag(event) else { return false }
+      beginDrag(from: event)
+      return true
+    }
+
+    /// The press is watched once for the list, not once for this row.
+    func stop() {}
 
     /// A first press on this row, where the list can see it. Not a control
-    /// click, which is the menu, and not one on a name being edited.
+    /// click, which is the menu, and not one on a name being edited. Not a
+    /// shift or ⌘ press either: that is a selection, and holding it to see
+    /// whether it drags kept every one waiting until the button came up.
     func claims(_ event: NSEvent) -> Bool {
       guard let window, event.window === window, event.clickCount == 1,
-        !event.modifierFlags.contains(.control),
+        event.modifierFlags.isDisjoint(with: [.control, .shift, .command]),
         let model, let entry, model.renaming != entry.path,
         visibleRect.contains(convert(event.locationInWindow, from: nil))
       else { return false }
@@ -117,24 +143,20 @@
       session.animatesToStartingPositionsOnCancelOrFail = true
     }
 
-    /// Each file is a promise drawn as its row. The paths travel on one more
-    /// item, which wears the folders' rows, or nothing when there are none.
+    /// One item a row, in the order dragged, drawn as that row: a file is a
+    /// promise carrying its path, a folder its path alone. The drag's count
+    /// is the rows dragged.
     func draggingItems(_ entries: [FileEntry], model: FilesTab) -> [NSDraggingItem] {
-      let files = entries.filter { $0.kind == .file }
-      let others = entries.filter { $0.kind != .file }
       let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-      var items = files.enumerated().map { index, file in
-        let item = NSDraggingItem(pasteboardWriter: DraggedRow.promise(for: file, model: model))
+      return entries.enumerated().map { index, entry in
+        let writer: NSPasteboardWriting =
+          entry.kind == .file ? DraggedRow.promise(for: entry, model: model) : DraggedRow.path(of: entry)
+        let item = NSDraggingItem(pasteboardWriter: writer)
         item.setDraggingFrame(
-          rows(from: index, count: 1), contents: Self.image(of: [file], dark: dark, row: bounds.size))
+          rows(from: index, count: 1),
+          contents: index < Self.drawnRows ? Self.image(of: [entry], dark: dark, row: bounds.size) : nil)
         return item
       }
-      let paths = NSDraggingItem(pasteboardWriter: DraggedRow.paths(entries))
-      paths.setDraggingFrame(
-        rows(from: files.count, count: max(1, others.count)),
-        contents: others.isEmpty ? nil : Self.image(of: others, dark: dark, row: bounds.size))
-      items.append(paths)
-      return items
     }
 
     /// Where `count` rows starting `index` rows below this one would be.

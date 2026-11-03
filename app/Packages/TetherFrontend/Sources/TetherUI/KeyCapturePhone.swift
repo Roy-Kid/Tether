@@ -4,12 +4,28 @@
   import Tether
   import UIKit
 
+  extension Notification.Name {
+    /// `PhoneKeyboard.staysDown` changed. The capture view reloads its input
+    /// view, and the key bar updates the button that asked.
+    static let tetherSoftwareKeyboard = Notification.Name("tether.softwareKeyboard")
+  }
+
   /// The software keyboard stays down when the app comes forward. A tap on
   /// the terminal asks for it; opening the app, or switching back to it,
-  /// does not. An iPad is unchanged: a hardware keyboard has to land somewhere.
+  /// does not. The key at the end of the shortcut row toggles the same flag.
+  /// An iPad starts with it up.
+  ///
+  /// Down does not resign first responder. The capture keeps an empty input
+  /// view instead, so a hardware keyboard and the edit menu still have a
+  /// responder while the software keyboard is hidden.
   @MainActor
   enum PhoneKeyboard {
-    static var staysDown = true
+    static var staysDown = UIDevice.current.userInterfaceIdiom == .phone {
+      didSet {
+        guard staysDown != oldValue else { return }
+        NotificationCenter.default.post(name: .tetherSoftwareKeyboard, object: nil)
+      }
+    }
 
     static func allowsAutomaticFocus(phone: Bool) -> Bool {
       !(phone && staysDown)
@@ -21,6 +37,45 @@
 
     static func noteTapped(phone: Bool) {
       if phone { staysDown = false }
+    }
+
+    static func toggle() { staysDown.toggle() }
+  }
+
+  /// Whether the keyboard is still choosing a character, and whether a double
+  /// tap may copy the word under it.
+  ///
+  /// English (and any direct layout) commits each letter as it is typed, so
+  /// a double tap is free to copy. Pinyin, kana and hangul are still the
+  /// input method's: a double tap there would take the word they have not
+  /// chosen yet.
+  enum PhoneInput {
+    static func multistage(_ language: String?) -> Bool {
+      guard let language = language?.lowercased() else { return false }
+      return language.hasPrefix("zh") || language.hasPrefix("ja") || language.hasPrefix("ko")
+    }
+
+    static func quickCopy(language: String?, composing: Bool) -> Bool {
+      !composing && !multistage(language)
+    }
+
+    static func correction(for language: String?) -> UITextAutocorrectionType {
+      multistage(language) ? .default : .no
+    }
+  }
+
+  /// Workspace actions, split on the separators the Mac menu uses.
+  enum PhoneMenu {
+    static func workspaceSections(_ items: [TerminalMenuItem]) -> [[TerminalMenuItem]] {
+      var sections: [[TerminalMenuItem]] = [[]]
+      for item in items {
+        if item.title.isEmpty {
+          if !sections[sections.count - 1].isEmpty { sections.append([]) }
+        } else {
+          sections[sections.count - 1].append(item)
+        }
+      }
+      return sections.filter { !$0.isEmpty }
     }
   }
 
@@ -58,6 +113,7 @@
     var mouse: MouseTracking = .off
     var onSelection: (SelectionUpdate) -> Void = { _ in }
     var selection: GridSelection?
+    var menuItems: [TerminalMenuItem] = []
 
     func makeUIView(context: Context) -> KeyCaptureView {
       let view = KeyCaptureView()
@@ -91,6 +147,7 @@
       view.mouse = mouse
       view.onSelection = onSelection
       view.selection = selection
+      view.menuItems = menuItems
     }
   }
 
@@ -107,6 +164,7 @@
     var mouse: MouseTracking = .off
     var onSelection: (SelectionUpdate) -> Void = { _ in }
     var selection: GridSelection?
+    var menuItems: [TerminalMenuItem] = []
     /// The cell a drag last reported, so a finger that stays put is quiet.
     private var reported: (row: UInt16, column: UInt16)?
     /// The caret, in this view's top-left coordinates, so composing text
@@ -118,10 +176,17 @@
       }
     }
     /// Pinyin (or whatever the input method has not committed). Empty once
-    /// a candidate is chosen and `insertText` sends the word.
-    private var marked = ""
+    /// a candidate is chosen and sent.
+    private var composition = PhoneComposition()
+    private var marked: String { composition.marked }
     var composing: String { marked }
-    var selectedTextRange: UITextRange?
+    /// Where the input method's caret sits inside `marked`, in UTF-16.
+    /// Empty when nothing is being composed. The caret itself is never nil:
+    /// a multistage keyboard will not mark text without one.
+    private var markedSelection: NSRange {
+      get { composition.caret }
+      set { composition.caret = newValue }
+    }
     var markedTextStyle: [NSAttributedString.Key: Any]?
     weak var inputDelegate: UITextInputDelegate?
     private var storedTokenizer: UITextInputStringTokenizer?
@@ -131,6 +196,12 @@
     /// A terminal is not prose. The software keyboard's replacements —
     /// capitals, smart quotes, the predictive bar — rewrite what was typed
     /// and change the keyboard's height while they do it.
+    ///
+    /// Correction stays off for a direct layout. Turning it off for every
+    /// layout also turns off the candidate bar, and pinyin then has nowhere
+    /// to put a character. Stored, and updated when the input mode changes:
+    /// a computed value the setter throws away makes UIKit reload the
+    /// keyboard until the keystrokes are gone.
     var autocorrectionType: UITextAutocorrectionType = .no
     var spellCheckingType: UITextSpellCheckingType = .no
     var autocapitalizationType: UITextAutocapitalizationType = .none
@@ -144,6 +215,35 @@
     /// the difference rather than the total.
     private var carried: Int32 = 0
     private var selectionAnchor: GridPoint?
+    /// Gestures this view installed. They do not run alongside each other.
+    /// The system's context menu is not one of them: it is later than the
+    /// selection press, and agreeing to run together shows two menus.
+    private var ownedGestures: [UIGestureRecognizer] = []
+    private var selectionPress: UILongPressGestureRecognizer?
+    private var editMenu: UIEditMenuInteraction?
+    /// Set while a press is a selection or a menu, so the tap that ends it
+    /// is not also a click.
+    private var consumedPress = false
+    private var editPoint: CGPoint = .zero
+    /// Double tap. It fails immediately on a multistage keyboard, so the
+    /// single tap does not wait out a copy that will not happen.
+    private var quickTap: UITapGestureRecognizer?
+    /// An empty input view keeps this view first responder while the software
+    /// keyboard is down. Resigning would take the edit menu with it.
+    private let blankKeyboard: UIView = {
+      let view = UIView(frame: .zero)
+      view.backgroundColor = .clear
+      view.isUserInteractionEnabled = false
+      return view
+    }()
+    /// Gestures the edit menu installed. The context menu's press has to
+    /// wait; these must not, or the menu shown on release never appears.
+    private var editMenuGestureIDs: Set<ObjectIdentifier> = []
+    private var deferredMenuGestures: [ObjectIdentifier] = []
+    /// The last input-mode class `reloadInputViews` was asked for, so a
+    /// switch to pinyin reloads once and does not loop.
+    private var traitsMultistage = false
+    private var reloadingTraits = false
 
     override init(frame: CGRect) {
       super.init(frame: frame)
@@ -161,13 +261,43 @@
       pan.maximumNumberOfTouches = 2
       pan.delegate = self
       addGestureRecognizer(pan)
+      // A still finger is a selection, not a scroll. The pan waits until
+      // that press fails, which a moving finger does within a few points.
+      // 0.45s is inside the system's context-menu press (about 0.55s), so
+      // on ordinary text this press wins and the menu is shown when it ends.
+      let hold = UILongPressGestureRecognizer(target: self, action: #selector(holdSelecting(_:)))
+      hold.minimumPressDuration = 0.45
+      hold.allowableMovement = 12
+      hold.cancelsTouchesInView = false
+      hold.delegate = self
+      addGestureRecognizer(hold)
+      selectionPress = hold
+      pan.require(toFail: hold)
       // A tap waits out the drag, so a click is not also the start of a scroll.
       let tap = UITapGestureRecognizer(target: self, action: #selector(takeFocus(_:)))
       tap.require(toFail: pan)
+      // A recognized press is a selection. The tap that would clear it has
+      // to wait that press out, and fail when the press wins.
+      tap.require(toFail: hold)
+      // English (any direct layout) copies the word on a double tap. The
+      // single tap waits so the first tap of that pair is not also a click.
+      let quick = UITapGestureRecognizer(target: self, action: #selector(quickCopied(_:)))
+      quick.numberOfTapsRequired = 2
+      quick.delegate = self
+      addGestureRecognizer(quick)
+      quickTap = quick
+      tap.require(toFail: quick)
       addGestureRecognizer(tap)
-      // A long-press on a path is a context menu with the file above it —
-      // the gesture the rest of the system uses for "show me this".
+      ownedGestures = [pan, hold, tap, quick]
+      // A long-press on a path is the system's context menu, with the file
+      // above it. Ordinary text loses that race — this view's press is
+      // shorter — and shows the same actions from an edit menu on release.
+      let editing = UIEditMenuInteraction(delegate: self)
+      editMenu = editing
+      addInteraction(editing)
+      editMenuGestureIDs = Set((gestureRecognizers ?? []).map { ObjectIdentifier($0) })
       addInteraction(UIContextMenuInteraction(delegate: self))
+      deferSystemMenu(to: hold)
       let center = NotificationCenter.default
       center.addObserver(self, selector: #selector(leftForeground(_:)),
         name: UIScene.didEnterBackgroundNotification, object: nil)
@@ -175,6 +305,10 @@
         name: UIScene.willEnterForegroundNotification, object: nil)
       center.addObserver(self, selector: #selector(enteredForeground(_:)),
         name: UIScene.didActivateNotification, object: nil)
+      center.addObserver(self, selector: #selector(inputModeChanged),
+        name: UITextInputMode.currentInputModeDidChangeNotification, object: nil)
+      center.addObserver(self, selector: #selector(softwareKeyboardChanged),
+        name: .tetherSoftwareKeyboard, object: nil)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -184,12 +318,22 @@
 
     private var phone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
 
-    override var canBecomeFirstResponder: Bool {
-      PhoneKeyboard.allowsAutomaticFocus(phone: phone)
+    override var canBecomeFirstResponder: Bool { wantsFocus }
+
+    /// Empty while the software keyboard is suppressed, so this view can stay
+    /// first responder — the edit menu and a hardware keyboard need that —
+    /// without the system keyboard covering the terminal.
+    override var inputView: UIView? {
+      PhoneKeyboard.staysDown ? blankKeyboard : nil
     }
 
     override func didMoveToWindow() {
       super.didMoveToWindow()
+      // The edit menu's gestures arrive with the window. They must not be
+      // told to wait for the selection press: that press already won, and
+      // the menu it presents then does nothing.
+      if window != nil { absorbEditMenuGestures() }
+      if let selectionPress { deferSystemMenu(to: selectionPress) }
       guard wantsFocus else { return }
       // During the SwiftUI update that inserts this view, becoming first
       // responder does not present the keyboard. The next turn does.
@@ -200,31 +344,48 @@
       }
     }
 
+    /// Gestures whose type is the edit menu's own. Named that way because
+    /// the interaction does not hand them out.
+    private func absorbEditMenuGestures() {
+      for gesture in gestureRecognizers ?? [] {
+        let name = String(describing: type(of: gesture))
+        if name.contains("EditMenu") { editMenuGestureIDs.insert(ObjectIdentifier(gesture)) }
+      }
+    }
+
     @discardableResult
     override func becomeFirstResponder() -> Bool {
       guard canBecomeFirstResponder else { return false }
-      let accepted = super.becomeFirstResponder()
-      if accepted { reloadInputViews() }
-      return accepted
+      // Set before the keyboard is built. Reloading here tears the input
+      // method down before it has attached, and Chinese then types nothing.
+      let language = textInputMode?.primaryLanguage
+      autocorrectionType = PhoneInput.correction(for: language)
+      traitsMultistage = PhoneInput.multistage(language)
+      return super.becomeFirstResponder()
+    }
+
+    /// The shortcut row, or a tap, changed whether the software keyboard is up.
+    @objc private func softwareKeyboardChanged() {
+      guard window != nil else { return }
+      if wantsFocus, !isFirstResponder, !PhoneKeyboard.staysDown {
+        _ = becomeFirstResponder()
+      }
+      reloadInputViews()
     }
 
     /// The app left the foreground. The keyboard it had up is not brought
-    /// back with it.
+    /// back with it. The view stays first responder, so a long-press after
+    /// returning still has a menu.
     @objc private func leftForeground(_ note: Notification) {
       guard sceneMatches(note) else { return }
       PhoneKeyboard.noteLeftForeground(phone: phone)
-      if isFirstResponder { _ = resignFirstResponder() }
     }
 
-    /// iOS restores the first responder as the scene activates, which would
-    /// open the software keyboard again. Refuse that until a tap.
+    /// iOS restores the system keyboard as the scene activates. Put the empty
+    /// input view back until a tap or the key bar asks for the keyboard.
     @objc private func enteredForeground(_ note: Notification) {
-      guard sceneMatches(note), phone, PhoneKeyboard.staysDown else { return }
-      if isFirstResponder { _ = resignFirstResponder() }
-      DispatchQueue.main.async { [weak self] in
-        guard let self, PhoneKeyboard.staysDown, self.isFirstResponder else { return }
-        _ = self.resignFirstResponder()
-      }
+      guard sceneMatches(note), PhoneKeyboard.staysDown else { return }
+      reloadInputViews()
     }
 
     private func sceneMatches(_ note: Notification) -> Bool {
@@ -232,20 +393,130 @@
       return scene === mine
     }
 
+    /// Switching onto pinyin (or kana, or hangul) has to reread correction,
+    /// or the candidate bar stays the one built for a direct layout. Once,
+    /// and not while a word is open: reloading then drops the composition.
+    @objc private func inputModeChanged() {
+      let language = textInputMode?.primaryLanguage
+      let next = PhoneInput.multistage(language)
+      autocorrectionType = PhoneInput.correction(for: language)
+      let changed = next != traitsMultistage
+      traitsMultistage = next
+      guard changed, !reloadingTraits, isFirstResponder, marked.isEmpty else { return }
+      reloadingTraits = true
+      reloadInputViews()
+      reloadingTraits = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+      consumedPress = false
+      super.touchesBegan(touches, with: event)
+    }
+
     @objc private func takeFocus(_ gesture: UITapGestureRecognizer) {
       guard wantsFocus else { return }
+      if consumedPress {
+        consumedPress = false
+        return
+      }
       if selection != nil {
         onSelection(.clear)
         selection = nil
         return
       }
       PhoneKeyboard.noteTapped(phone: phone)
-      becomeFirstResponder()
+      if !isFirstResponder { becomeFirstResponder() }
       onFocus?()
       guard mouse != .off, gesture.state == .ended else { return }
       guard let cell = geometry.cell(at: gesture.location(in: self)) else { return }
       point(.press, button: .left, cell: cell)
       point(.release, button: .left, cell: cell)
+    }
+
+    /// Double tap. Copies the word when the keyboard commits letters directly.
+    @objc private func quickCopied(_ gesture: UITapGestureRecognizer) {
+      guard gesture.state == .ended else { return }
+      _ = quickCopy(at: gesture.location(in: self), language: textInputMode?.primaryLanguage)
+    }
+
+    /// The word under `location`, onto the clipboard. Nothing while a word
+    /// is still being chosen, or while the keyboard is multistage.
+    @discardableResult
+    func quickCopy(at location: CGPoint, language: String?) -> Bool {
+      guard wantsFocus, PhoneInput.quickCopy(language: language, composing: !marked.isEmpty) else { return false }
+      guard let cell = geometry.cell(at: location) else { return false }
+      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
+      onSelection(.copy(.word, point, point))
+      return true
+    }
+
+    /// A still finger selects. Moving it grows the selection. Lifting leaves
+    /// the highlight and shows Copy, Close and the rest: the system's own
+    /// menu loses to this shorter press, so it never gets to show them.
+    @objc private func holdSelecting(_ gesture: UILongPressGestureRecognizer) {
+      guard wantsFocus, marked.isEmpty else { return }
+      guard let cell = geometry.clampedCell(at: gesture.location(in: self)) else { return }
+      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
+      switch gesture.state {
+      case .began:
+        consumedPress = true
+        // The menu needs a first responder. Becoming one with the empty input
+        // view does not raise the software keyboard.
+        if !isFirstResponder { _ = becomeFirstResponder() }
+        selectionAnchor = point
+        onSelection(.highlight(.word, point, point))
+      case .changed:
+        onSelection(.highlight(.character, selectionAnchor ?? point, point))
+      case .ended:
+        selectionAnchor = nil
+        editPoint = gesture.location(in: self)
+        // Presenting in this callback is dismissed by the touch that just
+        // ended. The next turn is after that touch has left.
+        DispatchQueue.main.async { [weak self] in
+          self?.presentEditingMenu()
+        }
+      case .cancelled, .failed:
+        selectionAnchor = nil
+      default:
+        break
+      }
+    }
+
+    /// Ordinary text belongs to the selection press. A link does not: that
+    /// press fails, and the system's menu — which waits for this one — shows
+    /// the file.
+    private func presentEditingMenu() {
+      guard wantsFocus, marked.isEmpty, window != nil else { return }
+      if !isFirstResponder { _ = becomeFirstResponder() }
+      editMenu?.presentEditMenu(
+        with: UIEditMenuConfiguration(identifier: nil, sourcePoint: editPoint))
+    }
+
+    func ownsSelectionPress(at location: CGPoint) -> Bool {
+      guard wantsFocus, marked.isEmpty else { return false }
+      guard let cell = geometry.clampedCell(at: location) else { return false }
+      return links.find(cell.row, cell.column) == nil
+    }
+
+    /// The system's menu waits until the selection press has failed. On a
+    /// link that failure is the moment the press would have begun, which is
+    /// what lets the file menu appear. The edit menu is not one of these:
+    /// it is presented after the press has already succeeded.
+    private func deferSystemMenu(to press: UILongPressGestureRecognizer) {
+      for gesture in gestureRecognizers ?? [] {
+        let id = ObjectIdentifier(gesture)
+        guard !editMenuGestureIDs.contains(id), !deferredMenuGestures.contains(id),
+          !ownedGestures.contains(where: { $0 === gesture })
+        else { continue }
+        // The system menu's press is a touch-duration observer and a simple
+        // press, not a type whose name says "context menu". Relationship
+        // recognizers are the failure edges themselves and must be left alone.
+        let name = String(describing: type(of: gesture))
+        guard name.contains("TouchDuration") || name.contains("SimplePress") || name.contains("SecondaryClick")
+        else { continue }
+        gesture.require(toFail: press)
+        deferredMenuGestures.append(id)
+      }
     }
 
     @objc private func dragged(_ gesture: UIPanGestureRecognizer) {
@@ -391,35 +662,46 @@
     /// A candidate, or a key the input method did not keep for itself.
     /// Composing text is drawn here and is not sent until this is called.
     func insertText(_ text: String) {
-      if !marked.isEmpty {
-        inputDelegate?.textWillChange(self)
-        marked = ""
-        inputDelegate?.textDidChange(self)
-        setNeedsDisplay()
-      }
-      // The return key arrives as a newline rather than as a key press, and a
-      // terminal wants the carriage return its line editor is waiting for.
-      if text == "\n" {
-        onInput?(.key(.enter, latch.spend()))
-        return
-      }
-      guard !text.isEmpty else { return }
-      // Whatever the key bar armed is spent here: this is where Ctrl-B
-      // becomes Ctrl-B rather than a `b`.
-      onInput?(.key(.text(text), latch.spend()))
+      let replacing = !marked.isEmpty
+      if replacing { beginCompositionChange() }
+      let committed = composition.insert(text)
+      if replacing { endCompositionChange() }
+      if let committed { sendCommitted(committed) }
     }
 
     func deleteBackward() {
       // Backspace while a word is still being chosen edits that word.
       // Sending it would delete whatever cell the caret is sitting on.
-      if !marked.isEmpty {
-        inputDelegate?.textWillChange(self)
-        marked.removeLast()
-        inputDelegate?.textDidChange(self)
-        setNeedsDisplay()
+      guard !marked.isEmpty else {
+        onInput?(.key(.backspace, latch.spend()))
         return
       }
-      onInput?(.key(.backspace, latch.spend()))
+      beginCompositionChange()
+      _ = composition.deleteBackward()
+      endCompositionChange()
+    }
+
+    private func beginCompositionChange() {
+      inputDelegate?.selectionWillChange(self)
+      inputDelegate?.textWillChange(self)
+    }
+
+    private func endCompositionChange() {
+      inputDelegate?.textDidChange(self)
+      inputDelegate?.selectionDidChange(self)
+      setNeedsDisplay()
+    }
+
+    /// The return key arrives as a newline rather than as a key press, and a
+    /// terminal wants the carriage return its line editor is waiting for.
+    /// Whatever the key bar armed is spent here.
+    private func sendCommitted(_ text: String) {
+      if text == "\n" {
+        onInput?(.key(.enter, latch.spend()))
+        return
+      }
+      guard !text.isEmpty else { return }
+      onInput?(.key(.text(text), latch.spend()))
     }
 
     override func draw(_ rect: CGRect) {
@@ -553,10 +835,23 @@
   }
 
   extension KeyCaptureView: UIGestureRecognizerDelegate {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+      if gestureRecognizer === quickTap {
+        return PhoneInput.quickCopy(language: textInputMode?.primaryLanguage, composing: !marked.isEmpty)
+      }
+      guard gestureRecognizer === selectionPress else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+      return ownsSelectionPress(at: gestureRecognizer.location(in: self))
+    }
+
     func gestureRecognizer(
       _ gestureRecognizer: UIGestureRecognizer,
       shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-    ) -> Bool { false }
+    ) -> Bool {
+      // A second menu running with the selection press is the one that
+      // hid Close. These stay exclusive. A link fails the press instead,
+      // and the system's menu then runs on its own.
+      false
+    }
   }
 
   extension KeyCaptureView {
@@ -567,16 +862,27 @@
     }
 
     private func replaceMarked(_ text: String?) {
-      inputDelegate?.textWillChange(self)
-      marked = text ?? ""
-      let end = markedEnd
-      selectedTextRange = InputRange(end, end)
-      inputDelegate?.textDidChange(self)
-      setNeedsDisplay()
+      let next = text ?? ""
+      setMarkedText(next, selectedRange: NSRange(location: next.utf16.count, length: 0))
     }
   }
 
   extension KeyCaptureView {
+    var selectedTextRange: UITextRange? {
+      get {
+        // Nil tells a pinyin keyboard there is no caret, and it never marks.
+        if marked.isEmpty { return InputRange(0, 0) }
+        let start = min(max(0, markedSelection.location), markedEnd)
+        let end = min(start + max(0, markedSelection.length), markedEnd)
+        return InputRange(start, end)
+      }
+      set {
+        let start = newValue.map { positionOffset($0.start) } ?? 0
+        let end = newValue.map { positionOffset($0.end) } ?? start
+        markedSelection = NSRange(location: start, length: max(0, end - start))
+      }
+    }
+
     var markedTextRange: UITextRange? {
       marked.isEmpty ? nil : InputRange(0, markedEnd)
     }
@@ -612,10 +918,26 @@
     }
 
     func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
-      replaceMarked(markedText)
+      beginCompositionChange()
+      composition.setMarked(markedText, selected: selectedRange)
+      endCompositionChange()
     }
 
-    func unmarkText() { replaceMarked("") }
+    /// The system Chinese keyboard calls this rather than the string form.
+    func setAttributedMarkedText(_ markedText: NSAttributedString?, selectedRange: NSRange) {
+      setMarkedText(markedText?.string, selectedRange: selectedRange)
+    }
+
+    /// Confirming the marked word. The Chinese keyboard commits a letter
+    /// this way, with no `insertText` after it; discarding the mark dropped
+    /// both the pinyin and the English typed on that keyboard.
+    func unmarkText() {
+      guard !marked.isEmpty else { return }
+      beginCompositionChange()
+      let committed = composition.unmark()
+      endCompositionChange()
+      if let committed { sendCommitted(committed) }
+    }
 
     func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
       InputRange(positionOffset(fromPosition), positionOffset(toPosition))
@@ -673,7 +995,11 @@
       return cursorRect
     }
 
-    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+      // An empty list gives the candidate window nowhere to sit, and pinyin
+      // then never marks.
+      [PhoneCaretRect(caretRect(for: range.start))]
+    }
 
     func closestPosition(to point: CGPoint) -> UITextPosition? { endOfDocument }
 
@@ -682,6 +1008,19 @@
     }
 
     func characterRange(at point: CGPoint) -> UITextRange? { markedTextRange }
+  }
+
+  private final class PhoneCaretRect: UITextSelectionRect {
+    private let caret: CGRect
+    init(_ caret: CGRect) {
+      self.caret = caret
+      super.init()
+    }
+    override var rect: CGRect { caret }
+    override var writingDirection: NSWritingDirection { .leftToRight }
+    override var containsStart: Bool { true }
+    override var containsEnd: Bool { true }
+    override var isVertical: Bool { false }
   }
 
   private final class InputPosition: UITextPosition {
@@ -728,10 +1067,6 @@
           case .control: coordinator.latch.toggle(control: true)
           case .option: coordinator.latch.toggle(control: false)
           }
-        },
-        onDismiss: {
-          UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         })
       latch.onChange = { [weak bar] modifiers in bar?.show(modifiers) }
       bar.show(latch.armed)
@@ -770,7 +1105,7 @@
 
     private let onKey: (Key) -> Void
     private let onModifier: (Modifier) -> Void
-    private let onDismiss: () -> Void
+    private var keyboardButton: UIButton?
     private var control: UIButton?
     private var option: UIButton?
     private var keys: [UIButton] = []
@@ -797,13 +1132,9 @@
       UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traitCollection)
     }
 
-    init(
-      onKey: @escaping (Key) -> Void, onModifier: @escaping (Modifier) -> Void,
-      onDismiss: @escaping () -> Void
-    ) {
+    init(onKey: @escaping (Key) -> Void, onModifier: @escaping (Modifier) -> Void) {
       self.onKey = onKey
       self.onModifier = onModifier
-      self.onDismiss = onDismiss
       super.init(frame: .zero, inputViewStyle: .keyboard)
       autoresizingMask = .flexibleWidth
 
@@ -822,11 +1153,12 @@
         key(symbol: "arrow.up", named: "Up") { [weak self] in self?.onKey(.up) },
         key(symbol: "arrow.right", named: "Right") { [weak self] in self?.onKey(.right) },
       ])
-      // Pinned at the right, outside the scrolling row: the way out of the
-      // keyboard is never scrolled off screen.
-      let hide = key(symbol: "keyboard.chevron.compact.down", named: "Hide keyboard") {
-        [weak self] in self?.onDismiss()
+      // Pinned at the right, outside the scrolling row: the keyboard control
+      // is never scrolled off screen. It toggles the software keyboard.
+      let hide = key(symbol: "keyboard", named: "Show keyboard") { [weak self] in
+        self?.toggleKeyboard()
       }
+      keyboardButton = hide
       hide.translatesAutoresizingMaskIntoConstraints = false
       addSubview(hide)
       let scroll = UIScrollView()
@@ -877,10 +1209,30 @@
         fill,
       ])
       restyle()
+      NotificationCenter.default.addObserver(
+        self, selector: #selector(keyboardVisibilityChanged), name: .tetherSoftwareKeyboard, object: nil)
+      reflectKeyboard()
       registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: KeyBar, _: UITraitCollection) in
         view.restyle()
         view.invalidateIntrinsicContentSize()
       }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    /// Shows or hides the software keyboard. The capture view is what applies
+    /// it; this button only changes the flag and then follows it.
+    func toggleKeyboard() { PhoneKeyboard.toggle() }
+
+    @objc private func keyboardVisibilityChanged() { reflectKeyboard() }
+
+    private func reflectKeyboard() {
+      guard let keyboardButton else { return }
+      let hidden = PhoneKeyboard.staysDown
+      symbols[ObjectIdentifier(keyboardButton)] =
+        hidden ? "keyboard" : "keyboard.chevron.compact.down"
+      keyboardButton.accessibilityLabel = hidden ? "Show keyboard" : "Hide keyboard"
+      restyle()
     }
 
     override var intrinsicContentSize: CGSize {
@@ -950,46 +1302,79 @@
     }
   }
 
+  extension KeyCaptureView: @MainActor UIEditMenuInteractionDelegate {
+    func editMenuInteraction(
+      _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
+      suggestedActions: [UIMenuElement]
+    ) -> UIMenu? {
+      terminalMenu(at: editPoint)
+    }
+
+    func editMenuInteraction(
+      _ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration
+    ) -> CGRect {
+      CGRect(x: editPoint.x, y: editPoint.y, width: 1, height: max(lineHeight, 1))
+    }
+  }
+
   extension KeyCaptureView: UIContextMenuInteractionDelegate {
     func contextMenuInteraction(
       _ interaction: UIContextMenuInteraction,
       configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
-      guard wantsFocus, let cell = geometry.cell(at: location) else { return nil }
-      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
-      let link = links.find(cell.row, cell.column)
-      let menu = link.flatMap { links.menu($0) }
-      pressed = link
-      let preview = menu?.preview.map { make in
+      guard let menu = terminalMenu(at: location) else { return nil }
+      consumedPress = true
+      let preview = pressed.flatMap { links.menu($0)?.preview }.map { make in
         { () -> UIViewController? in UIHostingController(rootView: make()) }
       }
       return UIContextMenuConfiguration(
         identifier: nil, previewProvider: preview,
-        actionProvider: { [weak self] _ in
-          guard let self else { return nil }
-          let editing = UIMenu(options: .displayInline, children: [
-            UIAction(title: "Select Text", image: UIImage(systemName: "text.cursor")) { [weak self] _ in
-              self?.onSelection(.highlight(.word, point, point))
-            },
-            UIAction(title: "Select Line", image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
-              self?.onSelection(.highlight(.line, point, point))
-            },
-            UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
-              guard let self else { return }
-              if let selected = self.selection { self.onSelection(.copyExisting(selected)) }
-              else { self.onSelection(.copy(.word, point, point)) }
-            },
-            UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard"),
-              attributes: UIPasteboard.general.hasStrings ? [] : [.disabled]) { [weak self] _ in
-              self?.paste(nil)
-            },
-          ])
-          let actions = menu?.items.map { item in
-            UIAction(title: item.title, image: UIImage(systemName: item.symbol),
-              attributes: item.destructive ? .destructive : []) { _ in item.action() }
-          } ?? []
-          return UIMenu(children: actions + [editing])
-        })
+        actionProvider: { _ in menu })
+    }
+
+    /// Select, copy, and the terminal's own actions. The same menu whichever
+    /// press won: the edit menu on ordinary text, the system one on a link.
+    private func terminalMenu(at location: CGPoint) -> UIMenu? {
+      guard wantsFocus, let cell = geometry.clampedCell(at: location) else { return nil }
+      let point = GridPoint(row: Int(cell.row), column: Int(cell.column))
+      let link = links.find(cell.row, cell.column)
+      let linkMenu = link.flatMap { links.menu($0) }
+      pressed = link
+      let editing = UIMenu(options: .displayInline, children: [
+        UIAction(title: "Select Text", image: UIImage(systemName: "text.cursor")) { [weak self] _ in
+          self?.onSelection(.highlight(.word, point, point))
+        },
+        UIAction(title: "Select Line", image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
+          self?.onSelection(.highlight(.line, point, point))
+        },
+        UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+          guard let self else { return }
+          if let selected = self.selection { self.onSelection(.copyExisting(selected)) }
+          else { self.onSelection(.copy(.word, point, point)) }
+        },
+        UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard"),
+          attributes: UIPasteboard.general.hasStrings ? [] : [.disabled]) { [weak self] _ in
+          self?.paste(nil)
+        },
+      ])
+      let actions = linkMenu?.items.map { item in
+        UIAction(title: item.title, image: UIImage(systemName: item.symbol),
+          attributes: item.destructive ? .destructive : []) { _ in item.action() }
+      } ?? []
+      let commands = PhoneMenu.workspaceSections(menuItems).map { section in
+        UIMenu(options: .displayInline, children: section.map { self.element(for: $0) })
+      }
+      let links = actions.isEmpty ? [] : [UIMenu(options: .displayInline, children: actions)]
+      return UIMenu(children: [editing] + commands + links)
+    }
+
+    private func element(for item: TerminalMenuItem) -> UIMenuElement {
+      if !item.children.isEmpty {
+        return UIMenu(title: item.title, children: item.children.map { element(for: $0) })
+      }
+      return UIAction(
+        title: item.title, attributes: item.enabled ? [] : .disabled, state: item.checked ? .on : .off
+      ) { _ in item.action?() }
     }
 
     /// Lifts the link's own cells, not the whole terminal: a snapshot of

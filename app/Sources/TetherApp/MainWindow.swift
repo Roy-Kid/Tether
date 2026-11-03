@@ -2,40 +2,122 @@
   import AppKit
   import SwiftUI
 
-  /// What the red button does to the main window.
+  /// What the close button does to the main window.
   ///
-  /// The window is a view of sessions the app holds, not their owner: the
-  /// tabs live as long as the process. But the view is not stateless — a
-  /// password being asked for, a plugin waiting on a reconnect, the handler
-  /// that disconnects everything on quit — and a `Window` scene that really
-  /// closes throws all of that away with its views. So the window is put
-  /// away, not closed, and comes back from the Dock exactly as it was.
-  /// Nothing is lost, so there is nothing to confirm.
+  /// Settings → General → When the Window Closes. Quit ends the app, through
+  /// the same live-terminal question as ⌘Q. Hide puts the window away and
+  /// leaves the Dock: the menu-bar icon is the way back, and the sessions
+  /// stay. A full-screen window is its own Space, so Hide leaves that Space
+  /// before the window goes, or the Space would stay behind, black and empty.
   enum MainWindowClose: Equatable {
+    case quit
     case hide
-    /// A full-screen window is its own Space. Hidden there, it would leave
-    /// that Space behind, black and empty; so it comes out first.
     case leaveFullScreenThenHide
 
-    static func action(fullScreen: Bool) -> Self {
-      fullScreen ? .leaveFullScreenThenHide : .hide
+    static func action(fullScreen: Bool, setting: String = CloseWindowPreference.chosen) -> Self {
+      guard setting != CloseWindowPreference.quit else { return .quit }
+      return fullScreen ? .leaveFullScreenThenHide : .hide
     }
   }
 
-  /// Sits in front of SwiftUI's window delegate. Close becomes hide; every
-  /// other message goes on to the delegate that was already there.
+  /// Quit, or stay running with only the menu-bar icon.
+  ///
+  /// The key and the two values live together so the picker and the close
+  /// path name the same strings. Anything unrecognized hides: a mistyped
+  /// value must not quit over someone's sessions.
+  enum CloseWindowPreference {
+    static let key = "closeWindow"
+    static let quit = "quit"
+    static let menuBar = "menuBar"
+    static let `default` = menuBar
+
+    static var chosen: String {
+      UserDefaults.standard.string(forKey: key) ?? `default`
+    }
+  }
+
+  /// The Dock icon, while Hide has put the main window away.
+  ///
+  /// The policy change is the real app's. A test runner shares this code and
+  /// must not lose its own Dock icon or be told to quit. The notifications
+  /// still post, so the menu-bar icon can be required and released either way.
+  @MainActor
+  enum AppPresence {
+    static let willLeaveDock = Notification.Name("Tether.willLeaveDock")
+    static let didReturnToDock = Notification.Name("Tether.didReturnToDock")
+
+    /// The close button hid the window, and it has not been shown as the
+    /// main window since. The Dock waits if another window, such as Settings,
+    /// is still open.
+    private(set) static var hiddenByClose = false
+
+    static var isTether: Bool { Bundle.main.bundleIdentifier == "Roy-Kid.Tether" }
+
+    /// Hide removes the Dock icon only once nothing else is on screen.
+    static func hidesDock(setting: String, mainVisible: Bool, otherVisible: Bool) -> Bool {
+      setting != CloseWindowPreference.quit && !mainVisible && !otherVisible
+    }
+
+    static func anotherWindowIsOpen(besides main: NSWindow?) -> Bool {
+      NSApp.windows.contains { window in
+        guard window !== main, window.isVisible, window.styleMask.contains(.titled) else { return false }
+        return window.level == .normal || window.level == .floating
+      }
+    }
+
+    static func rememberHiddenByClose() {
+      hiddenByClose = true
+    }
+
+    /// The menu-bar icon is posted up before the Dock icon goes, so there is
+    /// always something to click.
+    static func leaveDock(for window: NSWindow) {
+      hiddenByClose = true
+      NotificationCenter.default.post(name: willLeaveDock, object: window)
+      guard isTether else { return }
+      NSApp.setActivationPolicy(.accessory)
+    }
+
+    static func returnToDock() {
+      hiddenByClose = false
+      if isTether, NSApp.activationPolicy() == .accessory {
+        NSApp.setActivationPolicy(.regular)
+      }
+      NotificationCenter.default.post(name: didReturnToDock, object: nil)
+    }
+
+    /// Quit from the close button. Cancelled, the window is still there,
+    /// because the close was refused rather than performed.
+    static func quit() {
+      guard isTether else { return }
+      NSApp.terminate(nil)
+    }
+  }
+
+  /// Sits in front of SwiftUI's window delegate. Close becomes Quit or Hide;
+  /// every other message goes on to the delegate that was already there.
+  @MainActor
   final class HideInsteadOfClose: NSObject, NSWindowDelegate {
-    weak var forwarded: NSWindowDelegate?
+    /// AppKit asks `responds(to:)` off the main actor. The delegate it
+    /// forwards to is only installed and used on the main thread.
+    nonisolated(unsafe) weak var forwarded: NSWindowDelegate?
     private var hidesAfterFullScreen = false
 
     init(forwarding: NSWindowDelegate?) {
       forwarded = forwarding
     }
 
+    /// Posted before a hide, with the window as the object. The quick terminal
+    /// puts that window back at its own frame first, so one put away while
+    /// summoned comes back there.
+    static let willHide = Notification.Name("Tether.mainWindowWillHide")
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
       switch MainWindowClose.action(fullScreen: sender.styleMask.contains(.fullScreen)) {
+      case .quit:
+        AppPresence.quit()
       case .hide:
-        sender.orderOut(nil)
+        hide(sender)
       case .leaveFullScreenThenHide:
         hidesAfterFullScreen = true
         sender.toggleFullScreen(nil)
@@ -47,13 +129,26 @@
       forwarded?.windowDidExitFullScreen?(notification)
       guard hidesAfterFullScreen, let window = notification.object as? NSWindow else { return }
       hidesAfterFullScreen = false
-      window.orderOut(nil)
+      hide(window)
     }
 
-    /// The main window back in front, from wherever it was put. False when
+    /// Put away, then leave the Dock once no other window is left to show.
+    private func hide(_ window: NSWindow) {
+      NotificationCenter.default.post(name: Self.willHide, object: window)
+      window.orderOut(nil)
+      let others = AppPresence.anotherWindowIsOpen(besides: window)
+      if AppPresence.hidesDock(setting: CloseWindowPreference.chosen, mainVisible: false, otherVisible: others) {
+        AppPresence.leaveDock(for: window)
+      } else {
+        AppPresence.rememberHiddenByClose()
+      }
+    }
+
+    /// The main window back in front, and the Dock icon with it. False when
     /// it was already showing and there was nothing to bring back.
     @discardableResult
     static func reveal(_ window: NSWindow) -> Bool {
+      AppPresence.returnToDock()
       guard !window.isVisible || window.isMiniaturized else { return false }
       if window.isMiniaturized { window.deminiaturize(nil) }
       window.makeKeyAndOrderFront(nil)

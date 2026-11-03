@@ -63,6 +63,35 @@ func disableReleasesWorkspacesAndPersistsWithoutChangingHost() {
   #expect(other.starts == 1)
 }
 
+@MainActor
+private final class MarkPlugin: TetherPlugin {
+  let metadata = PluginMetadata(
+    id: "test.marks", name: "Marks", symbol: "circle", summary: "Marks")
+  var onMarks: (@MainActor () -> Void)?
+  func launch(in context: PluginContext) {}
+  func observeTabMarks(_ notify: @escaping @MainActor () -> Void) { onMarks = notify }
+}
+
+@Test @MainActor
+func tabMarksNotifyTheRegistry() {
+  let name = "TetherTests.marks.\(UUID())"
+  let defaults = UserDefaults(suiteName: name)!
+  defer { defaults.removePersistentDomain(forName: name) }
+  let registry = PluginRegistry(defaults: defaults)
+  let plugin = MarkPlugin()
+  registry.register(plugin)
+  #expect(registry.tabIndicatorEpoch == 0)
+  plugin.onMarks?()
+  #expect(registry.tabIndicatorEpoch == 1)
+  registry.setEnabled(false, id: plugin.metadata.id)
+  let hidden = registry.tabIndicatorEpoch
+  #expect(hidden == 2)
+  plugin.onMarks?()
+  #expect(registry.tabIndicatorEpoch == hidden)
+  registry.setEnabled(true, id: plugin.metadata.id)
+  #expect(registry.tabIndicatorEpoch == hidden &+ 1)
+}
+
 @Test @MainActor
 func tabSymbolComesFromTheFirstEnabledPlugin() {
   let registry = PluginRegistry(defaults: UserDefaults(suiteName: "TetherTests.symbols.\(UUID())")!)
@@ -240,12 +269,37 @@ func tabIndicatorsUseExactTerminalIdentityAndEnabledPluginLifetime() {
   let target = PluginTerminalIdentity(host: "Studio", terminal: "/dev/ttys001")
   plugin.tabIndicators = [.init(target: target, color: 0xFF9F0A, label: "Needs you")]
   registry.register(plugin)
-  #expect(registry.tabIndicator(for: target)?.color == 0xFF9F0A)
-  #expect(registry.tabIndicator(for: .init(host: "remote", terminal: target.terminal)) == nil)
-  #expect(registry.tabIndicator(for: .init(host: target.host, terminal: "/dev/ttys002")) == nil)
+  #expect(registry.tabIndicator(onAnyOf: [target])?.color == 0xFF9F0A)
+  #expect(registry.tabIndicator(onAnyOf: [.init(host: "remote", terminal: target.terminal)]) == nil)
+  #expect(registry.tabIndicator(onAnyOf: [.init(host: target.host, terminal: "/dev/ttys002")]) == nil)
   registry.setEnabled(false, id: plugin.metadata.id)
-  #expect(registry.tabIndicator(for: target) == nil)
+  #expect(registry.tabIndicator(onAnyOf: [target]) == nil)
   registry.setEnabled(true, id: plugin.metadata.id)
   plugin.tabIndicators = []
-  #expect(registry.tabIndicator(for: target) == nil)
+  #expect(registry.tabIndicator(onAnyOf: [target]) == nil)
+}
+
+@Test @MainActor
+func aMarkOnAnyOfSeveralTerminalsFollowsTheReportingPluginsOrder() {
+  let name = "TetherIndicatorsAnyOf.\(UUID())"
+  let defaults = UserDefaults(suiteName: name)!
+  defer { defaults.removePersistentDomain(forName: name) }
+  let registry = PluginRegistry(defaults: defaults)
+  let plugin = ExamplePlugin()
+  let first = PluginTerminalIdentity(host: "studio", terminal: "/dev/ttys004")
+  let second = PluginTerminalIdentity(host: "studio", terminal: "/dev/ttys009")
+  // The plugin's array is its priority: the job it lists first wins.
+  plugin.tabIndicators = [
+    .init(target: second, color: 0xFF9F0A, label: "Needs you"),
+    .init(target: first, color: 0x0A84FF, label: "Running"),
+  ]
+  registry.register(plugin)
+  #expect(registry.tabIndicator(onAnyOf: [first, second])?.label == "Needs you")
+  #expect(registry.tabIndicator(onAnyOf: [first])?.label == "Running")
+  // `ps` and a pty name spell one device two ways.
+  #expect(registry.tabIndicator(onAnyOf: [.init(host: "studio", terminal: "s004")])?.label == "Running")
+  #expect(registry.tabIndicator(onAnyOf: [.init(host: "lab", terminal: first.terminal)]) == nil)
+  #expect(registry.tabIndicator(onAnyOf: []) == nil)
+  registry.setEnabled(false, id: plugin.metadata.id)
+  #expect(registry.tabIndicator(onAnyOf: [first, second]) == nil)
 }

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Testing
+import TetherTestSupport
 import Tether
 import TetherPluginKit
 
@@ -10,7 +11,7 @@ extension BrowserUITests {
   /// An upload either arrives, asks, or says why not — and what it says
   /// survives the listing that follows it.
   @MainActor
-  @Suite("uploads", .serialized)
+  @Suite("uploads", .serialized, .appKitEventLoop)
   struct UploadTests {
     init() {
       #if os(macOS)
@@ -103,7 +104,7 @@ extension BrowserUITests {
         let action: String
         var asked: [String] = []
         init(_ action: String) { self.action = action }
-        func notify(title: String, body: String, source: String) async {}
+        func notify(title: String, body: String, source: String, pluginID: String) async {}
         func ask(_ prompt: PluginPrompt) async -> PluginAnswer {
           asked.append(prompt.title)
           return PluginAnswer(action: action)

@@ -109,7 +109,12 @@ private struct FileList: View {
   }
 
   private var listing: some View {
-    List(selection: $model.selection) {
+    // Once a draw: a selection change draws the list again, and this walks
+    // the whole tree.
+    #if os(macOS)
+      let rows = model.displayedRows
+    #endif
+    return List(selection: $model.selection) {
       if let problem = model.problem {
         Label(problem, systemImage: "exclamationmark.triangle")
           .font(UIStyle.detail)
@@ -117,12 +122,12 @@ private struct FileList: View {
       }
       #if os(macOS)
         // A tree, as an editor's explorer is: folders open in place.
-        ForEach(model.displayedRows) { row in
-          FileRow(model: model, entry: row.entry, depth: row.depth)
+        ForEach(rows) { row in
+          fileRow(row.entry, depth: row.depth)
             .tag(row.entry.path)
             .listRowBackground(backgroundOpacity < 1 ? Color.clear : nil)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+            .listRowInsets(FileRow.rowInsets)
         }
         // Once its rows redraw, the table registers the folder rows' file
         // drop and stands in front of the list's own: AppKit hands it every
@@ -131,7 +136,7 @@ private struct FileList: View {
       #else
         // A phone drills down: one directory a screen.
         ForEach(model.displayed, id: \.path) { entry in
-          FileRow(model: model, entry: entry)
+          fileRow(entry)
             .tag(entry.path)
         }
       #endif
@@ -146,6 +151,13 @@ private struct FileList: View {
           guard model.renaming == nil else { return false }
           return model.pasteLocalFiles(urls)
         }
+      }
+      // The column is as wide as the deepest indent. The list's own scroll
+      // view then moves sideways; the names stay reachable.
+      .background {
+        TreeDocumentWidth(
+          width: FileRow.documentWidth(depth: rows.map(\.depth).max() ?? 0),
+          editor: model.renaming)
       }
       .onAppear { listFocused = true }
       .onChange(of: model.listTicket) { _, _ in listFocused = true }
@@ -172,7 +184,7 @@ private struct FileList: View {
         model.previewSelection()
         return .handled
       }
-      .onPickerSubmit(enabled: model.renaming == nil && model.selection.count == 1) {
+      .onPickerSubmit(enabled: { model.renaming == nil && model.selection.count == 1 }) {
         model.renaming = model.selection.first
       }
       .onKeyPress(keys: [.delete, .deleteForward]) { _ in
@@ -244,7 +256,25 @@ private struct FileList: View {
     #else
       .listStyle(.plain)
     #endif
-    .dropDestination(for: URL.self) { urls, _ in uploadDropped(urls) }
+    .dropDestination(for: URL.self) { urls, _ in
+      return uploadDropped(urls)
+    }
+  }
+
+  /// One row. The values it shows are passed in, and the row compares those
+  /// rather than the selection: a range selection changes on every row the
+  /// pointer crosses, and rebuilding each row — its geometry, its drag
+  /// source — is what made that gesture stall.
+  private func fileRow(_ entry: FileEntry, depth: Int = 0) -> some View {
+    FileRow(
+      model: model, entry: entry, depth: depth,
+      isRenaming: model.renaming == entry.path,
+      isOpening: model.opening.contains(entry.path),
+      isExpanded: model.isExpanded(entry),
+      transfer: model.transfers.item(for: entry.path),
+      editingState: model.editing.states[entry.path]
+    )
+    .equatable()
   }
 
   /// Files from this machine dropped anywhere but on a folder row.
@@ -294,6 +324,7 @@ private struct FileList: View {
         [weak self] event in
         guard let self else { return event }
         if event.type == .keyDown { return self.pasteKey(event) }
+        if event.type == .leftMouseDown, self.swallowDrag(event) { return nil }
         self.takeKeyboard(event)
         return event
       }
@@ -302,6 +333,15 @@ private struct FileList: View {
     func stop() {
       if let monitor { NSEvent.removeMonitor(monitor) }
       monitor = nil
+    }
+
+    /// One press on a row, for the whole list. A monitor on every row ran
+    /// for every click, and a range selection is a click on each new row.
+    private func swallowDrag(_ event: NSEvent) -> Bool {
+      guard event.window === window else { return false }
+      let point = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(point), let row = RowDragView.under(event) else { return false }
+      return row.consumePress(event)
     }
 
     /// ⌘V pastes. ⌃V does too when Finder left files on the pasteboard;
@@ -341,11 +381,10 @@ private struct FileList: View {
         if fallback == nil, current.acceptsFirstResponder { fallback = current }
         view = current.superview
       }
-      if let table {
-        window.makeFirstResponder(table)
-      } else if let fallback {
-        window.makeFirstResponder(fallback)
-      }
+      // Every press and release came here; asking again for what it already
+      // has made the list redraw its focus on each click of a selection.
+      guard let target = table ?? fallback, window.firstResponder !== target else { return }
+      window.makeFirstResponder(target)
     }
 
     private func ownsFirstResponder() -> Bool {
@@ -395,30 +434,220 @@ private struct FileList: View {
       return names.map { URL(fileURLWithPath: $0) }
     }
   }
+
+  /// Indent is never dropped to fit the panel. The table column grows with
+  /// the deepest row, and the list scrolls sideways to the rest.
+  private struct TreeDocumentWidth: NSViewRepresentable {
+    var width: CGFloat
+    var editor: String?
+
+    func makeNSView(context: Context) -> TreeDocumentWidthView {
+      TreeDocumentWidthView()
+    }
+
+    func updateNSView(_ view: TreeDocumentWidthView, context: Context) {
+      let reveal = view.editor != editor && editor != nil
+      view.width = width
+      view.editor = editor
+      view.applySoon(revealEditor: reveal)
+    }
+
+    static func dismantleNSView(_ view: TreeDocumentWidthView, coordinator: ()) { view.stop() }
+  }
+
+  private final class TreeDocumentWidthView: NSView {
+    var width: CGFloat = 0
+    var editor: String?
+    private var observer: NSObjectProtocol?
+    private weak var observedClip: NSClipView?
+    private weak var scrollView: NSScrollView?
+    private var loop: CFRunLoopObserver?
+    private var scheduled = false
+    private var pendingReveal = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard window != nil else {
+        stop()
+        return
+      }
+      startLoop()
+      applySoon(revealEditor: false)
+    }
+
+    override func layout() {
+      super.layout()
+      // SwiftUI's list turns the horizontal scroller back off while it lays
+      // out. Pin it again at the end of this pass; the run-loop observer
+      // pins it once SwiftUI has finished.
+      pinScroller()
+      applySoon(revealEditor: false)
+    }
+
+    deinit { MainActor.assumeIsolated { stop() } }
+
+    func stop() {
+      unobserveClip()
+      scrollView = nil
+      if let loop {
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), loop, .commonModes)
+        self.loop = nil
+      }
+    }
+
+    /// SwiftUI clears the horizontal scroller after this view's own layout.
+    /// Before the run loop waits, put it back when the tree is wider than
+    /// the panel.
+    private func startLoop() {
+      guard loop == nil else { return }
+      let observer = CFRunLoopObserverCreateWithHandler(
+        kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0
+      ) { [weak self] _, _ in
+        MainActor.assumeIsolated { self?.pinScroller() }
+      }
+      guard let observer else { return }
+      loop = observer
+      CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    private func unobserveClip() {
+      if let observer { NotificationCenter.default.removeObserver(observer) }
+      observer = nil
+      observedClip = nil
+    }
+
+    func applySoon(revealEditor: Bool) {
+      pendingReveal = pendingReveal || revealEditor
+      guard !scheduled else { return }
+      scheduled = true
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.scheduled = false
+        let reveal = self.pendingReveal
+        self.pendingReveal = false
+        self.apply(revealEditor: reveal)
+      }
+    }
+
+    /// The table this width sits behind. The first ancestor that contains
+    /// one is the list; a sidebar table lives further up and is not it.
+    private func nearestTable() -> NSTableView? {
+      var ancestor: NSView? = self
+      while let current = ancestor {
+        if let table = findTable(in: current) { return table }
+        ancestor = current.superview
+      }
+      return nil
+    }
+
+    private func findTable(in view: NSView) -> NSTableView? {
+      if let table = view as? NSTableView { return table }
+      for child in view.subviews {
+        if let table = findTable(in: child) { return table }
+      }
+      return nil
+    }
+
+    private func observe(_ clip: NSClipView) {
+      guard observedClip !== clip else { return }
+      unobserveClip()
+      observedClip = clip
+      clip.postsBoundsChangedNotifications = true
+      observer = NotificationCenter.default.addObserver(
+        forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.applySoon(revealEditor: false) }
+      }
+    }
+
+    /// The list scrolls sideways only when a scroller is allowed. SwiftUI
+    /// keeps turning that off; the column is already wider than the panel.
+    private func pinScroller() {
+      if scrollView?.window == nil { scrollView = nearestTable()?.enclosingScrollView }
+      guard let scroll = scrollView else { return }
+      let visible = scroll.contentView.bounds.width
+      guard visible > 1 else { return }
+      let overflows = width > visible + 1
+      if scroll.hasHorizontalScroller != overflows { scroll.hasHorizontalScroller = overflows }
+      if overflows, scroll.horizontalScrollElasticity != .automatic {
+        scroll.horizontalScrollElasticity = .automatic
+      }
+    }
+
+    private func apply(revealEditor: Bool) {
+      guard let table = nearestTable(), let scroll = table.enclosingScrollView,
+        let column = table.tableColumns.first
+      else { return }
+      observe(scroll.contentView)
+      let visible = scroll.contentView.bounds.width
+      guard visible > 1 else { return }
+      let span = max(width, visible)
+      pinScroller()
+      if table.columnAutoresizingStyle != .noColumnAutoresizing {
+        table.columnAutoresizingStyle = .noColumnAutoresizing
+      }
+      if column.resizingMask != [] { column.resizingMask = [] }
+      if abs(column.minWidth - width) > 0.5 { column.minWidth = width }
+      if abs(column.width - span) > 0.5 { column.width = span }
+      if abs(table.frame.width - span) > 0.5 {
+        var frame = table.frame
+        frame.size.width = span
+        table.frame = frame
+      }
+      if let document = scroll.documentView, document !== table,
+        abs(document.frame.width - span) > 0.5
+      {
+        var frame = document.frame
+        frame.size.width = span
+        document.frame = frame
+      }
+      guard revealEditor, let field = editableField(in: table) else { return }
+      field.scrollToVisible(field.bounds)
+    }
+
+    private func editableField(in view: NSView) -> NSTextField? {
+      if let field = view as? NSTextField, field.isEditable { return field }
+      for child in view.subviews {
+        if let field = editableField(in: child) { return field }
+      }
+      return nil
+    }
+  }
 #endif
 
 /// One entry: its symbol and its name, or a field while it is renamed.
-private struct FileRow: View {
-  @Bindable var model: FilesTab
+///
+/// Equality ignores the selection. The list still draws the highlight; the
+/// row is rebuilt only when something it shows has changed.
+struct FileRow: View, Equatable {
+  let model: FilesTab
   let entry: FileEntry
   /// How deep under the root, for the tree's indent.
   var depth = 0
+  var isRenaming = false
+  var isOpening = false
+  var isExpanded = false
+  var transfer: Transfers.Item?
+  var editingState: EditingCopies.State?
   @State private var draft = ""
   @FocusState private var editing: Bool
+
+  nonisolated static func == (lhs: FileRow, rhs: FileRow) -> Bool {
+    lhs.entry == rhs.entry && lhs.depth == rhs.depth && lhs.isRenaming == rhs.isRenaming
+      && lhs.isOpening == rhs.isOpening && lhs.isExpanded == rhs.isExpanded
+      && lhs.transfer == rhs.transfer && lhs.editingState == rhs.editingState
+  }
 
   var body: some View {
     Group {
       #if os(macOS)
-        GeometryReader { geometry in
-          // Deep paths must give up indentation before they consume the name
-          // editor. Reserve room for the name, icons and a transfer indicator.
-          let indentation = min(CGFloat(depth) * FileRow.indent,
-            max(0, geometry.size.width - FileRow.contentWidth))
-          content
-            .padding(.leading, indentation)
-            .frame(maxHeight: .infinity)
-        }
-        .frame(height: UIStyle.rowHeight)
+        // Depth is the indent, including when the panel is narrower than
+        // the row. The list scrolls sideways rather than flattening the tree.
+        content
+          .padding(.leading, CGFloat(depth) * FileRow.indent)
+          .frame(height: UIStyle.rowHeight, alignment: .leading)
       #else
         content
       #endif
@@ -431,7 +660,7 @@ private struct FileRow: View {
     #if !os(macOS)
       .contentShape(Rectangle())
       .onTapGesture {
-        if model.renaming != entry.path { model.open(entry) }
+        if !isRenaming { model.open(entry) }
       }
       .contextMenu {
         EntryMenu(model: model, entries: [entry])
@@ -455,7 +684,7 @@ private struct FileRow: View {
         .font(UIStyle.symbol)
         .foregroundStyle(entry.kind == .directory ? Theme.accent : Theme.subtle)
         .frame(width: UIStyle.Mark.glyph)
-      if model.renaming == entry.path {
+      if isRenaming {
         TextField("Name", text: $draft)
           .textFieldStyle(.plain)
           .font(UIStyle.title)
@@ -476,12 +705,12 @@ private struct FileRow: View {
           .truncationMode(.middle)
       }
       Spacer(minLength: 0)
-      if let transfer = model.transfers.item(for: entry.path) {
+      if let transfer {
         ProgressView(value: transfer.fraction)
           .progressViewStyle(.circular)
           .controlSize(.mini)
-      } else if let state = model.editing.states[entry.path] {
-        EditingMark(state: state)
+      } else if let editingState {
+        EditingMark(state: editingState)
       }
     }
   }
@@ -493,21 +722,21 @@ private struct FileRow: View {
       if entry.kind == .directory {
         Button { model.toggle(entry) } label: {
           Group {
-            if model.opening.contains(entry.path) {
+            if isOpening {
               ProgressView().controlSize(.mini).accessibilityLabel("Loading files")
             } else {
               Image(systemName: "chevron.right")
                 .font(UIStyle.accessory)
                 .foregroundStyle(Theme.subtle)
-                .rotationEffect(.degrees(model.isExpanded(entry) ? 90 : 0))
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
           }
           .frame(width: FileRow.chevron, height: UIStyle.rowHeight)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(model.isExpanded(entry) ? "Collapse" : "Expand") \(Names.display(entry.name))")
-        .accessibilityValue(model.opening.contains(entry.path) ? "Loading" : (model.isExpanded(entry) ? "Expanded" : "Collapsed"))
+        .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(Names.display(entry.name))")
+        .accessibilityValue(isOpening ? "Loading" : (isExpanded ? "Expanded" : "Collapsed"))
       } else {
         Color.clear.frame(width: FileRow.chevron, height: UIStyle.Mark.hairline)
       }
@@ -516,8 +745,16 @@ private struct FileRow: View {
     static let indent: CGFloat = 12
     static let chevron = UIStyle.Mark.chevron
     static let nameWidth: CGFloat = 80
+    /// Leading and trailing room the list keeps outside the name. The
+    /// document width includes it, so the two stay one number.
+    static let rowInsets = EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
     static let contentWidth = nameWidth + chevron + UIStyle.Mark.glyph
       + UIStyle.controlHeight + 4 * UIStyle.Space.inline
+
+    /// Width of a row at `depth`, including its indent and the reserved name.
+    static func documentWidth(depth: Int) -> CGFloat {
+      CGFloat(depth) * indent + contentWidth + rowInsets.leading + rowInsets.trailing
+    }
   #endif
 
   /// Size and date, for the tooltip and VoiceOver: the window itself shows
@@ -585,13 +822,15 @@ private struct EntryDrag: ViewModifier {
     #if os(macOS)
       content.background { RowDragSource(model: model, entry: entry) }
     #else
-      let text = model.draggedPathText(entry)
+      // The paths are read when the drag starts. Reading the selection here
+      // would redraw every row whenever it changed.
+      let paths = DragPaths(model: model, entry: entry)
       if entry.kind == .file {
-        content.draggable(DraggedFile(text: text, file: model.fetch(entry))) {
+        content.draggable(DraggedFile(paths: paths, file: model.fetch(entry))) {
           preview
         }
       } else {
-        content.draggable(DroppedPath(text: text)) { preview }
+        content.draggable(LazyDroppedPath(paths: paths)) { preview }
       }
     #endif
   }
@@ -604,15 +843,42 @@ private struct EntryDrag: ViewModifier {
 /// A file row's drag on a phone: the absolute path, and the bytes when
 /// something asks. The fetch never needs the main actor.
 struct DraggedFile: Transferable {
-  let text: String
+  let paths: DragPaths
   let file: FileFetch
 
   static var transferRepresentation: some TransferRepresentation {
-    ProxyRepresentation { DroppedPath(text: $0.text) }
+    ProxyRepresentation { DroppedPath(text: $0.paths.text()) }
     FileRepresentation(exportedContentType: .data) { item in
       SentTransferredFile(try await item.file.local(), allowAccessingOriginalFile: false)
     }
     .suggestedFileName { Names.local($0.file.entry.name) }
+  }
+}
+
+/// Paths a phone drag carries, resolved when the receiver asks rather than
+/// while the row is drawn.
+final class DragPaths: @unchecked Sendable {
+  private let model: FilesTab
+  private let entry: FileEntry
+
+  init(model: FilesTab, entry: FileEntry) {
+    self.model = model
+    self.entry = entry
+  }
+
+  func text() -> String {
+    if Thread.isMainThread {
+      return MainActor.assumeIsolated { model.draggedPathText(entry) }
+    }
+    return DispatchQueue.main.sync { MainActor.assumeIsolated { model.draggedPathText(entry) } }
+  }
+}
+
+private struct LazyDroppedPath: Transferable {
+  let paths: DragPaths
+
+  static var transferRepresentation: some TransferRepresentation {
+    ProxyRepresentation { DroppedPath(text: $0.paths.text()) }
   }
 }
 

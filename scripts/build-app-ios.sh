@@ -168,7 +168,21 @@ cat > "$APP/Info.plist" <<PLIST
         </dict>
     </dict>
     <key>LSRequiresIPhoneOS</key><true/>
+    <!-- Audio keeps the process scheduled while an SSH session is live, so locking the phone does not drop it. SessionKeepAlive plays only then. -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
     <key>NSSupportsLiveActivities</key><true/>
+    <!-- A Live Activity tap opens tether://plugin/<id>. PluginReturn reads it. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>$TETHER_BUNDLE_ID</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>tether</string></array>
+        </dict>
+    </array>
     <!-- A password manager's export arrives as this activity (CredentialImport);
          see build-app.sh for why both names. -->
     <key>NSUserActivityTypes</key>

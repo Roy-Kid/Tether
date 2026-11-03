@@ -381,8 +381,9 @@ fn assemble_sessions(sessions: &str, windows: &str) -> Result<Vec<TmuxSessionInf
         .filter(|line| !line.is_empty())
         .filter_map(|line| parse_listed_session(line.trim_end_matches('\r')).ok())
         .map(|(id, name, attached)| {
-            let mut windows = by_session.remove(&id).unwrap_or_default();
-            windows.sort_by_key(|window| window.index);
+            // Keep the order tmux printed. list-windows already has one;
+            // sorting by index here would be a second order.
+            let windows = by_session.remove(&id).unwrap_or_default();
             TmuxSessionInfo { id, name, attached, windows }
         })
         .collect();
@@ -504,13 +505,22 @@ mod tests {
     }
 
     #[test]
-    fn windows_sort_by_index() {
+    fn windows_keep_the_list_order() {
         let listed = assemble_sessions(
             "$1\t0\tdev\n",
             "$1\t@9\t2\t0\t1\tc\n$1\t@7\t0\t1\t1\ta\n$1\t@8\t1\t0\t1\tb\n",
         )
         .unwrap();
-        assert_eq!(listed[0].windows.iter().map(|w| w.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(listed[0].windows.iter().map(|w| w.index).collect::<Vec<_>>(), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn sessions_keep_the_list_order() {
+        let listed = assemble_sessions("$2\t0\tzoo\n$1\t0\tapple\n", "").unwrap();
+        assert_eq!(
+            listed.iter().map(|session| session.name.as_str()).collect::<Vec<_>>(),
+            vec!["zoo", "apple"]
+        );
     }
 
     #[test]

@@ -8,43 +8,100 @@ import SwiftUI
   typealias PlatformWindow = UIWindow
 #endif
 
-/// The window a view's dialogs belong to.
+/// Where a dialog belongs.
 ///
 /// A view asking a question means it of the window it is in: Settings'
 /// "Forget this host key?" belongs on Settings, not on whichever window
-/// happens to be in front. Only a question with no view behind it — a
-/// handshake's — goes to the frontmost.
+/// happens to be in front. A question with no view behind it goes to the
+/// frontmost. A terminal's reconnect question is narrower than its window:
+/// it covers that terminal, and the rest of the window stays usable.
 @MainActor
-final class DialogAnchor {
+public final class DialogAnchor {
   weak var window: PlatformWindow?
+  #if os(macOS)
+    /// The terminal (or other region) this dialog covers. Nil covers the window.
+    weak var view: NSView?
+    /// Questions asked with this anchor belong on `view`.
+    var limitsToView = false
+    /// The covered view moved, or left the window.
+    var onRegionChange: (() -> Void)?
+    /// Fired once, when a view-scoped anchor first has a view on screen.
+    var whenViewReady: (() -> Void)?
+  #endif
+
+  public init() {}
+
+  /// A reconnect question covers the terminal this anchor is read from.
+  public func coverItsView() {
+    #if os(macOS)
+      limitsToView = true
+    #endif
+  }
 }
 
 /// Finds the window for a ``DialogAnchor``. Draws nothing and takes no
 /// touches.
 #if os(macOS)
-  struct DialogAnchorReader: NSViewRepresentable {
-    let anchor: DialogAnchor
+  public struct DialogAnchorReader: NSViewRepresentable {
+    public let anchor: DialogAnchor
+    /// This window is the one in front, so its terminal is the region.
+    public var claimsView = false
 
-    func makeNSView(context: Context) -> Reader {
+    public init(anchor: DialogAnchor, claimsView: Bool = false) {
+      self.anchor = anchor
+      self.claimsView = claimsView
+    }
+
+    public func makeNSView(context: Context) -> Reader {
       let view = Reader()
       view.anchor = anchor
+      view.claimsView = claimsView
       return view
     }
 
-    func updateNSView(_ view: Reader, context: Context) {
+    public func updateNSView(_ view: Reader, context: Context) {
       view.anchor = anchor
-      if let window = view.window { anchor.window = window }
+      view.claimsView = claimsView
+      view.claim()
     }
 
-    final class Reader: NSView {
+    public final class Reader: NSView {
       weak var anchor: DialogAnchor?
+      var claimsView = false
 
-      override func viewDidMoveToWindow() {
+      public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let window { anchor?.window = window }
+        if window == nil {
+          guard let anchor, anchor.view === self else { return }
+          anchor.view = nil
+          anchor.onRegionChange?()
+        } else {
+          claim()
+        }
       }
 
-      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+      public override func layout() {
+        super.layout()
+        claim()
+      }
+
+      public override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func claim() {
+        guard let anchor else { return }
+        if let window { anchor.window = window }
+        guard anchor.limitsToView else { return }
+        if claimsView, window != nil {
+          anchor.view = self
+          let ready = anchor.whenViewReady
+          anchor.whenViewReady = nil
+          ready?()
+          anchor.onRegionChange?()
+        } else if anchor.view === self {
+          anchor.view = nil
+          anchor.onRegionChange?()
+        }
+      }
     }
   }
 #else

@@ -2,6 +2,7 @@
   import AppKit
   import SwiftUI
   import Testing
+  import TetherTestSupport
   import Tether
   import TetherPluginKit
 
@@ -11,7 +12,7 @@
     /// The browser as it is drawn, in a window, answering real key events —
     /// what a person pressing space in the inspector actually exercises.
     @MainActor
-    @Suite("keys in the browser", .serialized)
+    @Suite("keys in the browser", .serialized, .appKitEventLoop)
     struct BrowserKeyTests {
       init() { _ = NSApplication.shared }
 
@@ -54,16 +55,125 @@
         model.renaming = path
         for width in [240, 480, 240] {
           window.setContentSize(NSSize(width: width, height: 400))
-          try await Task.sleep(for: .milliseconds(200))
           let content = try #require(window.contentView)
+          var field: NSTextField?
+          for _ in 0..<50 {
+            content.layoutSubtreeIfNeeded()
+            field = editableField(in: content)
+            if let field, field.bounds.width >= 80 { break }
+            try await Task.sleep(for: .milliseconds(20))
+          }
+          let editor = try #require(field)
+          #expect(editor.bounds.width >= 80)
+          #expect(editor.bounds.height >= 14)
+          let table = try #require(find(NSTableView.self, in: content))
+          let scroll = try #require(table.enclosingScrollView)
+          let document = try #require(scroll.documentView)
+          let needed = FileRow.documentWidth(depth: depth)
+          if needed > scroll.contentView.bounds.width + 1 {
+            for _ in 0..<50 where !scroll.hasHorizontalScroller {
+              content.layoutSubtreeIfNeeded()
+              try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(document.frame.width > scroll.contentView.bounds.width + 1)
+            #expect(scroll.hasHorizontalScroller)
+          }
+          editor.scrollToVisible(editor.bounds)
           content.layoutSubtreeIfNeeded()
-          let field = try #require(editableField(in: content))
-          #expect(field.bounds.width >= 80)
-          #expect(field.bounds.height >= 14)
-          #expect(field.visibleRect.width >= 80, "the editor must stay inside the inspector")
-          let rect = field.convert(field.bounds, to: content)
-          #expect(rect.minX >= 0 && rect.maxX <= content.bounds.width)
+          #expect(editor.visibleRect.width >= 80)
+          let origin = editor.convert(editor.bounds, to: document).minX
+          #expect(origin >= CGFloat(depth) * FileRow.indent)
         }
+      }
+
+      @Test("a narrow inspector indents every deeper row")
+      func narrowIndentKeepsGrowing() async throws {
+        let depth = 12
+        var tree: [String: FileKind] = ["/": .directory, "/home": .directory, "/home/ada": .directory]
+        var path = "/home/ada"
+        for index in 0..<depth {
+          path += "/folder\(index)"
+          tree[path] = .directory
+        }
+        let source = StubSource(tree)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("indent-\(UUID())")
+        let model = FilesTab(tab: context(), cache: FileCache(host: UUID(), base: base), open: { _ in source })
+        defer { model.close(); try? FileManager.default.removeItem(at: base) }
+        await model.go(to: "/home/ada")
+        var folder = "/home/ada"
+        for index in 0..<depth {
+          folder += "/folder\(index)"
+          await model.expand(try #require(model.entry(folder)))
+        }
+        let window = NSWindow(
+          contentRect: NSRect(x: -4000, y: -4000, width: 240, height: 720),
+          styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = NSHostingView(rootView: Browser(model: model))
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        let content = try #require(window.contentView)
+        var table: NSTableView?
+        for _ in 0..<50 {
+          content.layoutSubtreeIfNeeded()
+          table = find(NSTableView.self, in: content)
+          if table != nil { break }
+          try await Task.sleep(for: .milliseconds(20))
+        }
+        let found = try #require(table)
+        let scroll = try #require(found.enclosingScrollView)
+        for _ in 0..<50 {
+          content.layoutSubtreeIfNeeded()
+          let wide = (scroll.documentView?.frame.width ?? 0) > scroll.contentView.bounds.width + FileRow.indent
+          if wide, scroll.hasHorizontalScroller, found.numberOfRows >= depth { break }
+          try await Task.sleep(for: .milliseconds(20))
+        }
+        let document = try #require(scroll.documentView)
+        #expect(document.frame.width + 1 >= FileRow.documentWidth(depth: depth - 1))
+        #expect(scroll.hasHorizontalScroller)
+        let before = scroll.contentView.bounds.origin.x
+        if let cg = CGEvent(
+          scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: -80, wheel3: 0),
+          let event = NSEvent(cgEvent: cg)
+        {
+          scroll.scrollWheel(with: event)
+        }
+        #expect(scroll.contentView.bounds.origin.x > before + 20)
+        content.layoutSubtreeIfNeeded()
+        var origins: [CGFloat] = []
+        for row in 0..<found.numberOfRows {
+          guard let cell = found.view(atColumn: 0, row: row, makeIfNecessary: true) else { continue }
+          if let mark = chevronMinX(in: cell, root: document) { origins.append(mark) }
+        }
+        let sample = found.view(atColumn: 0, row: 0, makeIfNecessary: true).map { outline($0) } ?? ""
+        #expect(origins.count >= depth, "origins \(origins) \(sample)")
+        if origins.count >= depth {
+          let step = origins[depth - 1] - origins[0]
+          #expect(abs(step - CGFloat(depth - 1) * FileRow.indent) < 2, "origins \(origins)")
+        }
+      }
+
+      /// The disclosure is the narrow mark at the row's indented edge.
+      private func chevronMinX(in cell: NSView, root: NSView) -> CGFloat? {
+        var best: CGFloat?
+        func walk(_ view: NSView) {
+          let width = view.bounds.width
+          let height = view.bounds.height
+          if width >= 10, width <= 14, height >= 16 {
+            let x = view.convert(view.bounds, to: root).minX
+            if best.map({ x < $0 }) ?? true { best = x }
+          }
+          for child in view.subviews { walk(child) }
+        }
+        walk(cell)
+        return best
+      }
+
+      private func outline(_ view: NSView, depth: Int = 0) -> String {
+        guard depth < 6 else { return "" }
+        let rect = view.bounds
+        let label = view.accessibilityLabel() ?? ""
+        let line = "\(String(repeating: " ", count: depth))\(type(of: view)) \(Int(rect.width))x\(Int(rect.height)) \(label)\n"
+        return line + view.subviews.map { outline($0, depth: depth + 1) }.joined()
       }
 
       private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {

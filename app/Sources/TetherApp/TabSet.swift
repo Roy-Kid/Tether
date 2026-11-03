@@ -63,6 +63,10 @@ enum WorkspaceIntent: Equatable {
   case reconnect(UUID)
   /// Hand the open workspace to one paired device nearby.
   case takeOver
+  /// ⌘1…⌘4. The index is into the host library, this machine first.
+  case switchHost(Int)
+  /// Ask for a path and open it with the application the system chooses.
+  case openPath
 }
 
 /// The open sessions, grouped by the host the window is showing.
@@ -71,8 +75,8 @@ enum WorkspaceIntent: Equatable {
 final class TabSet {
   let keyBindings = KeyBindingStore()
   #if os(macOS)
-    /// The app's one quick terminal. A window's own tabs share the main
-    /// window's controller, so its menu toggles the same overlay.
+    /// The app's one quick terminal. It is the main window, summoned; every
+    /// window's menu talks to this same controller.
     var quickTerminal: QuickTerminalController
   #endif
   var tabs: [SessionTab] = []
@@ -141,8 +145,8 @@ final class TabSet {
   var paletteQuery = ""
 
   /// The windows these tabs are on screen in, by an id each window makes
-  /// for itself. One set of tabs can be in two windows at once — the
-  /// ordinary one and the quick terminal — and each answers for itself.
+  /// for itself. The one most recently key while shown sizes the sessions
+  /// and answers an intent.
   private(set) var shownWindows: Set<UUID> = []
   private(set) var keyWindows: Set<UUID> = []
   /// The window in front of the two: the one most recently key while
@@ -339,6 +343,16 @@ final class TabSet {
     return tabs.filter { $0.host.id == currentHost.id }
   }
 
+  /// Every shell on this host, in tab order. A picker lists the host, not
+  /// only the page that is open.
+  func hostShells(_ host: UUID, current: UUID) -> [ShellChoice] {
+    workspaces.filter { $0.host.id == host }.flatMap(\.terminalIDs).compactMap { terminalID in
+      tabs.first { $0.id == terminalID }.map {
+        ShellChoice(id: $0.id, title: displayTitle(for: $0.id), current: $0.id == current)
+      }
+    }
+  }
+
   var visibleExtensions: [WorkspaceEntry] {
     extensions.filter { entry in
       entry.hostID == nil || entry.hostID == currentHost?.id
@@ -362,6 +376,29 @@ final class TabSet {
   func open(_ host: Host, on connection: RemoteConnection, in workspaceID: UUID? = nil) {
     show(host)
     adopt(SessionTab(host: host, connection: connection, known: known, name: nextName(for: host)), in: workspaceID)
+  }
+
+  /// A terminal on this host that already holds a lease, or is logging in
+  /// to get one. Another reconnect joins it instead of dialling again.
+  func reconnectLeader(for host: Host, besides id: UUID) -> SessionTab? {
+    guard !host.isLocal, host.allowsConnectionReuse else { return nil }
+    let peers = tabs.filter { $0.id != id && $0.host.sameSessionTarget(as: host) }
+    if let live = peers.first(where: { $0.connection != nil }) { return live }
+    return peers.first { $0.isHandshaking }
+  }
+
+  /// Disconnected terminals a new lease on this host should open a channel for.
+  /// A shell the person ended is not one of them, and this machine is a process.
+  func sessionsToRestore(on host: Host) -> [SessionTab] {
+    guard !host.isLocal, host.allowsConnectionReuse else { return [] }
+    return tabs.filter { $0.host.sameSessionTarget(as: host) && $0.isDisconnected }
+  }
+
+  /// One login brings the host's other dropped terminals back, each as a channel.
+  private func restoreDisconnections(of source: SessionTab, on connection: RemoteConnection) {
+    for other in sessionsToRestore(on: source.host) where other !== source {
+      other.reuse(connection)
+    }
   }
 
   /// The authenticated lease for this host, if one is already in hand.
@@ -402,13 +439,15 @@ final class TabSet {
           lineLimit: HistoryPreference.limit(in: defaults), restoring: restoring)
         tab.historyID = id
       } catch { reportHistoryProblem("Could not save session history: \(error.localizedDescription)") }
-      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
     }
-    show(tab.host)
     tab.offersToSave = !keepDeclined.contains(tab.host.id)
     // A person who declined a question the login asked has closed it.
     let id = tab.id
     tab.onDeclined = { [weak self] in self?.close(id, remember: false) }
+    tab.onLeaseReady = { [weak self, weak tab] connection in
+      guard let self, let tab else { return }
+      self.restoreDisconnections(of: tab, on: connection)
+    }
     tabs.insert(tab, at: min(max(index ?? tabs.count, 0), tabs.count))
     if let workspaceID, let page = workspaces.firstIndex(where: { $0.id == workspaceID }) {
       workspaces[page].terminalIDs.append(tab.id)
@@ -417,6 +456,12 @@ final class TabSet {
         terminalIDs: [tab.id], focused: tab.id)
       workspaces.insert(page, at: min(max(index ?? workspaces.count, 0), workspaces.count))
     }
+    // `show` saves. The new archive has to already be in that snapshot:
+    // a directory SQLite still has open is not an unreferenced file.
+    if historyStore?.canWrite == true {
+      tab.onHistoryChanged = { [weak self] in self?.persistHistory() }
+    }
+    show(tab.host)
     select(tab.id)
     persistHistory()
   }
@@ -481,6 +526,20 @@ final class TabSet {
     tabs.first { $0.id == offer.tab }?.settlePasswordOffer()
   }
 
+  /// Open this host, or come back to the page it already has.
+  ///
+  /// Nil means the page is on screen. `.connect` means nothing is open
+  /// there yet, and the caller dials it. The intent handler must not assign
+  /// that itself: it just cleared `intent`.
+  func reveal(_ host: Host) -> WorkspaceIntent? {
+    if tabs.contains(where: { $0.host.id == host.id })
+      || extensions.contains(where: { $0.hostID == host.id }) {
+      show(host)
+      return nil
+    }
+    return .connect(host)
+  }
+
   /// Switch the window to this host, restoring its last tab. Does not connect.
   ///
   /// Goes through `select` so the page's focused pane, and the split that
@@ -517,35 +576,24 @@ final class TabSet {
 
   func commitLayout() { persistHistory() }
 
-  /// This machine, including the `.local` name a shell and a hook spell differently.
-  nonisolated static func sameMachine(_ reported: String, _ local: String) -> Bool {
-    if LocalMachine.same(reported, local) { return true }
-    let reported = reported.lowercased()
-    let local = local.lowercased()
-    if reported == local { return true }
-    func strip(_ value: String) -> String {
-      value.hasSuffix(".local") ? String(value.dropLast(".local".count)) : value
-    }
-    let short = strip(reported)
-    return !short.isEmpty && short == strip(local)
-  }
-
-  /// Land on the shell a status row named. A named terminal is that tty only.
-  /// A directory is used when the row named no terminal.
+  /// Land on the shell a status row named. A named terminal is that tty on
+  /// that machine only. A directory is used when the row named no terminal,
+  /// and is a path on this Mac: a remote tab in a folder of the same name is
+  /// somewhere else.
   @discardableResult
   func focusSession(host: String?, terminal: String?, directory: String?) -> Bool {
-    if let host, let terminal {
-      guard let tab = tabs.first(where: { tab in
-        guard let identity = tab.pluginTerminalIdentity else { return false }
-        return identity.terminal == terminal && Self.sameMachine(identity.host, host)
-      }) else { return false }
+    if let terminal {
+      guard let host else { return false }
+      let wanted = PluginTerminalIdentity(host: host, terminal: terminal)
+      guard let tab = tabs.first(where: { $0.pluginTerminalIdentity?.matches(wanted) == true })
+      else { return false }
       select(tab.id)
       return true
     }
     guard let directory, !directory.isEmpty else { return false }
     let wanted = URL(fileURLWithPath: directory).standardizedFileURL.path
     let matches = tabs.filter { tab in
-      guard let cwd = tab.workingDirectory else { return false }
+      guard tab.host.isLocal, let cwd = tab.workingDirectory else { return false }
       return URL(fileURLWithPath: cwd).standardizedFileURL.path == wanted
     }
     if let current = tabs.first(where: { $0.id == selected }), matches.contains(where: { $0.id == current.id }) {
@@ -706,19 +754,33 @@ final class TabSet {
   func closeAccountSessions() {
     let kept = workspaces.filter { $0.host.isLocal }
     let keptIDs = Set(kept.flatMap(\.terminalIDs))
-    let keptTabs = tabs.filter { keptIDs.contains($0.id) }
-    guard !keptTabs.isEmpty else {
+    guard tabs.contains(where: { keptIDs.contains($0.id) }) else {
       closeAll()
       return
     }
     let focus = selected.flatMap { keptIDs.contains($0) ? $0 : nil } ?? kept.last?.focused
-    tabs.removeAll { keptIDs.contains($0.id) }
-    closeAll()
-    tabs = keptTabs
-    workspaces = kept
+    // `closeAll` saves an empty snapshot. That would delete the local
+    // archives while those shells still have the databases open.
+    closedTabs.removeAll()
+    restoringTab = nil
+    if case .restoreTab = intent { intent = nil }
+    closeCheck?.cancel()
+    closeCheck = nil
+    checkingClose = nil
+    pendingClose = nil
+    closingWorkspace = nil
+    renamingWorkspace = nil
+    extensions.forEach { $0.workspace.close() }
+    extensions.removeAll()
+    let leaving = tabs.map(\.id).filter { !keptIDs.contains($0) }
+    for id in leaving { close(id, remember: false) }
     currentHost = .local
     selected = focus
-    if let focus { lastByHost[Host.local.id] = focus }
+    lastByHost = focus.map { [Host.local.id: $0] } ?? [:]
+    recents = []
+    tabMenu = nil
+    accessory = nil
+    sheet = nil
     persistHistory()
   }
 
@@ -1024,6 +1086,22 @@ final class TabSet {
     let current = selectedWorkspaceID.flatMap { ids.firstIndex(of: $0) } ?? 0
     let next = forward ? (current + 1) % ids.count : (current - 1 + ids.count) % ids.count
     select(ids[next])
+  }
+
+  /// Edits that terminal's chip in place. An empty name clears the pin.
+  func beginRenamingTerminal(_ id: UUID) {
+    guard tabs.contains(where: { $0.id == id }) else { return }
+    renamingWorkspace = nil
+    renaming = id
+    revealTabBar()
+  }
+
+  /// Edits that workspace's name on its focused chip.
+  func beginRenamingTab(_ id: UUID) {
+    guard workspaces.contains(where: { $0.id == id }) else { return }
+    renaming = nil
+    renamingWorkspace = id
+    revealTabBar()
   }
 
   /// An empty terminal name clears the pin. An empty workspace name keeps the old one.

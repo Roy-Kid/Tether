@@ -13,18 +13,33 @@ import TetherUI
 private final class HostProbe {
   var focused: [UUID] = []
   var dismissed: [UUID] = []
+  var renamed: [(UUID, String)] = []
+  /// What a status plugin reports, by tty, as the host would look it up.
+  var marks: [String: PluginTabIndicator] = [:]
+  var askedMarks: [[String]] = []
   let host = UUID()
+  /// The machine its shells are on, as the host names it.
+  var machine = "lab"
 
-  func context(_ id: UUID = UUID(), host: UUID? = nil) -> TabContext {
+  func context(
+    _ id: UUID = UUID(), host: UUID? = nil, terminalName: @escaping () -> String? = { nil }
+  ) -> TabContext {
     TabContext(
       id: id,
       plugin: PluginContext(
         connection: nil, hostLabel: "lab", hostID: host ?? self.host,
         openWorkspace: { _ in }, reconnect: { throw CancellationError() }),
+      terminalName: terminalName,
+      terminalHost: { [unowned self] in machine },
       focus: { [unowned self] in focused.append(id) },
       dismissAccessory: { [unowned self] in dismissed.append(id) },
       present: { _ in },
-      dismissSheet: {})
+      dismissSheet: {},
+      renameShell: { [unowned self] id, name in renamed.append((id, name)) },
+      terminalIndicator: { [unowned self] ttys in
+        askedMarks.append(ttys)
+        return ttys.lazy.compactMap { self.marks[$0] }.first
+      })
   }
 }
 
@@ -35,6 +50,35 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @MainActor
 @Suite("tmux on a tab")
 struct TmuxTabTests {
+
+  @Test("a session wears the mark a status plugin reports on one of its panes")
+  func sessionDotComesFromItsPanes() throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let tab = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { tab.close() }
+    let work = info("$1", "work")
+    let idle = info("$2", "idle")
+    #expect(tab.indicator(for: work) == nil, "no panes read yet")
+    #expect(host.askedMarks.isEmpty)
+
+    tab.notePanes(listed: "/dev/ttys004 $1\n/dev/ttys005 $1\n/dev/ttys006 $2\nnot a pane\n")
+    host.marks["/dev/ttys005"] = PluginTabIndicator(
+      target: .init(host: "lab", terminal: "/dev/ttys005"), color: 0xFF9F0A, label: "Needs you")
+    #expect(tab.indicator(for: work)?.label == "Needs you")
+    #expect(host.askedMarks.last == ["/dev/ttys004", "/dev/ttys005"])
+    #expect(tab.indicator(for: idle) == nil)
+    #expect(host.askedMarks.last == ["/dev/ttys006"])
+
+    // The tab shows its client's session; another tab on the host reads
+    // the same panes without listing them again.
+    #expect(tab.shownTerminals.isEmpty, "not a client yet")
+    tab.shellSessionID = "$1"
+    #expect(tab.shownTerminals == ["/dev/ttys004", "/dev/ttys005"])
+    let other = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { other.close() }
+    #expect(other.paneTTYs(of: "$2") == ["/dev/ttys006"])
+  }
 
   @Test("restore metadata keeps the session identity without retaining a client")
   func restorationMetadata() async throws {
@@ -72,10 +116,10 @@ struct TmuxTabTests {
 
     second.choose(info("$1", "dev"), windowID: nil)
 
-    #expect(host.focused.isEmpty, "the other terminal is left where it is")
+    #expect(host.focused == [firstID], "a shell that has not entered tmux switches to the tab that has the session")
     #expect(first.shellSessionID == "$1")
-    for _ in 0..<50 where second.busy { await Task.yield() }
-    #expect(second.error == "Not connected.")
+    #expect(second.error == nil)
+    #expect(!second.busy)
     #expect(!second.isShowing, "the terminal is never replaced")
   }
 
@@ -111,6 +155,18 @@ struct TmuxTabTests {
     #expect(client.shellSessionID == "$1", "a client that was not killed stays a client")
   }
 
+  @Test("renaming a shell tells the host, and an unchanged name does not")
+  func shellRenameReachesTheHost() throws {
+    let probe = HostProbe()
+    let shell = UUID()
+    let tab = try #require(TmuxPlugin().attach(to: probe.context()) as? TmuxTab)
+    tab.rename(.shell(shell, "Terminal 1"), to: "  build  ")
+    tab.rename(.shell(shell, "build"), to: "build")
+    #expect(probe.renamed.count == 1)
+    #expect(probe.renamed.first?.0 == shell)
+    #expect(probe.renamed.first?.1 == "build")
+  }
+
   @Test("a shell that is a client keeps its name, and is what the menu offers")
   func shellClientIsTheMenu() throws {
     let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
@@ -120,7 +176,7 @@ struct TmuxTabTests {
     #expect(tab.tabTitle == "dev")
     #expect(!tab.isShowing)
     #expect(tab.commands.map(\.id) == ["detach", "newWindow", "previousWindow", "nextWindow", "splitHorizontal", "splitVertical", "zoom",
-      "focusLeft", "focusDown", "focusUp", "focusRight"])
+      "focusLeft", "focusDown", "focusUp", "focusRight", "session1"])
     #expect(tab.closeNote == "tmux stays on the host.")
   }
 
@@ -153,6 +209,12 @@ struct TmuxTabTests {
     let first = try #require(plugin.attach(to: host.context()) as? TmuxTab)
     first.shellSessionID = "$1"
     #expect(plugin.tab(owning: "$1", on: host.host) === first)
+    plugin.remember([("/dev/pts/3", "$1")], on: host.host)
+    // Another machine's pts/3 is not this pane.
+    #expect(!plugin.claimTerminal(host: "gpu", terminal: "pts/3"))
+    #expect(host.focused.isEmpty)
+    #expect(plugin.claimTerminal(host: "lab", terminal: "pts/3"))
+    #expect(host.focused == [first.tab.id])
 
     first.close()
     #expect(plugin.tab(owning: "$1", on: host.host) == nil)
@@ -230,6 +292,89 @@ struct TmuxTabTests {
     #expect(shell.error == "Not connected.")
     #expect(shell.sessions.map(\.name) == ["kept"])
   }
+
+  @Test("refreshing keeps row positions while updating names, status and window indices")
+  func refreshKeepsRowPositions() throws {
+    let host = HostProbe()
+    let plugin = TmuxPlugin()
+    let tab = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { tab.close() }
+    let first = TmuxListedWindow(id: 9, index: 2, name: "zoo", active: true, panes: 1)
+    let second = TmuxListedWindow(id: 7, index: 0, name: "apple", active: false, panes: 1)
+    tab.store([
+      TmuxSessionInfo(id: "$2", name: "zoo", attached: false, windows: [first, second]),
+      info("$1", "apple"), info("$3", "ending"),
+    ])
+    #expect(tab.listedSessions.map(\.id) == ["$2", "$1", "$3"])
+    #expect(tab.windows(for: tab.sessions[0]).map(\.id) == [9, 7])
+
+    let renamed = TmuxListedWindow(id: 9, index: 8, name: "renamed", active: false, panes: 3)
+    let activated = TmuxListedWindow(id: 7, index: 1, name: "apple", active: true, panes: 2)
+    let added = TmuxListedWindow(id: 10, index: 0, name: "new", active: false, panes: 1)
+    tab.store([
+      info("$4", "aaa"), info("$1", "apple"),
+      TmuxSessionInfo(id: "$2", name: "zzz", attached: true, windows: [added, activated, renamed]),
+    ])
+    #expect(tab.listedSessions.map(\.id) == ["$2", "$1", "$4"])
+    #expect(tab.sessions[0].name == "zzz")
+    #expect(tab.sessions[0].attached)
+    #expect(tab.windows(for: tab.sessions[0]) == [renamed, activated, added])
+    #expect(tab.commands.map(\.title) == ["zzz", "apple", "aaa"])
+
+    // A new tab follows the host's existing positions on its first read.
+    let other = try #require(plugin.attach(to: host.context()) as? TmuxTab)
+    defer { other.close() }
+    other.store([
+      info("$4", "aaa"), info("$1", "apple"),
+      TmuxSessionInfo(id: "$2", name: "zzz", attached: true, windows: [added, activated]),
+    ])
+    #expect(other.listedSessions.map(\.id) == ["$2", "$1", "$4"])
+    #expect(other.windows(for: other.sessions[0]) == [activated, added])
+
+    other.store([])
+    #expect(other.listedSessions.isEmpty)
+    #expect(other.sessionsLoaded)
+    other.store([info("$1", "apple"), info("$2", "zzz")])
+    #expect(other.listedSessions.map(\.id) == ["$1", "$2"])
+  }
+
+  @Test("the shell's client list follows a session chosen in the terminal")
+  func clientListFollowsTheShell() throws {
+    let host = HostProbe()
+    let tab = try #require(
+      TmuxPlugin().attach(to: host.context(terminalName: { "/dev/ttys001" })) as? TmuxTab)
+    defer { tab.close() }
+    let now = Date()
+
+    tab.noteClients(listed: "/dev/ttys001|$2\n/dev/ttys002|$3\n", epoch: tab.clientEpoch, now: now)
+    #expect(tab.shellSessionID == "$2")
+    #expect(tab.symbol == TmuxPlugin.symbol)
+
+    tab.noteClients(listed: "ttys001|$9\n", epoch: tab.clientEpoch, now: now)
+    #expect(tab.shellSessionID == "$9")
+
+    let seen = tab.clientEpoch
+    tab.holdFollowers()
+    tab.noteClients(listed: "ttys001|$1\n", epoch: seen, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == "$9", "a list taken before the switch is dropped")
+    tab.noteClients(listed: "ttys001|$1\n", epoch: tab.clientEpoch, now: now)
+    #expect(tab.shellSessionID == "$9", "the switch keeps its session until the server can confirm it")
+    tab.noteClients(listed: "ttys001|$1\n", epoch: tab.clientEpoch, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == "$1")
+
+    tab.noteClients(listed: "/dev/ttys002|$3\n", epoch: tab.clientEpoch, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == nil, "a tty missing from a finished list has detached")
+
+    tab.noteClients(listed: "ttys001|$4\n", epoch: tab.clientEpoch, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == "$4")
+    tab.busy = true
+    tab.noteClients(listed: "ttys001|$5\n", epoch: tab.clientEpoch, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == "$4", "a switch in progress is not overwritten")
+    tab.close()
+    tab.busy = false
+    tab.noteClients(listed: "ttys001|$6\n", epoch: tab.clientEpoch, now: now.addingTimeInterval(10))
+    #expect(tab.shellSessionID == "$4")
+  }
 }
 
 @MainActor
@@ -252,6 +397,19 @@ struct TmuxCommandTests {
       "a name that cannot be quoted falls back to the session id")
     #expect(TmuxCommands.attachLine(name: "bad\nname", id: "$(id)", window: nil) == nil)
     #expect(TmuxCommands.attachLine(name: "", id: "$2", window: nil) == "tmux attach-session -t '$2'")
+  }
+
+  @Test("a client list names the session, and a missing server is not an empty one")
+  func clientList() {
+    #expect(TmuxClients.session(for: "/dev/ttys001", in: "/dev/ttys001|$2\n") == "$2")
+    #expect(TmuxClients.session(for: "/dev/ttys001", in: "ttys001|$9\n") == "$9")
+    #expect(TmuxClients.session(for: "/dev/ttys001", in: "/dev/ttys002|$3\n") == nil)
+    #expect(TmuxClients.session(for: "/dev/ttys001", in: "not a client\n") == nil)
+    let clients = Data("/dev/ttys001|$2\n".utf8)
+    #expect(TmuxClients.listing(status: 0, stdout: clients, stderr: Data()) == "/dev/ttys001|$2\n")
+    #expect(TmuxClients.listing(status: 1, stdout: Data(), stderr: Data("no clients\n".utf8)) == "")
+    #expect(TmuxClients.listing(status: 1, stdout: Data(), stderr: Data("no server running\n".utf8)) == nil)
+    #expect(TmuxClients.listing(status: 127, stdout: Data(), stderr: Data("No such file or directory\n".utf8)) == nil)
   }
 
   @Test("a client that is already tmux is switched, not typed into")
@@ -287,13 +445,20 @@ struct TmuxCommandTests {
     let plugin = TmuxPlugin()
     let tab = try #require(plugin.attach(to: HostProbe().context()) as? TmuxTab)
     defer { tab.close() }
-    #expect(tab.commands.isEmpty, "a shell that is not a tmux client offers nothing")
+    #expect(tab.commands.isEmpty, "a shell with no session list offers nothing")
+    tab.sessions = [info("$0", "alpha"), info("$1", "beta")]
+    #expect(tab.commands.map(\.id) == ["session1", "session2"], "⌥1 works before the shell has entered tmux")
     tab.shellSessionID = "$1"
     let descriptors = plugin.commandDescriptors
-    #expect(tab.commands.map(\.id) == descriptors.map(\.id))
+    let standing = descriptors.filter { !$0.id.hasPrefix("session") }
+    #expect(tab.commands.map(\.id).starts(with: standing.map(\.id)))
+    #expect(tab.commands.suffix(2).map(\.id) == ["session1", "session2"])
+    #expect(tab.commands.suffix(2).map(\.title) == ["alpha", "beta"])
     let chords = Dictionary(uniqueKeysWithValues: descriptors.compactMap { d in d.shortcut.map { (d.id, $0) } })
     #expect(Set(chords.values).count == chords.count, "no two tmux commands share a chord")
     #expect(chords["detach"] == nil)
+    #expect(chords["session1"] == PluginKeyChord("1", [.option]))
+    #expect(chords["session4"] == PluginKeyChord("4", [.option]))
   }
 }
 

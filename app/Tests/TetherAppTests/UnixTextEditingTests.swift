@@ -1,10 +1,11 @@
 #if os(macOS)
 import AppKit
 import Testing
+import TetherTestSupport
 @testable import TetherApp
 
 @MainActor
-@Suite("Unix text editing", .serialized)
+@Suite("Unix text editing", .serialized, .appKitEventLoop)
 struct UnixTextEditingTests {
   private func fixture(_ text: String) -> (NSWindow, NSTextView) {
     _ = NSApplication.shared

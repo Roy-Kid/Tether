@@ -1,21 +1,33 @@
 #if os(macOS)
   import AppKit
 
-  /// A Mac's dialog: an alert sheet on whatever is frontmost.
+  /// A Mac's dialog: an alert sheet on the anchor's window.
   ///
-  /// On the sheet already open, if there is one — a sheet on a window that is
-  /// showing a sheet waits behind it, which for a handshake means waiting on
-  /// a person who cannot see the question.
+  /// A terminal's question is not the window's. It is an alert hung over that
+  /// terminal, with a dimming window the size of the terminal, and the rest
+  /// of the window stays live. On the sheet already open, if there is one —
+  /// a sheet on a window that is showing a sheet waits behind it, which for
+  /// a handshake means waiting on a person who cannot see the question.
   @MainActor
   final class PlatformDialogSurface: DialogSurface {
+    @MainActor
     private final class Presentation {
       let alert: NSAlert
       weak var host: NSWindow?
       var withdrawn = false
       var answering = false
       var shortcuts: [(Dialog.Action.Shortcut, NSButton)] = []
+      var buttons: [NSButton] = []
+      /// Retained target for a terminal dialog's buttons. A sheet's own
+      /// actions are AppKit's; these are not a sheet.
+      var clicks: ButtonTarget?
       var cancelButton: NSButton?
       var keyMonitor: Any?
+      /// A reconnect question: the dim covers the terminal, the alert floats
+      /// over it, and neither is a sheet of the app window.
+      var usesRegion = false
+      var dim: NSWindow?
+      weak var region: DialogAnchor?
       /// Called once, however the dialog ends.
       var ended: ((NSApplication.ModalResponse) -> Void)?
       init(alert: NSAlert) { self.alert = alert }
@@ -25,6 +37,18 @@
         self.ended = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+        if let dim {
+          dim.orderOut(nil)
+          dim.parent?.removeChildWindow(dim)
+          self.dim = nil
+        }
+        if usesRegion {
+          alert.window.orderOut(nil)
+          alert.window.parent?.removeChildWindow(alert.window)
+        }
+        region?.onRegionChange = nil
+        region?.whenViewReady = nil
+        region = nil
         ended(response)
       }
     }
@@ -43,6 +67,7 @@
       for index in order {
         let action = dialog.actions[index]
         let button = alert.addButton(withTitle: action.title)
+        presentation.buttons.append(button)
         switch action.role {
         case .destructive:
           button.hasDestructiveAction = true
@@ -122,18 +147,141 @@
           return self.route(event)
         }
       }
-      if let window = Self.sheetHost(anchor?.window) {
-        presentation.host = window
-        alert.beginSheetModal(for: window) { presentation.end($0) }
+      if let anchor, anchor.limitsToView {
+        presentation.usesRegion = true
+        presentation.region = anchor
+        hangOnTerminal(alert, presentation: presentation, anchor: anchor)
+      } else if let window = Self.sheetHost(anchor?.window) {
+        beginSheet(alert, on: window, presentation: presentation)
       } else {
-        // No window to hang it on. `runModal` blocks, so not from inside
-        // whatever called this — and not at all if it was taken back first.
-        DispatchQueue.main.async {
-          guard !presentation.withdrawn else { return }
-          presentation.end(alert.runModal())
-        }
+        beginModal(alert, presentation: presentation)
       }
       return true
+    }
+
+    /// The alert and a dim the size of the terminal, both children of its
+    /// window. A sheet would dim and block that whole window.
+    private func hangOnTerminal(_ alert: NSAlert, presentation: Presentation, anchor: DialogAnchor) {
+      func hang() {
+        guard !presentation.withdrawn, presentation.dim == nil, presentation.host == nil else { return }
+        guard let view = Self.readyView(anchor), let parent = view.window else { return }
+        alert.layout()
+        let dim = DimWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        dim.isOpaque = false
+        dim.backgroundColor = .black.withAlphaComponent(UIStyle.scrimOpacity)
+        dim.hasShadow = false
+        dim.isReleasedWhenClosed = false
+        dim.isExcludedFromWindowsMenu = true
+        presentation.dim = dim
+        alert.window.isReleasedWhenClosed = false
+        let clicks = ButtonTarget()
+        clicks.buttons = presentation.buttons
+        clicks.onPress = { [weak presentation] index in
+          guard let presentation, presentation.ended != nil, !presentation.withdrawn else { return }
+          presentation.answering = true
+          let code = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + index
+          presentation.end(NSApplication.ModalResponse(rawValue: code))
+        }
+        presentation.clicks = clicks
+        for button in presentation.buttons {
+          button.target = clicks
+          button.action = #selector(ButtonTarget.press(_:))
+        }
+        place(alert, dim: dim, over: view, in: parent)
+        anchor.onRegionChange = { [weak self, weak presentation, weak anchor] in
+          guard let self, let presentation, presentation.ended != nil, let anchor else { return }
+          guard let view = Self.readyView(anchor), let parent = view.window, let dim = presentation.dim else {
+            presentation.dim?.ignoresMouseEvents = true
+            presentation.alert.window.ignoresMouseEvents = true
+            presentation.dim?.alphaValue = 0
+            presentation.alert.window.alphaValue = 0
+            return
+          }
+          self.place(alert, dim: dim, over: view, in: parent)
+        }
+        alert.window.makeKeyAndOrderFront(nil)
+        if let first = alert.window.initialFirstResponder {
+          alert.window.makeFirstResponder(first)
+        }
+      }
+      if Self.readyView(anchor) != nil {
+        hang()
+        return
+      }
+      anchor.whenViewReady = { [weak presentation] in
+        DispatchQueue.main.async {
+          guard let presentation, !presentation.withdrawn else { return }
+          hang()
+        }
+      }
+      DispatchQueue.main.async { [weak presentation] in
+        guard let presentation, !presentation.withdrawn, presentation.dim == nil else { return }
+        if Self.readyView(anchor) != nil {
+          hang()
+        } else if let window = Self.sheetHost(anchor.window) {
+          self.beginSheet(alert, on: window, presentation: presentation)
+        } else {
+          self.beginModal(alert, presentation: presentation)
+        }
+      }
+    }
+
+    private func place(_ alert: NSAlert, dim: NSWindow, over view: NSView, in parent: NSWindow) {
+      let screen = parent.convertToScreen(view.convert(view.bounds, to: nil))
+      guard screen.width > 1, screen.height > 1 else { return }
+      dim.alphaValue = 1
+      dim.ignoresMouseEvents = false
+      alert.window.alphaValue = 1
+      alert.window.ignoresMouseEvents = false
+      // An alert's own window is a modal panel. Left there, nothing else in
+      // the app can become key, which is the whole window being blocked.
+      dim.level = parent.level
+      alert.window.level = parent.level
+      dim.appearance = parent.appearance
+      alert.window.appearance = parent.appearance
+      if dim.frame.integral != screen.integral { dim.setFrame(screen, display: true) }
+      let size = alert.window.frame.size
+      var origin = NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2)
+      // An off-screen terminal (a test window, a space that is not this one)
+      // keeps its alert with it. One on a screen stays on that screen.
+      if let visible = parent.screen?.visibleFrame, visible.intersects(screen) {
+        origin.x = min(max(origin.x, visible.minX), max(visible.minX, visible.maxX - size.width))
+        origin.y = min(max(origin.y, visible.minY), max(visible.minY, visible.maxY - size.height))
+      }
+      let alertFrame = NSRect(origin: origin, size: size)
+      if alert.window.frame.integral != alertFrame.integral {
+        alert.window.setFrame(alertFrame, display: true)
+      }
+      stick(dim, to: parent)
+      stick(alert.window, to: parent)
+    }
+
+    private func stick(_ window: NSWindow, to parent: NSWindow) {
+      guard window.parent !== parent else { return }
+      window.parent?.removeChildWindow(window)
+      parent.addChildWindow(window, ordered: .above)
+    }
+
+    private func beginSheet(_ alert: NSAlert, on window: NSWindow, presentation: Presentation) {
+      presentation.host = window
+      alert.beginSheetModal(for: window) { presentation.end($0) }
+    }
+
+    /// No window to hang it on. `runModal` blocks, so not from inside
+    /// whatever called this — and not at all if it was taken back first.
+    private func beginModal(_ alert: NSAlert, presentation: Presentation) {
+      DispatchQueue.main.async {
+        guard !presentation.withdrawn else { return }
+        presentation.end(alert.runModal())
+      }
+    }
+
+    /// A view on a window, large enough to cover.
+    private static func readyView(_ anchor: DialogAnchor) -> NSView? {
+      guard let view = anchor.view, view.window != nil else { return nil }
+      let size = view.convert(view.bounds, to: nil).size
+      guard size.width > 1, size.height > 1 else { return nil }
+      return view
     }
 
     /// Only the visible, frontmost dialog owns these shortcuts. Consuming
@@ -175,6 +323,12 @@
       self.current = nil
       current.withdrawn = true
       let sheet = current.alert.window
+      // A terminal dialog is not a sheet, unless its view never appeared and
+      // it fell back onto the window.
+      if current.usesRegion, sheet.sheetParent == nil {
+        current.end(.abort)
+        return
+      }
       if let host = current.host, sheet.sheetParent != nil {
         host.endSheet(sheet, returnCode: .abort)
       } else if NSApp.modalWindow == sheet {
@@ -264,6 +418,24 @@
       case .code: box.contentType = .oneTimeCode
       }
       return box
+    }
+
+    /// Buttons of a terminal dialog. A sheet ends itself; this one does not.
+    @MainActor
+    private final class ButtonTarget: NSObject {
+      var buttons: [NSButton] = []
+      var onPress: ((Int) -> Void)?
+      @objc func press(_ sender: NSButton) {
+        guard let index = buttons.firstIndex(of: sender) else { return }
+        onPress?(index)
+      }
+    }
+
+    /// A borderless dim. It must not become key: the alert does, and the
+    /// window underneath has to be able to as well.
+    private final class DimWindow: NSWindow {
+      override var canBecomeKey: Bool { false }
+      override var canBecomeMain: Bool { false }
     }
 
     /// The anchor's window, or the one a person is looking at — down to

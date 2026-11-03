@@ -22,6 +22,6 @@ let package = Package(
                 .product(name: "TetherUI", package: "TetherFrontend"),
                 .product(name: "TetherPluginKit", package: "TetherFrontend"),
             ]),
-        .testTarget(name: "TmuxPluginTests", dependencies: ["TmuxPlugin"]),
+        .testTarget(name: "TmuxPluginTests", dependencies: ["TmuxPlugin", .product(name: "TetherTestSupport", package: "TetherFrontend")]),
     ]
 )

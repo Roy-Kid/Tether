@@ -165,8 +165,9 @@ impl LayoutCache {
         self.prepare_placed(frame, metrics, palette, overlay, dirty, None)
     }
 
-    /// The same frame, centred on a surface and with its edge backgrounds
-    /// carried to the surface's edges (`placement`). `None` draws the grid
+    /// The same frame, placed on a surface and with its edge backgrounds
+    /// carried to the surface's edges (`placement`). Across, the grid is
+    /// centred; down, it rests on the bottom edge. `None` draws the grid
     /// at the corner with nothing round it.
     pub fn prepare_placed(
         &mut self,

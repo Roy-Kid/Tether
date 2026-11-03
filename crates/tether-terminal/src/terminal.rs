@@ -312,6 +312,45 @@ fn row_fills_span(
     cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) || cell.c != ' '
 }
 
+/// The glyph at either end of `link`.
+fn glyph_text<'a>(link: &Link, glyphs: &'a [Glyph], first: bool) -> &'a str {
+    let Some(span) = (if first { link.spans.first() } else { link.spans.last() }) else {
+        return "";
+    };
+    glyphs
+        .iter()
+        .find(|glyph| {
+            glyph.row == span.row
+                && if first {
+                    glyph.column == span.start
+                } else {
+                    glyph.column + glyph.width == span.end
+                }
+        })
+        .map(|glyph| glyph.text.as_str())
+        .unwrap_or("")
+}
+
+/// The link's last glyph is the last thing on its line apart from blanks.
+fn link_ends_line(link: &Link, glyphs: &[Glyph]) -> bool {
+    let Some(span) = link.spans.last() else { return false };
+    let Some(index) = glyphs
+        .iter()
+        .rposition(|glyph| glyph.row == span.row && glyph.column + glyph.width == span.end)
+    else {
+        return false;
+    };
+    glyphs[index + 1..].iter().all(|glyph| link::breaks_token(&glyph.text))
+}
+
+fn pop_trailing_separators(glyphs: &mut Vec<Glyph>, hit: usize) {
+    while glyphs.len() > hit + 1
+        && glyphs.last().is_some_and(|glyph| link::breaks_token(&glyph.text))
+    {
+        glyphs.pop();
+    }
+}
+
 impl Terminal {
     pub fn new(size: ScreenSize) -> Self {
         Self::with_options(size, Options::default())
@@ -439,7 +478,9 @@ impl Terminal {
     /// shaped like. Wrapped rows are read as the one line they are, and so
     /// is a row that fills up to a vertical rule: a split writes the rest
     /// on the next row of that column range, with a newline, because the
-    /// rule is not the edge of the screen.
+    /// rule is not the edge of the screen. A path a program broke with a
+    /// newline in the middle of the name — after `-` or `%`, or into a
+    /// `%2F` — is one path too.
     ///
     /// Shape, not truth. Whether a path exists is for whoever holds the
     /// connection to ask.
@@ -466,7 +507,105 @@ impl Terminal {
                 spans: link::spans(&line[start..end]),
             });
         }
-        link::find(&line, hit)
+        let found = link::find(&line, hit)?;
+        match found.target {
+            LinkTarget::Path { .. } | LinkTarget::Url(_) => {
+                Some(self.mend_broken_path(line, hit, found))
+            }
+            _ => Some(found),
+        }
+    }
+
+    /// Pulls in adjacent lines when they are the same path with a newline
+    /// typed in the middle. Soft wraps are already one line. A line that
+    /// merely happens to end at the edge stays its own line.
+    fn mend_broken_path(&self, mut glyphs: Vec<Glyph>, mut hit: usize, mut found: Link) -> Link {
+        while let Some(first) = found.spans.first().copied() {
+            let left = self.span_left(Position::new(first.row, first.start));
+            if first.row == 0 || first.start != left {
+                break;
+            }
+            let previous = first.row - 1;
+            let (before, _, _) = self.logical_line(Position::new(previous, left));
+            if before.last().map(|glyph| glyph.row) != Some(previous) {
+                break;
+            }
+            let Some(end) = before.iter().rposition(|glyph| !link::breaks_token(&glyph.text))
+            else {
+                break;
+            };
+            let mut start = end;
+            while start > 0 && !link::breaks_token(&before[start - 1].text) {
+                start -= 1;
+            }
+            if !link::continues(&before[end].text, glyph_text(&found, &glyphs, true)) {
+                break;
+            }
+            let added = end - start + 1;
+            if glyphs.len() + added > link::LINE_LIMIT {
+                break;
+            }
+            pop_trailing_separators(&mut glyphs, hit);
+            let mut joined = before[start..=end].to_vec();
+            joined.extend_from_slice(&glyphs);
+            let Some(grown) = link::find(&joined, hit + added) else { break };
+            if grown.spans.first().map(|span| span.row) >= Some(first.row) {
+                break;
+            }
+            glyphs = joined;
+            hit += added;
+            found = grown;
+        }
+
+        loop {
+            if !link_ends_line(&found, &glyphs) {
+                break;
+            }
+            let Some(last) = found.spans.last().copied() else { break };
+            let Some(next) = last.row.checked_add(1).filter(|row| *row < self.size.rows) else {
+                break;
+            };
+            let left = self.span_left(Position::new(last.row, last.start));
+            let (more, _, _) = self.logical_line(Position::new(next, left));
+            if more.first().map(|glyph| glyph.row) != Some(next) {
+                break;
+            }
+            if more.first().map(|glyph| glyph.column) != Some(left) {
+                break;
+            }
+            if !link::continues(glyph_text(&found, &glyphs, false), &more[0].text) {
+                break;
+            }
+            let end =
+                more.iter().position(|glyph| link::breaks_token(&glyph.text)).unwrap_or(more.len());
+            if end == 0 || glyphs.len() + end > link::LINE_LIMIT {
+                break;
+            }
+            let blank_after = more[end..].iter().all(|glyph| link::breaks_token(&glyph.text));
+            pop_trailing_separators(&mut glyphs, hit);
+            glyphs.extend(more.into_iter().take(end));
+            let Some(grown) = link::find(&glyphs, hit) else { break };
+            if grown.spans.last().map(|span| (span.row, span.end)) <= Some((last.row, last.end)) {
+                break;
+            }
+            found = grown;
+            if !blank_after {
+                break;
+            }
+        }
+        found
+    }
+
+    /// The left edge of the column range `position` sits in.
+    fn span_left(&self, position: Position) -> u16 {
+        let grid = self.inner.grid();
+        let offset = grid.display_offset() as i32;
+        let columns = self.size.columns as usize;
+        let cells_at = |row: u16| &grid[Line(row as i32 - offset)];
+        match column_span(cells_at, position, columns, self.size.rows) {
+            ColumnSpan::Pane { left, .. } => left as u16,
+            ColumnSpan::Screen | ColumnSpan::Rule => 0,
+        }
     }
 
     /// The visible rows the one at `position` is part of, as glyphs with

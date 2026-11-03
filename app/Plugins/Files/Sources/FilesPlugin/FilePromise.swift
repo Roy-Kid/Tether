@@ -9,15 +9,14 @@
     static let droppedPath = NSPasteboard.PasteboardType(DroppedPath.contentType.identifier)
   }
 
-  /// A file row dragged out of the list: a promise of the file.
+  /// A file row dragged out of the list: a promise of the file, and its path.
   ///
   /// The bytes are fetched only once a drop has been accepted and its
   /// destination asks for them — Finder does, after the drag is over — on the
-  /// writer's own queue, never the main thread. Nothing else rides on this
-  /// item: SwiftUI reads an item that holds a promise as the promise alone,
-  /// so the path goes beside it (`DraggedRow.paths`). No string either:
-  /// given one, Finder would make a text clipping rather than keep the
-  /// promise.
+  /// writer's own queue, never the main thread. The path rides on the same
+  /// item, for the terminal, as plain data that Finder passes over: one row,
+  /// one item, so a drag counts what was dragged. No string: given one,
+  /// Finder would make a text clipping rather than keep the promise.
   final class FilePromise: NSFilePromiseProvider {
     /// Held here because the provider's delegate is weak.
     let writer: FilePromiseWriter
@@ -27,6 +26,15 @@
       super.init()
       fileType = Self.fileType(for: fetch.entry.name).identifier
       delegate = writer
+    }
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+      super.writableTypes(for: pasteboard) + [.droppedPath]
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+      guard type == .droppedPath else { return super.pasteboardPropertyList(forType: type) }
+      return DroppedPath.data(for: writer.fetch.entry.path)
     }
 
     /// The type the name says, when that is a kind of data; plain data
@@ -131,11 +139,11 @@
       FilePromise(model.fetch(entry))
     }
 
-    /// Every dragged path, as Copy Path would copy them, on an item of its
-    /// own: what the terminal pastes. Finder takes no part of it.
-    static func paths(_ entries: [FileEntry]) -> NSPasteboardItem {
+    /// A folder's path, which is all of it a drop can take: the terminal
+    /// pastes it, and Finder takes no part of it.
+    static func path(of entry: FileEntry) -> NSPasteboardItem {
       let item = NSPasteboardItem()
-      item.setData(DroppedPath.data(for: Names.copiedPaths(entries.map(\.path))), forType: .droppedPath)
+      item.setData(DroppedPath.data(for: entry.path), forType: .droppedPath)
       return item
     }
 

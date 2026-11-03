@@ -70,20 +70,38 @@ enum GridText {
     }
   }
 
-  static func string(in frame: ScreenFrame, selection: GridSelection) -> String {
+  /// `continuing` is true for a row whose next row is the same path, so the
+  /// copy has no newline there. A real line break stays a newline.
+  static func string(
+    in frame: ScreenFrame, selection: GridSelection, continuing: (Int) -> Bool = { _ in false }
+  ) -> String {
     let columns = Int(frame.columns)
     guard columns > 0 else { return "" }
     let start = selection.start
     let end = selection.end
     guard start.row <= end.row else { return "" }
-    var lines: [String] = []
+    var text = ""
+    var writing = false
     for row in start.row...end.row {
       guard frame.lines.indices.contains(row) else { continue }
+      if writing { text += continuing(row - 1) ? "" : "\n" }
       let from = row == start.row ? start.column : 0
       let through = row == end.row ? end.column : columns - 1
-      lines.append(trimmingTrailing(slice(frame.lines[row], from: from, through: through)))
+      text += trimmingTrailing(slice(frame.lines[row], from: from, through: through))
+      writing = true
     }
-    return lines.joined(separator: "\n")
+    return text
+  }
+
+  /// The cells a link is drawn on, as one selection. `end` on a span is one
+  /// past the last column.
+  static func covering(_ link: TerminalLink) -> GridSelection? {
+    guard let first = link.spans.first, let last = link.spans.last, last.end > 0 else { return nil }
+    let head = Int(last.end) - 1
+    guard head >= 0 else { return nil }
+    return GridSelection(
+      anchor: GridPoint(row: Int(first.row), column: Int(first.start)),
+      head: GridPoint(row: Int(last.row), column: head))
   }
 
   /// One rectangle per row, in the same spans a link uses: `end` is one past

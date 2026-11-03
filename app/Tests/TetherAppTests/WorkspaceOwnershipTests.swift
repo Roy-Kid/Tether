@@ -516,6 +516,29 @@ struct WorkspaceOwnershipTests {
     }
   #endif
 
+  @Test("a dropped host comes back on one lease; an ended shell does not")
+  func droppedTerminalsShareOneLease() {
+    let tabs = makeTabs()
+    let lab = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
+    let other = Host(label: "other", hostname: "other.example", port: 22, username: "ada", keyPath: nil)
+    let dropped = tab(lab, name: "Terminal 1", live: false)
+    let ended = tab(lab, name: "Terminal 2", live: false)
+    let elsewhere = tab(other, name: "Terminal 1", live: false)
+    let local = tab(.local, name: "Terminal 1", live: false)
+    dropped.finish(.lost(cause: "reset by peer"))
+    elsewhere.finish(.lost(cause: "reset by peer"))
+    local.finish(.lost(cause: "gone"))
+    tabs.adopt(dropped)
+    tabs.adopt(ended)
+    tabs.adopt(elsewhere)
+    tabs.adopt(local)
+
+    #expect(tabs.sessionsToRestore(on: lab).map(\.id) == [dropped.id])
+    #expect(tabs.sessionsToRestore(on: .local).isEmpty)
+    #expect(tabs.reconnectLeader(for: lab, besides: dropped.id) == nil,
+      "a dropped terminal is not a login to join")
+  }
+
   @Test("an ended tab is not a connection to reuse")
   func endedTabHasNoLease() async throws {
     let tabs = makeTabs()

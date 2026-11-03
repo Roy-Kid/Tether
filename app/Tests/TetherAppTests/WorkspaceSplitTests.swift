@@ -21,10 +21,18 @@ struct WorkspaceSplitTests {
     #expect(tabs.canPerform(.splitRight))
     #expect(tabs.canPerform(.splitDown))
     tabs.perform(.splitRight)
-    #expect(tabs.intent == .splitTerminal(shell.id, .right))
-    tabs.intent = nil
-    tabs.perform(.splitDown)
-    #expect(tabs.intent == .splitTerminal(shell.id, .down))
+    #if os(iOS)
+      let page = tabs.currentWorkspace?.id
+      #expect(tabs.intent == page.map { .addTerminal($0) })
+      tabs.intent = nil
+      tabs.perform(.splitDown)
+      #expect(tabs.intent == page.map { .addTerminal($0) })
+    #else
+      #expect(tabs.intent == .splitTerminal(shell.id, .right))
+      tabs.intent = nil
+      tabs.perform(.splitDown)
+      #expect(tabs.intent == .splitTerminal(shell.id, .down))
+    #endif
     tabs.perform(.joinGroups)
     #expect(tabs.workspaceSplit == nil)
     #if os(macOS)
@@ -67,13 +75,23 @@ struct WorkspaceSplitTests {
       #expect(WorkspaceAction.available.contains(action))
       #expect(tabs.canPerform(action))
       tabs.perform(action)
-      #expect(tabs.intent == .splitTerminal(shell.id, direction))
-      tabs.intent = nil
-      tabs.wide = false
-      #expect(!tabs.canPerform(action))
-      tabs.perform(action)
-      #expect(tabs.intent == nil)
-      tabs.wide = true
+      #if os(iOS)
+        // A touch screen opens another terminal. Width does not gate it.
+        let page = tabs.currentWorkspace?.id
+        #expect(tabs.intent == page.map { .addTerminal($0) })
+        tabs.intent = nil
+        tabs.wide = false
+        #expect(tabs.canPerform(action))
+        tabs.wide = true
+      #else
+        #expect(tabs.intent == .splitTerminal(shell.id, direction))
+        tabs.intent = nil
+        tabs.wide = false
+        #expect(!tabs.canPerform(action))
+        tabs.perform(action)
+        #expect(tabs.intent == nil)
+        tabs.wide = true
+      #endif
     }
   }
 

@@ -5,14 +5,13 @@ import Observation
 import SwiftUI
 import TetherUI
 
-/// The hotkey terminal: a panel of its own showing the main window's tabs,
-/// shown as an overlay. A non-activating panel is key without making this the active
-/// app, so the app in front stays there and the panel can join any Space —
-/// another app's full-screen one on another display included — which no
-/// activating window can (`WorkspaceWindow`). The ordinary window is never
-/// touched: showing and hiding this one leaves it where it is, and the
-/// Dock still means it. Hiding never closes a session. The overlay's size
-/// is its own (`quickSize`): dragged once, it comes back that size.
+/// The hotkey terminal: the main window, summoned. The shortcut shows that
+/// window on the display under the pointer, as an overlay — key without
+/// making this the active app, so it can join any Space, another app's
+/// full-screen one on another display included. Closing it puts the window
+/// back at the frame it had. The Dock and the menu bar open it there; only
+/// the shortcut summons it. Its summoned size is its own (`quickSize`):
+/// dragged once, it comes back that size. Hiding never closes a session.
 @MainActor @Observable
 final class QuickTerminalController: NSObject {
   var enabled: Bool {
@@ -23,40 +22,49 @@ final class QuickTerminalController: NSObject {
       refreshStatusItem()
     }
   }
-  /// Keeps the ordinary window above other apps' windows. The overlay floats
-  /// whatever this says.
+  /// Keeps the main window above other apps' windows. While summoned, the
+  /// window floats whatever this says.
   var alwaysOnTop: Bool {
     didSet {
       defaults.set(alwaysOnTop, forKey: "window.alwaysOnTop")
-      mainWindow?.level = alwaysOnTop ? .floating : .normal
+      if !quick { window?.level = alwaysOnTop ? .floating : .normal }
     }
   }
   var autoHide: Bool {
     didSet { defaults.set(autoHide, forKey: "quickTerminal.autoHide") }
   }
-  /// The menu-bar mark. Off, and the shortcut still works.
+  /// The menu-bar mark. Off, and the shortcut still works. Hide in When the
+  /// Window Closes puts the icon up anyway, until the window is the main
+  /// window again: with the Dock gone, the icon is the way back.
   var showsMenuBarIcon: Bool {
     didSet {
       defaults.set(showsMenuBarIcon, forKey: "quickTerminal.menuBarIcon")
       refreshStatusItem()
     }
   }
+  /// Hide has taken the Dock icon. The menu-bar mark stays until the window
+  /// comes back as the main window.
+  private var holdsMenuBarIcon = false
   var recordingShortcut = false {
     didSet { refreshHotKeys() }
   }
   private(set) var shortcutProblem: String?
 
-  /// The overlay, once it has been asked for.
-  @ObservationIgnored private var window: NSWindow?
-  /// Makes the overlay the first time it is asked for, so nothing — no
-  /// shell — exists for it until then.
-  @ObservationIgnored private var makePanel: (() -> NSWindow)?
-  @ObservationIgnored private weak var mainWindow: NSWindow?
+  /// The one workspace window.
+  @ObservationIgnored private weak var window: NSWindow?
+  /// Where that window was before the shortcut moved it, and how it was shown.
+  @ObservationIgnored private var home: Home?
+  /// Summoned onto the pointer's display. The Dock and the menu bar are not this.
+  private(set) var quick = false
+  /// Full screen has to finish leaving before the window can move.
+  @ObservationIgnored private var afterFullScreenExit: FullScreenFollowUp?
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private var previousApp: NSRunningApplication?
-  /// The overlay's size as it was last dragged. Nil until a drag: a
-  /// display's top half.
+  /// The summoned size as it was last dragged. Nil until a drag, or after
+  /// Reset: full width and the top third of the display.
   @ObservationIgnored private var quickSize: NSSize?
+  /// A frame this controller set, which is not a drag and not a new display.
+  @ObservationIgnored private var placing = false
   @ObservationIgnored private var bindingsStore: KeyBindingStore?
   @ObservationIgnored private var bindings: [KeyBinding] = []
   @ObservationIgnored private(set) var hotKeys: [EventHotKeyRef] = []
@@ -87,58 +95,47 @@ final class QuickTerminalController: NSObject {
     return NSSize(width: width, height: height)
   }
 
-  /// Whether the shortcut has anything to show.
-  private var canShow: Bool { window != nil || makePanel != nil }
+  /// Whether the shortcut has a window to move.
+  private var canShow: Bool { window != nil }
 
-  /// Whether the overlay is up.
-  var isShown: Bool { window?.isVisible == true }
+  /// Summoned, or about to be once full screen has finished leaving.
+  var isQuick: Bool { quick || afterFullScreenExit == .presentQuick }
 
-  /// The ordinary window, which "Always on Top" keeps above other apps.
-  func attachMain(_ window: NSWindow) {
-    mainWindow = window
-    window.level = alwaysOnTop ? .floating : .normal
-  }
+  /// Whether the window is up on the pointer's display.
+  var isShown: Bool { quick && window?.isVisible == true }
 
-  /// How to make the overlay, the first time it is asked for.
-  func provide(_ make: @escaping () -> NSWindow) {
-    makePanel = make
-    startListening()
-  }
-
-  /// The overlay itself, already made.
+  /// The workspace window. The shortcut moves this one; nothing else is made.
   func attach(to window: NSWindow) {
     guard self.window !== window else { return }
-    adopt(window)
+    if let old = self.window { unobserve(old) }
+    self.window = window
+    if !quick { window.level = alwaysOnTop ? .floating : .normal }
+    for name in Self.windowNotes {
+      NotificationCenter.default.addObserver(self, selector: selector(for: name), name: name, object: window)
+    }
     startListening()
   }
 
-  private func adopt(_ window: NSWindow) {
-    if let old = self.window {
-      for name in [NSWindow.didResignKeyNotification, NSWindow.didChangeScreenNotification,
-        NSWindow.didEndLiveResizeNotification] {
-        NotificationCenter.default.removeObserver(self, name: name, object: old)
-      }
+  private static let windowNotes: [Notification.Name] = [
+    NSWindow.didResignKeyNotification, NSWindow.didChangeScreenNotification,
+    NSWindow.didEndLiveResizeNotification, NSWindow.didExitFullScreenNotification,
+    HideInsteadOfClose.willHide,
+  ]
+
+  private func selector(for name: Notification.Name) -> Selector {
+    switch name {
+    case NSWindow.didChangeScreenNotification: #selector(screenChanged)
+    case NSWindow.didEndLiveResizeNotification: #selector(resized)
+    case NSWindow.didExitFullScreenNotification: #selector(exitedFullScreen)
+    case HideInsteadOfClose.willHide: #selector(windowWillHide(_:))
+    default: #selector(resignedKey)
     }
-    self.window = window
-    // Key without activating: the app in front keeps its place and its menu
-    // bar. On every Space, a full-screen one included, and never full screen
-    // itself. No frame autosave: its size is kept in `quickSize`.
-    (window as? NSPanel)?.styleMask.insert(.nonactivatingPanel)
-    window.level = .floating
-    var behavior = window.collectionBehavior
-    behavior.remove([.moveToActiveSpace, .fullScreenPrimary, .fullScreenNone, .primary, .auxiliary])
-    behavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
-    window.collectionBehavior = behavior
-    // Ordering out with the default animation and forward before it
-    // finishes waits on the window server, which is waiting for this thread.
-    window.animationBehavior = .none
-    window.setFrameAutosaveName("")
-    NotificationCenter.default.addObserver(self, selector: #selector(resignedKey),
-      name: NSWindow.didResignKeyNotification, object: window)
-    NotificationCenter.default.addObserver(self, selector: #selector(screenChanged),
-      name: NSWindow.didChangeScreenNotification, object: window)
-    NotificationCenter.default.addObserver(self, selector: #selector(resized),
-      name: NSWindow.didEndLiveResizeNotification, object: window)
+  }
+
+  private func unobserve(_ window: NSWindow) {
+    for name in Self.windowNotes {
+      NotificationCenter.default.removeObserver(self, name: name, object: window)
+    }
   }
 
   private var listening = false
@@ -148,6 +145,10 @@ final class QuickTerminalController: NSObject {
       listening = true
       NotificationCenter.default.addObserver(self, selector: #selector(resignedKey),
         name: NSApplication.didResignActiveNotification, object: NSApp)
+      NotificationCenter.default.addObserver(self, selector: #selector(holdMenuBarIcon(_:)),
+        name: AppPresence.willLeaveDock, object: nil)
+      NotificationCenter.default.addObserver(self, selector: #selector(releaseMenuBarIcon),
+        name: AppPresence.didReturnToDock, object: nil)
       DistributedNotificationCenter.default().addObserver(self, selector: #selector(keyboardChanged),
         name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
     }
@@ -191,126 +192,344 @@ final class QuickTerminalController: NSObject {
 
   func toggle() {
     guard enabled else { return }
-    if let window, window.isVisible && window.isKeyWindow && window.isOnActiveSpace {
-      hide()
+    if afterFullScreenExit != nil {
+      leaveQuick(showMain: false)
+      return
+    }
+    guard let window else { return }
+    if isShown && window.isKeyWindow && window.isOnActiveSpace {
+      leaveQuick(showMain: false)
     } else {
       show()
     }
   }
 
-  private func show() {
-    guard enabled else { return }
-    if window == nil, let makePanel { adopt(makePanel()) }
+  /// The Dock, the menu bar, and any reopen: the main window, at its own frame.
+  func showAsMainWindow() {
+    if quick || afterFullScreenExit != nil {
+      leaveQuick(showMain: true)
+      return
+    }
     guard let window else { return }
+    orderMain(window)
+  }
+
+  private func show() {
+    guard enabled, let window else { return }
+    if window.styleMask.contains(.fullScreen), !quick {
+      beginFromFullScreen(window, then: .presentQuick)
+      return
+    }
+    if !quick { rememberHome(window) }
+    presentQuick(window)
+  }
+
+  /// Full screen is its own Space. Leave it, then move; closing the summon
+  /// goes back into it.
+  private func beginFromFullScreen(_ window: NSWindow, then follow: FullScreenFollowUp) {
+    if home == nil { rememberHome(window) }
+    afterFullScreenExit = follow
+    window.toggleFullScreen(nil)
+  }
+
+  @objc private func exitedFullScreen() {
+    guard let follow = afterFullScreenExit, let window else { return }
+    afterFullScreenExit = nil
+    switch follow {
+    case .presentQuick:
+      home?.frame = window.frame
+      presentQuick(window)
+    case .restore:
+      let full = home?.fullScreen == true
+      home = nil
+      if full { window.toggleFullScreen(nil) }
+    case .showMain:
+      let full = home?.fullScreen == true
+      home = nil
+      orderMain(window)
+      if full { window.toggleFullScreen(nil) }
+    }
+  }
+
+  private func presentQuick(_ window: NSWindow) {
+    guard enabled else { return }
+    quick = true
     let front = NSWorkspace.shared.frontmostApplication
-    if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
-    // The display being worked on: the one holding the frontmost app's
-    // window. The pointer can rest on another display for hours, and is
-    // only asked when no window says. visibleFrame respects the menu bar.
-    let screen = Self.focusedScreen()
-      ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
-      ?? window.screen ?? NSScreen.main
+    if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+      previousApp = front
+    } else {
+      previousApp = nil
+    }
+    applyQuickStyle(window)
     if window.isMiniaturized { window.deminiaturize(nil) }
     // Showing on a Space that is no longer in front: come here rather than
     // send the person back there. Re-framed while still there, a window is
     // put on the pointer's display instead of the one asked for.
     if window.isVisible && !window.isOnActiveSpace { window.orderOut(nil) }
-    let frame = screen.map { Self.frame(in: $0.visibleFrame, size: quickSize, minimum: window.minSize) }
-    if let frame { window.setFrame(frame, display: window.isVisible) }
+    // The display under the pointer, wherever the window was.
+    let screen = Self.mouseScreen() ?? window.screen ?? NSScreen.main
+    placing = true
+    if let screen { place(window, on: screen) }
     window.orderFrontRegardless()
     // Ordering a hidden window on screen can hand it back narrower than it
     // was set — measured with Stage Manager on: 2560 points asked for, 2316
     // given, whatever the content view. A frame set while it is up stays.
-    if let frame, window.frame != frame { window.setFrame(frame, display: true) }
+    if let screen { place(window, on: screen) }
+    placing = false
     window.makeKey()
+    // The grid follows the view's bounds. A frame set here does not otherwise
+    // reach it, and the shell keeps the size it had.
+    refit(window)
   }
 
-  /// Dragged to another display: it hangs from that display's top, as it
-  /// would have been shown there.
-  @objc private func screenChanged() {
-    guard let window, window.isVisible, let screen = window.screen else { return }
-    let frame = Self.frame(in: screen.visibleFrame, size: quickSize, minimum: window.minSize)
-    guard window.frame != frame else { return }
-    window.setFrame(frame, display: true)
+  /// The frame and the way the window was shown, before the shortcut.
+  private func rememberHome(_ window: NSWindow) {
+    home = Home(
+      frame: window.frame,
+      visible: window.isVisible && !window.isMiniaturized,
+      miniaturized: window.isMiniaturized,
+      fullScreen: window.styleMask.contains(.fullScreen),
+      collectionBehavior: window.collectionBehavior,
+      minSize: window.minSize,
+      contentMinSize: window.contentMinSize,
+      animationBehavior: window.animationBehavior,
+      autosaveName: window.frameAutosaveName)
   }
 
-  /// A drag on the overlay ended: that is its size from now on, here and
-  /// across launches. A frame set by code — `show`, a display change — is
-  /// not a drag and leaves the memory alone.
-  @objc private func resized() {
-    guard let window, window.isVisible else { return }
-    let size = window.frame.size
-    quickSize = size
-    defaults.set(size.width, forKey: Self.widthKey)
-    defaults.set(size.height, forKey: Self.heightKey)
+  /// Key without activating, on every Space, never full screen itself.
+  /// No frame autosave: the summoned size is `quickSize`, and the main
+  /// window's frame must stay what it was.
+  private func applyQuickStyle(_ window: NSWindow) {
+    (window as? NSPanel)?.styleMask.insert(.nonactivatingPanel)
+    window.level = .floating
+    var behavior = window.collectionBehavior
+    behavior.remove([.moveToActiveSpace, .fullScreenPrimary, .fullScreenNone, .primary, .auxiliary])
+    behavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
+    window.collectionBehavior = behavior
+    // Ordering out with the default animation waits on the window server.
+    window.animationBehavior = .none
+    window.setFrameAutosaveName("")
+    // The document window's minimum is too tall for a third of a laptop.
+    window.contentMinSize = Self.minimumSize
+    window.minSize = Self.minimumSize
   }
 
-  /// Kept separate from toggle so focus changes cannot accidentally reopen it.
-  func hide() {
-    guard let window, window.isVisible else { return }
-    let returnsFocus = window.isKeyWindow && NSApp.isActive
-    window.orderOut(nil)
-    let previous = returnsFocus ? previousApp : nil
+  private func restoreStyle(_ window: NSWindow, _ saved: Home) {
+    (window as? NSPanel)?.styleMask.remove(.nonactivatingPanel)
+    window.level = alwaysOnTop ? .floating : .normal
+    window.collectionBehavior = saved.collectionBehavior
+    window.animationBehavior = saved.animationBehavior
+    window.contentMinSize = saved.contentMinSize
+    window.minSize = saved.minSize
+  }
+
+  /// Back to the frame the window had. `showMain` leaves it on screen there;
+  /// the shortcut returns it to the visibility it had.
+  private func leaveQuick(showMain: Bool) {
+    if afterFullScreenExit != nil {
+      afterFullScreenExit = showMain ? .showMain : .restore
+      return
+    }
+    guard let window else {
+      quick = false
+      home = nil
+      return
+    }
+    guard quick, let saved = home else {
+      quick = false
+      if showMain { orderMain(window) }
+      return
+    }
+    quick = false
+    home = nil
+    placing = true
+    restoreStyle(window, saved)
+    let keep = showMain || (saved.visible && !saved.miniaturized)
+    window.setFrame(saved.frame, display: keep && window.isVisible)
+    window.setFrameAutosaveName(saved.autosaveName)
+    window.setFrame(saved.frame, display: keep && window.isVisible)
+    placing = false
+    refit(window)
+    if showMain {
+      orderMain(window)
+      if saved.fullScreen { window.toggleFullScreen(nil) }
+      previousApp = nil
+      return
+    }
+    if saved.miniaturized {
+      window.miniaturize(nil)
+      return
+    }
+    if !saved.visible {
+      let returnsFocus = window.isKeyWindow && NSApp.isActive
+      window.orderOut(nil)
+      returnFocus(returnsFocus)
+      return
+    }
+    if saved.fullScreen { window.toggleFullScreen(nil) }
+    if let previous = previousApp {
+      previousApp = nil
+      RunLoop.main.perform { _ = MainActor.assumeIsolated { previous.activate() } }
+    }
+  }
+
+  /// Hide took the Dock icon. The mark stays up even when Show in Menu Bar is off.
+  /// Only the window this controller owns: another window's close is not this one.
+  @objc private func holdMenuBarIcon(_ note: Notification) {
+    guard let hiding = note.object as? NSWindow, hiding === window else { return }
+    holdsMenuBarIcon = true
+    refreshStatusItem()
+  }
+
+  /// After the click that opened the window. Removing the status item inside
+  /// its own action drops the click.
+  @objc private func releaseMenuBarIcon() {
+    holdsMenuBarIcon = false
+    DispatchQueue.main.async { [weak self] in self?.refreshStatusItem() }
+  }
+
+  /// Whether the menu bar is showing the mark.
+  var menuBarIconShown: Bool { statusItem != nil }
+
+  /// The red button puts the window away. Done first, so it is put away at
+  /// its own frame and showing it again brings that frame back.
+  @objc private func windowWillHide(_ note: Notification) {
+    guard let hiding = note.object as? NSWindow, hiding === window, quick, let saved = home else { return }
+    quick = false
+    home = nil
+    placing = true
+    restoreStyle(hiding, saved)
+    hiding.setFrame(saved.frame, display: false)
+    hiding.setFrameAutosaveName(saved.autosaveName)
+    hiding.setFrame(saved.frame, display: false)
+    placing = false
+    refit(hiding)
+  }
+
+  private func orderMain(_ window: NSWindow) {
+    AppPresence.returnToDock()
+    if window.isMiniaturized { window.deminiaturize(nil) }
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func returnFocus(_ returns: Bool) {
+    let previous = returns ? previousApp : nil
     previousApp = nil
-    if let previous {
-      RunLoop.main.perform {
-        _ = MainActor.assumeIsolated { previous.activate() }
-      }
-    }
+    guard let previous else { return }
+    RunLoop.main.perform { _ = MainActor.assumeIsolated { previous.activate() } }
   }
 
-  /// The display holding the frontmost app's front window. Another app's
-  /// windows are not ours to ask, so the window server's list answers.
-  private static func focusedScreen() -> NSScreen? {
-    guard let front = NSWorkspace.shared.frontmostApplication,
-      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-        as? [[String: Any]]
-    else { return nil }
-    let pid = front.processIdentifier
-    let ordinary = windows.lazy
-      .filter { $0[kCGWindowOwnerPID as String] as? pid_t == pid && $0[kCGWindowLayer as String] as? Int == 0 }
-      .compactMap { ($0[kCGWindowBounds as String] as? NSDictionary).flatMap(CGRect.init(dictionaryRepresentation:)) }
-    let screens = NSScreen.screens
-    return screenIndex(holding: Array(ordinary), screens: screens.map(\.frame)).map { screens[$0] }
+  /// The terminal measures the view. Laying the content out now is what
+  /// tells it the frame just applied, quick or main.
+  private func refit(_ window: NSWindow) {
+    window.contentView?.layoutSubtreeIfNeeded()
   }
 
-  /// Which of `screens` holds the frontmost of `windows`, listed front to
-  /// back as the window server gives them: from the primary display's
-  /// top-left corner, y down. One off every display is passed over: a
-  /// full-screen app's toolbar waits just above its display while hidden.
-  static func screenIndex(holding windows: [CGRect], screens: [NSRect]) -> Int? {
-    guard let primary = screens.first else { return nil }
-    for bounds in windows {
-      let center = NSPoint(x: bounds.midX, y: primary.maxY - bounds.midY)
-      if let index = screens.firstIndex(where: { NSMouseInRect(center, $0, false) }) { return index }
-    }
-    return nil
+  /// Hung from the top of `screen` at the remembered size, or the default.
+  private func place(_ window: NSWindow, on screen: NSScreen) {
+    let frame = Self.frame(in: screen.visibleFrame, size: quickSize, minimum: window.minSize)
+    let was = placing
+    placing = true
+    window.setFrame(frame, display: window.isVisible)
+    placing = was
   }
+
+  /// Forget a dragged size. The next show, and this one if it is summoned,
+  /// is the full width of the display and its top third.
+  func resetSize() {
+    quickSize = nil
+    defaults.removeObject(forKey: Self.widthKey)
+    defaults.removeObject(forKey: Self.heightKey)
+    guard quick, let window, window.isVisible, let screen = window.screen else { return }
+    place(window, on: screen)
+  }
+
+  /// Dragged to another display while summoned: it hangs from that display's
+  /// top, as it would have been shown there.
+  @objc private func screenChanged() {
+    guard quick, !placing, let window, window.isVisible, !window.inLiveResize,
+      let screen = window.screen else { return }
+    place(window, on: screen)
+  }
+
+  /// A drag while summoned ended: that is its size from now on, here and
+  /// across launches. A frame set by code — the shortcut, a display change —
+  /// is not a drag and leaves the memory alone.
+  @objc private func resized() {
+    guard quick, !placing, let window, window.isVisible, !window.inLiveResize else { return }
+    remember(window.frame.size)
+  }
+
+  private func remember(_ size: NSSize) {
+    guard size.width > 0, size.height > 0 else { return }
+    quickSize = size
+    defaults.set(Double(size.width), forKey: Self.widthKey)
+    defaults.set(Double(size.height), forKey: Self.heightKey)
+  }
+
+  /// Close the summon and put the window back. Focus changes call this so
+  /// they cannot open it.
+  func hide() {
+    guard quick || afterFullScreenExit != nil else { return }
+    leaveQuick(showMain: false)
+  }
+
+  /// The display under `point`. A point on no display is none: the shortcut
+  /// does not follow the frontmost window.
+  static func screenIndex(of point: NSPoint, screens: [NSRect]) -> Int? {
+    screens.firstIndex { NSMouseInRect(point, $0, false) }
+  }
+
+  private static func mouseScreen() -> NSScreen? {
+    let point = NSEvent.mouseLocation
+    return NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+  }
+
+  /// Shorter than the document window, so a third of a laptop is allowed.
+  static let minimumSize = NSSize(width: Chrome.windowMinWidth, height: 200)
 
   /// The overlay's frame on a display: hung from the top, centred. Full
-  /// width and half the height until a size was dragged, then that size,
+  /// width and the top third until a size was dragged, then that size,
   /// clamped to the display and never below the window's minimum.
   static func frame(in visibleFrame: NSRect, size: NSSize?, minimum: NSSize) -> NSRect {
-    let wanted = size ?? NSSize(width: visibleFrame.width, height: visibleFrame.height / 2)
+    let wanted = size ?? NSSize(width: visibleFrame.width, height: visibleFrame.height / 3)
     let width = min(visibleFrame.width, max(minimum.width, wanted.width))
     let height = min(visibleFrame.height, max(minimum.height, wanted.height))
+    // Whole points. A fractional frame is handed back a point off, so the
+    // window would not be the one just set.
     return NSRect(x: visibleFrame.midX - width / 2, y: visibleFrame.maxY - height,
-      width: width, height: height)
+      width: width, height: height).integral
   }
 
   @objc private func resignedKey() {
     // Sheets and popovers stay with their terminal. A separate Tether
     // window (Settings, for example) must remain reachable above the overlay.
     DispatchQueue.main.async { [weak self] in
-      guard let self, !self.showingStatusMenu, let window = self.window, window.isVisible,
-        !window.isKeyWindow, window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
-      if NSApp.isActive {
-        guard let key = NSApp.keyWindow, key.sheetParent == nil, key.parent == nil else { return }
-        self.hide()
-      } else if self.autoHide {
-        self.hide()
-      }
+      self?.considerHiding(afterSheet: true)
     }
+  }
+
+  /// Focus left the overlay. A dialog asked here can take key a turn before
+  /// it is attached, and the overlay is often not the active app. Neither
+  /// puts the window back: the question was asked where the window is.
+  private func considerHiding(afterSheet: Bool) {
+    guard !showingStatusMenu, let window, window.isVisible,
+      !window.isKeyWindow, window.attachedSheet == nil, NSApp.modalWindow == nil,
+      !Self.questionOf(window) else { return }
+    if afterSheet {
+      DispatchQueue.main.async { [weak self] in self?.considerHiding(afterSheet: false) }
+      return
+    }
+    if NSApp.isActive || autoHide { hide() }
+  }
+
+  /// A sheet or a child of any window (a dialog, a popover) is still this
+  /// terminal. Checked for the app's key window, which may not be ours yet.
+  private static func questionOf(_ window: NSWindow) -> Bool {
+    guard let key = NSApp.keyWindow else { return false }
+    if key.sheetParent != nil || key.parent != nil { return true }
+    return window.sheets.contains { $0 === key }
   }
 
   /// Sent several times for every switch, Pinyin on or off included. Only a
@@ -341,7 +560,7 @@ final class QuickTerminalController: NSObject {
   /// overlay while the status item stays where it is.
   func statusMenu() -> NSMenu {
     let menu = NSMenu()
-    let toggle = NSMenuItem(title: isShown ? "Hide Quick Terminal" : "Show Quick Terminal",
+    let toggle = NSMenuItem(title: isShown ? "Return to Main Window" : "Show Main Window",
       action: #selector(statusItemClicked), keyEquivalent: "")
     toggle.target = self
     menu.addItem(toggle)
@@ -353,16 +572,22 @@ final class QuickTerminalController: NSObject {
     return menu
   }
 
-  /// One click opens the quick terminal, the next closes it. The menu bar
-  /// takes key focus as the click lands, so this cannot ask whether the
-  /// window is still key — that would open it again instead of closing it.
+  /// The menu bar opens the main window. The click takes key focus as it
+  /// lands, so this cannot ask whether the window is still key.
   @objc func statusItemClicked() {
-    guard enabled else { return }
-    if isShown { hide() } else { show() }
+    showAsMainWindow()
+  }
+
+  /// The menu-bar mark. Hide keeps it while the Dock icon is gone, even when
+  /// Show in Menu Bar is off: that mark is the way back.
+  static func wantsMenuBarIcon(enabled: Bool, preference: Bool, holdingForHide: Bool, hasWindow: Bool) -> Bool {
+    hasWindow && (holdingForHide || (enabled && preference))
   }
 
   private func refreshStatusItem() {
-    guard enabled, showsMenuBarIcon, canShow else {
+    guard Self.wantsMenuBarIcon(
+      enabled: enabled, preference: showsMenuBarIcon, holdingForHide: holdsMenuBarIcon, hasWindow: canShow)
+    else {
       if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
       statusItem = nil
       return
@@ -375,7 +600,7 @@ final class QuickTerminalController: NSObject {
       statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseDown])
     }
     let shortcut = bindings.map(\.label).joined(separator: " / ")
-    statusItem?.button?.toolTip = shortcut.isEmpty ? "Quick Terminal" : "Quick Terminal (\(shortcut))"
+    statusItem?.button?.toolTip = shortcut.isEmpty ? "Show Main Window" : "Show Main Window (\(shortcut))"
   }
 
   private func refreshHotKeys() {
@@ -422,6 +647,13 @@ final class QuickTerminalController: NSObject {
     registeredCodes = codes
   }
 
+  /// Global notifications outlive the window this was attached to. A controller
+  /// released without `stop` must not stay registered for them.
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+    DistributedNotificationCenter.default().removeObserver(self)
+  }
+
   func stop() {
     for hotKey in hotKeys { UnregisterEventHotKey(hotKey) }
     hotKeys = []
@@ -432,10 +664,31 @@ final class QuickTerminalController: NSObject {
     NotificationCenter.default.removeObserver(self)
     DistributedNotificationCenter.default().removeObserver(self)
     listening = false
-    window?.orderOut(nil)
+    if quick || afterFullScreenExit != nil { leaveQuick(showMain: false) }
+    if let window { unobserve(window) }
     window = nil
-    makePanel = nil
     bindingsStore = nil
+  }
+}
+
+extension QuickTerminalController {
+  /// The window as the shortcut found it.
+  fileprivate struct Home {
+    var frame: NSRect
+    var visible: Bool
+    var miniaturized: Bool
+    var fullScreen: Bool
+    var collectionBehavior: NSWindow.CollectionBehavior
+    var minSize: NSSize
+    var contentMinSize: NSSize
+    var animationBehavior: NSWindow.AnimationBehavior
+    var autosaveName: String
+  }
+
+  fileprivate enum FullScreenFollowUp: Equatable {
+    case presentQuick
+    case restore
+    case showMain
   }
 }
 
@@ -525,6 +778,9 @@ struct QuickTerminalSettings: View {
       }
       Button("Show / Hide Quick Terminal") { controller.toggle() }
         .disabled(!controller.enabled)
+      Button("Reset Size") { controller.resetSize() }
+        .disabled(!controller.enabled)
+        .help("Full width, the top third of the screen")
     }
     Section("Window") {
       Toggle("Keep Window on Top", isOn: $controller.alwaysOnTop)

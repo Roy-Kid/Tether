@@ -1,7 +1,14 @@
 import Foundation
 
-/// A terminal on its actual machine, not a display title or saved-host alias.
-/// The host obtains these from the shell's lease; producers report the same facts.
+/// A terminal on its machine, named the one way the host and every plugin
+/// name it.
+///
+/// `host` is the machine. A remote shell's is the `~/.ssh/config` Host it was
+/// opened with: that stanza decides where `ssh` lands, so whatever reached the
+/// machine through it — a status hub, say — names the same place. A local
+/// shell's is this Mac's Bonjour name, `<LocalHostName>.local`. Never a display
+/// title, and never the far side's own hostname, which a Mac changes with its
+/// network. Lowercase. `terminal` is the controlling tty.
 public struct PluginTerminalIdentity: Codable, Hashable, Sendable {
   public let host: String
   public let terminal: String
@@ -9,6 +16,31 @@ public struct PluginTerminalIdentity: Codable, Hashable, Sendable {
   public init(host: String, terminal: String) {
     self.host = host.lowercased()
     self.terminal = terminal
+  }
+
+  /// The one comparison: the same machine and the same tty, however the tty
+  /// was spelled.
+  public func matches(_ other: PluginTerminalIdentity) -> Bool {
+    host == other.host && TerminalName.same(terminal, other.terminal)
+  }
+}
+
+/// One tty, however a producer spelled it.
+///
+/// `ps` prints `ttys004` or `s004`. A pty name is `/dev/ttys004`. Those are
+/// the same device.
+public enum TerminalName {
+  public static func same(_ left: String, _ right: String) -> Bool {
+    canonical(left) == canonical(right)
+  }
+
+  public static func canonical(_ raw: String) -> String {
+    var value = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    if value.hasPrefix("/dev/") { value.removeFirst("/dev/".count) }
+    if value.hasPrefix("s"), value.dropFirst().allSatisfy(\.isNumber) {
+      value = "tty" + value
+    }
+    return value
   }
 }
 

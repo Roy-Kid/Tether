@@ -99,10 +99,20 @@ struct RootView: View {
     registry.plugins.filter { registry.isEnabled($0.metadata.id) }.compactMap(\.statusBarItem)
   }
 
+  /// A password for a tab that does not exist yet blocks the window. One for
+  /// a terminal already on screen covers only that terminal.
+  private var connectBlocksWindow: Bool {
+    #if os(macOS)
+      connectRequests.contains { !$0.coversTerminal }
+    #else
+      !connectRequests.isEmpty
+    #endif
+  }
+
   private var terminalInputAllowed: Bool {
     var allowed = tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
       && tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && connectRequests.isEmpty && !showingSettings
+      && !connectBlocksWindow && !showingSettings
       && notice == nil
     #if os(iOS)
       allowed = allowed && statusPanel == nil
@@ -237,6 +247,12 @@ struct RootView: View {
       .modifier(PhoneColumnStyle(phone: phone))
       .fullScreenCover(item: $statusPanel) { panel in
         statusCover(panel)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .closePluginPanel)) { _ in
+        closeStatus()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .openPluginPanel)) { note in
+        openReturned(PluginOpen.id(from: note))
       }
       .onChange(of: tabs.selected, initial: true) { _, id in
         compactColumn = id == nil ? .sidebar : .detail
@@ -566,7 +582,13 @@ struct RootView: View {
     Task {
       let source = await passwordSource(for: host)
       // Closed while the keychain was being read: nothing to try again.
-      guard tabs.tabs.contains(where: { $0.id == tab.id }) else { return }
+      guard tabs.tabs.contains(where: { $0.id == tab.id }), tab.canReconnect else { return }
+      // Someone else on this host is already logging in, or has. A channel
+      // on that lease is the rest of the reconnect.
+      if let leader = tabs.reconnectLeader(for: host, besides: tab.id) {
+        tab.follow(leader)
+        return
+      }
       switch source {
       case .none: tab.redial(host: host, password: "", typedNow: false)
       case .saved(let password): tab.redial(host: host, password: password, typedNow: false)
@@ -631,13 +653,18 @@ struct RootView: View {
     if let workspace = tabs.extensions.first(where: { $0.id == id })?.workspace {
       workspace.content().id(workspace.id).padding(Chrome.margin)
     } else if let tab = tabs.tabs.first(where: { $0.id == id }) {
-      if let shown = tab.shown {
-        shown.content().id(tab.id).padding(Chrome.margin)
-      } else {
-        SessionView(tab: tab, links: links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: tabs.selected == id,
-          onFocus: { tabs.select(id) }).id(tab.id)
-          .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
+      Group {
+        if let shown = tab.shown {
+          shown.content().id(tab.id).padding(Chrome.margin)
+        } else {
+          SessionView(tab: tab, links: links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: tabs.selected == id,
+            onFocus: { tabs.select(id) }).id(tab.id)
+            .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
+        }
       }
+      #if os(macOS)
+        .background(DialogAnchorReader(anchor: tab.dialogAnchor, claimsView: tabs.isFront(windowID)))
+      #endif
     }
   }
 
@@ -700,15 +727,7 @@ struct RootView: View {
       if let entry = tabs.extensions.first(where: { $0.id == tabs.selected }) {
         extensionContent(entry)
       } else if let tab = tabs.current ?? tabs.visibleTabs.first {
-        #if os(iOS)
-          if tabs.wide, let layout = tabs.workspaceSplit, layout.ids.contains(tab.id) {
-            touchSplitCanvas(layout)
-          } else {
-            phoneSession(tab)
-          }
-        #else
-          phoneSession(tab)
-        #endif
+        phoneSession(tab)
       } else if let entry = tabs.extensions.first {
         extensionContent(entry)
       } else {
@@ -883,11 +902,22 @@ struct RootView: View {
       }
     }
 
-    private func openStatus(_ item: PluginStatusBarItem) {
+    @discardableResult
+    private func openStatus(_ item: PluginStatusBarItem) -> Bool {
       guard let workspace = registry.plugins.first(where: { $0.metadata.id == item.id })?.statusBarWorkspace()
-      else { return }
+      else { return false }
       statusPanel?.workspace.close()
       statusPanel = PhoneStatusPanel(pluginID: item.id, workspace: workspace)
+      return true
+    }
+
+    /// A tap names a plugin. Open its status page once that page exists;
+    /// until then keep the id.
+    private func openReturned(_ raw: String?) {
+      if let raw, !raw.isEmpty { PluginOpen.pending = raw }
+      guard let id = PluginOpen.pending,
+        let item = pluginStatusItems.first(where: { $0.id == id }) else { return }
+      if openStatus(item) { PluginOpen.pending = nil }
     }
 
     private func closeStatus() {
@@ -965,32 +995,6 @@ struct RootView: View {
       }
     }
 
-    /// Terminals side by side on an iPad, as the Mac splits them. Equal
-    /// shares rather than dividers to drag: the layout is the same tree, and
-    /// a pane is chosen by touching it.
-    private func touchSplitCanvas(_ layout: WorkspaceSplit) -> AnyView {
-      switch layout {
-      case .tab(let id):
-        return AnyView(touchPane(id))
-      case .split(.left, let first, let second, _), .split(.right, let first, let second, _):
-        return AnyView(HStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
-      case .split(.up, let first, let second, _), .split(.down, let first, let second, _):
-        return AnyView(VStack(spacing: 0) { touchSplitCanvas(first); Divider(); touchSplitCanvas(second) })
-      }
-    }
-
-    @ViewBuilder
-    private func touchPane(_ id: UUID) -> some View {
-      if let tab = tabs.tabs.first(where: { $0.id == id }) {
-        phoneSession(tab, pane: true)
-          .overlay(alignment: .top) {
-            if tabs.selected == id {
-              Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
-                .allowsHitTesting(false)
-            }
-          }
-      }
-    }
   #endif
 
   /// On a phone the session picker opens from the shell button, so it is not
@@ -1014,15 +1018,15 @@ struct RootView: View {
     .disabled(!tab.canOpen(plugin.id))
   }
 
-  /// One terminal. In a split it is one `pane` of several, and only the
-  /// selected one holds the keyboard; touching another selects it.
-  private func phoneSession(_ tab: SessionTab, pane: Bool = false) -> some View {
+  /// One terminal, filling the screen. Another one is a terminal to switch
+  /// to, not a pane beside this one.
+  private func phoneSession(_ tab: SessionTab) -> some View {
     Group {
       if let shown = tab.shown {
         shown.content()
       } else {
-        SessionView(tab: tab, links: links(for: tab), active: !pane || tabs.selected == tab.id,
-          onFocus: { if pane { tabs.select(tab.id) } })
+        SessionView(
+          tab: tab, links: links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: true, onFocus: {})
           .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
       }
     }
@@ -1067,6 +1071,9 @@ extension RootView {
         if let report = tabs.reconnectReport(for: id) { retry(report) }
       case .takeOver:
         Task { await offerTakeOver() }
+      case .switchHost(let index):
+        guard store.listed.indices.contains(index) else { return }
+        if let next = tabs.reveal(store.listed[index]), case .connect(let host) = next { open(host) }
       case .edit(let host):
         tabs.hostPicker = false
         route.show(store.hosts.contains { $0.id == host.id } ? .edit(host.id) : .newHost)
@@ -1076,6 +1083,11 @@ extension RootView {
         {
           launch(plugin)
         }
+      case .openPath:
+        #if os(macOS)
+          let directory = tabs.current?.workingDirectory
+          Task { await OpenPath.ask(workingDirectory: directory) }
+        #endif
       }
     }
     .onChange(of: route.requests) { _, _ in
@@ -1092,16 +1104,6 @@ extension RootView {
         // twice is (spec §6): ⌘W for a terminal, ⌥⌘W for a whole tab.
         shortcuts: [tabs.closingWorkspaceID == nil ? .command("w") : .commandOption("w")],
         cancel: { tabs.cancelClose() }, perform: { tabs.confirmClose() })
-    }
-    .dialog(for: tabs.renaming) { id in
-      Dialog.input(
-        "Rename", field: Dialog.Field("Name", initial: tabs.renameSeed(for: id)),
-        verb: "Save", cancel: { tabs.renaming = nil }, perform: { tabs.rename(id, to: $0) })
-    }
-    .dialog(for: tabs.renamingWorkspace) { id in
-      Dialog.input(
-        "Rename Tab", field: Dialog.Field("Name", initial: tabs.workspaces.first { $0.id == id }?.name ?? ""),
-        verb: "Save", cancel: { tabs.renamingWorkspace = nil }, perform: { tabs.rename(id, to: $0) })
     }
     #if !os(macOS)
       .sheet(isPresented: $showingSettings) {
@@ -1137,6 +1139,9 @@ extension RootView {
       store.handoff.start(store)
       tabs.takeOverReady = !store.handoff.nearby.isEmpty
       resumeSavedHandoff()
+      #if os(iOS)
+        openReturned(nil)
+      #endif
     }
     .onChange(of: store.handoff.nearby.map(\.id)) { _, ids in
       tabs.takeOverReady = !ids.isEmpty
@@ -1153,6 +1158,9 @@ extension RootView {
     }
     .onChange(of: pluginStatusItems.map(\.id)) { _, ids in
       PluginLive.retain(Set(ids))
+      #if os(iOS)
+        openReturned(nil)
+      #endif
     }
     .dialog(for: notice) { shown in
       Dialog.notice(shown.title, message: shown.message) { notice = nil }
@@ -1160,14 +1168,14 @@ extension RootView {
     #if os(iOS)
       .safeAreaInset(edge: .top, spacing: 0) {
         if !plugins.notes.isEmpty {
-          PluginNoteStack(plugins: plugins)
+          PluginNoteStack(plugins: plugins, onOpen: PluginOpen.ask)
             .padding(.horizontal, UIStyle.Space.group)
             .padding(.bottom, UIStyle.Space.small)
         }
       }
     #else
       .overlay(alignment: .topTrailing) {
-        PluginNoteStack(plugins: plugins)
+        PluginNoteStack(plugins: plugins, onOpen: PluginOpen.ask)
           .padding(UIStyle.Space.group)
       }
     #endif
@@ -1267,10 +1275,18 @@ extension RootView {
     #if os(iOS)
       if tabs.accessory != nil || tabs.palette != nil || tabs.hostPicker { return false }
     #endif
+    let problemBlocksWindow: Bool
+    #if os(macOS)
+      // A reconnect question covers its terminal. History still belongs to
+      // the window, and so does a password for a connection with no terminal.
+      problemBlocksWindow = tabs.problem?.coversTerminal == false
+    #else
+      problemBlocksWindow = tabs.problem != nil
+    #endif
     return tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && connectRequests.isEmpty
+      && !connectBlocksWindow
       && !showingSettings && notice == nil
-      && tabs.problem == nil && tabs.passwordOffer == nil
+      && !problemBlocksWindow && tabs.passwordOffer == nil
   }
 
   private var commandItems: [CommandItem] {
@@ -1279,13 +1295,24 @@ extension RootView {
       let shortcut = tabs.keyBindings.summary(for: command)
       return shortcut.isEmpty ? command.group : "\(command.group) · \(shortcut)"
     }
-    var items = WorkspaceAction.available.filter { tabs.wide || !$0.needsWidth }.map { action in
+    var items = WorkspaceAction.available.filter { action in
+      #if os(iOS)
+        // Split stays a Mac layout. Here the same idea is New Terminal.
+        switch action {
+        case .splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups: return false
+        default: break
+        }
+      #endif
+      return tabs.wide || !action.needsWidth
+    }.filter { action in
+      action.hostSlot.map { store.listed.indices.contains($0) } ?? true
+    }.map { action in
       let command = action.command
       return CommandItem(
         id: command.id,
         // Keep the searchable toggle name consistent with Key Bindings.
         // Native menus and the titlebar button still say Show/Hide Tab Bar.
-        title: action == .toggleTabBar ? command.title : tabs.title(for: action),
+        title: hostLabel(action) ?? (action == .toggleTabBar ? command.title : tabs.title(for: action)),
         // From the palette these close what is behind it, never the window.
         detail: detail(command),
         enabled: [.closeTerminal, .closeTab].contains(action) ? tabs.selected != nil : tabs.canPerform(action)
@@ -1323,6 +1350,12 @@ extension RootView {
       }
     }
     return items
+  }
+
+  /// ⌘1…⌘4 name the host they open. The binding table keeps "Host 1".
+  private func hostLabel(_ action: WorkspaceAction) -> String? {
+    guard let slot = action.hostSlot, store.listed.indices.contains(slot) else { return nil }
+    return store.listed[slot].displayName
   }
 
 
@@ -1414,14 +1447,19 @@ extension RootView {
   /// a client that has stopped answering (`TerminalSession.pause`).
   private func refreshFramePublishing() {
     #if os(macOS)
-      // Any window these tabs are shown in: the quick terminal and the
-      // ordinary window share them, and one hiding must not stop the other.
+      // This window, or another showing these tabs. Hiding the only one pauses frames.
       let foreground = windowShown || !tabs.shownWindows.isEmpty
     #else
       let foreground = phase != .background
     #endif
     for tab in tabs.tabs {
-      tab.setPublishesFrames(foreground && (tab.id == tabs.selected || tabs.workspaceSplit?.ids.contains(tab.id) == true))
+      #if os(iOS)
+        // One terminal fills the screen. The others stay in the title menu.
+        let showing = tab.id == tabs.selected
+      #else
+        let showing = tab.id == tabs.selected || tabs.workspaceSplit?.ids.contains(tab.id) == true
+      #endif
+      tab.setPublishesFrames(foreground && showing)
     }
   }
 
@@ -1456,12 +1494,16 @@ extension RootView {
       id: id,
       plugin: pluginContext(for: tab, pluginID: pluginID, pluginName: plugin.metadata.name),
       terminalName: { [weak tab] in tab?.terminalName },
+      terminalHost: { [weak tab] in tab?.pluginTerminalIdentity?.host },
       focus: { tabs.select(id) },
       dismissAccessory: { tabs.dismissAccessory(pluginID, on: id) },
       present: { view in tabs.sheet = PluginSheet(tab: id, plugin: pluginID, view: view) },
       dismissSheet: { if tabs.sheet?.tab == id { tabs.sheet = nil } },
       insertText: { [weak tab] text in tab?.send(.paste(text)) },
       runInTerminal: { [weak tab] line in
+        // Clear the whole draft, including text after a moved caret.
+        tab?.send(.key(.text("e"), .init(control: true)))
+        tab?.send(.key(.text("u"), .init(control: true)))
         tab?.send(.paste(line))
         tab?.send(.key(.enter))
       },
@@ -1473,15 +1515,14 @@ extension RootView {
       showAccessory: { tabs.showAccessory(pluginID, on: id) },
       linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
       shells: {
-        let members = tabs.workspace(containing: id)?.terminalIDs ?? []
-        return members.compactMap { terminalID in
-          tabs.tabs.first { $0.id == terminalID }.map { ShellChoice(id: $0.id, title: $0.title, current: $0.id == tabs.selected) }
-        }
+        guard let host = tabs.tabs.first(where: { $0.id == id })?.host.id else { return [] }
+        return tabs.hostShells(host, current: id)
       },
       openShell: { tabs.select($0) },
       newShell: {
         if let page = tabs.workspace(containing: id) { tabs.intent = .addTerminal(page.id) }
       },
+      renameShell: { shell, name in tabs.rename(shell, to: name) },
       scrollBy: { [weak tab] lines in tab?.scrollOwnHistory(by: lines) },
       reportWheel: { [weak tab] lines, column, row in
         guard let tab, lines != 0 else { return }
@@ -1490,7 +1531,10 @@ extension RootView {
           tab.send(.pointer(button: button, phase: .press, column: column, row: row))
         }
       },
-      mouseTracking: { [weak tab] in tab?.frame?.mouse ?? .off })
+      mouseTracking: { [weak tab] in tab?.frame?.mouse ?? .off },
+      terminalIndicator: { [weak tab] terminals in
+        tab.flatMap { registry.indicator(on: $0, terminals: terminals) }
+      })
   }
 
   /// What pointing at the terminal does on this tab: whatever its plugins
@@ -1558,12 +1602,33 @@ extension RootView {
   }
 
   /// A path dragged from the files list is pasted as that absolute path.
-  /// Anything else that is a file is handed to `receiveFiles`.
+  /// Anything else that is a file is handed to `receiveFiles`. A Mac reads
+  /// the drop in AppKit (`TerminalDropContent`); a phone through SwiftUI.
   private struct TerminalDrop: ViewModifier {
     let tab: SessionTab
     let receiveFiles: ([URL]) -> Void
 
     func body(content: Content) -> some View {
+      #if os(macOS)
+        content.terminalDrop(TerminalDropHandler(types: TerminalDropContent.types) { board in
+          switch TerminalDropContent.read(board) {
+          case .paste(let text):
+            tab.send(.paste(text))
+            return true
+          case .files(let urls):
+            receiveFiles(urls)
+            return true
+          case nil:
+            return false
+          }
+        })
+      #else
+        phoneDrop(content)
+      #endif
+    }
+
+    /// A phone's drag is SwiftUI's on both ends: one provider an item.
+    private func phoneDrop(_ content: Content) -> some View {
       content.onDrop(of: [DroppedPath.contentType, .fileURL], isTargeted: nil) { providers in
         let carried = providers.filter {
           $0.hasItemConformingToTypeIdentifier(DroppedPath.contentType.identifier)

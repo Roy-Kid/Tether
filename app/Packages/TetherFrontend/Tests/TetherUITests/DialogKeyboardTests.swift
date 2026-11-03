@@ -1,10 +1,11 @@
 #if os(macOS)
 import AppKit
 import Testing
+import TetherTestSupport
 @testable import TetherUI
 
 @MainActor
-@Suite("Dialog keyboard confirmation", .serialized)
+@Suite("Dialog keyboard confirmation", .serialized, .appKitEventLoop)
 struct DialogKeyboardTests {
   private func event(_ key: String, code: UInt16, in window: NSWindow,
     modifiers: NSEvent.ModifierFlags = [], repeated: Bool = false) throws -> NSEvent {
@@ -221,6 +222,56 @@ struct DialogKeyboardTests {
     task.cancel()
     #expect(await task.value == nil)
     #expect(!deleted)
+  }
+
+  @Test("a reconnect dialog covers its terminal and leaves the window usable")
+  func reconnectCoversTheTerminal() async throws {
+    let host = window()
+    host.setFrame(NSRect(x: -4000, y: -4000, width: 800, height: 600), display: true)
+    let terminal = NSView(frame: NSRect(x: 40, y: 80, width: 280, height: 200))
+    host.contentView?.addSubview(terminal)
+    let anchor = DialogAnchor()
+    anchor.coverItsView()
+    anchor.window = host
+    anchor.view = terminal
+    let surface = PlatformDialogSurface()
+    let queue = DialogQueue(surface: surface)
+    var reconnected = false
+    let dialog = Dialog(
+      title: "Connection to lab Lost", message: "reset",
+      actions: [.cancel("Not Now"), Dialog.Action("Reconnect") { _ in reconnected = true }])
+    let task = Task { await queue.ask(dialog, in: anchor) }
+    defer { task.cancel(); surface.withdraw(); host.orderOut(nil) }
+    try await settle { host.childWindows?.contains { self.button("Reconnect", in: $0.contentView ?? NSView()) != nil } == true }
+
+    #expect(host.attachedSheet == nil, "the window itself is not sheeted")
+    #expect(NSApp.modalWindow == nil, "the app is not modal")
+    let alert = try #require(host.childWindows?.first { button("Reconnect", in: $0.contentView ?? NSView()) != nil })
+    let dim = try #require(host.childWindows?.first { $0 !== alert })
+    let covered = host.convertToScreen(terminal.convert(terminal.bounds, to: nil))
+    #expect(abs(dim.frame.minX - covered.minX) < 2)
+    #expect(abs(dim.frame.minY - covered.minY) < 2)
+    #expect(abs(dim.frame.width - covered.width) < 2)
+    #expect(abs(dim.frame.height - covered.height) < 2)
+    #expect(alert.isVisible)
+    #expect(!alert.isSheet)
+    #expect(alert.level == host.level)
+    #expect(dim.level == host.level)
+    let elsewhere = host.convertToScreen(NSRect(x: 760, y: 560, width: 1, height: 1))
+    #expect(!dim.frame.intersects(elsewhere), "the dim is the terminal, not the window")
+    #expect(!alert.frame.intersects(elsewhere), "the dialog does not cover the rest of the window")
+
+    terminal.frame = NSRect(x: 320, y: 40, width: 200, height: 150)
+    anchor.onRegionChange?()
+    let moved = host.convertToScreen(terminal.convert(terminal.bounds, to: nil))
+    #expect(abs(dim.frame.minX - moved.minX) < 2)
+    #expect(abs(dim.frame.width - moved.width) < 2)
+
+    try #require(button("Reconnect", in: alert.contentView!)).performClick(nil)
+    try await settle { reconnected }
+    #expect(await task.value?.role == .confirm)
+    #expect(host.attachedSheet == nil)
+    #expect(host.childWindows?.contains { $0 === dim } != true)
   }
 }
 #endif

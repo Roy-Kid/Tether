@@ -123,8 +123,9 @@ final class DialogQueue {
 /// Above everything else the app is showing — a sheet, a popover, another
 /// window's worth of navigation — and in a place the app's own presentations
 /// cannot take away: a phone's dialogs get a window of their own, a Mac's are
-/// a sheet on whatever is frontmost. A view asks with `.dialog(for:)`; code
-/// that must wait for an answer asks with ``ask(_:)``.
+/// a sheet on the anchor's window, or on the terminal the anchor names.
+/// A view asks with `.dialog(for:)`; code that must wait for an answer asks
+/// with ``ask(_:)``.
 @MainActor
 public enum DialogPresenter {
   static let queue = DialogQueue(surface: PlatformDialogSurface())
@@ -133,9 +134,13 @@ public enum DialogPresenter {
   /// has already run when this returns. Cancelling the calling task takes
   /// the dialog away and returns `nil`. `shown` runs once it is on screen —
   /// the moment to start timing an answer, not the moment it was asked.
+  /// `anchor` puts it on that window, or on that terminal when the anchor
+  /// covers its view.
   @discardableResult
-  public static func ask(_ dialog: Dialog, shown: (@MainActor () -> Void)? = nil) async -> DialogReply? {
-    await queue.ask(dialog, shown: shown)
+  public static func ask(
+    _ dialog: Dialog, in anchor: DialogAnchor? = nil, shown: (@MainActor () -> Void)? = nil
+  ) async -> DialogReply? {
+    await queue.ask(dialog, in: anchor, shown: shown)
   }
 }
 
@@ -146,13 +151,18 @@ extension View {
   /// that changes shows the dialog for the new one; a key cleared by
   /// something else takes the dialog away, unanswered. A view that goes away
   /// answers its question with Cancel, as a sheet's own alert would.
-  public func dialog<Key: Hashable>(for key: Key?, _ make: @escaping (Key) -> Dialog) -> some View {
-    modifier(DialogModifier(key: key, make: make))
+  /// `covering` puts it on that anchor — a terminal's, when the question
+  /// belongs to one terminal.
+  public func dialog<Key: Hashable>(
+    for key: Key?, covering region: DialogAnchor? = nil, _ make: @escaping (Key) -> Dialog
+  ) -> some View {
+    modifier(DialogModifier(key: key, region: region, make: make))
   }
 }
 
 private struct DialogModifier<Key: Hashable>: ViewModifier {
   let key: Key?
+  let region: DialogAnchor?
   let make: (Key) -> Dialog
   /// The key on screen, or answered and still held by the state.
   @State private var shown: Key?
@@ -161,7 +171,9 @@ private struct DialogModifier<Key: Hashable>: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background(DialogAnchorReader(anchor: anchor))
+      .background {
+        if region == nil { DialogAnchorReader(anchor: anchor) }
+      }
       .onAppear { present(key) }
       .onChange(of: key) { _, key in present(key) }
       .onDisappear(perform: dismissed)
@@ -174,7 +186,7 @@ private struct DialogModifier<Key: Hashable>: ViewModifier {
     shown = key
     guard let key else { return }
     let dialog = make(key)
-    let anchor = anchor
+    let anchor = region ?? anchor
     let task = Task {
       let reply = await DialogPresenter.queue.ask(dialog, in: anchor)
       // Gone without an answer, and not because of this view: it counts as

@@ -29,6 +29,13 @@ struct TabAttachmentEntry {
 @Observable
 final class SessionTab: Identifiable {
   let id = UUID()
+  /// Where this terminal's reconnect questions are drawn. The view in front
+  /// fills it in; a handshake asked with no view still reaches a window.
+  let dialogAnchor: DialogAnchor = {
+    let anchor = DialogAnchor()
+    anchor.coverItsView()
+    return anchor
+  }()
   /// The host as it was when this tab last dialled.
   private(set) var host: Host
   /// Stable work-position name (`Terminal 1`). The chip may show a session,
@@ -82,6 +89,9 @@ final class SessionTab: Identifiable {
   /// Called when the person declined a question this tab's login asked:
   /// a decision, not a failure, and nothing is left for the tab to show.
   var onDeclined: (() -> Void)?
+  /// A remote lease is in hand. The workspace brings the host's other
+  /// disconnected terminals back on it — one login, a channel each.
+  var onLeaseReady: ((RemoteConnection) -> Void)?
 
   /// The attachment standing in for the shell, if one is.
   var shown: (any TabAttachment)? {
@@ -134,6 +144,10 @@ final class SessionTab: Identifiable {
   private var ready: [CheckedContinuation<RemoteConnection, Error>] = []
   private var pump: Task<Void, Never>?
   private var dialTask: Task<Void, Never>?
+  /// Bumped every time a new dial or a reused lease replaces the one in
+  /// flight. A handshake that finishes late must not adopt over the new one,
+  /// and must not treat its own cancellation as the person saying no.
+  private var dialGeneration = 0
   private var authentication: AuthenticationCoordinator?
   private var startingDirectory: String?
   /// A directory a preview tab stands in for. A live session reports its own.
@@ -144,11 +158,14 @@ final class SessionTab: Identifiable {
   /// The far-side tty, once a listing has named it. A local shell already
   /// has one on the session; this is only for a connection that does not.
   private var shellTTY: String?
-  private var terminalHost: String?
-  private var identityTask: Task<Void, Never>?
+  /// The terminal as plugins name it. The machine is this Mac or the
+  /// `~/.ssh/config` Host the shell was opened with — the one `ssh` reached,
+  /// and the one a status hub reaches too — never what the far side calls
+  /// itself.
   var pluginTerminalIdentity: PluginTerminalIdentity? {
-    guard isLive, let terminalHost, let terminalName else { return nil }
-    return PluginTerminalIdentity(host: terminalHost, terminal: terminalName)
+    guard isLive, !closed, let terminalName else { return nil }
+    return PluginTerminalIdentity(
+      host: host.isLocal ? LocalMachine.name : host.sshTarget, terminal: terminalName)
   }
   private var ttySearch: Task<Void, Never>?
   /// Set when the view has reported a size. Until then the pty is still the
@@ -182,7 +199,8 @@ final class SessionTab: Identifiable {
     self.name = name
     self.typedNow = typedNow
     self.startingDirectory = directory
-    dialTask = Task { await dial(password) }
+    let generation = dialGeneration
+    dialTask = Task { await dial(password, generation: generation) }
   }
 
   /// A tab that opens a shell on a connection that is already authenticated.
@@ -191,7 +209,8 @@ final class SessionTab: Identifiable {
     self.known = known
     self.name = name
     self.startingDirectory = directory
-    dialTask = Task { await attach(connection) }
+    let generation = dialGeneration
+    dialTask = Task { await attach(connection, generation: generation) }
   }
 
   /// Restoring several shells spends one authentication exchange when policy permits reuse.
@@ -200,9 +219,18 @@ final class SessionTab: Identifiable {
     self.known = known
     self.name = name
     self.startingDirectory = directory
-    dialTask = Task {
-      do { await attach(try await source.connectionReady()) }
-      catch { fail(error) }
+    let generation = dialGeneration
+    dialTask = Task { [weak self, weak source] in
+      guard let self else { return }
+      do {
+        guard let source else { throw CancellationError() }
+        let connection = try await source.connectionReady()
+        guard generation == self.dialGeneration else { return }
+        await self.attach(connection, generation: generation)
+      } catch {
+        guard generation == self.dialGeneration else { return }
+        self.fail(error)
+      }
     }
   }
 
@@ -215,14 +243,23 @@ final class SessionTab: Identifiable {
     self.stage = live ? .connected : .ended(nil)
   }
 
-  private func dial(_ password: String) async {
-    if host.isLocal { await open(); return }
+  private func dial(_ password: String, generation: Int) async {
+    guard generation == dialGeneration else { return }
+    if host.isLocal { await open(generation: generation); return }
     if let issue = host.connectionProblem {
+      guard generation == dialGeneration else { return }
       fail(IdentityError.storage(issue)); return
     }
     if host.allowsMasterReuse, await TerminalSession.sshMasterIsRunning(host.sshTarget) {
-      do { adopt(try await TerminalSession.connectOverSsh(host.sshTarget, columns: columns, rows: rows, history: history)) }
-      catch { fail(error) }
+      do {
+        let session = try await TerminalSession.connectOverSsh(
+          host.sshTarget, columns: columns, rows: rows, history: history)
+        guard generation == dialGeneration, !closed else { session.close(); return }
+        adopt(session)
+      } catch {
+        guard generation == dialGeneration else { return }
+        fail(error)
+      }
       return
     }
     // The coordinator holds the password for the handshake, and only the
@@ -232,12 +269,15 @@ final class SessionTab: Identifiable {
     authentication = coordinator
     defer { coordinator.cancel(); authentication = nil }
     do {
-      adopt(try await coordinator.connect(columns: columns, rows: rows, history: history))
+      let session = try await coordinator.connect(columns: columns, rows: rows, history: history)
+      guard generation == dialGeneration, !closed else { session.close(); return }
+      adopt(session)
       // Only a password the login is known to have used: one typed at the
       // server's own prompt, or the one given before dialling when nothing
       // else could have logged in. A key that got there first proves nothing.
       offer(coordinator.typedPassword ?? (typedNow && coordinator.passwordProven ? password : nil))
     } catch {
+      guard generation == dialGeneration else { return }
       fail(error)
     }
   }
@@ -248,6 +288,55 @@ final class SessionTab: Identifiable {
   func redial(host: Host, password: String, typedNow: Bool) {
     guard !closed, host.id == self.host.id else { return }
     self.host = host
+    self.typedNow = typedNow
+    let generation = retireAttempt()
+    dialTask = Task { await dial(password, generation: generation) }
+  }
+
+  /// Opens a shell on a lease another terminal on this host already holds.
+  ///
+  /// No handshake. A dropped connection takes every channel with it, so the
+  /// terminal that logs in again is the one the others hang from.
+  func reuse(_ connection: RemoteConnection) {
+    // A terminal already joining this login is connecting, not disconnected.
+    // Opening a second channel for it would be a second shell.
+    guard !closed, isDisconnected else { return }
+    let generation = retireAttempt()
+    dialTask = Task { [weak self] in
+      await self?.attach(connection, generation: generation)
+    }
+  }
+
+  /// Waits for `leader`'s handshake and then opens a channel on it.
+  ///
+  /// Marked connecting immediately, so a second reconnect on this host joins
+  /// the same login instead of starting another.
+  func follow(_ leader: SessionTab) {
+    guard !closed, leader !== self, canReconnect else { return }
+    let generation = retireAttempt()
+    dialTask = Task { [weak self, weak leader] in
+      guard let self else { return }
+      do {
+        guard let leader else { throw CancellationError() }
+        let connection = try await leader.connectionReady()
+        guard generation == self.dialGeneration, !self.closed else { return }
+        await self.attach(connection, generation: generation)
+      } catch {
+        guard generation == self.dialGeneration else { return }
+        // The leader was closed or gave up. This terminal stays, still down.
+        if error is CancellationError {
+          self.stage = .lost(message(for: error))
+          return
+        }
+        self.fail(error)
+      }
+    }
+  }
+
+  /// Drops the shell that was here and starts a new attempt. The screen
+  /// stays until that attempt draws one. Returns the generation the new
+  /// attempt owns.
+  private func retireAttempt() -> Int {
     problem = nil
     passwordOffer = nil
     pump?.cancel()
@@ -257,15 +346,12 @@ final class SessionTab: Identifiable {
     closeCheck.reset()
     ttySearch?.cancel()
     shellTTY = nil
-    identityTask?.cancel()
-    terminalHost = nil
-    // The last screen stays until the new shell draws one: a reconnect
-    // that fails again must not take what the person was reading with it.
     noteDamage(nil)
     problemRaised = false
     stage = .connecting
-    self.typedNow = typedNow
-    dialTask = Task { await dial(password) }
+    dialGeneration += 1
+    dialTask?.cancel()
+    return dialGeneration
   }
 
   /// The person has read the problem.
@@ -299,11 +385,13 @@ final class SessionTab: Identifiable {
   ///
   /// Another channel, not another handshake: the password and whatever else
   /// the server asked were spent getting the connection this tab is holding.
-  private func attach(_ connection: RemoteConnection) async {
+  private func attach(_ connection: RemoteConnection, generation: Int) async {
     do {
       let session = try await connection.openShell(columns: columns, rows: rows, history: history)
+      guard generation == dialGeneration, !closed else { session.close(); return }
       adopt(session)
     } catch {
+      guard generation == dialGeneration else { return }
       fail(error)
     }
   }
@@ -315,7 +403,7 @@ final class SessionTab: Identifiable {
   /// a dial returns, which is why it can join the same repaint loop on the
   /// last line — and why the last few lines of this are the last few lines
   /// of `dial`, down to handing out the same lease.
-  private func open() async {
+  private func open(generation: Int) async {
     do {
       // The folder may have been removed after closing the tab.
       var isDirectory: ObjCBool = false
@@ -324,8 +412,10 @@ final class SessionTab: Identifiable {
       }
       let session = try await TerminalSession.local(
         LocalShell(directory: directory, term: "xterm-256color", columns: columns, rows: rows, history: history))
+      guard generation == dialGeneration, !closed else { session.close(); return }
       adopt(session)
     } catch {
+      guard generation == dialGeneration else { return }
       fail(error)
     }
   }
@@ -336,18 +426,6 @@ final class SessionTab: Identifiable {
       return
     }
     self.session = session
-    identityTask?.cancel()
-    // The kernel name, not the Bonjour name: hooks report `os.hostname()`.
-    terminalHost = host.isLocal ? LocalMachine.kernelName : nil
-    if !host.isLocal, let connection = session.connection {
-      identityTask = Task { [weak self] in
-        guard let output = try? await connection.execute("hostname"), output.status == 0,
-          let value = String(data: output.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !value.isEmpty, value.count <= 255, !value.contains(where: { $0.isWhitespace }),
-          !Task.isCancelled, let self, self.session === session else { return }
-        self.terminalHost = value
-      }
-    }
     closeCheck.reset()
     reportHistoryError()
     // Before the first byte where possible: a program can ask what the
@@ -372,6 +450,9 @@ final class SessionTab: Identifiable {
     frame = session.frame()
     refreshLabels()
     startPumping(session)
+    if let connection = session.connection {
+      onLeaseReady?(connection)
+    }
   }
 
   /// Every failure is told, once, by name — except the person's own no,
@@ -761,8 +842,6 @@ final class SessionTab: Identifiable {
   }
 
   func close() {
-    identityTask?.cancel()
-    terminalHost = nil
     closed = true
     problem = nil
     passwordOffer = nil
@@ -816,7 +895,7 @@ final class SessionTab: Identifiable {
     // Back to `.connecting`: the handshake is still open, now waiting on the
     // answer just given rather than on the person.
     defer { if case .asking = stage { stage = .connecting } }
-    let reply = await DialogPresenter.ask(question.dialog, shown: shown)
+    let reply = await DialogPresenter.ask(question.dialog, in: dialogAnchor, shown: shown)
     // Nowhere to show it, or taken away by the platform: not the person's
     // no, and not to be closed as if it were.
     if reply == nil, !Task.isCancelled { authentication?.questionWentUnanswered() }
@@ -825,8 +904,5 @@ final class SessionTab: Identifiable {
 }
 
 func message(for error: Error) -> String {
-  // `TetherError` carries its own sentence via `LocalizedError`. Anything
-  // else still has to read as a sentence rather than as an empty box.
-  let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-  return text.isEmpty ? "\(error)" : text
+  ReportedFailure.sentence(error)
 }

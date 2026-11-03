@@ -2,7 +2,8 @@
 //!
 //! A surface is rarely a whole number of cells. Put at the corner, the grid
 //! leaves every spare pixel along the bottom and the right, and a margin the
-//! consumer asked to be even is not. Centred, the spare pixels split evenly.
+//! consumer asked to be even is not. Across, the spare pixels split evenly.
+//! Down, they stay above the grid, so the last row meets the bottom edge.
 //!
 //! The margin is not a frame either. A program that paints its own
 //! background paints the cells, not the margin, and a band of the page's
@@ -20,7 +21,7 @@ use crate::draw::{BgRect, DrawList, Rgba};
 /// The surface a grid is placed on, in the surface's pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placement {
-    /// The least distance between the grid and each edge.
+    /// The least distance between the grid and the side edges.
     pub inset: f32,
     pub width: f32,
     pub height: f32,
@@ -28,10 +29,17 @@ pub struct Placement {
 
 impl Placement {
     /// Where the grid's top-left corner goes. Whole pixels, so a cell edge
-    /// stays on a pixel edge.
+    /// stays on a pixel edge. Across, spare pixels split around the inset.
+    /// Down, the grid rests on the bottom edge.
     pub fn origin(&self, grid_width: f32, grid_height: f32) -> (f32, f32) {
-        (centred(self.width, grid_width, self.inset), centred(self.height, grid_height, self.inset))
+        (centred(self.width, grid_width, self.inset), rested(self.height, grid_height))
     }
+}
+
+/// Spare pixels stay above the grid. A status line then meets the bottom
+/// edge instead of leaving a margin under it.
+pub fn rested(available: f32, used: f32) -> f32 {
+    (available - used).max(0.0)
 }
 
 /// `inset` from the start, plus half of what is left once both insets and the
@@ -186,11 +194,21 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_rests_on_the_bottom() {
+        // 40 tall, 20 of grid: the spare 20 sits above the first row.
+        assert_eq!(rested(40.0, 20.0), 20.0);
+        assert_eq!(rested(20.0, 20.0), 0.0);
+        assert_eq!(rested(10.0, 20.0), 0.0);
+        let placement = Placement { inset: 10.0, width: 120.0, height: 40.0 };
+        assert_eq!(placement.origin(100.0, 20.0), (10.0, 20.0));
+    }
+
+    #[test]
     fn a_full_screen_background_reaches_every_edge() {
         let placement = Placement { inset: 10.0, width: 120.0, height: 40.0 };
         let rows = [row(&[(0.0, 100.0)], 0.0), row(&[(0.0, 100.0)], 10.0)];
         let origin = placement.origin(100.0, 20.0);
-        assert_eq!(origin, (10.0, 10.0));
+        assert_eq!(origin, (10.0, 20.0));
         let mut list = DrawList {
             rects: rows.iter().flat_map(|r| r.rects.clone()).collect(),
             ..Default::default()

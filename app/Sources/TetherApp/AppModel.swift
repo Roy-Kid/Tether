@@ -6,7 +6,7 @@ import TetherPluginHost
 import TetherPluginKit
 import TetherUI
 import TmuxPlugin
-#if os(macOS)
+#if TETHER_NERVE
 import NervePlugin
 #endif
 
@@ -52,9 +52,32 @@ final class AppModel {
     registry.register(TmuxPlugin())
     registry.register(FilesPlugin())
     registry.register(PortsPlugin())
-    #if os(macOS)
+    #if TETHER_NERVE
     registry.register(NervePlugin())
     #endif
     self.registry = registry
+    #if TETHER_NERVE
+    // A row click in the hosted panel uses the same landing as the web page.
+    // The panel is created above; the closure is read when the row is clicked.
+    NervePlugin.focus = { [weak self] request in
+      guard let self else { return false }
+      let landed = self.land(
+        host: request.host, terminal: request.terminal,
+        directory: request.directory, url: request.url)
+      return landed == "tab" || landed == "url"
+    }
+    #endif
+  }
+
+  /// A Nerve row, from the hosted panel or the web page. A shell tty is
+  /// this window's tab. A pane tty is the plugin's, which still selects
+  /// the tab that is showing that session.
+  func land(host: String?, terminal: String?, directory: String?, url: String?) -> String {
+    SessionFocus.land(
+      host: host, terminal: terminal, directory: directory, url: url,
+      sets: [tabs] + additionalSessions,
+      claim: { host, terminal in
+        registry.plugins.contains { $0.claimTerminal(host: host, terminal: terminal) }
+      })
   }
 }

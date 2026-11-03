@@ -38,11 +38,13 @@
   Tapping it opens that plugin's panel as a full-screen cover with Close, the
   same page other phone plugins use.
 - `host.notify` is a note on the page while Tether is open, and a system
-  notification in the plugin's name when it is not. Permission is asked once;
-  a denial offers Settings.
+  notification in the plugin's name when it is not. Permission is asked the
+  first time a plugin notifies; a denial offers Settings. Tapping the note or
+  the notification opens that plugin's status page.
 - A saturated status keeps a Live Activity: the plugin's name, its label and
   the status colour, on the Lock Screen and in the Dynamic Island. Gray or an
-  empty ribbon ends it.
+  empty ribbon ends it. Tapping it opens the same page. If an activity cannot
+  start, one note says so.
 
 ## Navigation and size classes (2026-10-12)
 

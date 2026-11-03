@@ -19,8 +19,14 @@ public enum PickerMovement: Sendable {
 
 public extension View {
   func onPickerSubmit(enabled: Bool = true, _ submit: @escaping () -> Void) -> some View {
+    onPickerSubmit(enabled: { enabled }, submit)
+  }
+
+  /// `enabled` is asked when the key arrives. Reading selection while the
+  /// list is built would redraw every row each time the selection changes.
+  func onPickerSubmit(enabled: @escaping () -> Bool, _ submit: @escaping () -> Void) -> some View {
     self.onKeyPress(keys: [.return, "m", "j", "M", "J"]) { press in
-      guard enabled, !isComposingText else { return .ignored }
+      guard enabled(), !isComposingText else { return .ignored }
       let flags = press.modifiers.intersection([.control, .option, .command, .shift])
       guard press.key == .return ? flags.isEmpty : flags == .control else { return .ignored }
       submit()

@@ -36,8 +36,9 @@ struct TouchWorkspaceTests {
       #expect(all.allSatisfy { WorkspaceAction.available.contains($0) })
     }
     #expect(phone.flatMap { $0 }.allSatisfy { !$0.needsWidth })
-    #expect(pad.flatMap { $0 }.contains(.splitRight))
-    #expect(pad.suffix(2) == [[.splitLeft, .splitRight, .splitUp, .splitDown], [.joinGroups]])
+    #expect(!pad.flatMap { $0 }.contains(.splitRight))
+    #expect(!pad.flatMap { $0 }.contains(.joinGroups))
+    #expect(phone == pad)
   }
 
   @Test("a phone keeps the portrait stack, including when landscape reports a regular width")
@@ -61,10 +62,17 @@ struct TouchWorkspaceTests {
     #expect(tabs.canPerform(.splitRight))
     tabs.wide = false
     #expect(!tabs.canPerform(.inspector))
-    #expect(!tabs.canPerform(.splitRight))
-    #expect(!tabs.canPerform(.splitDown))
-    tabs.perform(.splitRight)
-    #expect(tabs.intent == nil)
+    #if os(iOS)
+      // No second column, so split is another terminal on this host.
+      #expect(tabs.canPerform(.splitRight))
+      tabs.perform(.splitRight)
+      #expect(tabs.intent == tabs.currentWorkspace.map { .addTerminal($0.id) })
+    #else
+      #expect(!tabs.canPerform(.splitRight))
+      #expect(!tabs.canPerform(.splitDown))
+      tabs.perform(.splitRight)
+      #expect(tabs.intent == nil)
+    #endif
     #expect(tabs.canPerform(.renameTerminal))
   }
 

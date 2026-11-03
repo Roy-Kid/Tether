@@ -81,7 +81,7 @@ fn covers(core: &Range<usize>, suffix: &Option<Range<usize>>, hit: usize) -> boo
 
 /// Characters that end a word someone could mean as a path. Not `:` —
 /// URLs and line numbers use it — and not `.`, which names use.
-fn separates(text: &str) -> bool {
+pub(crate) fn breaks_token(text: &str) -> bool {
     text.chars().all(|c| {
         c.is_whitespace()
             || matches!(
@@ -91,16 +91,31 @@ fn separates(text: &str) -> bool {
     })
 }
 
+/// The next line keeps going as the same path.
+///
+/// A program sometimes prints a long path with a newline in the middle of
+/// it: after a `-`, after a `%`, or straight into a `%2F` encoding. A new
+/// absolute path or a new file on the next line is a different path.
+pub(crate) fn continues(previous: &str, next: &str) -> bool {
+    if previous.is_empty() || next.is_empty() || breaks_token(next) {
+        return false;
+    }
+    if next.starts_with('/') || next.starts_with('~') {
+        return false;
+    }
+    previous.ends_with('-') || previous.ends_with('%') || next.starts_with('%')
+}
+
 fn token_around(line: &[Glyph], hit: usize) -> Option<Range<usize>> {
-    if hit >= line.len() || separates(&line[hit].text) {
+    if hit >= line.len() || breaks_token(&line[hit].text) {
         return None;
     }
     let mut start = hit;
-    while start > 0 && !separates(&line[start - 1].text) {
+    while start > 0 && !breaks_token(&line[start - 1].text) {
         start -= 1;
     }
     let mut end = hit + 1;
-    while end < line.len() && !separates(&line[end].text) {
+    while end < line.len() && !breaks_token(&line[end].text) {
         end += 1;
     }
     Some(start..end)

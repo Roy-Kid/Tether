@@ -15,12 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / ".check-deps"))
 
 
-def run(*command, capture=False, cwd=None):
+def run(*command, capture=False, cwd=None, env=None):
     command = list(map(str, command))
     if command[0] == "dotnet" and sys.platform == "win32" and not shutil.which("dotnet"):
         command[0] = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "dotnet/dotnet.exe")
     print("+ " + " ".join(map(str, command)), flush=True)
-    return subprocess.run(command, cwd=cwd or ROOT, check=True,
+    return subprocess.run(command, cwd=cwd or ROOT, check=True, env=env,
                           text=True, encoding="utf-8", errors="replace",
                           stdout=subprocess.PIPE if capture else None).stdout
 
@@ -163,22 +163,73 @@ def windows():
     run("pwsh", "-NoProfile", "-File", "scripts/publish-windows.ps1", "-SkipNativeBuild")
 
 
+def require_test_report(output: str) -> None:
+    """The exit status alone is not the verdict. The app's test process has
+    ended mid-run with status 0 — 398 tests started, no summary, a failure
+    already printed — and the gate passed it."""
+    failed = re.search(r"^\s*✘ |Executed \d+ tests?, with [1-9]\d* failures?", output, re.M)
+    require(not failed, "A test failed: " + (failed.group(0).strip() if failed else ""))
+    started = "◇ Test " in output
+    summarized = re.search(r"^\s*✔ Test run with \d+ tests?", output, re.M)
+    require(not started or summarized, "The test run ended before reporting; its status cannot be trusted.")
+    require(started or "Executed " in output, "No test ran.")
+
+
+def swift_test(*args: str, env: dict) -> None:
+    """`swift test`, shown as it runs, and judged on what it reported."""
+    command = ["swift", "test", *args]
+    print("+ " + " ".join(command), flush=True)
+    lines = []
+    with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding="utf-8", errors="replace") as process:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            lines.append(line)
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command)
+    require_test_report("".join(lines))
+
+
+def require_pinned_xcode():
+    """A pass on another compiler proves nothing: CI's Xcode 26.6 could not
+    type-check a test that Xcode 27.1 compiled. CI selects the same file."""
+    pinned = (ROOT / ".xcode-version").read_text(encoding="utf-8").strip()
+    selected = run("xcodebuild", "-version", capture=True).splitlines()[0].removeprefix("Xcode ").strip()
+    require(selected == pinned,
+            f"Xcode {selected} is selected; CI builds with Xcode {pinned} (.xcode-version). "
+            "Select that Xcode, or change .xcode-version so CI moves with you.")
+
+
 def apple(build=True):
+    require_pinned_xcode()
+    # What CI has: this repository and nothing beside it. A sibling checkout
+    # the app's manifest can reach otherwise resolves here and nowhere else.
+    hermetic = {**os.environ, "TETHER_HERMETIC": "1"}
     if build:
         run("bash", "scripts/build-xcframework.sh")
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
                     "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
-        run("swift", "test", "--package-path", package)
+        swift_test("--package-path", package, env=hermetic)
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
-        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build", cwd=ROOT / "app")
+        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build",
+        cwd=ROOT / "app", env=hermetic)
     # Previously flaky regressions must survive additional scheduling runs.
     for _ in range(2):
-        run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "BrowserUITests")
-        run("swift", "test", "--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession")
-        run("swift", "test", "--package-path", "app", "--filter", "ShellActivityTests")
+        swift_test("--package-path", "app/Plugins/Files", "--filter", "BrowserUITests", env=hermetic)
+        swift_test("--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession", env=hermetic)
+        swift_test("--package-path", "app", "--filter", "ShellActivityTests", env=hermetic)
+
+
+def drop_inherited_sdk():
+    """Apple's /usr/bin/git exports SDKROOT, the Command Line Tools' macOS SDK,
+    to the hooks it runs. One SDKROOT names one platform and the XCFramework is
+    built for three, so its iOS slices linked against macOS. Each build finds
+    its own SDK, as it does outside the hook and on CI."""
+    os.environ.pop("SDKROOT", None)
 
 
 def main():
+    drop_inherited_sdk()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--staged", action="store_true")
     group = parser.add_mutually_exclusive_group()

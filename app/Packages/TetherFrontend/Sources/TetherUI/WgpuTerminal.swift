@@ -31,12 +31,16 @@ struct WgpuTerminal: View {
   let overlay: RenderOverlay?
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
+  /// The drawable's bounds, after AppKit has laid the view out. SwiftUI's
+  /// geometry can miss a frame set in code; this one does not.
+  var onBounds: (CGSize) -> Void = { _ in }
   @State private var problem: Dialog?
   @Environment(\.workspaceBackgroundOpacity) private var backgroundOpacity
 
   var body: some View {
     NativeTerminal(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics,
-      palette: palette, padding: padding, backgroundOpacity: backgroundOpacity, overlay: overlay, onPresented: onPresented, onScale: onScale) { error, retry, dismiss in
+      palette: palette, padding: padding, backgroundOpacity: backgroundOpacity, overlay: overlay,
+      onPresented: onPresented, onScale: onScale, onBounds: onBounds) { error, retry, dismiss in
       problem = Dialog(title: "Terminal Rendering Failed", message: error.localizedDescription,
         actions: [.cancel("Close") { problem = nil; dismiss() }, .init("Retry") { _ in problem = nil; retry() }])
     }
@@ -55,12 +59,14 @@ private struct NativeTerminal {
   let overlay: RenderOverlay?
   let onPresented: (Int) -> Void
   let onScale: (CGFloat) -> Void
+  let onBounds: (CGSize) -> Void
   let failure: (Error, @escaping @MainActor () -> Void, @escaping @MainActor () -> Void) -> Void
 
   @MainActor private func update(_ view: TerminalGPUView) {
     view.onFailure = failure
     view.onPresented = onPresented
     view.onScale = onScale
+    view.onBounds = onBounds
     view.update(frame: frame, dirtyRows: dirtyRows, damageEpoch: damageEpoch, metrics: metrics, palette: palette, overlay: overlay, padding: padding, backgroundOpacity: backgroundOpacity)
   }
 }
@@ -121,6 +127,21 @@ final class TerminalGPUView: NativeTerminalView {
   var onFailure: ((Error, @escaping @MainActor () -> Void, @escaping @MainActor () -> Void) -> Void)?
   var onPresented: ((Int) -> Void)?
   var onScale: ((CGFloat) -> Void)?
+  var onBounds: ((CGSize) -> Void)?
+  private var reportedBounds: CGSize = .zero
+
+  /// One report per distinct size, on the next turn. Layout can run inside
+  /// a SwiftUI update, and resizing the session from there re-enters it.
+  private func reportBounds() {
+    let size = bounds.size
+    guard size.width > 1, size.height > 1 else { return }
+    guard abs(size.width - reportedBounds.width) > 0.5 || abs(size.height - reportedBounds.height) > 0.5 else { return }
+    reportedBounds = size
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.reportedBounds == size else { return }
+      self.onBounds?(size)
+    }
+  }
 
   #if os(macOS)
     override func makeBackingLayer() -> CALayer { TimeoutMetalLayer() }
@@ -140,6 +161,7 @@ final class TerminalGPUView: NativeTerminalView {
     override func layout() {
       super.layout()
       noteScale()
+      reportBounds()
       guard window?.isVisible == true else {
         orderedIn = false
         paintHeld = false
@@ -193,7 +215,7 @@ final class TerminalGPUView: NativeTerminalView {
       }
     }
     override func didMoveToWindow() { super.didMoveToWindow(); noteScale(); window == nil ? shutdown() : schedule() }
-    override func layoutSubviews() { super.layoutSubviews(); noteScale(); schedule() }
+    override func layoutSubviews() { super.layoutSubviews(); noteScale(); reportBounds(); schedule() }
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     private var displayScale: CGFloat { window?.screen.scale ?? traitCollection.displayScale }
     private var drawable: Bool {

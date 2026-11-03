@@ -134,6 +134,7 @@ func aPageAndANativeCallerShareTheHost() async throws {
   #expect(noted.ok)
   #expect(presenter.notes.map(\.0) == ["Ready"])
   #expect(presenter.notes.map(\.1) == ["done"])
+  #expect(host.api.notes.first?.pluginID == record.id)
 
   presenter.answer = PluginAnswer(action: "keep", value: "")
   let asked = await host.perform(

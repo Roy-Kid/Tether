@@ -24,10 +24,16 @@ public final class TmuxTab: TabAttachment {
   public var missing = false
   public var busy = false
   public var draftName = ""
+  /// A new session's name is being typed in the list. Nothing is created until
+  /// that name is committed, and nothing asks for it in a sheet.
+  public var namingSession = false
+  /// Escape in the name field also reaches the picker's cancel. Set for that
+  /// turn so cancelling the name does not close the picker.
+  var suppressPickerDismiss = false
   public private(set) var connection: RemoteConnection?
   public var sessionToEnd: TmuxSessionInfo?
   public var windowToEnd: TmuxListedWindow?
-  /// The name being edited, while the rename dialog is open.
+  /// The session, window, or shell whose name is being edited in place.
   public var renaming: TmuxRename?
   private var shellSessionName = ""
   private var operation: Task<Void, Never>?
@@ -39,6 +45,8 @@ public final class TmuxTab: TabAttachment {
   private let onClose: () -> Void
   private let rememberSessions: ([TmuxSessionInfo]) -> Void
   private let recalledSessions: () -> [TmuxSessionInfo]
+  private let rememberPanes: ([(tty: String, session: String)]) -> Void
+  private let recalledPanes: () -> [(tty: String, session: String)]
   /// A refresh that arrived while an operation was running. `run` drops a
   /// second call, so the list would otherwise stay whatever the first one saw.
   private var refreshPending = false
@@ -63,13 +71,23 @@ public final class TmuxTab: TabAttachment {
   private var panesAt = Date.distantPast
   private var paneTask: Task<Void, Never>?
   private var paneGeneration = 0
+  /// Bumped when this tab chooses, detaches, or asks which session its client
+  /// is showing. A client list taken before the bump is dropped.
+  private(set) var clientEpoch = 0
+  /// A list that arrives before this is ignored. Set when this tab itself
+  /// switches, so a poll already in flight cannot put the old session back.
+  private var followAfter = Date.distantPast
+  private let onConnected: () -> Void
 
   init(
     tab: TabContext,
     owner: @escaping (String) -> TmuxTab?,
     onClose: @escaping () -> Void,
     rememberSessions: @escaping ([TmuxSessionInfo]) -> Void = { _ in },
-    recalledSessions: @escaping () -> [TmuxSessionInfo] = { [] }
+    recalledSessions: @escaping () -> [TmuxSessionInfo] = { [] },
+    rememberPanes: @escaping ([(tty: String, session: String)]) -> Void = { _ in },
+    recalledPanes: @escaping () -> [(tty: String, session: String)] = { [] },
+    onConnected: @escaping () -> Void = {}
   ) {
     self.tab = tab
     self.connection = tab.plugin.connection
@@ -77,6 +95,9 @@ public final class TmuxTab: TabAttachment {
     self.onClose = onClose
     self.rememberSessions = rememberSessions
     self.recalledSessions = recalledSessions
+    self.rememberPanes = rememberPanes
+    self.recalledPanes = recalledPanes
+    self.onConnected = onConnected
   }
 
   // MARK: - TabAttachment
@@ -86,6 +107,8 @@ public final class TmuxTab: TabAttachment {
   public var isShowing: Bool { false }
   /// While this shell is a tmux client, the tab wears the plugin's mark.
   public var symbol: String { shellSessionID == nil ? "" : TmuxPlugin.symbol }
+  /// The panes of the session this shell is a client of: what the tab shows.
+  public var shownTerminals: [String] { shellSessionID.map(paneTTYs(of:)) ?? [] }
   public var subtitle: String {
     guard let id = shellSessionID else { return "" }
     return sessions.first { $0.id == id }?.name ?? shellSessionName
@@ -131,7 +154,8 @@ public final class TmuxTab: TabAttachment {
     }
   }
   public var commands: [PluginCommand] {
-    guard shellSessionID != nil else { return [] }
+    let jumps = sessionJumps
+    guard shellSessionID != nil else { return jumps }
     return [
       PluginCommand(id: "detach", title: "Detach Session", symbol: "eject") { [weak self] in
         self?.detachSession()
@@ -157,6 +181,18 @@ public final class TmuxTab: TabAttachment {
     ] + TmuxPaneDirection.allCases.map { direction in
       PluginCommand(id: direction.commandID, title: direction.title, symbol: direction.symbol) {
         [weak self] in self?.focusPane(direction)
+      }
+    } + jumps
+  }
+
+  /// ⌥1…⌥4 follow the session list this tab is showing, in that order.
+  /// A missing session is not a command, so the key still reaches the shell.
+  private var sessionJumps: [PluginCommand] {
+    Array(listedSessions.prefix(4).enumerated()).map { index, session in
+      let number = index + 1
+      let name = session.name.isEmpty ? "Session \(number)" : session.name
+      return PluginCommand(id: "session\(number)", title: name, symbol: "\(number).circle") {
+        [weak self] in self?.choose(session, windowID: nil)
       }
     }
   }
@@ -196,6 +232,7 @@ public final class TmuxTab: TabAttachment {
     // The picker may have listed before this lease existed. That attempt
     // fails, and a refresh started while it was in flight used to be dropped.
     refresh()
+    onConnected()
   }
   public func close() {
     closed = true
@@ -281,6 +318,14 @@ public final class TmuxTab: TabAttachment {
   /// session only changes window. Another client of the same server switches.
   /// A plain shell is given `tmux attach-session`, which is what then draws.
   public func choose(_ chosen: TmuxSessionInfo, windowID: UInt32?) {
+    // The session already has a terminal on this host. Go there. Attaching
+    // again from a shell that has not entered tmux would be a second client.
+    if let holder = owner(chosen.id), holder !== self {
+      holder.tab.focus()
+      if windowID != nil { holder.choose(chosen, windowID: windowID) }
+      tab.dismissAccessory()
+      return
+    }
     if shellSessionID == chosen.id, windowID == nil {
       closePicker()
       return
@@ -325,7 +370,7 @@ public final class TmuxTab: TabAttachment {
     error = nil
     operation = Task { [weak self] in
       do { try await action() } catch is CancellationError {} catch {
-        self?.error = error.localizedDescription
+        self?.error = ReportedFailure.sentence(error)
       }
       self?.busy = false
       let pending = self?.refreshPending == true
@@ -339,6 +384,27 @@ public final class TmuxTab: TabAttachment {
   private func lease() throws -> RemoteConnection {
     guard let connection else { throw TmuxTabError.noConnection }
     return connection
+  }
+
+  /// `list-panes -a -F '#{pane_tty} #{session_id}'`, one pane a line.
+  func notePanes(listed text: String) {
+    let panes = text.split(whereSeparator: \.isNewline).compactMap { line -> (tty: String, session: String)? in
+      let parts = line.split(whereSeparator: \.isWhitespace).map(String.init)
+      guard parts.count >= 2, parts[0].hasPrefix("/") else { return nil }
+      return (parts[0], parts[1])
+    }
+    rememberPanes(panes)
+  }
+
+  /// This host's panes of one session, as last read by any tab here.
+  func paneTTYs(of session: String) -> [String] {
+    recalledPanes().filter { $0.session == session }.map(\.tty)
+  }
+
+  /// The status mark on one of this session's panes, if a plugin reports one.
+  func indicator(for session: TmuxSessionInfo) -> PluginTabIndicator? {
+    let ttys = paneTTYs(of: session.id)
+    return ttys.isEmpty ? nil : tab.terminalIndicator(ttys)
   }
 
   /// Sessions to show. This tab's own list once a read has finished; until
@@ -366,9 +432,28 @@ public final class TmuxTab: TabAttachment {
       do {
         let connection = try lease()
         store(try await connection.tmuxSessions())
+        if let output = try? await connection.execute(
+          "tmux list-panes -a -F '#{pane_tty} #{session_id}'"),
+          (output.status ?? 1) == 0,
+          let text = String(data: output.stdout, encoding: .utf8)
+        {
+          notePanes(listed: text)
+        }
         if let tty = tab.terminalName() {
-          noteShellClient(tty: tty, session: try? await connection.tmuxSession(forClientTTY: tty))
-        } else {
+          // A switch that starts while this question is in flight wins.
+          // A failed question leaves the client already known: tmux missing
+          // is not the same as this shell having detached.
+          clientEpoch &+= 1
+          let epoch = clientEpoch
+          do {
+            let session = try await connection.tmuxSession(forClientTTY: tty)
+            if epoch == clientEpoch, !closed {
+              noteShellClient(tty: tty, session: session)
+            }
+          } catch {
+            // The question failed. The client already known stays.
+          }
+        } else if !closed {
           noteShellClient(tty: nil, session: nil)
         }
       } catch {
@@ -382,15 +467,40 @@ public final class TmuxTab: TabAttachment {
     }
   }
 
-  /// Keeps a list this tab read, and the host's copy of it.
-  private func store(_ listed: [TmuxSessionInfo]) {
-    sessions = listed
+  /// Refresh metadata in place. tmux may return a different order after a
+  /// rename or window reindex; only new rows go at the end.
+  func store(_ listed: [TmuxSessionInfo]) {
+    var remaining = listed
+    var ordered: [TmuxSessionInfo] = []
+    for previous in listedSessions {
+      guard let index = remaining.firstIndex(where: { $0.id == previous.id }) else { continue }
+      let updated = remaining.remove(at: index)
+      var windows = updated.windows
+      let retained = previous.windows.compactMap { window -> TmuxListedWindow? in
+        guard let index = windows.firstIndex(where: { $0.id == window.id }) else { return nil }
+        return windows.remove(at: index)
+      }
+      ordered.append(TmuxSessionInfo(
+        id: updated.id, name: updated.name, attached: updated.attached,
+        windows: retained + windows))
+    }
+    sessions = ordered + remaining
     sessionsLoaded = true
   }
 
+  /// A name nobody in the current list has. The row starts with it selected.
+  public func suggestedSessionName() -> String {
+    let taken = Set(listedSessions.map(\.name))
+    var name = "untitled"
+    var number = 2
+    while taken.contains(name) {
+      name = "untitled \(number)"
+      number += 1
+    }
+    return name
+  }
+
   /// Reports success only after the new session is running in this terminal.
-  /// The draft and error remain available to the presenting form when an
-  /// operation fails.
   public func create(onSuccess: @escaping @MainActor () -> Void) {
     let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else { return }
@@ -431,9 +541,16 @@ public final class TmuxTab: TabAttachment {
   }
 
   public func rename(_ renamed: TmuxRename, to name: String) {
+    let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     switch renamed {
-    case .session(let session): renameSession(session, to: name)
+    case .shell(let id, let previous):
+      guard name != previous else { return }
+      tab.renameShell(id, name)
+    case .session(let session):
+      guard name != session.name else { return }
+      renameSession(session, to: name)
     case .window(let window):
+      guard name != window.name else { return }
       run { [self] in
         guard let command = TmuxCommands.renameWindow(window.id, to: name) else {
           throw TmuxTabError.rejected(TmuxCommands.rejectedName)
@@ -486,15 +603,19 @@ public final class TmuxTab: TabAttachment {
         adopt(chosen)
         return
       }
+      holdFollowers()
       guard let command = TmuxCommands.switchClient(tty: tty, session: chosen.id) else {
         throw TmuxTabError.rejected(TmuxCommands.rejectedName)
       }
       try await exec(command)
+      if closed || Task.isCancelled { return }
+      holdFollowers()
       noteShellClient(tty: tty, session: chosen.id)
       adopt(chosen)
       if let windowID { try await exec(TmuxCommands.selectWindow(windowID)) }
       return
     }
+    holdFollowers()
     guard let line = TmuxCommands.attachLine(name: chosen.name, id: chosen.id, window: windowID) else {
       throw TmuxTabError.rejected(TmuxCommands.rejectedName)
     }
@@ -714,6 +835,7 @@ public final class TmuxTab: TabAttachment {
   }
 
   fileprivate func forgetShellClient() {
+    holdFollowers()
     shellSessionID = nil
     shellTTY = nil
     shellSessionName = ""
@@ -721,6 +843,26 @@ public final class TmuxTab: TabAttachment {
     shellNotches = ShellNotches()
     copiedPanes = []
     invalidatePanes()
+  }
+
+  /// Ignore a client list that was already in flight. This tab just chose or
+  /// left a session; the server's answer from before that must not put it back.
+  func holdFollowers() {
+    clientEpoch &+= 1
+    followAfter = Date().addingTimeInterval(1.5)
+  }
+
+  /// One host's `list-clients`. `epoch` is the value captured when the list
+  /// was asked for. A tty absent from a list that finished has detached; a
+  /// list that never finished is not passed here.
+  func noteClients(listed text: String, epoch: Int, now: Date = Date()) {
+    guard epoch == clientEpoch, !busy, !closed, now >= followAfter else { return }
+    let tty = tab.terminalName() ?? shellTTY
+    guard let tty else { return }
+    let session = TmuxClients.session(for: tty, in: text)
+    let previous = shellSessionID
+    noteShellClient(tty: tty, session: session)
+    if session != previous, connection != nil { refresh() }
   }
 
   private func invalidatePanes() {
@@ -769,6 +911,33 @@ public final class TmuxTab: TabAttachment {
     else { return }
     panes = parsed
     panesAt = Date()
+  }
+}
+
+/// `tmux list-clients`, one line per client. The shell's own tty is matched
+/// the way a producer spells it; a missing tmux is not an empty server.
+enum TmuxClients {
+  static let listCommand = "tmux list-clients -F '#{client_tty}|#{session_id}'"
+
+  static func session(for tty: String, in text: String) -> String? {
+    for line in text.split(whereSeparator: \.isNewline) {
+      let parts = line.split(separator: "|", maxSplits: 1).map {
+        String($0).trimmingCharacters(in: .whitespaces)
+      }
+      guard parts.count == 2, !parts[1].isEmpty, TerminalName.same(parts[0], tty) else { continue }
+      return parts[1]
+    }
+    return nil
+  }
+
+  /// Nil when the server did not answer, so a missing tmux does not look like
+  /// every client detaching. "no clients" is an empty list: the tty is gone.
+  static func listing(status: Int32?, stdout: Data, stderr: Data) -> String? {
+    let out = String(decoding: stdout, as: UTF8.self)
+    let err = String(decoding: stderr, as: UTF8.self)
+    if status == 0 { return out }
+    if (out + "\n" + err).localizedCaseInsensitiveContains("no clients") { return "" }
+    return nil
   }
 }
 
@@ -1158,11 +1327,13 @@ enum TmuxTabError: LocalizedError {
 public enum TmuxRename: Hashable {
   case session(TmuxSessionInfo)
   case window(TmuxListedWindow)
+  case shell(UUID, String)
 
   public var name: String {
     switch self {
     case .session(let session): session.name
     case .window(let window): window.name
+    case .shell(_, let name): name
     }
   }
 }

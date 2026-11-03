@@ -1,4 +1,7 @@
+# One compiler here, in the commit gate and in CI. "stable" was whatever
+# stable was on the day: a lint new to CI's compiler failed a tree this
+# machine's had passed. Change the version here; CI installs this file.
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]

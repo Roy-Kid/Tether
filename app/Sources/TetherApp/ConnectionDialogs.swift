@@ -77,11 +77,11 @@ struct ConnectionDialogs: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .dialog(for: connecting) { request in
+      .dialog(for: connecting, covering: connecting.flatMap(anchor(for:))) { request in
         ConnectionDialog.password(
           request, connect: { connect(request, $0) }, cancel: { cancelConnect(request) })
       }
-      .dialog(for: tabs.problem) { report in
+      .dialog(for: tabs.problem, covering: tabs.problem.flatMap(anchor(for:))) { report in
         if report.problem.kind == .history {
           Dialog(title: "Could Not Save Session History", message: report.problem.reason,
             actions: [Dialog.Action("OK") { _ in tabs.tabs.first { $0.id == report.tab }?.acknowledge() }])
@@ -101,5 +101,17 @@ struct ConnectionDialogs: ViewModifier {
           offer, replacing: remembers(offer.host), keep: { keep(offer) },
           decline: { tabs.answer(offer, kept: false) })
       }
+  }
+
+  /// The terminal a reconnect question covers. A history failure, and a
+  /// password for a connection that has no terminal yet, stay on the window.
+  private func anchor(for request: ConnectRequest) -> DialogAnchor? {
+    guard request.coversTerminal, let id = request.retrying else { return nil }
+    return tabs.tabs.first { $0.id == id }?.dialogAnchor
+  }
+
+  private func anchor(for report: TabProblem) -> DialogAnchor? {
+    guard report.coversTerminal else { return nil }
+    return tabs.tabs.first { $0.id == report.tab }?.dialogAnchor
   }
 }

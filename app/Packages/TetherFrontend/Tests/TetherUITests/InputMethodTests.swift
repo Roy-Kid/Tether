@@ -1,12 +1,13 @@
 #if os(macOS)
 import AppKit
 import Testing
+import TetherTestSupport
 import Tether
 
 @testable import TetherUI
 
 @MainActor
-@Suite("Input method positioning")
+@Suite("Input method positioning", .appKitEventLoop)
 struct InputMethodTests {
   @Test("all Control letters reach the terminal unchanged, including editing and process-control keys")
   func unixNavigation() throws {

@@ -2,6 +2,7 @@
   import AppKit
   import SwiftUI
   import Testing
+  import TetherTestSupport
   import Tether
   import TetherPluginHost
   import TetherPluginKit
@@ -70,8 +71,11 @@
       Self.settle(1.5)
     }
 
+    @MainActor
     func tearDown() {
+      window.delegate = nil
       window.close()
+      AppPresence.returnToDock()
       UserDefaults().removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: directory)
     }
@@ -97,7 +101,7 @@
   /// the split view's panes. A click is sent through the window, the way a
   /// person's arrives, rather than to the strip.
   @MainActor
-  @Suite("Tab strip clicks", .serialized)
+  @Suite("Tab strip clicks", .serialized, .appKitEventLoop)
   struct TabStripClickTests {
     @Test("the plus beside the tab strip requests a new tab without dragging the window")
     func plusCreatesTab() throws {
@@ -158,6 +162,48 @@
 
       #expect(hosted.window.drags == 1)
       #expect(hosted.tabs.selectedWorkspaceID == selected)
+    }
+
+    @Test("renaming a terminal edits its chip, and Escape leaves the name")
+    func renameEditsTheChip() throws {
+      let suite = "Tether.RenameChip.\(UUID())"
+      let defaults = try #require(UserDefaults(suiteName: suite))
+      defer { defaults.removePersistentDomain(forName: suite) }
+      let tabs = TabSet(defaults: defaults)
+      let terminal = SessionTab(preview: .local, known: KnownHosts(), name: "Terminal 1", live: false)
+      tabs.adopt(terminal)
+      let window = KeyedWindow.make()
+      defer { window.close() }
+      window.contentView = NSHostingView(rootView:
+        VStack(spacing: 0) {
+          WorkspaceTabBar(tabs: tabs, onClose: { _ in })
+          Spacer()
+        })
+      window.orderFront(nil)
+      HostedWorkspace.settle(0.4)
+      tabs.beginRenamingTerminal(terminal.id)
+      HostedWorkspace.settle(0.5)
+      let content = try #require(window.contentView)
+      content.layoutSubtreeIfNeeded()
+      let field = try #require(textField(in: content), "the chip becomes the editor")
+      #expect(field.stringValue == "Terminal 1")
+      let rect = field.convert(field.bounds, to: nil)
+      let hit = content.hitTest(NSPoint(x: rect.midX, y: rect.midY))
+      #expect(hit === field || hit is NSText, "a press on the name reaches the field")
+      window.makeFirstResponder(field.currentEditor() ?? field)
+      let escape = try #require(NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+      window.sendEvent(escape)
+      HostedWorkspace.settle(0.3)
+      #expect(tabs.renaming == nil)
+      #expect(terminal.pinnedName == nil)
+    }
+
+    private func textField(in view: NSView) -> NSTextField? {
+      if let field = view as? NSTextField, field.isEditable { return field }
+      return view.subviews.lazy.compactMap { textField(in: $0) }.first
     }
 
     private func catcher(in window: NSWindow) throws -> (NSView, [UUID: CGRect]) {

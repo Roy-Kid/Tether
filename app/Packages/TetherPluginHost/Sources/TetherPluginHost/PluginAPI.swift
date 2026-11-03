@@ -4,6 +4,8 @@ import TetherPluginKit
 import UserNotifications
 #if os(iOS)
   import UIKit
+#elseif os(macOS)
+  import AppKit
 #endif
 
 public struct PluginNote: Identifiable, Equatable, Sendable {
@@ -12,6 +14,16 @@ public struct PluginNote: Identifiable, Equatable, Sendable {
   public var body: String
   /// The plugin the note came from. Empty when the caller did not name one.
   public var source: String
+  /// Which plugin a tap opens. Empty for a note the host wrote itself.
+  public var pluginID: String
+
+  /// Carried on a system notification so a tap can open this plugin.
+  public static let userInfoKey = "pluginID"
+
+  public static func pluginID(in userInfo: [AnyHashable: Any]) -> String? {
+    guard let id = userInfo[userInfoKey] as? String, !id.isEmpty else { return nil }
+    return id
+  }
 }
 
 /// One implementation of the plugin contract. A page's RPC and a native
@@ -41,17 +53,35 @@ public final class PluginAPI: PluginServing {
     notes.removeAll { $0.id == id }
   }
 
-  public func notify(title: String, body: String, source: String = "") async {
+  /// A note the host writes for itself. It stays on the page and does not ask
+  /// to post a system notification.
+  public func noteLocally(title: String, body: String) {
+    insert(PluginNote(
+      id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)),
+      source: "", pluginID: ""))
+  }
+
+  public func notify(title: String, body: String, source: String = "", pluginID: String = "") async {
+    let note = PluginNote(
+      id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)),
+      source: String(source.prefix(80)), pluginID: String(pluginID.prefix(128)))
+    insert(note)
     if let presenting {
       await presenting.notify(title: title, body: body)
       return
     }
-    let note = PluginNote(
-      id: UUID(), title: String(title.prefix(120)), body: String(body.prefix(240)),
-      source: String(source.prefix(80)))
+    await SystemNote.post(title: note.title, body: note.body, source: note.source, pluginID: note.pluginID)
+  }
+
+  /// The app asks the first time a plugin notifies. Until it is set, a banner
+  /// is not posted.
+  public static func deliverSystemNotes(by authorize: @escaping @MainActor () async -> Bool) {
+    SystemNote.authorize = authorize
+  }
+
+  private func insert(_ note: PluginNote) {
     notes.insert(note, at: 0)
     if notes.count > 4 { notes.removeLast(notes.count - 4) }
-    await SystemNote.post(title: note.title, body: note.body, source: note.source)
   }
 
   public func ask(_ prompt: PluginPrompt) async -> PluginAnswer {
@@ -122,22 +152,10 @@ public protocol PluginPresenting: AnyObject {
 
 @MainActor
 enum SystemNote {
-  /// While the app is open the note is already on screen. A banner then would
-  /// be the same words twice. Away, the system is the only place it can land.
-  static func post(title: String, body: String, source: String) async {
-    #if os(iOS)
-      if UIApplication.shared.applicationState == .active { return }
-    #endif
-    let center = UNUserNotificationCenter.current()
-    let settings = await center.notificationSettings()
-    switch settings.authorizationStatus {
-    case .notDetermined:
-      guard (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true else { return }
-    case .authorized, .provisional, .ephemeral:
-      break
-    default:
-      return
-    }
+  /// Set by the app. The first real notify is when permission is asked.
+  static var authorize: (@MainActor () async -> Bool)?
+
+  static func content(title: String, body: String, source: String, pluginID: String) -> UNMutableNotificationContent {
     let content = UNMutableNotificationContent()
     if source.isEmpty {
       content.title = title
@@ -146,7 +164,30 @@ enum SystemNote {
       content.title = source
       content.body = body.isEmpty ? title : "\(title)\n\(body)"
     }
+    if PluginNote.pluginID(in: [PluginNote.userInfoKey: pluginID]) != nil {
+      content.userInfo = [PluginNote.userInfoKey: pluginID]
+    }
+    return content
+  }
+
+  /// While the app is open the note is already on screen. A banner then would
+  /// be the same words twice. Away, the system is the only place it can land.
+  static func post(title: String, body: String, source: String, pluginID: String) async {
+    let allowed = await authorize?() ?? false
+    guard !front else { return }
+    guard allowed else { return }
+    let content = content(title: title, body: body, source: source, pluginID: pluginID)
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-    try? await center.add(request)
+    try? await UNUserNotificationCenter.current().add(request)
+  }
+
+  private static var front: Bool {
+    #if os(iOS)
+      UIApplication.shared.applicationState == .active
+    #elseif os(macOS)
+      NSApp.isActive
+    #else
+      false
+    #endif
   }
 }

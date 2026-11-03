@@ -83,18 +83,19 @@ struct LinkGeometryTests {
     #expect(geometry.cell(at: CGPoint(x: 20, y: 8 + 16 * 24)) == nil)
   }
 
-  @Test("a click lands where the renderer centred the grid")
+  @Test("a click lands where the renderer placed the grid")
   func placedGrid() {
     // 100 × 50 points at 2×: 200 × 100 pixels, a 16-pixel inset, cells of
     // 16 × 32 pixels. Across, 200 − 32 − 160 leaves 8 spare, 4 each side:
-    // the grid starts at 20 pixels. Down, 100 − 32 − 64 leaves 4: 18.
+    // the grid starts at 20 pixels, 10 points. Down, the grid rests on the
+    // bottom: 100 − 64 leaves 36 pixels, 18 points.
     let placed = CellGeometry.placed(
       size: CGSize(width: 100, height: 50), scale: 2, inset: 8, cellWidth: 8, lineHeight: 16,
       columns: 10, rows: 2)
     #expect(placed.originX == 10)
-    #expect(placed.originY == 9)
+    #expect(placed.originY == 18)
     #expect(placed.cell(at: CGPoint(x: 9.5, y: 20)) == nil, "the margin, though inside the inset's reach")
-    #expect(placed.cell(at: CGPoint(x: 10, y: 9))! == (0, 0))
+    #expect(placed.cell(at: CGPoint(x: 10, y: 18))! == (0, 0))
     // An odd spare pixel stays on the far side, as the renderer leaves it.
     let odd = CellGeometry.placed(
       size: CGSize(width: 100.5, height: 50), scale: 2, inset: 8, cellWidth: 8, lineHeight: 16,
@@ -102,6 +103,21 @@ struct LinkGeometryTests {
     #expect(odd.originX == 10)
     #expect(CellGeometry.gridPadding(inset: 8, scale: 2) == 16)
     #expect(CellGeometry.gridPadding(inset: -4, scale: 2) == 0)
+  }
+
+  @Test("fractional row heights keep the pointer aligned with a tall grid")
+  func fractionalRowHeight() {
+    let placed = CellGeometry.placed(
+      size: CGSize(width: 660, height: 805), scale: 2, inset: 8,
+      cellWidth: 8, lineHeight: 15.6, columns: 80, rows: 50)
+    #expect(abs(placed.originY - 25) < 0.001)
+    for row in 0..<50 {
+      let top = 25 + CGFloat(row) * 15.6
+      let point = CGPoint(x: placed.originX + 4, y: top + 0.1)
+      #expect(placed.cell(at: point)?.row == UInt16(row))
+    }
+    let last = LinkSpan(row: 49, start: 0, end: 1)
+    #expect(abs(placed.rect(for: last).maxY - 805) < 0.001)
   }
 
   @Test("a drag that leaves the grid ends on the nearest cell")

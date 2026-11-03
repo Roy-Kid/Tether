@@ -6,6 +6,19 @@ import SwiftUI
   import UIKit
 #endif
 
+/// A failure as one sentence. A channel the server would not open is that
+/// sentence; the protocol library's reason stays out of the window.
+public enum ReportedFailure {
+  public static func sentence(_ error: Error) -> String {
+    let text = ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.range(of: "Failed to open channel", options: .caseInsensitive) != nil {
+      return "The server refused to open a session."
+    }
+    return text.isEmpty ? String(describing: error) : text
+  }
+}
+
 extension EnvironmentValues {
   /// Opacity of workspace backgrounds over the host's native backdrop.
   /// The host supplies 0.5...1; 1 preserves opaque rendering by default.

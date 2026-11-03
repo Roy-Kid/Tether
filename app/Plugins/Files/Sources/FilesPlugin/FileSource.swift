@@ -1,5 +1,6 @@
 import Foundation
 import Tether
+import TetherUI
 
 /// What the browser asks of the far side. `RemoteFiles` is the one that
 /// matters; the protocol exists so a test can answer instead of a server.
@@ -30,5 +31,5 @@ extension RemoteFiles: FileSource {}
 
 /// A failure, as the one line the browser shows.
 func describe(_ error: Error) -> String {
-  (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+  ReportedFailure.sentence(error)
 }

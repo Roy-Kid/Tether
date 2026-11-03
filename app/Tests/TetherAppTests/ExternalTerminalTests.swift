@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 @testable import TetherApp
+import TetherPluginKit
 
 @Suite("Landing on a terminal")
 struct ExternalTerminalTests {
@@ -19,15 +20,19 @@ struct ExternalTerminalTests {
     #expect(FocusLink.url("vscode://file/Users/roykid/work/Nerve")?.scheme == "vscode")
   }
 
-  @Test func theLocalHostMatchesWithOrWithoutTheLocalSuffix() {
-    #expect(TabSet.sameMachine("roydemacbook-air.local", "RoydeMacBook-Air.local"))
-    #expect(TabSet.sameMachine("roydemacbook-air", "RoydeMacBook-Air.local"))
-    #expect(!TabSet.sameMachine("gpu.example", "RoydeMacBook-Air.local"))
-    #expect(!TabSet.sameMachine("", "RoydeMacBook-Air.local"))
-    let names = LocalMachine.spellings(kernel: "RoydeAir.kemi.uu.se", bonjour: "roydemacbook-air.local")
-    #expect(LocalMachine.same("roydeair.kemi.uu.se", "roydemacbook-air.local", names: names))
-    #expect(!LocalMachine.same("gpu.example", "roydemacbook-air.local", names: names))
-    #expect(TabSet.sameMachine(LocalMachine.kernelName, ProcessInfo.processInfo.hostName))
+  @Test func thisMacIsItsBonjourNameWhateverNetworkItIsOn() {
+    #expect(LocalMachine.resolve(bonjour: "RoydeMacBook-Air", kernel: "roydeair.kemi.uu.se")
+      == "roydemacbook-air.local")
+    #expect(LocalMachine.resolve(bonjour: nil, kernel: "Studio") == "studio")
+    #expect(LocalMachine.resolve(bonjour: " ", kernel: "Studio") == "studio")
+    #expect(LocalMachine.name.hasSuffix(".local"))
+  }
+
+  @Test func oneComparisonNamesATerminal() {
+    let tab = PluginTerminalIdentity(host: "Arrhenius", terminal: "/dev/pts/3")
+    #expect(tab.matches(PluginTerminalIdentity(host: "arrhenius", terminal: "pts/3")))
+    #expect(!tab.matches(PluginTerminalIdentity(host: "arrhenius1.kemi.uu.se", terminal: "/dev/pts/3")))
+    #expect(!tab.matches(PluginTerminalIdentity(host: "arrhenius", terminal: "/dev/pts/4")))
   }
 }
 #endif

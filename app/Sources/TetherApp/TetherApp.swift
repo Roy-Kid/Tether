@@ -27,34 +27,66 @@ import TmuxPlugin
     }
   }
 
-  /// One window starts as the app. Closing it must not quit: the icon stays
-  /// in the Dock, the window is put away with every tab in it, and a click on
-  /// the icon brings it back (`HideInsteadOfClose`).
+  /// One window starts as the app. Closing it follows When the Window Closes:
+  /// Quit ends the app, Hide puts the window away and leaves the Dock, and
+  /// the menu-bar icon brings it back (`HideInsteadOfClose`).
   ///
   /// The window is made here, not by a scene: SwiftUI's own window cannot
-  /// be the panel the quick terminal is shown as (`WorkspaceWindow`).
+  /// be shown as the quick terminal (`WorkspaceWindow`).
   @MainActor
   final class TetherAppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private(set) var window: WorkspaceWindow?
     private var extras: [ExtraWindow] = []
     private lazy var quitGate = QuitGate()
+    /// Rewrites ⇧⌘letter menu equivalents before AppKit matches them.
+    private var shortcutMonitor: Any?
+    /// Settings, or another workspace window, closing after Hide deferred
+    /// leaving the Dock.
+    private var windowCloseObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
       let window = WorkspaceWindow(hosting: RootHost(model: model))
       self.window = window
       model.openAdditionalWindow = { [weak self] in self?.openAdditionalWindow() }
       let quick = model.tabs.quickTerminal
-      quick.attachMain(window)
-      quick.provide { [weak self] in self?.makeQuickTerminal() ?? NSPanel() }
+      quick.attach(to: window)
       quick.useBindings(model.tabs.keyBindings)
       window.makeKeyAndOrderFront(nil)
+      shortcutMonitor = MenuKeyEquivalents.install { [weak self] event in
+        guard let self else { return event }
+        let tabs = self.model.commandTabs
+        let editing = WorkspaceKeyBindingMonitor.MonitorView.isEditingText(
+          event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder)
+        if let menu = NSApp.mainMenu {
+          MenuKeyEquivalents.normalize(
+            menu, commands: KeyBindingCatalog.commands(registry: self.model.registry, tabs: tabs),
+            editingText: editing, bindings: { tabs.keyBindings.bindings(for: $0) })
+        }
+        if PickerShortcuts.handle(event) { return nil }
+        return MenuKeyEquivalents.dispatch(event, tabs: tabs, registry: self.model.registry)
+      }
       // Launch activated the app before it had a window, which brings no
       // Space forward. Now that it has one, once more — measured: launched
       // behind another app's full-screen Space, the window stayed behind it.
       NSApp.activate(ignoringOtherApps: true)
       UNUserNotificationCenter.current().delegate = self
-      Task { await NotificationPermission.askIfNeeded() }
+      windowCloseObserver = NotificationCenter.default.addObserver(
+        forName: NSWindow.willCloseNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in self?.leaveDockIfTheCloseIsFinished() }
+      }
+    }
+
+    /// Hide waited because another window was open. Once that window goes
+    /// and the main window is still put away, the Dock icon goes with it.
+    private func leaveDockIfTheCloseIsFinished() {
+      guard AppPresence.hiddenByClose, let window, !window.isVisible else { return }
+      guard AppPresence.hidesDock(
+        setting: CloseWindowPreference.chosen, mainVisible: false,
+        otherVisible: AppPresence.anotherWindowIsOpen(besides: window))
+      else { return }
+      AppPresence.leaveDock(for: window)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -67,16 +99,10 @@ import TmuxPlugin
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+      if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor) }
+      if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
       model.tabs.quickTerminal.stop()
       for extra in extras { extra.tabs.closeAll() }
-    }
-
-    /// The quick terminal: a panel of its own showing the main window's
-    /// tabs, so the two share every tab and session and neither moves or
-    /// hides the other. Made the first time it is asked for. Closing it puts
-    /// it away like hiding it does.
-    private func makeQuickTerminal() -> NSWindow {
-      WorkspaceWindow(hosting: RootHost(model: model, primary: false), autosaveName: nil)
     }
 
     /// Another workspace window. It has its own tabs and does not hide in
@@ -112,12 +138,15 @@ import TmuxPlugin
       tabs.closeAll()
     }
 
-    /// The main window, not just any: with Settings open and the main
-    /// window put away, the icon still means the terminals. Answered here,
-    /// so nothing else opens a second window for the same scene. The quick
-    /// terminal is not it either: the Dock is how a person asks for a
-    /// window, the shortcut how they ask for the quick terminal.
+    /// The Dock asks for the main window, at its own frame. The shortcut is
+    /// what summons that same window onto the pointer's display. Answered
+    /// here, so nothing else opens a second window for the same scene.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+      let quick = model.tabs.quickTerminal
+      if quick.isQuick {
+        quick.showAsMainWindow()
+        return false
+      }
       guard let window = HideInsteadOfClose.mainWindow(in: sender) else { return true }
       return !HideInsteadOfClose.reveal(window)
     }
@@ -195,12 +224,86 @@ struct TetherApp: App {
     ) {
       completionHandler([.banner, .sound, .list])
     }
+
+    nonisolated func userNotificationCenter(
+      _ center: UNUserNotificationCenter,
+      didReceive response: UNNotificationResponse,
+      withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+      PluginOpen.receive(response)
+      completionHandler()
+    }
   }
 #endif
 
 extension Notification.Name {
   /// A status row landed on a terminal. The panel gets out of the way.
   static let closePluginPanel = Notification.Name("Tether.closePluginPanel")
+  /// A notification, a Live Activity or an in-page note asked for its plugin.
+  static let openPluginPanel = Notification.Name("Tether.openPluginPanel")
+}
+
+/// A tap arrived before the window could open the plugin, or after it could.
+@MainActor
+enum PluginOpen {
+  static var pending: String?
+
+  static func ask(_ id: String) {
+    guard !id.isEmpty else { return }
+    pending = id
+    NotificationCenter.default.post(
+      name: .openPluginPanel, object: nil, userInfo: [PluginNote.userInfoKey: id])
+  }
+
+  static func id(from note: Notification) -> String? {
+    PluginNote.pluginID(in: note.userInfo ?? [:])
+  }
+
+  nonisolated static func receive(_ response: UNNotificationResponse) {
+    let id = PluginNote.pluginID(in: response.notification.request.content.userInfo)
+    guard let id else { return }
+    Task { @MainActor in ask(id) }
+  }
+}
+
+/// Where a Nerve row lands. A named terminal is that tty. A directory matches
+/// a shell's working directory. An editor link opens its app. A file URL does
+/// not: that launches Finder.
+@MainActor
+enum SessionFocus {
+  static func land(
+    host: String?, terminal: String?, directory: String?, url: String?, sets: [TabSet],
+    claim: (String, String) -> Bool = { _, _ in false }
+  ) -> String {
+    if let terminal {
+      if sets.contains(where: { $0.focusSession(host: host, terminal: terminal, directory: nil) }) {
+        NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+        return "tab"
+      }
+      // A pane's tty is not the shell's. The plugin that owns that pane
+      // brings its tab forward; the shell match above cannot see it.
+      if let host, claim(host, terminal) {
+        NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+        return "tab"
+      }
+    }
+    if sets.contains(where: { $0.focusSession(host: nil, terminal: nil, directory: directory) }) {
+      NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+      return "tab"
+    }
+    #if os(macOS)
+      if let terminal, host?.lowercased() == LocalMachine.name,
+        ExternalTerminal.focus(device: terminal)
+      {
+        NotificationCenter.default.post(name: .closePluginPanel, object: nil)
+        return "tab"
+      }
+      if let raw = url, let link = FocusLink.url(raw), NSWorkspace.shared.open(link) {
+        return "url"
+      }
+    #endif
+    return "none"
+  }
 }
 
 /// An editor a job already named. A directory is not opened here: that launches Finder.
@@ -257,24 +360,34 @@ enum ExternalTerminal {
 struct RootHost: View {
   @Bindable var model: AppModel
   /// Nil on the main window, which keeps `model.tabs`. An additional window
-  /// passes its own set and closes for real.
+  /// passes its own set and closes for real, and must not open, import, or
+  /// sync a second time.
   var ownedSessions: TabSet? = nil
-  /// False for the quick terminal: the main window's tabs in a second
-  /// window, which must not open them, import, or sync a second time.
-  var primary = true
   private var windowTabs: TabSet { ownedSessions ?? model.tabs }
-  /// The window that starts the app: the main window's tabs, in the main window.
-  private var isPrimary: Bool { ownedSessions == nil && primary }
+  /// The window that starts the app.
+  private var isPrimary: Bool { ownedSessions == nil }
   #if os(iOS)
     @Environment(\.scenePhase) private var phase
+    /// Connected sessions. Read here so a stage change schedules the keep-alive.
+    private var liveSessions: Int {
+      windowTabs.tabs.reduce(0) { $0 + ($1.isLive ? 1 : 0) }
+    }
   #endif
 
   var body: some View {
     RootView(store: model.store, tabs: windowTabs, registry: model.registry, secrets: model.secrets,
       plugins: model.plugins, installedPlugins: $model.installedPlugins)
+      .onOpenURL { url in
+        guard let id = PluginReturn.pluginID(from: url) else { return }
+        PluginOpen.ask(id)
+      }
       .task {
         // First, so the keychain is listed before anything on screen could
         // be holding a key it has not saved yet.
+        PluginAPI.deliverSystemNotes { await NotificationPermission.askIfNeeded() }
+        PluginLive.onUnavailable = { [plugins = model.plugins] reason in
+          plugins.noteLocally(title: "Live Activities", body: reason)
+        }
         Task { await model.store.sweepCredentials() }
         if model.installedPlugins == nil {
           let library = InstalledPlugins(
@@ -285,39 +398,14 @@ struct RootHost: View {
             PluginLive.note(
               pluginID: id, name: plugin?.metadata.name ?? item.label, label: item.label, segments: item.segments)
           }
-          library.onFocus = { request in
-            let sets = [model.tabs] + model.additionalSessions
-            if let terminal = request.terminal {
-              if sets.contains(where: { $0.focusSession(host: request.host, terminal: terminal, directory: nil) }) {
-                NotificationCenter.default.post(name: .closePluginPanel, object: nil)
-                return "tab"
-              }
-              #if os(macOS)
-                if let host = request.host,
-                  TabSet.sameMachine(host, LocalMachine.kernelName),
-                  ExternalTerminal.focus(device: terminal)
-                {
-                  NotificationCenter.default.post(name: .closePluginPanel, object: nil)
-                  return "tab"
-                }
-              #endif
-              return "none"
-            }
-            if sets.contains(where: { $0.focusSession(host: nil, terminal: nil, directory: request.directory) }) {
-              NotificationCenter.default.post(name: .closePluginPanel, object: nil)
-              return "tab"
-            }
-            #if os(macOS)
-              if let raw = request.url, let url = FocusLink.url(raw), NSWorkspace.shared.open(url) {
-                return "url"
-              }
-            #endif
-            return "none"
+          library.onFocus = { [model] request in
+            model.land(
+              host: request.host, terminal: request.terminal,
+              directory: request.directory, url: request.url)
           }
           model.installedPlugins = library
           library.discover()
           #if os(iOS)
-            await NotificationPermission.askIfNeeded()
             PluginLive.adopt()
           #endif
           #if os(macOS)
@@ -367,14 +455,14 @@ struct RootHost: View {
         Dialog.notice(notice.title, message: notice.message) { model.imports.notice = nil }
       }
       #if os(macOS)
-        // Attention is the window being key. The overlay is worked in
-        // without the app ever becoming active, so the app's state says nothing.
+        // Attention is this window being key, including while it is summoned
+        // onto another display. Cleared once no window of these tabs is.
         .background {
           WindowState { value in
             if value.key { model.keyTabs = windowTabs }
             else if model.keyTabs === windowTabs {
-              // Two windows can show these tabs. Cleared only once neither
-              // is key, after both have reported (`TabSet.note`).
+              // Cleared only once none of these tabs' windows is key
+              // (`TabSet.note`).
               DispatchQueue.main.async {
                 if windowTabs.keyWindows.isEmpty, model.keyTabs === windowTabs { model.keyTabs = nil }
               }
@@ -385,7 +473,13 @@ struct RootHost: View {
         }
         .environment(\.workspaceHidesOnClose, isPrimary)
       #else
-        .onChange(of: phase) { _, phase in attend(phase == .active) }
+        .onChange(of: phase) { _, phase in
+          attend(phase == .active)
+          SessionKeepAlive.sync(active: phase == .active, liveSessions: liveSessions)
+        }
+        .onChange(of: liveSessions) { _, live in
+          SessionKeepAlive.sync(active: phase == .active, liveSessions: live)
+        }
         .onContinueUserActivity(ASCredentialExchangeActivity) { model.imports.receive($0) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
           for tab in windowTabs.tabs { tab.releaseHistory() }

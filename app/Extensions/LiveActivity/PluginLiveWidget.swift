@@ -27,6 +27,7 @@ struct PluginLiveWidget: Widget {
         Spacer(minLength: 0)
       }
       .padding(.horizontal, 12)
+      .widgetURL(PluginReturn.url(pluginID: context.attributes.pluginID))
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
@@ -49,6 +50,7 @@ struct PluginLiveWidget: Widget {
       } minimal: {
         Circle().fill(Color(liveHex: context.state.tint)).frame(width: 8, height: 8)
       }
+      .widgetURL(PluginReturn.url(pluginID: context.attributes.pluginID))
     }
   }
 

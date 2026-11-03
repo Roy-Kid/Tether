@@ -28,7 +28,9 @@ struct PluginPanelPopover: NSViewRepresentable {
     static let contentWidth: CGFloat = 460
     static let minimumWidth: CGFloat = 280
     static let maximumWidth: CGFloat = 720
-    static let minimumHeight: CGFloat = 140
+    /// A one-row panel is about this tall. A higher floor leaves an empty well
+    /// under the last row, which is the popover's own fill.
+    static let minimumHeight: CGFloat = 72
     static let maximumHeight: CGFloat = 720
     static let initialHeight: CGFloat = 240
     let popover = NSPopover()
@@ -118,10 +120,15 @@ struct PluginPanelPopover: NSViewRepresentable {
         return
       }
       // A SwiftUI panel brings its own frame. Follow that instead of the web page's width.
+      //
+      // `intrinsicContentSize` after the popover has a size is that size.
+      // A short first read, clamped up to the minimum, then reads back as
+      // the minimum: the page stays clipped to an empty well, and the
+      // popover's own fill is all that shows.
       guard let hosting = controller.children.compactMap({ $0 as? NSHostingController<AnyView> }).first else { return }
-      hosting.sizingOptions = .intrinsicContentSize
       hosting.view.layoutSubtreeIfNeeded()
-      let fitted = hosting.view.intrinsicContentSize
+      let proposal = NSSize(width: Self.maximumWidth, height: Self.maximumHeight)
+      let fitted = hosting.sizeThatFits(in: proposal)
       guard fitted.width.isFinite, fitted.height.isFinite, fitted.width > 1, fitted.height > 1 else { return }
       let size = Self.clamp(NSSize(width: fitted.width, height: fitted.height))
       guard abs(popover.contentSize.height - size.height) > 0.5

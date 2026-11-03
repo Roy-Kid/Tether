@@ -21,6 +21,7 @@ embed_live_activity() {
   xcrun --sdk "$sdk" swiftc -parse-as-library -application-extension -O \
     -module-name TetherLiveActivity -target "$target" \
     app/Sources/TetherApp/PluginLiveAttributes.swift \
+    app/Sources/TetherApp/PluginReturn.swift \
     app/Extensions/LiveActivity/PluginLiveWidget.swift \
     -o "$binary" >&2 || { rm -rf "$appex"; return 1; }
 

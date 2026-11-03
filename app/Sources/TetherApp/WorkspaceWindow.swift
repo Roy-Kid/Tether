@@ -2,16 +2,28 @@
   import AppKit
   import SwiftUI
 
-  /// The window a workspace lives in. A panel, because only a panel can be
-  /// shown as an overlay — key without making this the active app, over any
-  /// Space, another app's full-screen one on another display included — and
-  /// the quick terminal is one of these shown that way, over the same tabs
-  /// (`QuickTerminalController`). The ordinary window is another: titled,
-  /// resizable, full-screen capable, remembered across launches.
+  /// The workspace window. A panel, because the quick terminal is this same
+  /// window shown as an overlay — key without making this the active app,
+  /// over any Space, another app's full-screen one on another display
+  /// included — and only a panel can be that (`QuickTerminalController`).
+  /// Ordinarily it is titled, resizable, full-screen capable, and remembered
+  /// across launches.
   class WorkspaceWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     /// An overlay is not the app's main window: the app in front stays as it was.
     override var canBecomeMain: Bool { !styleMask.contains(.nonactivatingPanel) }
+
+    /// A panel does not offer a declined key to the menu bar. SwiftUI's
+    /// ⇧⌘letter items are rewritten just before this runs; without the
+    /// forward, Change Host never arrives while the terminal is first
+    /// responder.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+      if super.performKeyEquivalent(with: event) { return true }
+      // A field keeps the keys the monitor declined. Forwarding them would
+      // run the menu item anyway — ⌘1 would leave the field for a host.
+      if WorkspaceKeyBindingMonitor.MonitorView.isEditingText(firstResponder) { return false }
+      return NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
+    }
 
     /// Hosting `root`, opened at the size a new window opens at, or where
     /// `autosaveName` last remembered it.

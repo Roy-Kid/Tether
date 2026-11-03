@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TetherTestSupport
 import TetherPluginKit
 import TetherUI
 @testable import TetherApp
@@ -8,12 +9,13 @@ import PortsPlugin
 import TmuxPlugin
 #if os(macOS)
 import AppKit
+import SwiftUI
 #endif
 
 /// The shortcut table as a whole: which chord runs what, and where a
 /// plugin's command takes a chord from the window's.
 @MainActor
-@Suite("Shortcut table")
+@Suite("Shortcut table", .appKitEventLoop)
 struct ShortcutTableTests {
   private func isolated(_ body: (KeyBindingStore, UserDefaults) throws -> Void) rethrows {
     let name = "shortcut-table-test.\(UUID())"
@@ -176,6 +178,35 @@ struct ShortcutTableTests {
     #expect(!WorkspaceKeyBindingMonitor.MonitorView.isEditingText(field))
   }
 
+  @Test("a shifted letter menu item matches the chord the terminal receives")
+  func shiftedLetterMenuEquivalent() throws {
+    let target = MenuActionTarget()
+    let menu = NSMenu()
+    let change = NSMenuItem(title: "Change Host…", action: #selector(MenuActionTarget.changeHost(_:)), keyEquivalent: "h")
+    change.keyEquivalentModifierMask = [.command, .shift]
+    change.target = target
+    menu.addItem(change)
+    let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+    redo.keyEquivalentModifierMask = [.command, .shift]
+    menu.addItem(redo)
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+      windowNumber: 0, context: nil, characters: "H", charactersIgnoringModifiers: "H",
+      isARepeat: false, keyCode: 4))
+    let commands = [WorkspaceAction.changeHost.command, WorkspaceAction.zen.command]
+    #expect(!menu.performKeyEquivalent(with: event), "SwiftUI's lowercase form does not match")
+    MenuKeyEquivalents.normalize(menu, commands: commands, editingText: false) { $0.defaults }
+    #expect(menu.performKeyEquivalent(with: event),
+      "equiv \(change.keyEquivalent) shift \(change.keyEquivalentModifierMask.contains(.shift)) fired \(target.fired)")
+    #expect(change.keyEquivalent == "H")
+    #expect(!change.keyEquivalentModifierMask.contains(.shift))
+    #expect(redo.keyEquivalent == "z", "Redo keeps ⇧⌘Z")
+    MenuKeyEquivalents.normalize(menu, commands: commands, editingText: true) { $0.defaults }
+    #expect(change.keyEquivalent == "h")
+    #expect(change.keyEquivalentModifierMask.contains(.shift))
+    #expect(!menu.performKeyEquivalent(with: event), "a text field keeps ⇧⌘H")
+  }
+
   @Test("Shift is a modifier of the chord, not part of its key")
   func shiftedPunctuation() throws {
     func event(_ characters: String, code: UInt16) throws -> NSEvent {
@@ -191,8 +222,134 @@ struct ShortcutTableTests {
             "what was typed stays the first reading, for chords people recorded")
     #expect(KeyBinding.unshifted(try event("Z", code: 6)) == nil, "a letter reads the same either way")
   }
+
+  @Test("⇧⌘H changes host while the terminal view is first responder")
+  func changeHostReachesTerminal() async throws {
+    _ = NSApplication.shared
+    let box = ShortcutHit()
+    let root = ShortcutHost(hit: box)
+    let panel = ForcedKeyPanel(
+      contentRect: NSRect(x: -2400, y: -2400, width: 420, height: 280),
+      styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+      backing: .buffered, defer: false)
+    panel.contentView = NSHostingView(rootView: root)
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    var monitor: WorkspaceKeyBindingMonitor.MonitorView?
+    repeat {
+      panel.contentView?.layoutSubtreeIfNeeded()
+      monitor = panel.contentView.flatMap { findMonitor(in: $0) }
+      if monitor != nil { break }
+      try await Task.sleep(for: .milliseconds(20))
+    } while ContinuousClock.now < deadline
+    let installed = try #require(monitor, "the workspace monitor is in the panel")
+    let capture = try #require(panel.contentView.flatMap { findCapture(in: $0) })
+    panel.makeFirstResponder(capture)
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+      windowNumber: panel.windowNumber, context: nil, characters: "H",
+      charactersIgnoringModifiers: "H", isARepeat: false, keyCode: 4))
+    #expect(installed.route(event) == nil)
+    #expect(box.count == 1)
+    #expect(capture.sawKey == false, "the terminal does not receive the chord")
+
+    let target = MenuActionTarget()
+    let menu = NSMenu()
+    let change = NSMenuItem(title: "Change Host…", action: #selector(MenuActionTarget.changeHost(_:)), keyEquivalent: "h")
+    change.keyEquivalentModifierMask = [.command, .shift]
+    change.target = target
+    menu.addItem(change)
+    let previous = NSApp.mainMenu
+    NSApp.mainMenu = menu
+    defer { NSApp.mainMenu = previous }
+    MenuKeyEquivalents.normalize(menu, commands: [WorkspaceAction.changeHost.command], editingText: false) {
+      $0.defaults
+    }
+    let delivered = panel.performKeyEquivalent(with: event)
+    #expect(delivered && target.fired == 1,
+      "equiv \(change.keyEquivalent) shift \(change.keyEquivalentModifierMask.contains(.shift)) delivered \(delivered) fired \(target.fired)")
+  }
+
+  @Test("the app monitor opens the host picker for ⇧⌘H")
+  func dispatchOpensHostPicker() throws {
+    _ = NSApplication.shared
+    let tabs = TabSet()
+    tabs.menuShortcuts = true
+    let panel = ForcedKeyPanel(
+      contentRect: NSRect(x: -2600, y: -2600, width: 200, height: 120),
+      styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+      windowNumber: panel.windowNumber, context: nil, characters: "H",
+      charactersIgnoringModifiers: "H", isARepeat: false, keyCode: 4))
+    let registry = PluginRegistry()
+    #expect(MenuKeyEquivalents.dispatch(event, tabs: tabs, registry: registry) == nil)
+    #expect(tabs.hostPicker)
+    let field = NSTextView()
+    panel.contentView = field
+    panel.makeFirstResponder(field)
+    tabs.hostPicker = false
+    #expect(MenuKeyEquivalents.dispatch(event, tabs: tabs, registry: registry) === event,
+      "a text field keeps ⇧⌘H")
+    #expect(!tabs.hostPicker)
+  }
   #endif
 }
+
+#if os(macOS)
+private final class ForcedKeyPanel: WorkspaceWindow {
+  override var isKeyWindow: Bool { true }
+  override var isMainWindow: Bool { true }
+}
+
+@MainActor
+private final class ShortcutHit {
+  var count = 0
+}
+
+private struct ShortcutHost: View {
+  let hit: ShortcutHit
+
+  var body: some View {
+    TerminalCapture()
+      .frame(width: 420, height: 280)
+      .background {
+        WorkspaceKeyBindingMonitor(enabled: true) { binding, _, editing in
+          guard binding == KeyBinding("h", [.command, .shift]), !editing else { return false }
+          hit.count += 1
+          return true
+        }
+      }
+  }
+}
+
+private struct TerminalCapture: NSViewRepresentable {
+  func makeNSView(context: Context) -> TerminalCaptureView { TerminalCaptureView() }
+  func updateNSView(_ nsView: TerminalCaptureView, context: Context) {}
+
+  final class TerminalCaptureView: NSView {
+    var sawKey = false
+    override var acceptsFirstResponder: Bool { true }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool { false }
+    override func keyDown(with event: NSEvent) { sawKey = true }
+  }
+}
+
+@MainActor
+private func findMonitor(in view: NSView) -> WorkspaceKeyBindingMonitor.MonitorView? {
+  if let view = view as? WorkspaceKeyBindingMonitor.MonitorView { return view }
+  return view.subviews.lazy.compactMap { findMonitor(in: $0) }.first
+}
+
+@MainActor
+private func findCapture(in view: NSView) -> TerminalCapture.TerminalCaptureView? {
+  if let view = view as? TerminalCapture.TerminalCaptureView { return view }
+  return view.subviews.lazy.compactMap { findCapture(in: $0) }.first
+}
+#endif
 
 @MainActor
 private final class ChordPlugin: TetherPlugin {
@@ -213,5 +370,10 @@ private final class TableTestWindow: NSWindow {
 
 private final class FocusableView: NSView {
   override var acceptsFirstResponder: Bool { true }
+}
+
+private final class MenuActionTarget: NSObject {
+  var fired = 0
+  @objc func changeHost(_ sender: Any?) { fired += 1 }
 }
 #endif

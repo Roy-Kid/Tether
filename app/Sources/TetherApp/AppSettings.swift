@@ -463,6 +463,9 @@ private struct GeneralSettings: View {
   var connections: TabSet?
   @AppStorage(LaunchPreference.key) private var openLocalAtLaunch = LaunchPreference.default
   @AppStorage(LastTabPreference.key) private var closeLastTab = LastTabPreference.default
+  #if os(macOS)
+    @AppStorage(CloseWindowPreference.key) private var closeWindow = CloseWindowPreference.default
+  #endif
 
   var body: some View {
     SwiftUI.Section("On Launch") {
@@ -475,6 +478,18 @@ private struct GeneralSettings: View {
     #if os(macOS)
       if let controller = connections?.quickTerminal {
         QuickTerminalSettings(controller: controller, bindings: connections?.keyBindings)
+      }
+    #endif
+
+    #if os(macOS)
+      SwiftUI.Section("When the Window Closes") {
+        Picker("Close Button", selection: $closeWindow) {
+          Text("Quit").tag(CloseWindowPreference.quit)
+          Text("Hide").tag(CloseWindowPreference.menuBar)
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+        .help("Hide keeps Tether running. The Dock icon goes, and the menu bar icon stays.")
       }
     #endif
 

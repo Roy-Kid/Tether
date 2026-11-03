@@ -2,11 +2,12 @@
   import AppKit
   import Foundation
   import Testing
+  import TetherTestSupport
   import SwiftUI
 
   @testable import TetherApp
 
-  @Suite("Titlebar double-click")
+  @Suite("Titlebar double-click", .appKitEventLoop)
   struct TitlebarDoubleClickTests {
     @Test("the choice in Desktop & Dock decides")
     func followsSetting() {
@@ -51,7 +52,7 @@
   }
 
   @MainActor
-  @Suite("⌘W with nothing open")
+  @Suite("⌘W with nothing open", .appKitEventLoop)
   struct CloseWindowCommandTests {
     @Test("an empty window closes the window, and says so in the menu")
     func emptyClosesWindow() {
@@ -93,14 +94,32 @@
     }
   }
 
+  /// The running app's choice, put back when the test ends. A machine that
+  /// has already chosen Quit must not make these tests quit the runner.
+  @MainActor
+  private func withClosePreference(_ value: String, _ body: () throws -> Void) rethrows {
+    let defaults = UserDefaults.standard
+    let saved = defaults.object(forKey: CloseWindowPreference.key)
+    defaults.set(value, forKey: CloseWindowPreference.key)
+    defer {
+      if let saved {
+        defaults.set(saved, forKey: CloseWindowPreference.key)
+      } else {
+        defaults.removeObject(forKey: CloseWindowPreference.key)
+      }
+    }
+    try body()
+  }
+
   /// The red button, ⌘W and the Dock, through the window the app draws.
   @MainActor
-  @Suite("Closing the main window", .serialized)
+  @Suite("Closing the main window", .serialized, .appKitEventLoop)
   struct MainWindowCloseTests {
-    @Test("the red button puts the window away with its sessions, and the Dock brings it back")
+    @Test("Hide puts the window away with its sessions, and showing it brings it back")
     func closeHides() throws {
-      let hosted = try HostedWorkspace(terminals: 1)
-      defer { hosted.tearDown() }
+      try withClosePreference(CloseWindowPreference.menuBar) {
+        let hosted = try HostedWorkspace(terminals: 1)
+        defer { hosted.tearDown() }
       let window = hosted.window
       #expect(window.delegate is HideInsteadOfClose)
 
@@ -114,10 +133,12 @@
       #expect(HideInsteadOfClose.reveal(window))
       #expect(window.isVisible)
       #expect(!HideInsteadOfClose.reveal(window), "a window already in front is left alone")
+      }
     }
 
     @Test("⌘W in an empty window closes it the way the red button does")
     func commandClosesEmptyWindow() throws {
+      try withClosePreference(CloseWindowPreference.menuBar) {
       let hosted = try HostedWorkspace(terminals: 0)
       defer { hosted.tearDown() }
       #expect(hosted.window.isVisible)
@@ -126,22 +147,55 @@
       HostedWorkspace.settle(0.25)
       #expect(!hosted.window.isVisible)
       #expect(hosted.window.miniaturizes == 0)
+      }
     }
 
     @Test("⇧⌘W puts the window away with its terminals still open")
     func commandClosesWindow() throws {
+      try withClosePreference(CloseWindowPreference.menuBar) {
       let hosted = try HostedWorkspace(terminals: 1)
       defer { hosted.tearDown() }
       hosted.tabs.perform(.closeWindow)
       HostedWorkspace.settle(0.25)
       #expect(!hosted.window.isVisible)
       #expect(hosted.tabs.tabs.count == 1)
+      }
+    }
+
+    @Test("Quit leaves the window up until the app itself quits")
+    func quitLeavesTheWindow() throws {
+      try withClosePreference(CloseWindowPreference.quit) {
+        let hosted = try HostedWorkspace(terminals: 1)
+        defer { hosted.tearDown() }
+        hosted.window.performClose(nil)
+        HostedWorkspace.settle(0.25)
+        #expect(hosted.window.isVisible)
+        #expect(hosted.tabs.tabs.first?.isLive == true)
+        #expect(!AppPresence.isTether)
+      }
+    }
+
+    @Test("Hide leaves the Dock only when nothing else is showing")
+    func dockFollowsTheSetting() {
+      #expect(CloseWindowPreference.default == CloseWindowPreference.menuBar)
+      #expect(MainWindowClose.action(fullScreen: false, setting: CloseWindowPreference.quit) == .quit)
+      #expect(MainWindowClose.action(fullScreen: true, setting: CloseWindowPreference.quit) == .quit)
+      #expect(MainWindowClose.action(fullScreen: false, setting: CloseWindowPreference.menuBar) == .hide)
+      #expect(MainWindowClose.action(fullScreen: true, setting: "elsewhere") == .leaveFullScreenThenHide)
+      #expect(AppPresence.hidesDock(setting: CloseWindowPreference.menuBar, mainVisible: false, otherVisible: false))
+      #expect(!AppPresence.hidesDock(setting: CloseWindowPreference.menuBar, mainVisible: false, otherVisible: true))
+      #expect(!AppPresence.hidesDock(setting: CloseWindowPreference.quit, mainVisible: false, otherVisible: false))
+      #expect(!AppPresence.hidesDock(setting: CloseWindowPreference.menuBar, mainVisible: true, otherVisible: false))
+      #expect(QuickTerminalController.wantsMenuBarIcon(enabled: false, preference: false, holdingForHide: true, hasWindow: true))
+      #expect(!QuickTerminalController.wantsMenuBarIcon(enabled: true, preference: false, holdingForHide: false, hasWindow: true))
+      #expect(QuickTerminalController.wantsMenuBarIcon(enabled: true, preference: true, holdingForHide: false, hasWindow: true))
+      #expect(!QuickTerminalController.wantsMenuBarIcon(enabled: true, preference: true, holdingForHide: true, hasWindow: false))
     }
   }
 #endif
 
 #if os(macOS)
-  @Suite("Workspace background preferences")
+  @Suite("Workspace background preferences", .appKitEventLoop)
   struct WorkspaceAppearanceTests {
     @Test("glass is opt-in and accessibility always restores a solid window")
     func accessibility() {

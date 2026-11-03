@@ -1,5 +1,13 @@
 // swift-tools-version: 6.2
+import Foundation
 import PackageDescription
+
+// Nerve's own panel, on a Mac with Nerve checked out beside Tether. CI and the
+// commit gate (`TETHER_HERMETIC`) have this repository alone, so the app
+// links nothing from outside it there, and is checked that way.
+let nervePath = "../../nerve/surfaces/tether"
+let linksNerve = Context.environment["TETHER_HERMETIC"] == nil
+    && FileManager.default.fileExists(atPath: Context.packageDirectory + "/" + nervePath)
 
 // The app is a *consumer* of the SDK, not part of it. It lives in its own
 // package and reaches Tether the way anyone else would — by depending on the
@@ -15,9 +23,7 @@ let package = Package(
         .package(path: "Plugins/Tmux"),
         .package(path: "Plugins/Files"),
         .package(path: "Plugins/Ports"),
-        // macOS only: Nerve's own panel, from the sibling checkout.
-        .package(path: "../../nerve/surfaces/tether"),
-    ],
+    ] + (linksNerve ? [.package(path: nervePath)] : []),
     targets: [
         .executableTarget(
             name: "TetherApp",
@@ -29,9 +35,15 @@ let package = Package(
                 .product(name: "TmuxPlugin", package: "Tmux"),
                 .product(name: "FilesPlugin", package: "Files"),
                 .product(name: "PortsPlugin", package: "Ports"),
-                .product(name: "NervePlugin", package: "tether", condition: .when(platforms: [.macOS])),
-            ]
+            ] + (linksNerve
+                ? [.product(name: "NervePlugin", package: "tether", condition: .when(platforms: [.macOS]))]
+                : []),
+            // Said by the manifest, not guessed from a module left in `.build`
+            // by a build that did link it.
+            swiftSettings: linksNerve ? [.define("TETHER_NERVE", .when(platforms: [.macOS]))] : []
         ),
-        .testTarget(name: "TetherAppTests", dependencies: ["TetherApp"])
+        .testTarget(name: "TetherAppTests", dependencies: [
+            "TetherApp", .product(name: "TetherTestSupport", package: "TetherFrontend"),
+        ])
     ]
 )

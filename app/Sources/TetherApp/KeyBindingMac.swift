@@ -2,6 +2,7 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
+import TetherPluginKit
 import TetherUI
 
 extension KeyBinding {
@@ -159,6 +160,111 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
       if let monitor { NSEvent.removeMonitor(monitor) }
       monitor = nil
     }
+  }
+}
+
+/// SwiftUI stores ⇧⌘H as `"h"` plus Shift. AppKit matches that chord only
+/// when the letter is uppercase and Shift is not in the mask, so the menu
+/// never fires it while the terminal is first responder.
+///
+/// Each key is rewritten before the menu looks. While a text field is
+/// focused, only the palette and the closes stay in that form; every other
+/// chord is put back. Redo is never rewritten, so ⇧⌘Z there stays Redo.
+enum MenuKeyEquivalents {
+  private static let systemActions: Set<String> = [
+    "undo:", "redo:", "cut:", "copy:", "paste:", "pasteAsPlainText:", "selectAll:",
+    "hide:", "hideOtherApplications:", "terminate:", "performMiniaturize:",
+    "performClose:", "performZoom:",
+  ]
+
+  static func install(_ handle: @escaping (NSEvent) -> NSEvent?) -> Any? {
+    NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      handle(event)
+    }
+  }
+
+  /// Runs a workspace chord from the app monitor. The panel never delivers
+  /// that chord to the menu bar, and the view monitor is not the only copy
+  /// of these windows. A plugin command is left for the view monitor, which
+  /// knows the items the window is offering.
+  @MainActor
+  static func dispatch(_ event: NSEvent, tabs: TabSet, registry: PluginRegistry) -> NSEvent? {
+    guard tabs.menuShortcuts == true,
+      let window = event.window, window is WorkspaceWindow, window.isKeyWindow,
+      window.attachedSheet == nil, NSApp.modalWindow == nil,
+      (window.firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
+      let binding = KeyBinding(event: event)
+    else { return event }
+    let editing = WorkspaceKeyBindingMonitor.MonitorView.isEditingText(window.firstResponder)
+    let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
+    for chord in [binding, KeyBinding.unshifted(event)].compactMap({ $0 }) {
+      guard let id = tabs.keyBindings.command(for: chord, in: definitions, offered: tabs.offeredCommandIDs)
+      else { continue }
+      guard let action = WorkspaceAction(rawValue: id) else { return event }
+      guard !editing || WorkspaceAction.answersWhileEditingText(id) else { return event }
+      if !event.isARepeat { tabs.perform(action) }
+      return nil
+    }
+    return event
+  }
+
+  static func normalize(
+    _ menu: NSMenu, commands: [KeyBindingCommand], editingText: Bool,
+    bindings: (KeyBindingCommand) -> [KeyBinding?]
+  ) {
+    var index: [KeyBinding: KeyBindingCommand] = [:]
+    for command in commands {
+      for binding in bindings(command).compactMap({ $0 })
+      where binding.modifiers.contains(.shift) && binding.key.count == 1 && binding.key.first?.isLetter == true {
+        index[binding] = command
+      }
+    }
+    walk(menu, index: index, editingText: editingText)
+  }
+
+  private static func walk(_ menu: NSMenu, index: [KeyBinding: KeyBindingCommand], editingText: Bool) {
+    for item in menu.items {
+      if let submenu = item.submenu { walk(submenu, index: index, editingText: editingText) }
+      guard item.action.map({ !systemActions.contains(NSStringFromSelector($0)) }) ?? true,
+        let chord = chord(of: item), let command = index[chord]
+      else { continue }
+      let allow = !editingText || WorkspaceAction.answersWhileEditingText(command.id)
+      let letter = allow ? chord.key.uppercased() : chord.key
+      guard letter.count == 1 else { continue }
+      var modifiers = chord.modifiers
+      if allow { modifiers.remove(.shift) }
+      let mask = eventMask(modifiers)
+      let same = item.keyEquivalent == letter
+        && item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == mask
+      if !same {
+        item.keyEquivalent = letter
+        item.keyEquivalentModifierMask = mask
+      }
+      if allow { item.allowsAutomaticKeyEquivalentLocalization = false }
+    }
+  }
+
+  /// `"h"` plus Shift and `"H"` plus Command are one chord.
+  private static func chord(of item: NSMenuItem) -> KeyBinding? {
+    let raw = item.keyEquivalent
+    guard raw.count == 1, let character = raw.first, character.isLetter else { return nil }
+    var modifiers: KeyModifiers = []
+    let mask = item.keyEquivalentModifierMask
+    if mask.contains(.command) { modifiers.insert(.command) }
+    if mask.contains(.option) { modifiers.insert(.option) }
+    if mask.contains(.control) { modifiers.insert(.control) }
+    if mask.contains(.shift) || character.isUppercase { modifiers.insert(.shift) }
+    guard modifiers.contains(.shift) else { return nil }
+    return KeyBinding(String(character), modifiers)
+  }
+
+  private static func eventMask(_ modifiers: KeyModifiers) -> NSEvent.ModifierFlags {
+    var mask: NSEvent.ModifierFlags = []
+    if modifiers.contains(.command) { mask.insert(.command) }
+    if modifiers.contains(.option) { mask.insert(.option) }
+    if modifiers.contains(.control) { mask.insert(.control) }
+    if modifiers.contains(.shift) { mask.insert(.shift) }
+    return mask
   }
 }
 

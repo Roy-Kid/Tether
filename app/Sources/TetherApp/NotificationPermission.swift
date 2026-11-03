@@ -6,27 +6,29 @@
 import TetherUI
 import UserNotifications
 
-/// First launch asks for notification permission. After a denial the system
-/// will not ask again, so the prompt opens Settings instead.
+/// The first time a plugin notifies, ask for permission. After a denial the
+/// system will not ask again, so the prompt opens Settings instead.
 enum NotificationPermission {
   private static let explainedKey = "explainedNotificationPermission"
 
   @MainActor
-  static func askIfNeeded() async {
+  static func askIfNeeded() async -> Bool {
     let center = UNUserNotificationCenter.current()
     let settings = await center.notificationSettings()
     switch settings.authorizationStatus {
     case .authorized, .provisional, .ephemeral:
-      return
+      return true
     case .notDetermined:
-      _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+      let allowed = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) == true
       UserDefaults.standard.set(true, forKey: explainedKey)
+      return allowed
     case .denied:
-      guard !UserDefaults.standard.bool(forKey: explainedKey) else { return }
+      guard !UserDefaults.standard.bool(forKey: explainedKey) else { return false }
       await offerSettings()
       UserDefaults.standard.set(true, forKey: explainedKey)
+      return false
     @unknown default:
-      return
+      return false
     }
   }
 
@@ -72,6 +74,15 @@ enum NotificationPermission {
       withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
       completionHandler([.banner, .sound, .list])
+    }
+
+    nonisolated func userNotificationCenter(
+      _ center: UNUserNotificationCenter,
+      didReceive response: UNNotificationResponse,
+      withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+      PluginOpen.receive(response)
+      completionHandler()
     }
   }
 #endif

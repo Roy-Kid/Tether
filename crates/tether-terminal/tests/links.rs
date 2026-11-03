@@ -144,6 +144,45 @@ fn a_short_line_beside_a_vertical_rule_stays_on_its_own_row() {
 }
 
 #[test]
+fn a_path_broken_by_newlines_in_the_middle_of_the_name_is_one_path() {
+    // As printed: a newline after the directory, and another after a
+    // hyphen in the id. On a wide screen those are real newlines. On a
+    // narrow one the middle line wraps as well.
+    let path = "/home/jicli594/.grok/sessions/%2Fnoibackup%2Fproj%2Fdisk%2Fteoroo%2Fpersonal%2Fjicli594%2Fwork%2Fmolcrafts%2Fmolab/01a186d8-8add-7d40-9c0b-2c0b7908a1d1/images/tg-fit.png";
+    let broken = path.replacen("/sessions/", "/sessions/\r\n", 1).replacen("9c0b-", "9c0b-\r\n", 1);
+    let wide = terminal(160, 6, &format!("{broken}\r\n"));
+    for (row, column) in [(0, 1), (1, 4), (2, 3)] {
+        assert_eq!(path_at(&wide, row, column).unwrap().0, path, "row {row}");
+    }
+    let narrow = terminal(40, 8, &format!("{broken}\r\n"));
+    assert_eq!(path_at(&narrow, 0, 1).unwrap().0, path, "a wrapped middle row");
+    assert_eq!(path_at(&narrow, 3, 1).unwrap().0, path, "inside the wrap");
+
+    let link = wide.link_at(Position::new(2, 3)).unwrap();
+    let spans: Vec<(u16, u16, u16)> =
+        link.spans.iter().map(|span| (span.row, span.start, span.end)).collect();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0].0, 0);
+    assert_eq!(spans[2].0, 2);
+}
+
+#[test]
+fn a_hyphen_at_the_end_of_a_line_keeps_the_path_going() {
+    let terminal = terminal(40, 4, "see /tmp/foo-\r\nbar.txt later\r\n");
+    assert_eq!(path_at(&terminal, 0, 8).unwrap().0, "/tmp/foo-bar.txt");
+    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, "/tmp/foo-bar.txt");
+}
+
+#[test]
+fn a_new_path_on_the_next_line_stays_its_own() {
+    let terminal = terminal(40, 6, "/usr/bin/\r\n/usr/local/bin\r\nsrc/a.rs\r\nsrc/b.rs\r\n");
+    assert_eq!(path_at(&terminal, 0, 1).unwrap().0, "/usr/bin/");
+    assert_eq!(path_at(&terminal, 1, 1).unwrap().0, "/usr/local/bin");
+    assert_eq!(path_at(&terminal, 2, 1).unwrap().0, "src/a.rs");
+    assert_eq!(path_at(&terminal, 3, 1).unwrap().0, "src/b.rs");
+}
+
+#[test]
 fn a_line_that_merely_ends_at_the_edge_is_not_joined_to_the_next() {
     // Exactly twenty characters, then a newline: two lines, not one.
     let terminal = terminal(20, 4, "aaaaaaaaaa/bbbbbbbbb\r\nccc/ddd.txt\r\n");

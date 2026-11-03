@@ -21,6 +21,7 @@ struct WorkspaceCommands: Commands {
       #if os(macOS)
         Button("New Window") { model.openAdditionalWindow?() }
           .keyboardShortcut("n", modifiers: [.command, .shift])
+        command(.openPath)
       #endif
       command(.newTab)
       command(.renameTab)
@@ -71,6 +72,13 @@ struct WorkspaceCommands: Commands {
     CommandMenu("Host") {
       command(.changeHost)
       command(.manageHosts)
+      let switches = WorkspaceAction.hostSwitches.prefix(model.store.listed.count)
+      if !switches.isEmpty {
+        Divider()
+        ForEach(Array(switches), id: \.rawValue) { action in
+          command(action)
+        }
+      }
     }
     CommandMenu("Terminal") {
       command(.newTerminal)
@@ -80,12 +88,14 @@ struct WorkspaceCommands: Commands {
       Divider()
       command(.previousTerminal)
       command(.nextTerminal)
-      Divider()
-      command(.splitLeft)
-      command(.splitRight)
-      command(.splitUp)
-      command(.splitDown)
-      command(.joinGroups)
+      #if os(macOS)
+        Divider()
+        command(.splitLeft)
+        command(.splitRight)
+        command(.splitUp)
+        command(.splitDown)
+        command(.joinGroups)
+      #endif
     }
     CommandMenu("Plugins") {
       // One submenu per tab plugin, under its own name. The menu bar can
@@ -123,10 +133,18 @@ struct WorkspaceCommands: Commands {
   }
 
   private func command(_ action: WorkspaceAction) -> some View {
-    Button(tabs.title(for: action)) { tabs.perform(action) }
+    Button(label(for: action)) { tabs.perform(action) }
       .disabled(!tabs.canPerform(action))
       .keyboardShortcut(tabs.menuShortcut(for: action)?.keyboardShortcut)
       .disabled(shortcutsEnabled != true)
+  }
+
+  /// ⌘1…⌘4 show the host they open. Every other command keeps its own name.
+  private func label(for action: WorkspaceAction) -> String {
+    guard let slot = action.hostSlot, model.store.listed.indices.contains(slot) else {
+      return tabs.title(for: action)
+    }
+    return model.store.listed[slot].displayName
   }
 }
 
