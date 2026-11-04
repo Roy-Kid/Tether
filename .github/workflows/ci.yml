@@ -5,7 +5,7 @@
 name: CI
 
 on:
-  # `scripts/ship.py` pushes a commit to `ci/<sha>` and promotes it to dev or
+  # `scripts/ship.py` pushes a commit to `ci/check` and promotes it to dev or
   # master only once every workflow passed there; the pre-push hook refuses
   # anything else. master is checked again as the release branch.
   push:

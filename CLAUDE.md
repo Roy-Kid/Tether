@@ -85,7 +85,7 @@ Install the repository-local commit gate once per clone with
 host-platform checks as CI. See `docs/commit-checks.md` for tool requirements,
 the audited failure history and cross-platform coverage. Run
 `python scripts/check.py` to check the working tree before staging. Push with
-`python scripts/ship.py` (dev) or `--to master`: it runs CI on `ci/<sha>` and
+`python scripts/ship.py` (dev) or `--to master`: it runs CI on `ci/check` and
 promotes the commit only once every workflow passed; a plain push to dev or
 master is refused by the pre-push hook. Each CI job is one
 `check.py --job <name>`, the same function a commit runs.

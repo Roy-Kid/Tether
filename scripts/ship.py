@@ -1,7 +1,7 @@
 """Push a commit to dev or master only after every workflow passed on it.
 
 The commit gate runs every CI job this host can. The rest — Windows, on a
-Mac — can only run on CI, so a commit goes to `ci/<sha>` first, and reaches
+Mac — can only run on CI, so a commit goes to `ci/check` first, and reaches
 the branch it was meant for when every workflow there is green:
 
     python scripts/ship.py              # HEAD to dev
@@ -80,25 +80,26 @@ def failures(run_id: int) -> str:
     return "\n".join(line for line in log.splitlines() if wanted.search(line))[-4000:]
 
 
+# One staging branch, kept: a workflow restores only caches saved on its own
+# branch or the default one, so a branch per commit always ran cold.
+STAGING = "ci/check"
+
+
 def ship(target: str) -> int:
     sha = git("rev-parse", "HEAD")
-    staging = f"ci/{sha[:12]}"
     if not verdict(sha)[0]:
-        print(f"Checking {sha[:12]} on {staging} …", flush=True)
-        subprocess.run(["git", "push", "--force", "origin", f"{sha}:refs/heads/{staging}"], cwd=ROOT, check=True)
+        print(f"Checking {sha[:12]} on {STAGING} …", flush=True)
+        subprocess.run(["git", "push", "--force", "origin", f"{sha}:refs/heads/{STAGING}"], cwd=ROOT, check=True)
         deadline = time.monotonic() + TIMEOUT_SECONDS
-        try:
-            while True:
-                found = runs(sha)
-                done = all(found.get(name, {}).get("status") == "completed" for name in workflows())
-                if done:
-                    break
-                if time.monotonic() > deadline:
-                    print("Timed out waiting for CI.", file=sys.stderr)
-                    return 1
-                time.sleep(POLL_SECONDS)
-        finally:
-            subprocess.run(["git", "push", "--quiet", "origin", "--delete", staging], cwd=ROOT)
+        while True:
+            found = runs(sha)
+            done = all(found.get(name, {}).get("status") == "completed" for name in workflows())
+            if done:
+                break
+            if time.monotonic() > deadline:
+                print("Timed out waiting for CI.", file=sys.stderr)
+                return 1
+            time.sleep(POLL_SECONDS)
         green, missing = verdict(sha)
         if not green:
             for name in missing:

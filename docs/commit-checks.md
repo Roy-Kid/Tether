@@ -24,7 +24,7 @@ nightly run sets `TETHER_FUZZ_SECONDS=600`). `--job` runs one job.
 
 **Nothing reaches dev or master untried.** The one job a Mac cannot run is
 `windows`. `python scripts/ship.py` (or `--to master`) pushes HEAD to
-`ci/<sha>`, waits for every workflow on that commit, and pushes the same commit
+`ci/check`, waits for every workflow on that commit, and pushes the same commit
 to the branch only when all of them passed; on a failure it prints the failing
 lines and the commit stays where it was. The pre-push hook refuses a push to
 dev or master of any commit without a green run of every workflow, so a plain
