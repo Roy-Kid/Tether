@@ -125,6 +125,9 @@ such in the test's stdout.
 
 > Superseded by ADR 0021. Apple no longer keeps a Canvas or CoreGraphics painter. The public surface is the screen frame and the shared GPU renderer, not a draw list a consumer paints itself. The glyphon choice in the Decision section stands.
 
+> Since 2026-11: `tether-render`'s cost test and `RenderCostTests` are gone;
+> `frame-cost` is the remaining measurement.
+
 - `cargo run --release -p tether-ffi --bin frame-cost` stays as the
   frame-production half. `tether-render`'s cost test is the drawing half,
   the way `RenderCostTests` was on Swift.

@@ -2,7 +2,7 @@
 
   <!--
     The Windows host. A consumer of the Tether façade like any other
-    (Decisions/0004: the app is not privileged). WinUI 3 / Windows App SDK is
+    (the app is not privileged). WinUI 3 / Windows App SDK is
     the Win11-native view shell; the terminal is `Tether.TerminalSurface`.
   -->
   <PropertyGroup>

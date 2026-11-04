@@ -15,57 +15,57 @@ Run `python scripts/check.py` manually to validate the working tree. This can
 take several minutes because it runs builds and tests.
 
 **One definition of every check.** `check.py` has one function per CI job —
-`linux`, `apple`, `windows`, `fuzz` — and a workflow job is setup steps and a
+`linux`, `apple`, `windows`, `windows-tests`, `fuzz` — and a workflow job is setup steps and a
 single `python scripts/check.py --job <name>`, nothing else; `test-check.py`
 fails if a workflow runs anything outside the gate, or if the workflows' jobs
 and the gate's differ. A commit on a Mac runs `linux`, `apple` and `fuzz`
 (the push-length fuzz: every recorded crash, then ten seconds a target; the
 nightly run sets `TETHER_FUZZ_SECONDS=600`). `--job` runs one job.
 
-**Nothing reaches dev or master untried.** The one job a Mac cannot run is
-`windows`. `python scripts/ship.py` (or `--to master`) pushes HEAD to
-`ci/check`, waits for every workflow on that commit, and pushes the same commit
-to the branch only when all of them passed; on a failure it prints the failing
-lines and the commit stays where it was. The pre-push hook refuses a push to
-dev or master of any commit without a green run of every workflow, so a plain
-`git push` there is refused with the command to use. CI runs on `ci/**`,
-master, pull requests and the nightly schedule — not again on dev.
+**A push runs only what a Mac cannot.** Commits go straight to dev and
+master; there is no staging branch. A push to either runs `windows-tests`
+(`windows.yml`): the workspace's tests and the .NET suites on Windows, no lint.
+The whole gate — `linux`, `apple`, `fuzz` and the full `windows` — runs in
+`ci.yml` each night on master and on demand.
 
 | Previous failure | Gate that catches recurrence |
 | --- | --- |
 | Rust formatting and lint errors | `cargo fmt --check`; workspace/all-targets Clippy with warnings denied |
 | Linux-only local-shell initializer mismatch | Full workspace/all-targets build and tests on Linux CI |
 | Missing Linux CJK fonts | Fontconfig language check before glyph shaping tests; CI installs fonts |
-| Swift modifier Hashable and missing frame mouse argument | All six Swift package test builds on macOS |
+| Swift modifier Hashable and missing frame mouse argument | All seven Swift package test builds on macOS |
 | CRLF paste incorrectly treated as one Character | Existing Swift paste regression; Windows paste tests |
-| Asynchronous file close checked after a fixed sleep (again on a loaded `xcode-27` runner) | The close regression waits for the close, up to five seconds; Files tests plus two extra executions of it |
-| PTY foreground/background cleanup and padded ps commands | App tests plus two extra ShellActivity executions |
+| Asynchronous file close checked after a fixed sleep (again on a loaded `xcode-27` runner) | The close regression waits for the close, up to five seconds |
+| An edited copy's state read the instant its bytes landed, before the main actor marked it synced | The editing tests wait for the state as well as the bytes |
+| PTY foreground/background cleanup and padded ps commands | App tests |
 | Broken directory/project references | XML input validation and real Windows build |
 | Release packaging adds loose files | Real Release publish; exactly one EXE required |
 | Hook returns success after a failed check | Negative controls including a real commit in a disposable Git repository |
 | Test compiled by Xcode 27.1 here, "unable to type-check in reasonable time" on CI's Xcode 26.6 | `.xcode-version`: CI selects it on the `xcode-27` image; the Apple gate refuses any other Xcode |
 | Lint on CI's newer `stable` Rust, absent from this machine's | `rust-toolchain.toml` names an exact version; CI runs `rustup toolchain install` from it |
 | App resolved a sibling `../nerve` checkout that CI does not have | Apple gate builds with `TETHER_HERMETIC=1`; the manifest links Nerve only outside it |
-| A Mac-only test trait in a suite shared with iOS failed only on CI's iPhone run | The Apple gate builds the frontend's tests for the iOS simulator (`build-for-testing`) |
+| A Mac-only test trait in a suite shared with iOS failed only on CI's iPhone run | The Apple gate runs the frontend's tests on an iOS simulator (`xcodebuild test`) |
 | The hook's iOS link used the macOS SDK: `/usr/bin/git` exports `SDKROOT` to the hooks it runs | The gate drops an inherited `SDKROOT` before building; each target finds its own SDK |
-| Every failure surfaced after merge, then again each night on the same commit | CI runs on pushes to `dev` as well as `master` |
+| Two gates in one checkout, and a CI simulator run, sat over an hour with nothing printed | `check.py` takes a lock, so a second gate refuses; a command silent for ten minutes is killed and fails; every CI job has a time limit |
+| Every CI run built from cold: a cache is read only on its own branch or the default one | The Rust cache key follows `build-xcframework.sh`, so it is saved again when the build changes |
 | App and Files test processes exited 0 mid-run — no summary, a failure already printed — and the gate passed them | The gate judges each `swift test` by its report: any `✘`, or a run that never prints its summary, blocks. UI suites declare `.appKitEventLoop` |
 
 Windows commits run common source/boundary checks, Rust format, Clippy, full
-build/tests, native Debug/Release builds, WinUI build, four application regression
+build/tests, a native release build, WinUI build, four application regression
 executables, both .NET test suites, and single-file publishing. They require
 Rust, .NET 10, PowerShell 7 and the pinned `uniffi-bindgen-cs` generator used by
 CI. Generated bindings are compared in a temporary directory without rewriting
 the index or source. PowerShell syntax is parsed before building. Warnings fail
 the WinUI build and release publish.
 
-macOS commits run common checks, build the Apple XCFramework (device and
-simulator included), and execute all Swift suites and the additional scheduling
-runs. They require the appropriate Xcode SDK and Rust Apple targets.
+macOS commits run common checks, build a debug Apple XCFramework (the Mac and
+simulator slices: no check loads a device one), and execute all Swift suites,
+the app's iOS simulator build and the frontend's tests on an iOS simulator,
+which boots while the rest builds. They require the appropriate Xcode SDK and
+Rust Apple targets. What ships is built in release by `build-xcframework.sh`.
 The Files browser UI suites share one serialized parent because windows,
 clipboard contents and the plugin dialog gateway are process-wide state.
-The Apple gate repeats this entire UI group twice after the full package run;
-an initial failure still blocks immediately. The installer regression invokes
+The installer regression invokes
 the real installer in a disposable repository and verifies that a failing
 checker prevents an actual commit.
 
@@ -75,9 +75,9 @@ Hook files alone do not enable a hook. Verify installation with
 Rerun the installer if either setting is absent; Git does not transfer local
 hook configuration when cloning a repository.
 
-Linux commits run common checks and all fuzz targets for 60 seconds each,
-including replay of stored regressions. They require CJK fonts, nightly Rust,
-and cargo-fuzz. The scheduled CI fuzz run retains its longer 600-second budget.
+Linux commits run common checks. The fuzz job replays stored regressions, then
+runs every target for ten seconds (`TETHER_FUZZ_SECONDS`); the nightly run
+gives each 600. They require CJK fonts, nightly Rust, and cargo-fuzz.
 
 A local pass counts only on CI's compilers and inputs. Both compilers are
 pinned in the repository: `rust-toolchain.toml` (cargo obeys it here and on
@@ -104,12 +104,11 @@ status of 0 on trust: a `✘` or a missing summary blocks.
 The CI workflows use these same entry points on Windows, Linux and macOS.
 The common checks include renderer-evidence parser regressions. Windows checks
 also lint the opt-in render-diagnostics feature and build the HWND evaluation
-harness; these compile/fixture checks do not run GPU benchmarks. Layout timing tests are
-manual and ignored by default. Hardware performance is informational and never
-a CI gate. See
+harness; these compile checks do not run GPU benchmarks. Hardware performance
+is informational and never a CI gate. See
 [renderer evaluation](renderer-evaluation.md) for those separate measurements.
 Windows cannot compile Apple SDK code, and macOS cannot build WinUI. A local
-pass therefore is not a cross-platform pass. Retain all three CI jobs as required
+pass therefore is not a cross-platform pass. Retain all four CI jobs as required
 merge checks; hooks are clone-local and Git permits bypassing them. No finite
 test suite can guarantee that every future bug or timing failure is caught.
 

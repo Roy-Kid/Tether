@@ -9,6 +9,5 @@ subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-c
                 str(root / "scripts/check-requirements.txt")], cwd=root, check=True)
 subprocess.run(["git", "config", "--local", "core.hooksPath", ".githooks"], cwd=root, check=True)
 subprocess.run(["git", "config", "--local", "tether.python", sys.executable], cwd=root, check=True)
-for hook in ("pre-commit", "pre-push"):
-    (root / ".githooks" / hook).chmod(0o755)
-print("Installed the commit gate and the pre-push check for this clone.")
+(root / ".githooks/pre-commit").chmod(0o755)
+print("Installed the commit gate for this clone.")

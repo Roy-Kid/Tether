@@ -393,7 +393,7 @@ public sealed class SessionModel : IAsyncDisposable
         catch (TetherException.SessionEnded) { }
     }
 
-    /// <summary>What the text at a cell names, if anything (Decisions/0015).</summary>
+    /// <summary>What the text at a cell names, if anything.</summary>
     public TerminalLink? LinkAt(ushort row, ushort column) => _session?.LinkAt(row, column);
 
     /// <summary>

@@ -2,7 +2,7 @@
 //
 // Mirrors the Swift façade's naming rather than UniFFI's generated names, and
 // keeps every UniFFI type `internal` (spec §8: no UI toolkit types here, and
-// Decisions/0004: generated symbols must not leak). A consumer that needs a
+// generated symbols must not leak). A consumer that needs a
 // type that is not exported here has found a façade gap, not a reason to
 // reach into `Generated/`.
 
@@ -249,7 +249,7 @@ public readonly record struct Cell(int Column, int Row);
 /// <summary>Where a link is drawn on one screen row. <c>End</c> is one past the last column.</summary>
 public sealed record LinkSpan(int Row, int Start, int End);
 
-/// <summary>What a link points at. A path is shape, not truth (Decisions/0015).</summary>
+/// <summary>What a link points at. A path is shape, not truth.</summary>
 public abstract record LinkKind
 {
     /// <summary>The URI a program attached with <c>OSC 8</c>, exactly as sent.</summary>
@@ -265,7 +265,7 @@ public abstract record LinkKind
 /// <summary>Something on screen that names a place, and where it is drawn.</summary>
 public sealed record TerminalLink(string Text, LinkKind Kind, IReadOnlyList<LinkSpan> Spans);
 
-/// <summary>What the pointer is doing (spec §14 carries selection; Decisions/0015 adds link underlines).</summary>
+/// <summary>What the pointer is doing (spec §14 carries selection; link underlines too).</summary>
 public sealed record Overlay(
     Selection? Selection,
     IReadOnlyList<LinkUnderline> LinkUnderlines,
@@ -282,7 +282,7 @@ public sealed record Overlay(
 /// <summary>A drag selection, as the two cells the drag started and ended on.</summary>
 public sealed record Selection(Cell Anchor, Cell Focus);
 
-/// <summary>One underline under a hovered link. A wrapped link is several (Decisions/0015).</summary>
+/// <summary>One underline under a hovered link. A wrapped link is several.</summary>
 /// <param name="End">One past the last column.</param>
 public sealed record LinkUnderline(int Row, int Start, int End, bool Confirmed);
 

@@ -17,7 +17,7 @@
 //
 // `Gen` is uniffi-bindgen-cs output. It stays `internal`, and the alias is
 // how we keep generated names from colliding with the public contract
-// (Decisions/0004: generated symbols must not leak).
+// (generated symbols must not leak).
 
 using Gen = global::uniffi.tether_ffi;
 
@@ -220,7 +220,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// What the text at a cell names, if anything, and where it is drawn.
-    /// Asked when a person points, not every frame (Decisions/0015).
+    /// Asked when a person points, not every frame.
     /// </summary>
     public TerminalLink? LinkAt(ushort row, ushort column) => Lift(_inner.LinkAt(row, column));
 
@@ -256,7 +256,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 
     // ---- lowering: public contract → generated types ----
     // A field map, not a rename of a dependency: the generated types stay
-    // `internal` so a consumer cannot name them (Decisions/0004).
+    // `internal` so a consumer cannot name them.
 
     private static Gen.Destination Lower(Destination d) =>
         new(d.Host, d.Port, d.User, d.Term, d.Columns, d.Rows, d.ScrollbackLines, d.History?.Inner);
@@ -484,7 +484,7 @@ public sealed class TerminalSession : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// UniFFI's own cancellation token. Wired to a .NET token so a cancelled
-    /// <c>Task</c> reaches the Rust future (Decisions/0003: UniFFI's generated
+    /// <c>Task</c> reaches the Rust future (UniFFI's generated
     /// bindings poll a Rust future to completion and ignore
     /// <c>Task.IsCancelled</c>).
     /// </summary>

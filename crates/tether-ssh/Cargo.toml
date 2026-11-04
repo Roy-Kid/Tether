@@ -8,9 +8,9 @@ description = "SSH: transport, authentication, host trust, channels, shells."
 
 [dependencies]
 # Crypto is per-target. `aws-lc-rs` is the default everywhere it builds from
-# cargo + a C compiler alone (Apple, per Decisions/0002). On Windows its
-# `aws-lc-sys` wants NASM, which is outside that contract, so Windows uses
-# russh's `ring` fallback until the 0002 gate is re-measured for MSVC.
+# cargo + a C compiler alone (Apple). On Windows its `aws-lc-sys` wants NASM,
+# which is outside that contract, so Windows uses russh's `ring` fallback
+# until that is measured again for MSVC.
 russh = { workspace = true, default-features = false, features = ["flate2", "rsa"] }
 tokio = { workspace = true, features = ["io-util", "net"] }
 thiserror = { workspace = true }

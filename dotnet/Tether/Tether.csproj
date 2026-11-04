@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    The façade. The only target a consumer references (Decisions/0004, 0017).
+    The façade. The only target a consumer references (Decisions/0017).
 
     `Generated/tether_ffi.cs` is uniffi-bindgen-cs output and is never
     hand-edited; every type in it is `internal`, which is what keeps the

@@ -4,7 +4,7 @@
 // `wgpu`, `glyphon` and `cosmic-text` stay inside the generated binding and
 // `tether-render` (backend confinement).
 //
-// `Gen` is uniffi-bindgen-cs output and stays `internal` (Decisions/0004).
+// `Gen` is uniffi-bindgen-cs output and stays `internal`.
 
 using Gen = global::uniffi.tether_ffi;
 

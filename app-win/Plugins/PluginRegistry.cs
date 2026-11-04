@@ -2,7 +2,7 @@
 //
 // The window draws what this lists. It does not know what an extension is
 // for — the one line that names one is the registration, the same rule as
-// on Mac (Decisions/0012).
+// on Mac.
 
 namespace TetherApp.Plugins;
 

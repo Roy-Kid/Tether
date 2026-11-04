@@ -31,6 +31,11 @@ until 0006's triggers fire.
 
 ## Consequences
 
+> Since 2026-11: CI builds and checks the library through `scripts/check.py`
+> (`windows` job), and `publish-windows.ps1` runs `build-windows.ps1` for a
+> release. `verify-consumer-build.ps1` never compiled its sample and is gone;
+> the Swift consumer check (`verify-consumer-build.sh`) remains.
+
 - `scripts/build-windows.ps1` is the source of truth: `cargo build --release
   -p tether-ffi --features render --target x86_64-pc-windows-msvc`, then
   `uniffi-bindgen-cs --library …` into `dotnet/Tether/Generated/`.

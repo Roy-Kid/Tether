@@ -27,8 +27,7 @@ repository = "https://github.com/tether/tether"
 [workspace.dependencies]
 # Engines are composed, never rewritten (spec §2, §5).
 #
-# russh crypto is target-specific (Decisions/0002 measured `aws-lc-rs` on
-# Apple; on `*-pc-windows-msvc` its `aws-lc-sys` build wants NASM, which is
+# russh crypto is target-specific (`aws-lc-rs` was measured on Apple; on `*-pc-windows-msvc` its `aws-lc-sys` build wants NASM, which is
 # not in the toolchain contract). `ring` is russh's own fallback feature and
 # is what Windows uses until that gate is re-measured. See tether-ssh.
 russh = { version = "0.63", default-features = false, features = ["flate2", "rsa"] }

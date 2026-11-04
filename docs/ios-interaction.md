@@ -1,5 +1,9 @@
 # iOS interaction follow-up — 2026-10-08
 
+> Test counts below are what passed when each change landed. The suites were
+> pruned on 2026-11-04 (about 530 tests removed), so they are dated evidence,
+> not today's sizes.
+
 ## Platform design
 
 - Plugin accessories open as full-screen covers on iOS, including iPad. The host

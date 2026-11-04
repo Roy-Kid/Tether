@@ -364,20 +364,8 @@ Ordinary SSH remains available when tmux is disabled. Default remote socket only
 
 # Verification
 
-Use latest stable Rust (`rustup update stable`) and Xcode with Swift 6.2 or later.
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-./scripts/tether.sh --build-xcframework
-swift test --package-path swift
-swift test --package-path app/Packages/TetherFrontend
-swift test --package-path app/Packages/TetherPluginHost
-swift test --package-path app/Plugins/Tmux
-swift test --package-path app/Plugins/Files
-swift test --package-path app/Plugins/Ports
-./scripts/tether.sh --build-app
-```
+The commands, and the compilers they are pinned to, are in [CLAUDE.md](../CLAUDE.md#working-here);
+`python scripts/check.py` runs every check this host can.
 
 Debug builds support `TETHER_HOSTS_FILE=/absolute/path/hosts.json` for isolated UI
 fixtures. This does not change the normal host store and is absent from release builds.

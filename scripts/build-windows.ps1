@@ -2,10 +2,11 @@
 # Produces tether_ffi.dll + import lib and refreshes the checked-in C# bindings.
 #
 # Consumers never run this: it needs the Rust toolchain and uniffi-bindgen-cs,
-# which the spec says they must not. It runs here and in CI, and its outputs
-# are what ship (Decisions/0004, 0017).
+# which the spec says they must not. `publish-windows.ps1` runs it, and its
+# outputs are what ship (Decisions/0017). CI's check builds the same library
+# through `check.py` and compares the bindings there.
 #
-# Usage: pwsh scripts/build-windows.ps1 [-Target x86_64-pc-windows-msvc] [-Release]
+# Usage: pwsh scripts/build-windows.ps1 [-Target x86_64-pc-windows-msvc] [-DebugBuild]
 param(
     [string]$Target = "x86_64-pc-windows-msvc",
     [switch]$DebugBuild
@@ -14,7 +15,6 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 
-$profile = if ($DebugBuild) { "debug" } else { "--release"; "release" }
 if ($DebugBuild) {
     $cargoArgs = @()
     $profileName = "debug"
@@ -38,7 +38,7 @@ if (-not (Test-Path $dll)) {
 }
 
 # Generated C# is checked in so a consumer needs no Rust to build.
-# CI re-runs this and fails on a diff; it is never hand-edited.
+# CI regenerates it and fails on a diff; it is never hand-edited.
 Write-Host "generating C# bindings"
 $bindgen = Get-Command uniffi-bindgen-cs -ErrorAction SilentlyContinue
 if (-not $bindgen) {

@@ -188,6 +188,16 @@ def verify_bindings(library):
             ROOT / "dotnet/Tether/Generated/tether_ffi.cs", Path(temporary) / "tether_ffi.cs")
 
 
+def dotnet_tests(release=False, *flags):
+    """The .NET suites, over the native library they load."""
+    library = stage_native(release=release)
+    for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):
+        run("dotnet", "run", "--project", "tests/" + name)
+    for name in ("ssh-config", "plugins"):
+        run("dotnet", "test", "tests/" + name, *flags)
+    return library
+
+
 def windows():
     run("pwsh", "-NoProfile", "-Command",
         "$ErrorActionPreference='Stop'; foreach($file in Get-ChildItem scripts -Filter *.ps1) { "
@@ -196,17 +206,20 @@ def windows():
         "if($problems.Count) { throw ($problems | Out-String) } }")
     # One native build, the release one the portable package ships: the
     # bindings, the regressions and the publish all use it.
-    verify_bindings(stage_native(release=True))
+    verify_bindings(dotnet_tests(True, "-warnaserror"))
     run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
         "--all-targets", "--", "-D", "warnings")
     run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
-    for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):
-        run("dotnet", "run", "--project", "tests/" + name)
-    for name in ("ssh-config", "plugins"):
-        run("dotnet", "test", "tests/" + name, "-warnaserror")
     # The app compiles here, in Release with warnings as errors, and must
     # still publish as one executable.
     run("pwsh", "-NoProfile", "-File", "scripts/publish-windows.ps1", "-SkipNativeBuild")
+
+
+def windows_tests():
+    """What a push waits for: the tests only Windows can run. No lint, and
+    nothing the gate on a Mac already checked; `windows` is the whole job."""
+    run("cargo", "test", "--locked", "--workspace")
+    dotnet_tests()
 
 
 def require_test_report(output: str) -> None:
@@ -298,6 +311,7 @@ JOBS = {
     "linux": lambda: common(),
     "apple": lambda: apple(),
     "windows": lambda: (common(), windows()),
+    "windows-tests": windows_tests,
     "fuzz": lambda: fuzz(),
 }
 HOST_JOBS = {"darwin": ("linux", "apple", "fuzz"), "win32": ("windows",)}
@@ -306,7 +320,7 @@ HOST_JOBS = {"darwin": ("linux", "apple", "fuzz"), "win32": ("windows",)}
 def drop_inherited_sdk():
     """Apple's /usr/bin/git exports SDKROOT, the Command Line Tools' macOS SDK,
     to the hooks it runs. One SDKROOT names one platform and the XCFramework is
-    built for three, so its iOS slices linked against macOS. Each build finds
+    built for several, so its iOS slices linked against macOS. Each build finds
     its own SDK, as it does outside the hook and on CI."""
     os.environ.pop("SDKROOT", None)
 

@@ -67,7 +67,7 @@ Trimming is disabled to preserve WinUI and reflection-based serialization.
 On macOS:
 
 ```sh
-swift test --package-path app/Packages/TetherFrontend --filter TerminalExperience
+swift test --package-path app/Packages/TetherFrontend
 swift test --package-path app
 ```
 
@@ -83,8 +83,8 @@ ANSI color style. Soft is the app default, matching the Windows frontend's
 existing softer palette; Classic preserves the original colors. Named ANSI
 slots keep their meaning, and explicit RGB output is untouched. The palette
 used for the selected tab, terminal background and remote color-query responses
-is the same. Both soft variants participate in the existing contrast checks;
-Soft Light's dim gray was adjusted on both platforms to meet the text floor.
+is the same. Soft Light's dim gray was adjusted on both platforms to meet the
+text contrast floor.
 
 Terminal padding is adjustable from 0 to 40 points and defaults to 16 on Mac,
 12 on iPhone/iPad. Changing it refits the PTY and updates input/selection geometry.

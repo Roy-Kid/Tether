@@ -1,6 +1,6 @@
 // `~/.ssh/config`, read for the hosts it describes.
 //
-// The file is the store (Decisions/0009): a person's config carries
+// The file is the store: a person's config carries
 // `ControlMaster`, `ForwardAgent`, a comment reminding them which machine is
 // which — none of which this app understands. What is parsed is an *index*,
 // and structured edits live in SshConfigEditor, preserving other directives.

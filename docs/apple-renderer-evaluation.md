@@ -1,5 +1,9 @@
 # Apple shared-renderer implementation and observations
 
+> Test counts below are what passed when each change landed. The suites were
+> pruned on 2026-11-04 (about 530 tests removed), so they are dated evidence,
+> not today's sizes.
+
 Date: 2026-10-17. Architecture: [one renderer, native hosts](renderer-architecture.md).
 The implementation uses the shared Rust renderer on macOS and iOS, with Metal
 presentation through wgpu. The independent Swift Metal and Canvas painters are

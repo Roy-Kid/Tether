@@ -23,7 +23,7 @@
 *.vt   -text
 *.snap text eol=lf
 
-# Native artifacts are build outputs, never committed (Decisions/0004).
+# Native artifacts are build outputs, never committed.
 *.dll  binary
 *.lib  binary
 *.a    binary

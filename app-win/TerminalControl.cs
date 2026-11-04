@@ -7,7 +7,7 @@
 // Selection is a rectangle of cells; copy takes the run text inside it and
 // paste is a `TerminalInput.Paste` the engine brackets (spec §12).
 //
-// Links follow Decisions/0015: the terminal finds the shape (`LinkAt`), the
+// Links: the terminal finds the shape (`LinkAt`), the
 // frontend underlines what a person points at and says what opening does.
 // The gestures are ones a program in the terminal cannot claim — Ctrl+click
 // and the context menu — because a plain click stays the remote's when mouse
@@ -792,7 +792,7 @@ public sealed class TerminalControl : Control
         if (CellAt(position) is not Cell cell) return;
 
         // Ctrl+click opens a link. A plain click stays the remote's when
-        // mouse reporting is on (Decisions/0015).
+        // mouse reporting is on.
         if (IsDown(VirtualKey.Control) && LinkAt(cell) is { } link)
         {
             OpenLink(link);
@@ -926,7 +926,7 @@ public sealed class TerminalControl : Control
         }
     }
 
-    // ---- links (Decisions/0015) ----
+    // ---- links ----
 
     private TerminalLink? LinkAt(Cell cell) =>
         _model?.LinkAt((ushort)Math.Max(0, cell.Row), (ushort)Math.Max(0, cell.Column));

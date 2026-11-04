@@ -19,15 +19,20 @@ app**, a standalone terminal client and the first consumer of that SDK.
 ## Components
 
 ```text
-tether-terminal    bytes → screen state + damage; input encoding
-tether-ssh         transport, authentication, host trust, channels, shell
-tether-core        session orchestration + the public API
-tether-render      terminal state → GPU draw            (Phase 4)
-tether-view/swift  SwiftUI / UIKit view + bindings      (Phase 4)
-tether-app/apple   the flagship application             (Phase 5)
+crates/tether-terminal  bytes → screen state + damage; input encoding
+crates/tether-ssh       transport, authentication, host trust, channels, shell
+crates/tether-local     a shell on this machine, the other producer
+crates/tether-core      session orchestration + the public API
+crates/tether-files     SFTP over any byte stream
+crates/tether-tmux      tmux workspaces over any transport
+crates/tether-render    terminal state → GPU draw
+crates/tether-ffi       the UniFFI seam the native bindings come from
+swift/                  the Swift package: bindings + façade
+dotnet/                 the C# façade
+app/                    the app, the SDK's first consumer
 ```
 
-A consuming application imports `tether-core` and `tether-view/swift`.
+A consuming Swift application imports the `swift/` package.
 
 `tether-terminal` links no SSH symbol. That is not a convention — it is how the
 byte-stream boundary is proved by the build graph rather than asserted in a
@@ -39,7 +44,8 @@ For repository development, install the commit gate once per clone with
 `python3 scripts/install-hooks.py`. See [commit checks](docs/commit-checks.md)
 for platform coverage and required tools.
 
-Build with the latest stable Rust (`rustup update stable`); the current minimum is 1.98.1.
+The Rust toolchain is pinned in `rust-toolchain.toml` and Xcode in `.xcode-version`;
+`rustup` and the Apple gate hold a build to both.
 
 ```bash
 cargo build

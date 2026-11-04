@@ -55,7 +55,7 @@ sealed class FilesAttachment : ITabAttachment
         if (paths.Count == 0) return false;
         // On this machine a drop is a path to type. A remote shell, and WSL,
         // cannot see a Windows path, so the file has to be put where the
-        // shell is and the path it will know typed after it (Decisions/0014).
+        // shell is and the path it will know typed after it.
         if (!_tab.Model.IsRemote && !_tab.Model.IsWsl) return false;
         _tab.Show();
         _ = ReceiveAsync(paths);

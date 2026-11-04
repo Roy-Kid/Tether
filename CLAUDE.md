@@ -84,15 +84,15 @@ Install the repository-local commit gate once per clone with
 `python scripts/install-hooks.py`. It rejects partial staging and runs the same
 host-platform checks as CI. See `docs/commit-checks.md` for tool requirements,
 the audited failure history and cross-platform coverage. Run
-`python scripts/check.py` to check the working tree before staging. Push with
-`python scripts/ship.py` (dev) or `--to master`: it runs CI on `ci/check` and
-promotes the commit only once every workflow passed; a plain push to dev or
-master is refused by the pre-push hook. Each CI job is one
-`check.py --job <name>`, the same function a commit runs.
+`python scripts/check.py` to check the working tree before staging. Commits go
+straight to dev and master. A push runs only the Windows tests
+(`windows.yml`), the one thing a Mac cannot check before committing; the whole
+gate runs on CI nightly (`ci.yml`). Each CI job is one `check.py --job <name>`,
+the same function a commit runs.
 
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place
-./scripts/tether.sh --check                       # cargo clippy --workspace -- -D warnings
+./scripts/tether.sh --check                       # cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/tether.sh --test                        # cargo test --workspace
 ./scripts/tether.sh --build-app                   # macOS Tether.app
 ./scripts/tether.sh --build-app-ios               # simulator Tether.app + install
@@ -115,7 +115,8 @@ swift test --package-path app                          # the app's own state
   -destination "platform=iOS Simulator,id=<udid>")     # the phone's frontend tests
 ```
 
-CI runs everything above. The app links nothing from outside this repository;
+CI runs the cargo and Swift commands above; the app builds, the
+consumer check and the shipping XCFramework run here. The app links nothing from outside this repository;
 its plugins are the built-in ones. Nothing in any suite touches the system
 keychain. Nerve's native panel is linked only on a Mac with `../nerve` beside
 this checkout, and never under `TETHER_HERMETIC=1`, which the commit gate sets.

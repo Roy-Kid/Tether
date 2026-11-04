@@ -1,5 +1,9 @@
 # Performance and UI review — 2026-10-05
 
+> Test counts below are what passed when each change landed. The suites were
+> pruned on 2026-11-04 (about 530 tests removed), so they are dated evidence,
+> not today's sizes.
+
 Scope: terminal Metal rendering, asynchronous file-tree expansion, and existing
 native chrome. The tab/host bar heights, gutters, layout, typography and palette
 remain unchanged.
@@ -45,8 +49,6 @@ empty-grid updates. Results:
 No frame-rate, CPU or power measurement is claimed. No comprehensive VoiceOver,
 physical-device or pixel-level application-layout acceptance is claimed.
 
-The supplied AGENTS.md references RTK.md; that file was not found in the workspace
-or its ancestor instruction locations.
 
 ## Warning cleanup follow-up — 2026-10-05
 

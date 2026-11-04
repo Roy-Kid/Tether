@@ -2,7 +2,7 @@
 //
 // Two shapes on Mac; Windows has the one the file browser is. An inspector
 // plugin sits beside the terminal while the shell keeps running
-// (Decisions/0014). The host asks what to draw and forwards drops and
+//. The host asks what to draw and forwards drops and
 // links. It does not learn what a file is.
 
 using Microsoft.UI.Xaml;

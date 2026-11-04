@@ -1,5 +1,9 @@
 # UI calibration
 
+> Test counts below are what passed when each change landed. The suites were
+> pruned on 2026-11-04 (about 530 tests removed), so they are dated evidence,
+> not today's sizes.
+
 ## Visual rules
 
 - App controls use `UIStyle` in `Design.swift`: platform-specific typography,

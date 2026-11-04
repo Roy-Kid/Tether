@@ -7,7 +7,7 @@ license.workspace = true
 description = "Files where a session's shell is running, over SFTP on any duplex byte stream."
 
 [dependencies]
-# SFTP is composed, not written (spec §5; the judgement is Decisions/0013).
+# SFTP is composed, not written (spec §5).
 # `russh` is only its dev-dependency: the client speaks over any ordered
 # duplex stream, which is what keeps this crate transport-independent.
 russh-sftp = "3"

@@ -16,35 +16,6 @@ gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
 
-ship_spec = importlib.util.spec_from_file_location("ship", Path(__file__).with_name("ship.py"))
-ship = importlib.util.module_from_spec(ship_spec)
-ship_spec.loader.exec_module(ship)
-
-
-class ShipTests(unittest.TestCase):
-    """dev and master take only commits every workflow passed."""
-
-    def push(self, remote_ref, sha="a" * 40, green=False):
-        line = f"refs/heads/topic {sha} {remote_ref} {'0' * 40}"
-        with patch.object(ship, "verdict", return_value=(green, [] if green else ["Windows"])) as verdict:
-            return ship.pre_push([line]), verdict
-
-    def test_an_untried_commit_cannot_reach_dev_or_master(self):
-        for branch in ship.PROTECTED:
-            code, _ = self.push(f"refs/heads/{branch}")
-            self.assertEqual(code, 1, branch)
-
-    def test_a_commit_every_workflow_passed_goes_through(self):
-        code, _ = self.push("refs/heads/dev", green=True)
-        self.assertEqual(code, 0)
-
-    def test_staging_branches_and_deletions_are_not_asked(self):
-        code, verdict = self.push("refs/heads/ci/abc")
-        self.assertEqual(code, 0)
-        code, _ = self.push("refs/heads/dev", sha="0" * 40)
-        self.assertEqual(code, 0)
-        verdict.assert_not_called()
-
 
 class GateTests(unittest.TestCase):
     def setUp(self):
@@ -191,7 +162,7 @@ class GateTests(unittest.TestCase):
                     command = step.get("run", "").strip()
                     if not command:
                         continue
-                    found = re.fullmatch(r"python3? scripts/check\.py --job (\w+)", command)
+                    found = re.fullmatch(r"python3? scripts/check\.py --job ([\w-]+)", command)
                     if found:
                         checks.append(found.group(1))
                     else:
@@ -235,7 +206,6 @@ class GateTests(unittest.TestCase):
         (self.root / ".githooks").mkdir()
         hook = self.root / ".githooks/pre-commit"
         shutil.copyfile(ROOT / ".githooks/pre-commit", hook)
-        shutil.copyfile(ROOT / ".githooks/pre-push", self.root / ".githooks/pre-push")
         (self.root / "scripts").mkdir()
         (self.root / "scripts/check.py").write_text(
             "from pathlib import Path\nPath('.git/checker-ran').touch()\nraise SystemExit(23)\n")

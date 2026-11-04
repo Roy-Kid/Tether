@@ -63,7 +63,7 @@ Optional `--presentmon C:\Tools\PresentMon.exe` supports v2 QPC display evidence
 
 ## Checks and next decision
 
-CI runs builds, Rust checks, binding consistency, fixture contracts, evidence-parser tests and Windows release checks. It runs no GPU benchmark and makes no frame-time assertions. Existing prepare() cost measurements remain as ignored manual tests without timing thresholds; they do not cover GPU execution or presentation. The full common/Windows checks passed locally, including publishing; the updated parser tests and fixture checks also passed. Apple/Linux checks were not run on this Windows host.
+CI runs builds, Rust checks, binding consistency, fixture contracts, evidence-parser tests and Windows release checks. It runs no GPU benchmark and makes no frame-time assertions. The full common/Windows checks passed locally, including publishing; the updated parser tests and fixture checks also passed. Apple/Linux checks were not run on this Windows host.
 
 The Windows path was credible enough to measure. Cross-monitor DPI, device loss, integrated GPUs and long-duration stability remain unverified Windows coverage. Apple drawing has since moved to the shared renderer; this report does not approve or retain a second painter. A regression is fixed on that shared path. See [ADR 0021](../Decisions/0021-renderer-unification-is-measurement-gated.md).
 
