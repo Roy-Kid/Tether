@@ -240,12 +240,14 @@ def apple(build=True):
     hermetic = {**os.environ, "TETHER_HERMETIC": "1"}
     if build:
         # The Mac and the simulator are where the checks run; a device slice
-        # is a third release build that nothing here would load.
+        # is a third build that nothing here would load. Debug, because a
+        # release build with LTO was most of the job and tests no other code.
         run("bash", "scripts/build-xcframework.sh",
-            env={**hermetic, "TETHER_XCFRAMEWORK_TARGETS": "aarch64-apple-darwin aarch64-apple-ios-sim"})
+            env={**hermetic, "TETHER_XCFRAMEWORK_TARGETS": "aarch64-apple-darwin aarch64-apple-ios-sim",
+                 "TETHER_XCFRAMEWORK_PROFILE": "debug"})
     # The C# bindings come from the library's metadata, the same on every
     # platform: a Rust change made here shows up here, not first on Windows.
-    verify_bindings(ROOT / "target/aarch64-apple-darwin/release/libtether_ffi.dylib")
+    verify_bindings(ROOT / "target/aarch64-apple-darwin/debug/libtether_ffi.dylib")
     for package in ("swift", "app/Packages/TetherFrontend", "app/Packages/TetherPluginHost",
                     "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
         swift_test("--package-path", package, env=hermetic)

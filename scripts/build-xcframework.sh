@@ -36,13 +36,19 @@ export IPHONEOS_DEPLOYMENT_TARGET=26.0
 # A check names the slices it runs on: no check runs on a device, so it
 # builds no device slice. What ships has all three.
 read -r -a TARGETS <<< "${TETHER_XCFRAMEWORK_TARGETS:-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim}"
+# And it links a debug build: what it tests is the same code, and a release
+# build with LTO is most of a check's time. What ships is release.
+PROFILE="${TETHER_XCFRAMEWORK_PROFILE:-release}"
+PROFILE_FLAG=()
+[[ "$PROFILE" == release ]] && PROFILE_FLAG=(--release)
+DIRECTORY=$([[ "$PROFILE" == release ]] && echo release || echo debug)
 LIB=libtether_ffi.a
 OUT=swift/Artifacts
 STAGE=target/xcframework
 
 for target in "${TARGETS[@]}"; do
   echo "building $target"
-  cargo build --locked --release --lib -p tether-ffi --features render --target "$target"
+  cargo build --locked ${PROFILE_FLAG[@]+"${PROFILE_FLAG[@]}"} --lib -p tether-ffi --features render --target "$target"
 done
 
 # Headers and the module map are generated, not hand-written, so the C module
@@ -51,7 +57,7 @@ done
 rm -rf "$STAGE"
 mkdir -p "$STAGE/include"
 cargo run -q --bin uniffi-bindgen -- generate \
-  --library "target/aarch64-apple-darwin/release/libtether_ffi.dylib" \
+  --library "target/aarch64-apple-darwin/$DIRECTORY/libtether_ffi.dylib" \
   --language swift --out-dir "$STAGE/gen"
 cp "$STAGE/gen/TetherFFI.h" "$STAGE/gen/TetherFFI.modulemap" "$STAGE/include/"
 mv "$STAGE/include/TetherFFI.modulemap" "$STAGE/include/module.modulemap"
@@ -60,7 +66,7 @@ args=()
 for target in "${TARGETS[@]}"; do
   slice="$STAGE/$target"
   mkdir -p "$slice"
-  cp "target/$target/release/$LIB" "$slice/$LIB"
+  cp "target/$target/$DIRECTORY/$LIB" "$slice/$LIB"
   cp -R "$STAGE/include" "$slice/include"
   args+=(-library "$slice/$LIB" -headers "$slice/include")
 done
