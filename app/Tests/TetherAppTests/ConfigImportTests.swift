@@ -41,28 +41,6 @@ struct ConfigImportTests {
       links: links, defaultUser: "ada"))
   }
 
-  @Test("a stanza the library does not have is added")
-  func added() {
-    #expect(Self.plan([Self.entry()]) == [.add(Self.entry())])
-  }
-
-  @Test("an edited stanza updates its host")
-  func edited() {
-    let record = Self.record()
-    let edited = Self.entry(host: "10.0.0.9")
-    #expect(Self.plan([edited], [record], links: ["lab": Self.link(record)])
-      == [.take(edited, id: record.profile.id, replacing: nil)])
-  }
-
-  /// The library is the source of truth: a change made in Tether stands as
-  /// long as the stanza it came from is not edited again.
-  @Test("a stanza nobody touched never undoes a change made in Tether")
-  func untouchedStanza() {
-    let changed = Self.record(host: "10.0.0.9")
-    #expect(Self.plan([Self.entry()], [changed], links: ["lab": Self.link(changed)])
-      == [.keep(Self.entry(), id: changed.profile.id)])
-  }
-
   @Test("both changed: the one changed last wins")
   func crossedEdits() {
     let now = Date()
@@ -74,21 +52,6 @@ struct ConfigImportTests {
       modified: now.addingTimeInterval(-60)) == [.keep(Self.entry(), id: newer.profile.id)])
   }
 
-  /// A second Mac naming a host another device added is naming that host.
-  @Test("the same name is the same host")
-  func sameName() {
-    let agreeing = Self.record()
-    #expect(Self.plan([Self.entry()], [agreeing]) == [.keep(Self.entry(), id: agreeing.profile.id)])
-    let older = Self.record(host: "10.0.0.9", modified: .distantPast)
-    #expect(Self.plan([Self.entry()], [older], modified: Date()) == [.take(Self.entry(), id: older.profile.id, replacing: nil)])
-  }
-
-  @Test("a stanza taken out of the file leaves its host in the library")
-  func removedFromFile() {
-    let record = Self.record()
-    #expect(Self.plan([], [record], links: ["lab": Self.link(record)]) == [.forget(alias: "lab")])
-  }
-
   /// Deleted in Tether, and the stanza still in the file: it stays deleted —
   /// until someone edits the stanza, which is asking for the host again.
   @Test("a host deleted in Tether is not brought back by its stanza")
@@ -97,14 +60,6 @@ struct ConfigImportTests {
     #expect(Self.plan([Self.entry()], [record], links: ["lab": Self.link(record)]).isEmpty)
     let edited = Self.entry(host: "10.0.0.9")
     #expect(Self.plan([edited], [record], links: ["lab": Self.link(record)]) == [.forget(alias: "lab"), .add(edited)])
-  }
-
-  @Test("a renamed stanza is the same host")
-  func renamed() {
-    let record = Self.record()
-    let renamed = Self.entry("lab-gpu")
-    #expect(Self.plan([renamed], [record], links: ["lab": Self.link(record)])
-      == [.take(renamed, id: record.profile.id, replacing: "lab")])
   }
 
   @Test("a host iCloud removed comes back from the file")

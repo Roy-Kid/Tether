@@ -36,18 +36,6 @@ import Testing
       #expect(KeyCaptureView.namedKey(for: .keyboardPageDown) == .pageDown)
     }
 
-    @Test("function keys carry their own number")
-    func functionKeys() {
-      let table: [(UIKeyboardHIDUsage, UInt8)] = [
-        (.keyboardF1, 1), (.keyboardF2, 2), (.keyboardF3, 3), (.keyboardF4, 4),
-        (.keyboardF5, 5), (.keyboardF6, 6), (.keyboardF7, 7), (.keyboardF8, 8),
-        (.keyboardF9, 9), (.keyboardF10, 10), (.keyboardF11, 11), (.keyboardF12, 12),
-      ]
-      for (usage, number) in table {
-        #expect(KeyCaptureView.namedKey(for: usage) == .function(number))
-      }
-    }
-
     /// Letters are not named keys. They arrive as text through `insertText`,
     /// and claiming them here as well would send every character twice.
     @Test("ordinary letters are not claimed as named keys")

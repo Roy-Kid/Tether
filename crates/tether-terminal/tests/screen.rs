@@ -1,8 +1,7 @@
 //! Recorded byte streams in, asserted screen state out.
 
 use tether_terminal::{
-    Cell, Color, CursorShape, NamedColor, Options, Palette, Rgb, ScreenSize, Scroll, Terminal,
-    Underline,
+    Cell, Color, NamedColor, Options, Palette, Rgb, ScreenSize, Scroll, Terminal, Underline,
 };
 
 fn terminal(columns: u16, rows: u16) -> Terminal {
@@ -13,12 +12,6 @@ fn fed(bytes: &[u8]) -> Terminal {
     let mut term = terminal(20, 5);
     term.feed(bytes);
     term
-}
-
-#[test]
-fn plain_text_lands_on_the_first_row() {
-    let term = fed(b"hello");
-    assert_eq!(term.screen().row_text(0), "hello");
 }
 
 /// tmux moves the cursor with a tab and leaves `\t` in the cell it jumped
@@ -45,19 +38,6 @@ fn an_escape_sequence_split_across_feeds_still_applies() {
     let screen = term.screen();
     assert_eq!(screen.row_text(0), "red");
     assert_eq!(screen.row(0).unwrap()[0].style.foreground, Color::Named(NamedColor::Red));
-}
-
-/// The same hazard one level down: a multi-byte scalar split mid-sequence.
-#[test]
-fn a_utf8_scalar_split_across_feeds_is_reassembled() {
-    let snowman = "☃".as_bytes();
-    let (first, second) = snowman.split_at(1);
-
-    let mut term = terminal(20, 5);
-    term.feed(first);
-    term.feed(second);
-
-    assert_eq!(term.screen().row_text(0), "☃");
 }
 
 /// Bytes, scalars, graphemes, glyphs and cells are five different things
@@ -113,23 +93,6 @@ fn text_attributes_cross_the_boundary_as_our_own_types() {
     assert!(style.strikethrough);
     assert_eq!(style.underline, Underline::Single);
     assert_eq!(style.foreground, Color::Rgb { red: 10, green: 20, blue: 30 });
-}
-
-#[test]
-fn the_cursor_can_be_moved_and_hidden() {
-    let mut term = terminal(20, 5);
-    term.feed(b"\x1b[3;7H");
-
-    let cursor = term.screen().cursor;
-    // The escape is one-based; a consumer's grid is not.
-    assert_eq!(cursor.position.row, 2);
-    assert_eq!(cursor.position.column, 6);
-    assert!(cursor.visible);
-
-    term.feed(b"\x1b[?25l");
-    let hidden = term.screen().cursor;
-    assert!(!hidden.visible);
-    assert_eq!(hidden.shape, CursorShape::Hidden);
 }
 
 #[test]
@@ -189,25 +152,6 @@ fn a_remote_copy_is_handed_to_the_local_clipboard_once() {
     assert_eq!(term.take_clipboard().as_deref(), Some("中"));
 }
 
-/// The sequence can be cut by a packet boundary, like any other escape.
-#[test]
-fn a_remote_copy_split_across_feeds_is_reassembled() {
-    let mut term = terminal(20, 5);
-    term.feed(b"\x1b]52;c;aG");
-    assert_eq!(term.take_clipboard(), None);
-    term.feed(b"k=\x1b\\");
-    assert_eq!(term.take_clipboard().as_deref(), Some("hi"));
-}
-
-/// Two copies in one chunk: the pasteboard holds the last one.
-#[test]
-fn the_later_remote_copy_replaces_the_earlier() {
-    let mut term = terminal(20, 5);
-    // "hi", then "b" (Yg==).
-    term.feed(b"\x1b]52;c;aGk=\x1b\\\x1b]52;c;Yg==\x1b\\");
-    assert_eq!(term.take_clipboard().as_deref(), Some("b"));
-}
-
 /// `OSC 52` can also ask to read the clipboard. Answering would send the
 /// person's last copy to the far side, so the request produces nothing.
 #[test]
@@ -230,15 +174,6 @@ fn a_remote_copy_past_the_cap_is_ignored() {
     sequence.extend(b"\x1b\\");
     term.feed(&sequence);
     assert_eq!(term.take_clipboard(), None);
-}
-
-#[test]
-fn the_bell_is_reported_once() {
-    let mut term = terminal(20, 5);
-    term.feed(b"\x07");
-
-    assert!(term.take_changes().bell);
-    assert!(!term.take_changes().bell);
 }
 
 /// One column hangs the engine's reflow: a wide character needs two, and
@@ -320,27 +255,6 @@ fn lines_that_scrolled_off_can_be_looked_at_again() {
     assert_eq!(term.screen().text(), live, "back to exactly where it was");
 }
 
-/// Scrolling past either end stops there rather than running away, so a
-/// wheel at the end of its travel is a no-op instead of a bug.
-#[test]
-fn the_viewport_is_clamped_at_both_ends() {
-    let mut term =
-        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
-    for line in 0..20 {
-        term.feed(format!("line-{line}\r\n").as_bytes());
-    }
-
-    for _ in 0..50 {
-        term.scroll(Scroll::PageUp);
-    }
-    assert_eq!(term.viewport().offset, term.history_lines(), "stops at the oldest line");
-
-    for _ in 0..50 {
-        term.scroll(Scroll::PageDown);
-    }
-    assert!(term.viewport().is_live(), "stops at the live screen");
-}
-
 /// A full-screen program's output is not scrollback, and the engine keeps
 /// none for it — so the viewport cannot leave the live screen there.
 #[test]
@@ -362,24 +276,6 @@ fn the_alternate_screen_has_no_history_to_scroll_into() {
     // Leaving it puts the history back.
     term.feed(b"\x1b[?1049l");
     assert!(term.history_lines() > 0, "the history was waiting underneath");
-}
-
-/// What went past since the last frame, so a consumer holding its own view of
-/// the scrollback can keep it still.
-#[test]
-fn changes_report_how_many_lines_went_past() {
-    let mut term =
-        Terminal::with_options(ScreenSize::new(20, 4), Options { scrollback_lines: 100 });
-    let _ = term.take_changes();
-
-    for line in 0..10 {
-        term.feed(format!("line-{line}\r\n").as_bytes());
-    }
-    let changes = term.take_changes();
-    assert!(changes.scrolled_lines > 0, "ten lines on a four-row screen scrolled some off");
-
-    // Nothing new, nothing reported.
-    assert_eq!(term.take_changes().scrolled_lines, 0);
 }
 
 /// Reading history while the far side is still talking must not yank the

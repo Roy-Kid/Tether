@@ -5,17 +5,6 @@ import zlib
 
 @testable import TetherPluginHost
 
-@Test func aRepositoryAddressIsOwnerAndName() {
-  #expect(GitHubRepository.parse("https://github.com/Acme/plugin")?.owner == "Acme")
-  #expect(GitHubRepository.parse("https://github.com/Acme/plugin")?.name == "plugin")
-  #expect(GitHubRepository.parse("http://www.github.com/Acme/plugin.git/")?.name == "plugin")
-  #expect(GitHubRepository.parse("github.com/Acme/plugin?tab=readme")?.owner == "Acme")
-  #expect(GitHubRepository.parse("https://github.com/Acme/plugin/tree/main") == nil)
-  #expect(GitHubRepository.parse("https://gist.github.com/Acme/plugin") == nil)
-  #expect(GitHubRepository.parse("https://gitlab.com/Acme/plugin") == nil)
-  #expect(GitHubRepository.parse("Acme/plugin") == nil)
-}
-
 @Test func latestReleaseTagIsASingleName() throws {
   let tagged = Data(#"{"tag_name":"v1.2.3","zipball_url":"https://evil.example/zip"}"#.utf8)
   #expect(GitHubTag.read(from: tagged) == "v1.2.3")
@@ -24,27 +13,6 @@ import zlib
   #expect(GitHubHosts.allows("codeload.github.com"))
   #expect(!GitHubHosts.allows("codeload.github.com.evil.com"))
   #expect(!GitHubHosts.allows("objects.githubusercontent.com"))
-}
-
-@Test func aStoredArchiveRoundTripsAndADeflatedOneDoesToo() throws {
-  let directory = FileManager.default.temporaryDirectory.appending(path: "zip-\(UUID().uuidString)")
-  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-  defer { try? FileManager.default.removeItem(at: directory) }
-  let stored = ZipBuilder.archive([
-    .init(name: "repo-v1/manifest.json", bytes: Data("{\"id\":\"ok\"}".utf8)),
-    .init(name: "repo-v1/web/index.html", bytes: Data("hello".utf8)),
-  ])
-  try ZipArchive.extract(stored, to: directory)
-  let page = directory.appending(path: "repo-v1/web/index.html")
-  #expect(try Data(contentsOf: page) == Data("hello".utf8))
-
-  let deflated = ZipBuilder.archive([
-    .init(name: "note.txt", bytes: Data("hello".utf8), method: 8),
-  ])
-  let plain = directory.appending(path: "plain")
-  try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
-  try ZipArchive.extract(deflated, to: plain)
-  #expect(try Data(contentsOf: plain.appending(path: "note.txt")) == Data("hello".utf8))
 }
 
 @Test func anArchiveCannotLeaveItsDirectoryOrCarryALink() throws {

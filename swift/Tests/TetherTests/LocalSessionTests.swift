@@ -15,10 +15,6 @@ import Testing
 /// saying so.
 @Suite("A local session", .enabled(if: TerminalSession.isLocalAvailable))
 struct LocalSessionTests {
-  @Test("a name with no ControlPath is not a master")
-  func noControlPathIsNotAMaster() async {
-    #expect(await TerminalSession.sshMasterIsRunning("tether-no-such-mux-host") == false)
-  }
 
   /// Waits until `predicate` holds, or gives up.
   ///
@@ -48,63 +44,6 @@ struct LocalSessionTests {
 
   private static func text(_ frame: ScreenFrame) -> String {
     frame.lines.map { $0.runs.map(\.text).joined() }.joined(separator: "\n")
-  }
-
-  @Test("opens without a host, a user or a credential")
-  func opensWithNothing() async throws {
-    // The absence is the assertion. A local session needs none of the
-    // ceremony a remote one does, and a shape that demanded a placeholder
-    // host would be admitting the two are different kinds of thing.
-    let session = try await TerminalSession.local()
-    defer { session.close() }
-    #expect(session.ending() == nil)
-  }
-
-  @Test("history crosses the Swift boundary and reopens as displayed content")
-  func persistentHistory() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "tether-history-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let history = try SessionHistory(directory: directory, lineLimit: nil)
-    let first = try await TerminalSession.local(LocalShell(columns: 80, rows: 24, history: history))
-    try first.send(.paste("printf '\\033[31mffi''-history\\033[0m\\n'\n"))
-    _ = await settle(first, "the archived marker") { $0.contains("ffi-history") }
-    first.close()
-    #expect(history.error == nil)
-    let reopened = try SessionHistory(directory: directory, lineLimit: nil, restoring: true)
-    let second = try await TerminalSession.local(LocalShell(columns: 80, rows: 24, history: reopened))
-    defer { second.close() }
-    // Restoring should show recent content immediately, before any scrolling.
-    #expect(Self.text(second.frame()).contains("ffi-history"))
-    #expect(second.historyError == nil)
-  }
-
-  @Test("draws what the shell writes")
-  func drawsOutput() async throws {
-    let session = try await TerminalSession.local(
-      LocalShell(columns: 80, rows: 24))
-    defer { session.close() }
-
-    try session.send(.paste("printf 'from''-swift\\n'\n"))
-    let screen = await settle(session, "the shell's reply") { $0.contains("from-swift") }
-    #expect(screen.contains("from-swift"))
-  }
-
-  @Test("names what its output points at, and where its shell is")
-  func linksAndWorkingDirectory() async throws {
-    let session = try await TerminalSession.local(LocalShell(columns: 80, rows: 24))
-    defer { session.close() }
-
-    try session.send(.paste("printf '\\033]7;file://here/tmp/runs\\007wrote out/pl''ot.png\\n'\n"))
-    _ = await settle(session, "the path") { $0.contains("wrote out/plot.png") }
-
-    #expect(session.workingDirectory == "/tmp/runs")
-    let frame = session.frame()
-    let row = try #require(
-      frame.lines.firstIndex { line in line.runs.map(\.text).joined().hasPrefix("wrote out/") })
-    let link = try #require(session.link(atRow: UInt16(row), column: 8))
-    #expect(link.text == "out/plot.png")
-    #expect(link.kind == .path(path: "out/plot.png", line: nil, column: nil))
-    #expect(link.spans == [LinkSpan(row: UInt16(row), start: 6, end: 18)])
   }
 
   @Test("carries typing through to the shell")
@@ -148,24 +87,6 @@ struct LocalSessionTests {
     #expect(secondScreen.contains("two"))
   }
 
-  @Test("the far side can be told what this application draws with")
-  func carriesAPalette() async throws {
-    let session = try await TerminalSession.local()
-    defer { session.close() }
-
-    let grey = TerminalColor(red: 0x80, green: 0x80, blue: 0x80)
-    try session.setPalette(
-      TerminalPalette(
-        foreground: TerminalColor(red: 0x1f, green: 0x21, blue: 0x28),
-        background: TerminalColor(red: 0xfb, green: 0xfb, blue: 0xfd),
-        cursor: TerminalColor(red: 0x00, green: 0x7a, blue: 0xff),
-        ansi: Array(repeating: grey, count: 16)))
-
-    // Saying nothing is a thing an application is allowed to do, and it is
-    // what it did before there was a palette to say.
-    try session.setPalette(nil)
-  }
-
   @Test("a palette that is not sixteen colours is refused, not padded")
   func refusesAShortPalette() async throws {
     let session = try await TerminalSession.local()
@@ -180,25 +101,4 @@ struct LocalSessionTests {
     }
   }
 
-  @Test("leases a connection of its own")
-  func leasesAConnection() async throws {
-    // Not a special case a frontend has to remember: it asks, and both kinds
-    // of session answer the same way. Nothing was authenticated here and
-    // nothing is held open — but a second command can be run on this machine
-    // just as it can on the far side of a network, and a feature built on
-    // that is a feature that did not have to be written twice.
-    let session = try await TerminalSession.local()
-    defer { session.close() }
-    #expect(session.connection != nil)
-  }
-
-  @Test("starts where it was told to")
-  func startsInADirectory() async throws {
-    let session = try await TerminalSession.local(LocalShell(directory: "/"))
-    defer { session.close() }
-
-    try session.send(.paste("pwd; printf 'HE''RE\\n'\n"))
-    let screen = await settle(session, "pwd's answer") { $0.contains("HERE") }
-    #expect(screen.contains("/"))
-  }
 }

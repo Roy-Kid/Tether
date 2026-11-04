@@ -5,14 +5,6 @@ import TetherPluginKit
 @testable import TetherPluginHost
 
 @Test @MainActor
-func readingWithoutAGrantFails() async throws {
-  let host = try await activatedHost()
-  let response = await host.perform(request("document.read", session: host.liveSessions.first!, payload: .object([:])))
-  #expect(response.ok == false)
-  #expect(response.error == "noGrant")
-}
-
-@Test @MainActor
 func aGrantReturnsBytesAndNoPath() async throws {
   let consent = ScriptedConsent(allow: true)
   let (host, root) = try await installedHost(consent: consent)
@@ -30,21 +22,6 @@ func aGrantReturnsBytesAndNoPath() async throws {
   let text = try RPCCodec.encode(response)
   #expect(!text.contains(root.path))
   #expect(!text.contains("\"path\""))
-}
-
-@Test @MainActor
-func aHandleFromAnotherActivationFails() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
-  let first = try host.install(directory: try Fixture.make(id: "fixture.one"))
-  let second = try host.install(directory: try Fixture.make(id: "fixture.two", suffixes: ["other"]))
-  let sessionA = try await host.activate(id: first.id, runtime: IdleRuntime())
-  let sessionB = try await host.activate(id: second.id, runtime: IdleRuntime())
-  let handle = try await host.grant(session: sessionA, bytes: Data("secret".utf8))
-
-  let response = await host.perform(
-    request("document.read", session: sessionB, payload: .object(["handle": .string(handle.id.uuidString)])))
-  #expect(response.ok == false)
-  #expect(response.error == "invalidHandle")
 }
 
 @Test @MainActor
@@ -105,19 +82,6 @@ func thePageCannotSpeakAsAnotherSession() async throws {
   #expect(response.error == "invalidHandle")
 }
 
-@Test
-func consentIsATitleAndAVerb() {
-  let dialog = ConsentPrompt.dialog(pluginName: "Fixture", permission: .documentRead)
-  #expect(dialog.title == "Fixture")
-  #expect(dialog.message == "document.read")
-  #expect(dialog.actions.map(\.title) == ["Allow", "Cancel"])
-  #expect(dialog.actions.map(\.role) == [.confirm, .cancel])
-  let ending = PluginDialog(.confirm("End this session?", verb: "End", destructive: true))
-  #expect(ending.dialog.title == "End this session?")
-  #expect(ending.dialog.actions.map(\.title) == ["Cancel", "End"])
-  #expect(ending.dialog.actions.map(\.role) == [.cancel, .destructive])
-}
-
 @Test @MainActor
 func aPageAndANativeCallerShareTheHost() async throws {
   let presenter = RecordedPresenter()
@@ -147,29 +111,6 @@ func aPageAndANativeCallerShareTheHost() async throws {
     ])))
   #expect(asked.payload.key("action")?.string == "keep")
   #expect(presenter.prompts.map(\.title) == ["Replace?"])
-}
-
-@Test @MainActor
-func thePageReadsTheTabItWasOpenedAgainst() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
-  let record = try host.install(directory: try Fixture.make())
-  let hostID = UUID()
-  var reconnected = 0
-  let session = try await host.activate(
-    id: record.id, runtime: IdleRuntime(),
-    environment: PluginEnvironment(hostID: hostID, hostLabel: "lab", shellLabel: "zsh", connected: false),
-    reconnect: { reconnected += 1 })
-  let context = await host.perform(request("host.context", session: session, payload: .object([:])))
-  #expect(context.payload.key("hostID")?.string == hostID.uuidString)
-  #expect(context.payload.key("hostLabel")?.string == "lab")
-  #expect(context.payload.key("shellLabel")?.string == "zsh")
-  #expect(context.payload.key("connected")?.bool == false)
-  let again = await host.perform(request("host.reconnect", session: session, payload: .object([:])))
-  #expect(again.ok)
-  #expect(again.payload.key("connected")?.bool == true)
-  #expect(reconnected == 1)
-  let missing = await host.perform(request("host.reconnect", session: UUID(), payload: .object([:])))
-  #expect(missing.error == "noSession")
 }
 
 @MainActor

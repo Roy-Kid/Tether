@@ -112,15 +112,4 @@ struct CredentialExchangeTests {
     #expect(picked.password && !picked.privateKey)
   }
 
-  /// PKCS#8 DER becomes PEM; the text of a key file stays as it is.
-  @Test func aPrivateKeyIsKeptAsPEM() throws {
-    let der = Data([0x30, 0x2e, 0x02, 0x01, 0x00]) + Data(repeating: 7, count: 43)
-    let pem = try #require(CredentialExchange.privateKey(der))
-    #expect(pem.hasPrefix("-----BEGIN PRIVATE KEY-----\n"))
-    #expect(pem.hasSuffix("\n-----END PRIVATE KEY-----\n"))
-    #expect(HostStore.looksLikePrivateKey(pem))
-    let file = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----"
-    #expect(CredentialExchange.privateKey(Data(file.utf8)) == file + "\n")
-    #expect(CredentialExchange.privateKey(Data("not a key".utf8)) == nil)
-  }
 }

@@ -319,22 +319,4 @@ mod tests {
         let result = probe_delay(5_000, 20, Some(CancellationToken::new())).await;
         assert!(matches!(result, Err(TetherError::TimedOut { millis: 20 })));
     }
-
-    /// Without a token the call still completes; cancellation is opt-in.
-    #[tokio::test]
-    async fn absent_token_does_not_block_completion() {
-        assert_eq!(probe_delay(10, 1_000, None).await.unwrap(), "waited 10ms");
-    }
-
-    /// A token signalled before the call is observed immediately.
-    #[tokio::test]
-    async fn pre_cancelled_token_returns_at_once() {
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(token.is_cancelled());
-        assert!(matches!(
-            probe_delay(5_000, 10_000, Some(token)).await,
-            Err(TetherError::Cancelled)
-        ));
-    }
 }

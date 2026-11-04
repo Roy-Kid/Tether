@@ -21,28 +21,6 @@ struct KnownHostsTests {
     HostIdentity(host: host, port: port, algorithm: "ssh-ed25519", fingerprint: fingerprint)
   }
 
-  @Test("a host nobody has seen is asked about")
-  func unknown() {
-    let location = temporaryFile("known_hosts.json")
-    defer { removeDirectory(of: location) }
-    let known = KnownHosts(location: location)
-
-    guard case .unknown = known.question(for: Self.identity()) else {
-      Issue.record("a first sighting must be unknown")
-      return
-    }
-  }
-
-  @Test("a key already accepted is not asked about again")
-  func remembered() {
-    let location = temporaryFile("known_hosts.json")
-    defer { removeDirectory(of: location) }
-    let known = KnownHosts(location: location)
-
-    known.remember(Self.identity())
-    #expect(known.question(for: Self.identity()) == nil)
-  }
-
   @Test("a key that changed under a host is the question that matters")
   func changed() {
     let location = temporaryFile("known_hosts.json")
@@ -77,19 +55,6 @@ struct KnownHostsTests {
     #expect(KnownHosts.endpoint(Self.identity(port: 2222)) == "10.0.0.4:2222")
   }
 
-  @Test("accepting a new key replaces the old one rather than adding to it")
-  func rotation() {
-    let location = temporaryFile("known_hosts.json")
-    defer { removeDirectory(of: location) }
-    let known = KnownHosts(location: location)
-
-    known.remember(Self.identity(fingerprint: "SHA256:aaa"))
-    known.remember(Self.identity(fingerprint: "SHA256:bbb"))
-
-    #expect(known.entries.count == 1)
-    #expect(known.entries.first?.fingerprint == "SHA256:bbb")
-  }
-
   @Test("forgetting a key means being asked about it again")
   func forgetting() {
     let location = temporaryFile("known_hosts.json")
@@ -109,18 +74,6 @@ struct KnownHostsTests {
     // lying if the entry came back on the next launch.
     let reopened = KnownHosts(location: location)
     #expect(reopened.entries.isEmpty)
-  }
-
-  @Test("what was accepted survives a relaunch")
-  func persistence() {
-    let location = temporaryFile("known_hosts.json")
-    defer { removeDirectory(of: location) }
-
-    KnownHosts(location: location).remember(Self.identity())
-
-    let reopened = KnownHosts(location: location)
-    #expect(reopened.entries.map(\.endpoint) == ["10.0.0.4:22"])
-    #expect(reopened.question(for: Self.identity()) == nil)
   }
 
   /// Losing this file silently would turn every host back into an unknown

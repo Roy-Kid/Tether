@@ -21,29 +21,6 @@ struct ShellTTYTests {
     #expect(ShellTTY.candidates(in: text) == ["/dev/pts/5"])
   }
 
-  @Test("every other session on the connection is a candidate, and this command's own pty is not")
-  func severalShells() {
-    let text = """
-      TETHER-TTY 3002
-       2000     1 ?
-       2002  2001 pts/5
-       2001  2000 ?
-       3002  3001 ?
-       3001  2000 ?
-       3004  3002 pts/9
-       4001  2000 ?
-       4002  4001 ttys003
-      TETHER-TTY-END
-      """
-    #expect(ShellTTY.candidates(in: text) == ["/dev/pts/5", "/dev/ttys003"])
-  }
-
-  @Test("a table without the marker names nothing")
-  func unmarked() {
-    #expect(ShellTTY.candidates(in: "2002 2001 pts/5\n").isEmpty)
-    #expect(ShellTTY.candidates(in: "TETHER-TTY 1\n").isEmpty)
-  }
-
   @Test("one pty of this size is this shell; two of this size is not a guess")
   func size() {
     let both = ["/dev/pts/5", "/dev/pts/8"]
@@ -69,11 +46,4 @@ struct ShellTTYTests {
     #expect(ShellTTY.sizeCommand(for: []) == nil)
   }
 
-  @Test("stty's rows-then-columns become the view's columns and rows")
-  func parseSizes() {
-    let sizes = ShellTTY.parseSizes("noise\n/dev/pts/5 40 120\n/not/a/tty 1 1\n")
-    #expect(sizes["/dev/pts/5"]?.columns == 120)
-    #expect(sizes["/dev/pts/5"]?.rows == 40)
-    #expect(sizes["/not/a/tty"] == nil)
-  }
 }

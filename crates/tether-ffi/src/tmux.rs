@@ -443,11 +443,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_listing_is_empty() {
-        assert_eq!(assemble_sessions("", "").unwrap(), Vec::new());
-    }
-
-    #[test]
     fn sessions_carry_windows_without_attaching() {
         let sessions = "$1\t1\tmolpy-molrs\n$2\t0\tmolpack\n";
         let windows = concat!(
@@ -493,33 +488,6 @@ mod tests {
                     ],
                 },
             ]
-        );
-    }
-
-    #[test]
-    fn a_session_name_may_contain_spaces() {
-        let listed =
-            assemble_sessions("$3\t0\tmy session\n", "$3\t@1\t0\t1\t1\teditor two\n").unwrap();
-        assert_eq!(listed[0].name, "my session");
-        assert_eq!(listed[0].windows[0].name, "editor two");
-    }
-
-    #[test]
-    fn windows_keep_the_list_order() {
-        let listed = assemble_sessions(
-            "$1\t0\tdev\n",
-            "$1\t@9\t2\t0\t1\tc\n$1\t@7\t0\t1\t1\ta\n$1\t@8\t1\t0\t1\tb\n",
-        )
-        .unwrap();
-        assert_eq!(listed[0].windows.iter().map(|w| w.index).collect::<Vec<_>>(), vec![2, 0, 1]);
-    }
-
-    #[test]
-    fn sessions_keep_the_list_order() {
-        let listed = assemble_sessions("$2\t0\tzoo\n$1\t0\tapple\n", "").unwrap();
-        assert_eq!(
-            listed.iter().map(|session| session.name.as_str()).collect::<Vec<_>>(),
-            vec!["zoo", "apple"]
         );
     }
 

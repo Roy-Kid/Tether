@@ -33,7 +33,9 @@ done
 export MACOSX_DEPLOYMENT_TARGET=26.0
 export IPHONEOS_DEPLOYMENT_TARGET=26.0
 
-TARGETS=(aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim)
+# A check names the slices it runs on: no check runs on a device, so it
+# builds no device slice. What ships has all three.
+read -r -a TARGETS <<< "${TETHER_XCFRAMEWORK_TARGETS:-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim}"
 LIB=libtether_ffi.a
 OUT=swift/Artifacts
 STAGE=target/xcframework

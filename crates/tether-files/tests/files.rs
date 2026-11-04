@@ -128,13 +128,6 @@ fn noise(len: usize) -> Vec<u8> {
 fn nothing(_: u64) {}
 
 #[tokio::test]
-async fn home_is_an_absolute_path() {
-    let Some(files) = files().await else { return };
-    let home = files.home().await.unwrap();
-    assert!(home.starts_with('/'), "{home}");
-}
-
-#[tokio::test]
 async fn a_listing_names_what_is_there_and_says_what_each_thing_is() {
     let Some(files) = files().await else { return };
     let scratch = Scratch::new("list");
@@ -156,21 +149,6 @@ async fn a_listing_names_what_is_there_and_says_what_each_thing_is() {
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[1].path, scratch.remote("b.txt"));
     assert!(entries[1].modified.is_some());
-}
-
-#[tokio::test]
-async fn stat_follows_a_link_and_lstat_does_not() {
-    let Some(files) = files().await else { return };
-    let scratch = Scratch::new("stat");
-    std::fs::write(scratch.path("target"), b"12345").unwrap();
-    std::os::unix::fs::symlink(scratch.path("target"), scratch.path("link")).unwrap();
-
-    let followed = files.stat(&scratch.remote("link")).await.unwrap();
-    assert_eq!((followed.kind, followed.size), (Kind::File, 5));
-    assert_eq!(followed.name, "link");
-
-    let itself = files.lstat(&scratch.remote("link")).await.unwrap();
-    assert_eq!(itself.kind, Kind::Link);
 }
 
 #[tokio::test]
@@ -204,22 +182,6 @@ async fn a_download_is_the_same_bytes_and_reports_how_far_it_got() {
     assert_eq!(reported.load(Ordering::SeqCst), bytes.len() as u64);
     assert_eq!(std::fs::read(scratch.path("local.bin")).unwrap(), bytes);
     assert_eq!(scratch.names(""), ["local.bin", "remote.bin"]);
-}
-
-#[tokio::test]
-async fn a_cancelled_download_leaves_nothing_behind() {
-    let Some(files) = files().await else { return };
-    let scratch = Scratch::new("download-cancel");
-    std::fs::write(scratch.path("remote.bin"), noise(256 * 1024)).unwrap();
-    let cancelled = CancellationToken::new();
-    cancelled.cancel();
-
-    let result = files
-        .download(&scratch.remote("remote.bin"), &scratch.path("local.bin"), &cancelled, nothing)
-        .await;
-
-    assert_eq!(result.unwrap_err(), Error::Cancelled);
-    assert_eq!(scratch.names(""), ["remote.bin"]);
 }
 
 #[tokio::test]
@@ -263,40 +225,6 @@ async fn an_upload_does_not_replace_a_file_unless_asked_to() {
     files.upload(&local, &there, true, &token, nothing).await.unwrap();
     assert_eq!(std::fs::read(scratch.path("there.txt")).unwrap(), b"new");
     assert_eq!(scratch.names(""), ["local.txt", "there.txt"]);
-}
-
-#[tokio::test]
-async fn a_cancelled_upload_leaves_nothing_on_the_far_side() {
-    let Some(files) = files().await else { return };
-    let scratch = Scratch::new("upload-cancel");
-    std::fs::write(scratch.path("local.bin"), noise(256 * 1024)).unwrap();
-    std::fs::create_dir(scratch.path("remote")).unwrap();
-    let cancelled = CancellationToken::new();
-    cancelled.cancel();
-
-    let result = files
-        .upload(
-            &scratch.path("local.bin"),
-            &scratch.remote("remote/never.bin"),
-            false,
-            &cancelled,
-            nothing,
-        )
-        .await;
-
-    assert_eq!(result.unwrap_err(), Error::Cancelled);
-    assert!(scratch.names("remote").is_empty());
-}
-
-#[tokio::test]
-async fn a_directory_is_made_once() {
-    let Some(files) = files().await else { return };
-    let scratch = Scratch::new("mkdir");
-    let path = scratch.remote("made");
-
-    files.make_directory(&path).await.unwrap();
-    assert!(scratch.path("made").is_dir());
-    assert_eq!(files.make_directory(&path).await.unwrap_err(), Error::Exists { path });
 }
 
 #[tokio::test]

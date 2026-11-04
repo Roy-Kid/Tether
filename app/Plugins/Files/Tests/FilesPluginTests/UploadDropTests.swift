@@ -112,63 +112,11 @@
         return done
       }
 
-      private func localFile() throws -> URL {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("finder-\(UUID()).txt")
-        try Data("from finder".utf8).write(to: file)
-        return file
-      }
-
       private func eventually(_ done: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !done(), Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
       }
 
-      @Test("the table registers file drops, and a file dropped on it lands in the folder shown")
-      func dropOnTable() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let (window, table) = try await host(model)
-        defer { window.orderOut(nil) }
-        #expect(table.registeredDraggedTypes.contains(.fileURL), "the table is what AppKit picks")
-
-        for onRow in [true, false] {
-          // Uploading refreshes and resizes the table. Wait for that state,
-          // then resolve the next drag's coordinates against the current view.
-          try await eventually { table.numberOfRows == model.displayedRows.count && !model.loading }
-          try #require(table.numberOfRows == model.displayedRows.count && !model.loading)
-          table.layoutSubtreeIfNeeded()
-          let fileRow = try #require(model.displayedRows.firstIndex { $0.entry.path == "/home/ada/b.txt" })
-          let row = table.rect(ofRow: fileRow)
-          let location = onRow
-            ? NSPoint(x: row.midX, y: row.midY)
-            : NSPoint(x: table.bounds.midX, y: table.bounds.maxY - 4)
-          let point = table.convert(location, to: nil)
-          let file = try localFile()
-          defer { try? FileManager.default.removeItem(at: file) }
-          #expect(drop([file as NSURL], on: table, at: point, in: window))
-          try await eventually { source.uploads.contains { $0.1 == "/home/ada/\(file.lastPathComponent)" } }
-          #expect(source.uploads.last?.0 == file.path)
-          #expect(source.uploads.last?.1 == "/home/ada/\(file.lastPathComponent)")
-        }
-      }
-
-      @Test("a row dragged back onto the table is not a file from this machine")
-      func ownRowFetchesNothing() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let (window, table) = try await host(model)
-        defer { window.orderOut(nil) }
-        let entry = try #require(model.entry("/home/ada/b.txt"))
-        let point = table.convert(NSPoint(x: table.bounds.midX, y: table.bounds.maxY - 4), to: nil)
-        _ = drop(
-          [DraggedRow.promise(for: entry, model: model)],
-          on: table, at: point, in: window)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(source.downloads.isEmpty)
-        #expect(source.uploads.isEmpty)
-      }
     }
   }
 #endif

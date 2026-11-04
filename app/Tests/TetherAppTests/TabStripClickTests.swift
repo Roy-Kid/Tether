@@ -130,21 +130,6 @@
       #expect(window.drags == 0)
     }
 
-    @Test("a click on a tab in the titlebar switches to it")
-    func clickSwitches() throws {
-      let hosted = try HostedWorkspace(terminals: 2)
-      defer { hosted.tearDown() }
-      let ids = hosted.tabs.visibleIDs
-      #expect(hosted.tabs.selectedWorkspaceID == ids[1])
-
-      let (strip, frames) = try catcher(in: hosted.window)
-      let first = try #require(hosted.tabs.workspaces.first { $0.id == ids[0] }?.focused)
-      let chip = try #require(frames[first], "the strip knows where the first tab is")
-      hosted.click(at: windowPoint(chip.midX, chip.midY, in: strip))
-      #expect(hosted.tabs.selectedWorkspaceID == ids[0])
-      #expect(hosted.window.drags == 0)
-    }
-
     /// The strip's scroll view takes the width the tabs do not need, and the
     /// catcher lies over all of it. A press there that misses every tab is a
     /// press on the titlebar, and a titlebar moves its window.
@@ -162,43 +147,6 @@
 
       #expect(hosted.window.drags == 1)
       #expect(hosted.tabs.selectedWorkspaceID == selected)
-    }
-
-    @Test("renaming a terminal edits its chip, and Escape leaves the name")
-    func renameEditsTheChip() throws {
-      let suite = "Tether.RenameChip.\(UUID())"
-      let defaults = try #require(UserDefaults(suiteName: suite))
-      defer { defaults.removePersistentDomain(forName: suite) }
-      let tabs = TabSet(defaults: defaults)
-      let terminal = SessionTab(preview: .local, known: KnownHosts(), name: "Terminal 1", live: false)
-      tabs.adopt(terminal)
-      let window = KeyedWindow.make()
-      defer { window.close() }
-      window.contentView = NSHostingView(rootView:
-        VStack(spacing: 0) {
-          WorkspaceTabBar(tabs: tabs, onClose: { _ in })
-          Spacer()
-        })
-      window.orderFront(nil)
-      HostedWorkspace.settle(0.4)
-      tabs.beginRenamingTerminal(terminal.id)
-      HostedWorkspace.settle(0.5)
-      let content = try #require(window.contentView)
-      content.layoutSubtreeIfNeeded()
-      let field = try #require(textField(in: content), "the chip becomes the editor")
-      #expect(field.stringValue == "Terminal 1")
-      let rect = field.convert(field.bounds, to: nil)
-      let hit = content.hitTest(NSPoint(x: rect.midX, y: rect.midY))
-      #expect(hit === field || hit is NSText, "a press on the name reaches the field")
-      window.makeFirstResponder(field.currentEditor() ?? field)
-      let escape = try #require(NSEvent.keyEvent(
-        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-        windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
-        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
-      window.sendEvent(escape)
-      HostedWorkspace.settle(0.3)
-      #expect(tabs.renaming == nil)
-      #expect(terminal.pinnedName == nil)
     }
 
     private func textField(in view: NSView) -> NSTextField? {

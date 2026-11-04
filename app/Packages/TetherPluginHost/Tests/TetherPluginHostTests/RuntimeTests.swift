@@ -34,32 +34,3 @@ func navigationStaysInsideThePackage() throws {
   #expect(!WebOrigin.allows(URL(fileURLWithPath: "/tmp/plugin-root-other/payload.js"), root: root))
   #expect(!WebOrigin.allows(URL(fileURLWithPath: "/etc/passwd"), root: root))
 }
-
-@Test @MainActor
-func theBridgeScriptNamesOnlyThePluginChannel() {
-  let session = UUID()
-  let source = WebKitRuntime.bridgeScript(
-    session: session,
-    environment: PluginEnvironment(hostID: nil, hostLabel: "lab", shellLabel: "zsh", connected: true))
-  #expect(source.contains(session.uuidString))
-  #expect(source.contains("webkit.messageHandlers.plugin"))
-  #expect(source.contains("host.notify"))
-  #expect(source.contains("host.reconnect"))
-  #expect(source.contains("\"hostLabel\":\"lab\""))
-  #expect(!source.contains("dlopen"))
-  #expect(!source.contains("spawn"))
-}
-
-@Test @MainActor
-func webKitActivateThenUnloadReleasesTheView() async throws {
-  let host = PluginHost(consent: ScriptedConsent(allow: true), presenting: RecordedPresenter())
-  let record = try host.install(directory: try Fixture.make(id: "fixture.webkit"))
-  let runtime = WebKitRuntime()
-  let session = try await host.activate(id: record.id, runtime: runtime)
-  #expect(runtime.webView(for: session) != nil)
-
-  host.unload(session: session)
-  #expect(runtime.webView(for: session) == nil)
-  #expect(host.liveSessions.isEmpty)
-  #expect(host.record(record.id)?.status == .unloaded)
-}

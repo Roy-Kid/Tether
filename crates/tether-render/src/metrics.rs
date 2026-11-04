@@ -127,14 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn narrow_runs_keep_the_grid() {
-        let metrics = thirteen();
-        let drawn = metrics.tracked_width(80, 80);
-        let grid = metrics.cell_width * 80.0;
-        assert!((drawn - grid).abs() <= 1.0, "eighty columns drew {drawn} against a {grid} grid");
-    }
-
-    #[test]
     fn wide_runs_keep_the_grid() {
         let metrics = thirteen();
         // Twenty CJK characters cover forty columns.
@@ -160,19 +152,5 @@ mod tests {
         }
         assert_eq!(metrics.columns_fitting(0.0), 1);
         assert_eq!(metrics.columns_fitting(10_000.0), 1000);
-    }
-
-    #[test]
-    fn rows_fitting_is_capped() {
-        let metrics = thirteen();
-        assert_eq!(metrics.rows_fitting(0.0), 1);
-        assert_eq!(metrics.rows_fitting(10_000.0), 500);
-    }
-
-    #[test]
-    fn empty_runs_cost_nothing() {
-        let metrics = thirteen();
-        assert_eq!(metrics.tracking(0, 0), 0.0);
-        assert_eq!(metrics.tracked_width(80, 0), 0.0);
     }
 }

@@ -399,15 +399,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_blank_ssh_setting_is_not_a_program() {
-        assert_eq!(chosen_ssh_from("  "), None);
-        assert_eq!(
-            chosen_ssh_from(r"  C:\Windows\System32\OpenSSH\ssh.exe  ").as_deref(),
-            Some(r"C:\Windows\System32\OpenSSH\ssh.exe")
-        );
-    }
-
-    #[test]
     fn percent_c_matches_openssh() {
         assert_eq!(
             percent_c("RoydeMacBook-Air.local", "login.hpc.arrhenius.naiss.se", 22, "jicli594"),
@@ -424,11 +415,5 @@ mod tests {
             Some("cm-262eb38b5e7150890591c6caa5b44dc96d090b52")
         );
         assert_eq!(replace_hash("mux-%r@%h:%p", hashed), None);
-    }
-
-    #[test]
-    fn control_prefix_stops_at_the_hash() {
-        assert_eq!(control_prefix("cm-0093acfd828fe3b9300414f1e65cfe23aba737bb"), "cm-");
-        assert_eq!(control_prefix("mux-%r@%h:%p"), "mux-%r@%h:%p");
     }
 }

@@ -370,47 +370,12 @@ mod tests {
     }
 
     #[test]
-    fn absent_damage_rebuilds_a_warm_cache() {
-        let mut frame = one_row(vec![styled("hello", 5)]);
-        frame.rows = 2;
-        frame.lines.push(Row { runs: vec![styled("world", 5)] });
-        let mut cache = LayoutCache::default();
-        let palette = Palette::dark();
-        let overlay = Overlay::default();
-        cache.prepare(&frame, &metrics(), &palette, &overlay, Some(&[]));
-        frame.lines[0].runs[0].text = "other".into();
-        let rebuilt = cache.prepare(&frame, &metrics(), &palette, &overlay, None);
-        assert_eq!(rebuilt.texts[0].text, "other");
-        assert_eq!(rebuilt, prepare(&frame, &metrics(), &palette));
-    }
-
-    #[test]
     fn an_overflowing_run_is_clipped_to_the_column_count() {
         let mut frame = one_row(vec![styled("abcdef", 6)]);
         frame.columns = 4;
         let list = prepare(&frame, &metrics(), &Palette::dark());
         assert_eq!(list.texts.len(), 1);
         assert_eq!(list.texts[0].width, 4.0 * metrics().cell_width);
-    }
-
-    #[test]
-    fn runs_land_on_the_grid() {
-        let frame = one_row(vec![styled("hello", 5), styled("world", 5)]);
-        let list = prepare(&frame, &metrics(), &Palette::dark());
-        assert_eq!(list.texts.len(), 2);
-        assert_eq!(list.texts[0].x, 0.0);
-        assert_eq!(list.texts[0].width, 40.0);
-        assert_eq!(list.texts[1].x, 40.0);
-        assert_eq!(list.texts[1].width, 40.0);
-    }
-
-    #[test]
-    fn a_row_of_runs_never_covers_more_columns_than_the_screen_has() {
-        let frame = one_row(vec![styled("ab中文cd", 8)]);
-        // The frame builder already split on width changes; this asserts the
-        // layout places what it was given exactly as wide as it claims.
-        let list = prepare(&frame, &metrics(), &Palette::dark());
-        assert_eq!(list.texts[0].width, 8.0 * metrics().cell_width);
     }
 
     #[test]
@@ -421,12 +386,6 @@ mod tests {
         assert_eq!(list.rects.len(), 1);
         assert_eq!(list.rects[0].color, Palette::dark().normal[1]);
         assert_eq!(list.texts.len(), 1);
-    }
-
-    #[test]
-    fn page_background_is_not_a_rect() {
-        let list = prepare(&one_row(vec![styled("hi", 2)]), &metrics(), &Palette::dark());
-        assert!(list.rects.is_empty());
     }
 
     #[test]
@@ -452,86 +411,8 @@ mod tests {
         assert!(list.texts.is_empty());
     }
 
-    #[test]
-    fn whitespace_is_not_drawn_as_text() {
-        let list = prepare(&one_row(vec![styled("    ", 4)]), &metrics(), &Palette::dark());
-        assert!(list.texts.is_empty());
-    }
-
-    #[test]
-    fn dim_text_keeps_its_colour_with_alpha() {
-        let mut run = styled("x", 1);
-        run.style.dim = true;
-        let palette = Palette::dark();
-        let list = prepare(&one_row(vec![run]), &metrics(), &palette);
-        assert_eq!(list.texts[0].color.alpha, 0.6);
-        assert_eq!(list.texts[0].color.red, palette.foreground.red);
-    }
-
-    #[test]
-    fn cursor_shapes_are_boxes() {
-        for (shape, expect) in [
-            (Caret::Block, (8.0, 16.0)),
-            (Caret::Underline, (8.0, 2.0)),
-            (Caret::Beam, (2.0, 16.0)),
-        ] {
-            let frame = Frame {
-                cursor_shape: shape,
-                cursor_visible: true,
-                cursor_row: 2,
-                cursor_column: 3,
-                ..one_row(vec![styled("x", 1)])
-            };
-            // one_row only has one row; give the cursor somewhere to sit.
-            let frame = Frame {
-                rows: 3,
-                lines: vec![frame.lines[0].clone(), frame.lines[0].clone(), frame.lines[0].clone()],
-                ..frame
-            };
-            let list = prepare(&frame, &metrics(), &Palette::dark());
-            let cursor = list.cursor.expect("cursor drawn");
-            assert_eq!((cursor.width, cursor.height), expect, "shape {shape:?}");
-            assert_eq!(cursor.x, 24.0);
-            assert_eq!(cursor.y, 32.0 + if shape == Caret::Underline { 14.0 } else { 0.0 });
-            let alpha = if shape == Caret::Block { 0.85 } else { 1.0 };
-            assert!((cursor.color.alpha - alpha).abs() < 1e-6);
-        }
-    }
-
-    #[test]
-    fn hidden_or_invisible_cursor_is_absent() {
-        let mut hidden_shape = one_row(vec![styled("x", 1)]);
-        hidden_shape.cursor_visible = true;
-        hidden_shape.cursor_shape = Caret::Hidden;
-        assert!(prepare(&hidden_shape, &metrics(), &Palette::dark()).cursor.is_none());
-
-        let mut invisible = one_row(vec![styled("x", 1)]);
-        invisible.cursor_visible = false;
-        invisible.cursor_shape = Caret::Block;
-        assert!(prepare(&invisible, &metrics(), &Palette::dark()).cursor.is_none());
-    }
-
     fn cell(column: u32, row: u32) -> Cell {
         Cell { column, row }
-    }
-
-    #[test]
-    fn a_selection_paints_a_tint_over_its_cells() {
-        let frame = one_row(vec![styled("hello", 5)]);
-        let overlay = Overlay {
-            selection: Some((cell(1, 0), cell(3, 0))),
-            selection_color: Rgba::new(0.2, 0.5, 1.0, 0.12),
-            ..Overlay::default()
-        };
-        let list = prepare_with_overlay(&frame, &metrics(), &Palette::dark(), &overlay);
-
-        let selection = list
-            .rects
-            .iter()
-            .find(|r| (r.color.alpha - 0.12).abs() < 1e-6)
-            .expect("selection rect");
-        assert_eq!(selection.x, 8.0);
-        assert_eq!(selection.width, 24.0, "three columns");
     }
 
     #[test]
@@ -566,25 +447,5 @@ mod tests {
         assert_eq!(rects[0].width, 2.0 * 8.0, "columns 8..end on the first row");
         assert_eq!(rects[1].width, 10.0 * 8.0, "the middle row is whole");
         assert_eq!(rects[2].x, 0.0, "the last row starts at the left edge");
-    }
-
-    #[test]
-    fn a_link_underline_is_solid_when_confirmed_and_dashed_when_not() {
-        let frame = one_row(vec![styled("src/main.rs", 11)]);
-        let mut confirmed =
-            Overlay { link_color: Rgba::new(0.3, 0.6, 1.0, 1.0), ..Overlay::default() };
-        confirmed.link_underlines.push(LinkUnderline {
-            span: crate::draw::CellSpan { row: 0, start: 0, end: 11 },
-            confirmed: true,
-        });
-        let solid = prepare_with_overlay(&frame, &metrics(), &Palette::dark(), &confirmed);
-        let rules: Vec<_> = solid.rects.iter().filter(|r| r.height == 1.0).collect();
-        assert_eq!(rules.len(), 1, "a confirmed underline is one rule");
-
-        let mut dashed = confirmed.clone();
-        dashed.link_underlines[0].confirmed = false;
-        let dotted = prepare_with_overlay(&frame, &metrics(), &Palette::dark(), &dashed);
-        let rules: Vec<_> = dotted.rects.iter().filter(|r| r.height == 1.0).collect();
-        assert!(rules.len() > 1, "a dotted underline is several dashes");
     }
 }

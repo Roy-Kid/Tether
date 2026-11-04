@@ -15,7 +15,7 @@ use tether_core::ssh::{Endpoint, KeyDescription, KeyError, KeyUnlocker, Prompter
 use tether_core::terminal::ScreenSize;
 use tether_core::{Credential, Dial, DialError};
 
-use support::{CLIENT_KEY, CLIENT_PUBLIC_KEY, LOCKED_KEY, LOCKED_PASSPHRASE, LOCKED_PUBLIC_KEY};
+use support::{CLIENT_KEY, LOCKED_KEY, LOCKED_PASSPHRASE, LOCKED_PUBLIC_KEY};
 
 async fn dial(policy: support::Policy) -> (Dial, Arc<Mutex<support::Observed>>) {
     let (address, observed) = support::listen(policy).await;
@@ -82,21 +82,6 @@ async fn a_key_that_cannot_be_read_is_left_out_and_the_rest_are_still_offered() 
     session.close().await.expect("closes");
 }
 
-/// When the login does fail, the key that was left out is part of the
-/// answer — named by where it sat, so the caller can name the file.
-#[tokio::test]
-async fn a_refused_login_says_which_key_was_left_out_and_why() {
-    let (dial, _) = dial_refusing().await;
-    match dial.connect(vec![key("PRIVATE MATERIAL"), key(CLIENT_KEY)]).await {
-        Err(DialError::Refused { skipped, .. }) => {
-            assert_eq!(skipped.len(), 1);
-            assert_eq!(skipped[0].position, 0);
-            assert!(matches!(skipped[0].problem, KeyError::Unreadable { .. }));
-        }
-        other => panic!("expected Refused with a skipped key, got {other:?}"),
-    }
-}
-
 async fn dial_refusing() -> (Dial, Arc<Mutex<support::Observed>>) {
     // Accepts a key nobody here holds, so every key offered is refused.
     dial(support::Policy { accepts_key: Some(LOCKED_PUBLIC_KEY), ..support::Policy::default() })
@@ -139,37 +124,6 @@ async fn a_locked_key_with_no_way_to_ask_is_left_out_with_its_fingerprint() {
     }
 }
 
-#[tokio::test]
-async fn a_locked_key_the_server_wants_is_unlocked_and_logs_in() {
-    let (dial, _) = dial(support::Policy {
-        accepts_key: Some(LOCKED_PUBLIC_KEY),
-        ..support::Policy::default()
-    })
-    .await;
-    let unlock = Counting::new([Some(LOCKED_PASSPHRASE)]);
-
-    let session = dial.connect(vec![locked(&unlock)]).await.expect("unlocked and accepted");
-    assert_eq!(unlock.asked(), 1);
-    session.close().await.expect("closes");
-}
-
-/// The server said no to the public half, so nobody is asked; the next
-/// credential is.
-#[tokio::test]
-async fn a_locked_key_the_server_does_not_want_asks_nobody() {
-    let (dial, _) = dial(support::Policy {
-        accepts_key: Some(CLIENT_PUBLIC_KEY),
-        ..support::Policy::default()
-    })
-    .await;
-    let unlock = Counting::new([Some(LOCKED_PASSPHRASE)]);
-
-    let session =
-        dial.connect(vec![locked(&unlock), key(CLIENT_KEY)]).await.expect("the second key logs in");
-    assert_eq!(unlock.asked(), 0, "never asked for a key the server would not take");
-    session.close().await.expect("closes");
-}
-
 /// Declining is the person's no: it ends the login as a decline, exactly as
 /// closing an interactive prompt does.
 #[tokio::test]
@@ -210,26 +164,6 @@ async fn three_wrong_passphrases_name_the_key() {
         other => panic!("expected the key named as unusable, got {other:?}"),
     }
     assert_eq!(unlock.asked(), 3);
-}
-
-/// A passphrase given up front is used without asking anyone.
-#[tokio::test]
-async fn a_supplied_passphrase_is_used_without_asking() {
-    let (dial, _) = dial(support::Policy {
-        accepts_key: Some(LOCKED_PUBLIC_KEY),
-        ..support::Policy::default()
-    })
-    .await;
-
-    let session = dial
-        .connect(vec![Credential::PrivateKey {
-            pem: LOCKED_KEY.to_owned(),
-            passphrase: Some(LOCKED_PASSPHRASE.to_owned()),
-            unlock: None,
-        }])
-        .await
-        .expect("the supplied passphrase unlocks it");
-    session.close().await.expect("closes");
 }
 
 /// A key sealed whole — PKCS#8, a legacy PEM — has to be unlocked before

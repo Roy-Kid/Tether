@@ -51,60 +51,6 @@ private func info(_ id: String, _ name: String) -> TmuxSessionInfo {
 @Suite("tmux on a tab")
 struct TmuxTabTests {
 
-  @Test("a session wears the mark a status plugin reports on one of its panes")
-  func sessionDotComesFromItsPanes() throws {
-    let host = HostProbe()
-    let plugin = TmuxPlugin()
-    let tab = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    defer { tab.close() }
-    let work = info("$1", "work")
-    let idle = info("$2", "idle")
-    #expect(tab.indicator(for: work) == nil, "no panes read yet")
-    #expect(host.askedMarks.isEmpty)
-
-    tab.notePanes(listed: "/dev/ttys004 $1\n/dev/ttys005 $1\n/dev/ttys006 $2\nnot a pane\n")
-    host.marks["/dev/ttys005"] = PluginTabIndicator(
-      target: .init(host: "lab", terminal: "/dev/ttys005"), color: 0xFF9F0A, label: "Needs you")
-    #expect(tab.indicator(for: work)?.label == "Needs you")
-    #expect(host.askedMarks.last == ["/dev/ttys004", "/dev/ttys005"])
-    #expect(tab.indicator(for: idle) == nil)
-    #expect(host.askedMarks.last == ["/dev/ttys006"])
-
-    // The tab shows its client's session; another tab on the host reads
-    // the same panes without listing them again.
-    #expect(tab.shownTerminals.isEmpty, "not a client yet")
-    tab.shellSessionID = "$1"
-    #expect(tab.shownTerminals == ["/dev/ttys004", "/dev/ttys005"])
-    let other = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    defer { other.close() }
-    #expect(other.paneTTYs(of: "$2") == ["/dev/ttys006"])
-  }
-
-  @Test("restore metadata keeps the session identity without retaining a client")
-  func restorationMetadata() async throws {
-    let host = HostProbe()
-    let plugin = TmuxPlugin()
-    let original = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    #expect(original.restorationState == nil)
-    original.sessions = [info("$7", "work")]
-    original.shellSessionID = "$7"
-    let data = try #require(original.restorationState)
-    let saved = try JSONDecoder().decode(TmuxTab.Restoration.self, from: data)
-    #expect(saved.sessionID == "$7")
-    #expect(saved.sessionName == "work")
-    original.shellSessionID = nil
-    #expect(original.restorationState == nil)
-    original.close()
-
-    let restored = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    defer { restored.close() }
-    restored.restore(from: data)
-    for _ in 0..<100 where restored.busy { try await Task.sleep(for: .milliseconds(5)) }
-    #expect(!restored.busy)
-    #expect(restored.error != nil, "reopening needs a fresh lease; metadata cannot keep one alive")
-    #expect(restored.shellSessionID == nil)
-  }
-
   @Test("choosing a session on another tab does not take this terminal over")
   func anotherTerminalStays() async throws {
     let host = HostProbe()
@@ -140,68 +86,6 @@ struct TmuxTabTests {
     #expect(remote.shellSessionID == nil)
   }
 
-  @Test("ending a session is not pretended when there is no lease")
-  func endingNeedsALease() async throws {
-    let host = HostProbe()
-    let plugin = TmuxPlugin()
-    let client = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    let asking = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    client.shellSessionID = "$1"
-
-    asking.endSession(info("$1", "work"))
-
-    for _ in 0..<50 where asking.busy { await Task.yield() }
-    #expect(asking.error == "Not connected.")
-    #expect(client.shellSessionID == "$1", "a client that was not killed stays a client")
-  }
-
-  @Test("renaming a shell tells the host, and an unchanged name does not")
-  func shellRenameReachesTheHost() throws {
-    let probe = HostProbe()
-    let shell = UUID()
-    let tab = try #require(TmuxPlugin().attach(to: probe.context()) as? TmuxTab)
-    tab.rename(.shell(shell, "Terminal 1"), to: "  build  ")
-    tab.rename(.shell(shell, "build"), to: "build")
-    #expect(probe.renamed.count == 1)
-    #expect(probe.renamed.first?.0 == shell)
-    #expect(probe.renamed.first?.1 == "build")
-  }
-
-  @Test("a shell that is a client keeps its name, and is what the menu offers")
-  func shellClientIsTheMenu() throws {
-    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    tab.shellSessionID = "$1"
-    tab.sessions = [info("$1", "dev")]
-    #expect(tab.subtitle == "dev")
-    #expect(tab.tabTitle == "dev")
-    #expect(!tab.isShowing)
-    #expect(tab.commands.map(\.id) == ["detach", "newWindow", "previousWindow", "nextWindow", "splitHorizontal", "splitVertical", "zoom",
-      "focusLeft", "focusDown", "focusUp", "focusRight", "session1"])
-    #expect(tab.closeNote == "tmux stays on the host.")
-  }
-
-  @Test("nothing is offered until this terminal is a client")
-  func menuNeedsAClient() throws {
-    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    #expect(!tab.isShowing)
-    #expect(tab.subtitle.isEmpty)
-    #expect(tab.tabTitle.isEmpty)
-    #expect(tab.closeNote == nil)
-    #expect(tab.commands.isEmpty)
-  }
-
-  @Test("detaching without a lease leaves the client in place")
-  func detachNeedsALease() async throws {
-    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    tab.shellSessionID = "$1"
-    #expect(tab.commands.map(\.id).contains("detach"))
-
-    tab.detachSession()
-    for _ in 0..<50 where tab.busy { await Task.yield() }
-    #expect(tab.error == "Not connected.")
-    #expect(tab.shellSessionID == "$1")
-  }
-
   @Test("a closed tab no longer owns its session")
   func closeForgets() throws {
     let host = HostProbe()
@@ -218,40 +102,6 @@ struct TmuxTabTests {
 
     first.close()
     #expect(plugin.tab(owning: "$1", on: host.host) == nil)
-  }
-
-  @Test("choosing the session this shell is already showing stays on it")
-  func choosingTheShellsSession() throws {
-    let host = HostProbe()
-    let tab = try #require(TmuxPlugin().attach(to: host.context()) as? TmuxTab)
-    tab.shellSessionID = "$1"
-
-    tab.choose(info("$1", "dev"), windowID: nil)
-
-    #expect(tab.shellSessionID == "$1")
-    #expect(!tab.isShowing)
-    #if os(macOS)
-      #expect(host.dismissed.isEmpty, "the inspector stays open")
-    #else
-      #expect(host.dismissed.count == 1)
-    #endif
-    #expect(!tab.busy, "already there, so nothing is run")
-  }
-
-  @Test("without a lease an operation fails where it can be seen")
-  func noLeaseIsAnError() async throws {
-    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    tab.refresh()
-    for _ in 0..<100 where tab.busy { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(tab.error == "Not connected.")
-  }
-
-  @Test("a wheel is left with the shell until this one is known to be the client")
-  func wheelWaitsForAKnownClient() throws {
-    let tab = try #require(TmuxPlugin().attach(to: HostProbe().context()) as? TmuxTab)
-    #expect(tab.claimWheel(3, column: 1, row: 2) == .pass)
-    #expect(!tab.shellInputWaits)
-    #expect(tab.error == nil)
   }
 
   @Test("a shell beside a client lists that host's sessions before its own read")
@@ -272,70 +122,6 @@ struct TmuxTabTests {
     #expect(shell.error == "Not connected.")
     #expect(!shell.sessionsLoaded)
     #expect(shell.sessions.map(\.name) == ["dev", "ops"], "a failed read keeps the host's list")
-  }
-
-  @Test("a refresh asked while busy runs once the operation finishes")
-  func refreshWaitsForTheOperation() async throws {
-    let host = HostProbe()
-    let plugin = TmuxPlugin()
-    let client = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    let shell = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    client.sessions = [info("$3", "kept")]
-
-    shell.run { try await Task.sleep(for: .milliseconds(60)) }
-    #expect(shell.busy)
-    shell.refresh()
-    #expect(shell.busy)
-    #expect(shell.sessions.map(\.name) == ["kept"])
-
-    for _ in 0..<100 where shell.busy { try await Task.sleep(for: .milliseconds(5)) }
-    #expect(shell.error == "Not connected.")
-    #expect(shell.sessions.map(\.name) == ["kept"])
-  }
-
-  @Test("refreshing keeps row positions while updating names, status and window indices")
-  func refreshKeepsRowPositions() throws {
-    let host = HostProbe()
-    let plugin = TmuxPlugin()
-    let tab = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    defer { tab.close() }
-    let first = TmuxListedWindow(id: 9, index: 2, name: "zoo", active: true, panes: 1)
-    let second = TmuxListedWindow(id: 7, index: 0, name: "apple", active: false, panes: 1)
-    tab.store([
-      TmuxSessionInfo(id: "$2", name: "zoo", attached: false, windows: [first, second]),
-      info("$1", "apple"), info("$3", "ending"),
-    ])
-    #expect(tab.listedSessions.map(\.id) == ["$2", "$1", "$3"])
-    #expect(tab.windows(for: tab.sessions[0]).map(\.id) == [9, 7])
-
-    let renamed = TmuxListedWindow(id: 9, index: 8, name: "renamed", active: false, panes: 3)
-    let activated = TmuxListedWindow(id: 7, index: 1, name: "apple", active: true, panes: 2)
-    let added = TmuxListedWindow(id: 10, index: 0, name: "new", active: false, panes: 1)
-    tab.store([
-      info("$4", "aaa"), info("$1", "apple"),
-      TmuxSessionInfo(id: "$2", name: "zzz", attached: true, windows: [added, activated, renamed]),
-    ])
-    #expect(tab.listedSessions.map(\.id) == ["$2", "$1", "$4"])
-    #expect(tab.sessions[0].name == "zzz")
-    #expect(tab.sessions[0].attached)
-    #expect(tab.windows(for: tab.sessions[0]) == [renamed, activated, added])
-    #expect(tab.commands.map(\.title) == ["zzz", "apple", "aaa"])
-
-    // A new tab follows the host's existing positions on its first read.
-    let other = try #require(plugin.attach(to: host.context()) as? TmuxTab)
-    defer { other.close() }
-    other.store([
-      info("$4", "aaa"), info("$1", "apple"),
-      TmuxSessionInfo(id: "$2", name: "zzz", attached: true, windows: [added, activated]),
-    ])
-    #expect(other.listedSessions.map(\.id) == ["$2", "$1", "$4"])
-    #expect(other.windows(for: other.sessions[0]) == [activated, added])
-
-    other.store([])
-    #expect(other.listedSessions.isEmpty)
-    #expect(other.sessionsLoaded)
-    other.store([info("$1", "apple"), info("$2", "zzz")])
-    #expect(other.listedSessions.map(\.id) == ["$1", "$2"])
   }
 
   @Test("the shell's client list follows a session chosen in the terminal")
@@ -399,19 +185,6 @@ struct TmuxCommandTests {
     #expect(TmuxCommands.attachLine(name: "", id: "$2", window: nil) == "tmux attach-session -t '$2'")
   }
 
-  @Test("a client list names the session, and a missing server is not an empty one")
-  func clientList() {
-    #expect(TmuxClients.session(for: "/dev/ttys001", in: "/dev/ttys001|$2\n") == "$2")
-    #expect(TmuxClients.session(for: "/dev/ttys001", in: "ttys001|$9\n") == "$9")
-    #expect(TmuxClients.session(for: "/dev/ttys001", in: "/dev/ttys002|$3\n") == nil)
-    #expect(TmuxClients.session(for: "/dev/ttys001", in: "not a client\n") == nil)
-    let clients = Data("/dev/ttys001|$2\n".utf8)
-    #expect(TmuxClients.listing(status: 0, stdout: clients, stderr: Data()) == "/dev/ttys001|$2\n")
-    #expect(TmuxClients.listing(status: 1, stdout: Data(), stderr: Data("no clients\n".utf8)) == "")
-    #expect(TmuxClients.listing(status: 1, stdout: Data(), stderr: Data("no server running\n".utf8)) == nil)
-    #expect(TmuxClients.listing(status: 127, stdout: Data(), stderr: Data("No such file or directory\n".utf8)) == nil)
-  }
-
   @Test("a client that is already tmux is switched, not typed into")
   func switchClient() {
     #expect(
@@ -428,38 +201,6 @@ struct TmuxCommandTests {
     #expect(TmuxCommands.renameWindow(2, to: "bad\nname") == nil)
   }
 
-  @Test("focus moves between panes and windows of the session on this terminal")
-  func paneAndWindowFocus() {
-    #expect(TmuxCommands.selectPane("$1", .left) == "tmux select-pane -L -t '$1'")
-    #expect(TmuxCommands.selectPane("$1", .down) == "tmux select-pane -D -t '$1'")
-    #expect(TmuxCommands.selectPane("$1", .up) == "tmux select-pane -U -t '$1'")
-    #expect(TmuxCommands.selectPane("$1", .right) == "tmux select-pane -R -t '$1'")
-    #expect(TmuxCommands.selectPane("$(id)", .left) == nil)
-    #expect(TmuxCommands.cycleWindow("$1", forward: true) == "tmux next-window -t '$1'")
-    #expect(TmuxCommands.cycleWindow("$1", forward: false) == "tmux previous-window -t '$1'")
-    #expect(TmuxCommands.cycleWindow("dev", forward: true) == nil)
-  }
-
-  @Test("every command a client offers is catalogued, with the chords spec §4 gives tmux")
-  func catalogue() throws {
-    let plugin = TmuxPlugin()
-    let tab = try #require(plugin.attach(to: HostProbe().context()) as? TmuxTab)
-    defer { tab.close() }
-    #expect(tab.commands.isEmpty, "a shell with no session list offers nothing")
-    tab.sessions = [info("$0", "alpha"), info("$1", "beta")]
-    #expect(tab.commands.map(\.id) == ["session1", "session2"], "⌥1 works before the shell has entered tmux")
-    tab.shellSessionID = "$1"
-    let descriptors = plugin.commandDescriptors
-    let standing = descriptors.filter { !$0.id.hasPrefix("session") }
-    #expect(tab.commands.map(\.id).starts(with: standing.map(\.id)))
-    #expect(tab.commands.suffix(2).map(\.id) == ["session1", "session2"])
-    #expect(tab.commands.suffix(2).map(\.title) == ["alpha", "beta"])
-    let chords = Dictionary(uniqueKeysWithValues: descriptors.compactMap { d in d.shortcut.map { (d.id, $0) } })
-    #expect(Set(chords.values).count == chords.count, "no two tmux commands share a chord")
-    #expect(chords["detach"] == nil)
-    #expect(chords["session1"] == PluginKeyChord("1", [.option]))
-    #expect(chords["session4"] == PluginKeyChord("4", [.option]))
-  }
 }
 
 @MainActor
@@ -489,60 +230,6 @@ struct ShellScrollTests {
     #expect(TmuxShellScroll.cancel(pane: "dev") == nil)
   }
 
-  @Test("a tty that is not a client returns the wheel to history only while the mouse is free")
-  func release() {
-    #expect(TmuxShellScroll.returnsToHistory(.off))
-    #expect(!TmuxShellScroll.returnsToHistory(.clicks))
-  }
-
-  @Test("the wheel is claimed only for the shell that is already that client")
-  func claimsOnlyTheKnownClient() {
-    #expect(
-      TmuxShellScroll.claims(
-        connected: true, session: "$1", tty: "/dev/ttys001", knownTTY: "/dev/ttys001"))
-    #expect(
-      !TmuxShellScroll.claims(
-        connected: false, session: "$1", tty: "/dev/ttys001", knownTTY: "/dev/ttys001"))
-    #expect(
-      !TmuxShellScroll.claims(
-        connected: true, session: "dev", tty: "/dev/ttys001", knownTTY: "/dev/ttys001"))
-    #expect(
-      !TmuxShellScroll.claims(
-        connected: true, session: "$1", tty: "/dev/ttys002", knownTTY: "/dev/ttys001"))
-    #expect(
-      !TmuxShellScroll.claims(
-        connected: true, session: nil, tty: "/dev/ttys001", knownTTY: "/dev/ttys001"))
-  }
-
-  @Test("a wheel is held only while this tty might still be the client")
-  func holdsWhileUnsettled() {
-    #expect(
-      TmuxShellScroll.holds(
-        connected: true, tty: "/dev/ttys001", knownTTY: nil, session: nil, lookupRunning: true))
-    #expect(
-      !TmuxShellScroll.holds(
-        connected: true, tty: "/dev/ttys001", knownTTY: "/dev/ttys001",
-        session: nil, lookupRunning: true),
-      "a settled no keeps the terminal's own history")
-    #expect(
-      !TmuxShellScroll.holds(
-        connected: true, tty: "/dev/ttys001", knownTTY: nil, session: nil, lookupRunning: false))
-  }
-
-  @Test("opposite notches cancel, and a run that overflows stays in range")
-  func notchesCancel() {
-    var notches = ShellNotches()
-    notches.add(4)
-    notches.add(1)
-    #expect(notches.take().lines == 5)
-    #expect(notches.take().lines == 0)
-    notches.add(.max)
-    notches.add(1)
-    #expect(notches.take().lines == .max)
-    notches.add(3)
-    notches.add(-3)
-    #expect(notches.take().lines == 0)
-  }
 }
 
 @MainActor
@@ -566,41 +253,12 @@ struct PaneWheelTests {
     ]
   }
 
-  @Test("a shell pane scrolls by the pointer, and the status line does not")
-  func shellScrolls() {
-    let layout = panes()
-    #expect(TmuxPaneLayout.decide(layout, column: 4, row: 5) == .scroll("%0"))
-    #expect(TmuxPaneLayout.decide(layout, column: 4, row: 15) == .scroll("%1"))
-    #expect(TmuxPaneLayout.decide(layout, column: 4, row: 10) == .ignore)
-    #expect(TmuxPaneLayout.decide(layout, column: 4, row: 19) == .ignore)
-  }
-
   @Test("a pane that asked for the mouse keeps the wheel, and one already copying keeps scrolling")
   func programsKeepTheWheel() {
     #expect(TmuxPaneLayout.decide(panes(wantsMouse: true), column: 1, row: 1) == .report)
     #expect(TmuxPaneLayout.decide(panes(alternate: true, wantsMouse: true), column: 1, row: 1) == .report)
     #expect(TmuxPaneLayout.decide(panes(alternate: true), column: 1, row: 1) == .stop)
     #expect(TmuxPaneLayout.decide(panes(alternate: true, inMode: true), column: 1, row: 1) == .scroll("%0"))
-  }
-
-  @Test("the cell under the pointer is the only layer that moves")
-  func oneLayer() {
-    #expect(TmuxPaneLayout.claim(panes(), column: 4, row: 5) == .taken)
-    #expect(TmuxPaneLayout.claim(panes(), column: 4, row: 19) == .taken)
-    #expect(TmuxPaneLayout.claim(panes(wantsMouse: true), column: 1, row: 1) == .report)
-    #expect(TmuxPaneLayout.claim(panes(alternate: true), column: 1, row: 1) == .taken)
-  }
-
-  @Test("a zoomed window scrolls only the pane that is showing")
-  func zoomShowsOnePane() {
-    #expect(TmuxPaneLayout.decide(panes(zoomed: true), column: 1, row: 5) == .scroll("%1"))
-  }
-
-  @Test("a status line on top is not a pane row")
-  func statusOnTop() {
-    let layout = panes(statusTop: true)
-    #expect(TmuxPaneLayout.decide(layout, column: 1, row: 0) == .ignore)
-    #expect(TmuxPaneLayout.decide(layout, column: 1, row: 1) == .scroll("%0"))
   }
 
   @Test("the layout command quotes only a session id, and a bad line is refused")

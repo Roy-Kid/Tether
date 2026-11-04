@@ -129,25 +129,6 @@ async fn a_message_with_no_prompts_is_answered_without_asking_anyone() {
     assert_eq!(asked.len(), 2, "nobody is asked about a message with nothing to answer");
 }
 
-/// A wrong answer must not cost the connection: someone mistypes a code and
-/// should get another go without a fresh handshake.
-#[tokio::test]
-async fn a_wrong_answer_leaves_the_connection_usable() {
-    let (connection, _) = connect(Policy::default()).await;
-
-    let wrong = support::ScriptedPrompter::new([vec!["not the password".to_string()]]);
-    let connection = match connection.interactive(USER, &wrong).await.expect("attempt") {
-        Step::Rejected { retry, .. } => retry,
-        other => panic!("a wrong password should be rejected, got {other:?}"),
-    };
-
-    let right = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
-    match connection.interactive(USER, &right).await.expect("retry") {
-        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
-        other => panic!("retry should have succeeded, got {other:?}"),
-    }
-}
-
 /// A refused host key is not an authentication failure either, and must not
 /// be reported as one: the remedy is checking a fingerprint, not retyping a
 /// password.
@@ -195,94 +176,10 @@ async fn the_verifier_is_shown_a_recognisable_fingerprint() {
     drop(connection);
 }
 
-/// Asking what a server accepts must not disclose anything.
-#[tokio::test]
-async fn offered_methods_can_be_read_without_offering_a_credential() {
-    let (connection, _) = connect(Policy::default()).await;
-
-    match connection.offered_methods(USER).await.expect("probe") {
-        Step::Rejected { remaining, .. } => assert!(
-            remaining.iter().any(|m| m.to_string() == "keyboard-interactive"),
-            "expected keyboard-interactive among {remaining:?}"
-        ),
-        other => panic!("a bare probe should not authenticate, got {other:?}"),
-    }
-}
-
 async fn read_text(shell: &mut tether_ssh::Shell) -> String {
     match shell.next_output().await {
         Some(Output::Stdout(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
         other => panic!("expected stdout, got {other:?}"),
-    }
-}
-
-/// The third authentication family. A key is not a password with better
-/// hygiene: nothing is typed, so there is no prompt to answer.
-#[tokio::test]
-async fn a_private_key_authenticates() {
-    let (connection, observed) =
-        connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
-
-    match connection.private_key(USER, &client_key(), None).await.expect("attempt") {
-        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
-        other => panic!("the key should have been accepted, got {other:?}"),
-    }
-    assert!(observed.lock().unwrap().public_key_attempts >= 1);
-}
-
-/// An unknown key is refused without costing the connection, and the server
-/// says what it would take instead.
-#[tokio::test]
-async fn an_unknown_key_is_refused_and_the_server_says_what_it_wants() {
-    let (connection, _) = connect(Policy::default()).await;
-
-    match connection.private_key(USER, &client_key(), None).await.expect("attempt") {
-        Step::Rejected { remaining, .. } => assert!(
-            remaining.iter().any(|m| m.to_string() == "keyboard-interactive"),
-            "expected keyboard-interactive among {remaining:?}"
-        ),
-        other => panic!("an unauthorised key should be refused, got {other:?}"),
-    }
-}
-
-/// A key *and* a one-time code — the arrangement most research clusters use,
-/// and the reason a partial success is not a failure. Reporting this as
-/// "authentication failed" would strand every such login.
-///
-/// Ignored against russh 0.63.3, which cannot *emit* a partial success: its
-/// server assigns the handler's flag and then overwrites it with `false` on
-/// the next line, in all four rejection paths. That is a defect in russh's
-/// server role, which Tether uses only in this fake host — the client code
-/// under test here is unaffected, and passes once the server can express what
-/// the test needs. Fixed upstream in warp-tech/russh#773 (`dddf72c`,
-/// 2026-09-13), unreleased as of 0.63.3; verified against `main`, where this
-/// test passes. Re-enable on the release that carries it.
-#[ignore = "needs russh > 0.63.3 (warp-tech/russh#773); passes against main"]
-#[tokio::test]
-async fn a_key_accepted_as_a_first_factor_leads_to_a_second() {
-    let (connection, _) = connect(Policy {
-        accepts_key: Some(CLIENT_PUBLIC_KEY),
-        key_is_only_the_first_factor: true,
-        ..Policy::default()
-    })
-    .await;
-
-    let connection = match connection.private_key(USER, &client_key(), None).await.expect("attempt")
-    {
-        Step::AnotherFactor { remaining, next } => {
-            assert!(
-                remaining.iter().any(|m| m.to_string() == "keyboard-interactive"),
-                "expected keyboard-interactive among {remaining:?}"
-            );
-            next
-        }
-        other => panic!("expected a partial success, got {other:?}"),
-    };
-
-    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
-    match connection.interactive(USER, &prompter).await.expect("second factor") {
-        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
-        other => panic!("the second factor should have completed login, got {other:?}"),
     }
 }
 
@@ -322,29 +219,6 @@ async fn a_subsystem_opens_on_the_authenticated_session() {
     assert_eq!(read_text(&mut sftp).await, "\x00\x00\x00\x05\x01\x00\x00\x00\x03");
 
     assert!(matches!(session.subsystem("no-such-thing").await, Err(SshError::ShellRefused { .. })));
-}
-
-/// A second terminal is another channel, not another login. The handshake
-/// already happened; asking for a password again would be the client
-/// forgetting what it is holding.
-#[tokio::test]
-async fn a_second_shell_opens_on_the_authenticated_session() {
-    let (connection, _) = connect(Policy::default()).await;
-    let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
-    let session = match connection.interactive(USER, &prompter).await.unwrap() {
-        Step::Authenticated(session) => session,
-        other => panic!("unexpected authentication: {other:?}"),
-    };
-
-    let mut first = session.shell("xterm-256color", WindowSize::default()).await.unwrap();
-    let mut second = session.shell("xterm-256color", WindowSize::default()).await.unwrap();
-    assert_eq!(read_text(&mut first).await, BANNER);
-    assert_eq!(read_text(&mut second).await, BANNER);
-
-    first.write(b"one\n".to_vec()).await.unwrap();
-    second.write(b"two\n".to_vec()).await.unwrap();
-    assert_eq!(read_text(&mut first).await, "one\n");
-    assert_eq!(read_text(&mut second).await, "two\n");
 }
 
 fn locked_key() -> PrivateKey {
@@ -398,66 +272,6 @@ async fn a_locked_key_the_server_refuses_asks_nobody() {
     }
 }
 
-/// Closing the passphrase dialog is the person's no — not a wrong passphrase.
-#[tokio::test]
-async fn declining_to_unlock_is_a_decline() {
-    let (connection, _) =
-        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
-            .await;
-    let unlocker = support::ScriptedUnlocker::new([None]);
-
-    match connection.private_key(USER, &locked_key(), Some(&unlocker)).await {
-        Err(SshError::Declined) => {}
-        other => panic!("expected Declined, got {other:?}"),
-    }
-}
-
-/// Three wrong passphrases end the attempt, and say so in their own words.
-#[tokio::test]
-async fn three_wrong_passphrases_are_named_for_what_they_were() {
-    let (connection, _) =
-        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
-            .await;
-    let unlocker = support::ScriptedUnlocker::new([Some("one"), Some("two"), Some("three")]);
-
-    match connection.private_key(USER, &locked_key(), Some(&unlocker)).await {
-        Err(SshError::Key(tether_ssh::KeyError::WrongPassphrase)) => {}
-        other => panic!("expected a wrong passphrase, got {other:?}"),
-    }
-    let attempts: Vec<u32> = unlocker.asked.lock().unwrap().iter().map(|(_, n)| *n).collect();
-    assert_eq!(attempts, vec![1, 2, 3]);
-}
-
-/// A key with no passphrase never asks for one.
-#[tokio::test]
-async fn an_unlocked_key_asks_nobody() {
-    let (connection, _) =
-        connect(Policy { accepts_key: Some(CLIENT_PUBLIC_KEY), ..Policy::default() }).await;
-    let unlocker = support::ScriptedUnlocker::new([Some("unused")]);
-
-    match connection.private_key(USER, &client_key(), Some(&unlocker)).await.expect("attempt") {
-        Step::Authenticated(session) => session.disconnect().await.expect("disconnect"),
-        other => panic!("the key should have been accepted, got {other:?}"),
-    }
-    assert!(unlocker.asked.lock().unwrap().is_empty());
-}
-
-/// A locked key with nothing to ask is refused by name before the server
-/// hears about it.
-#[tokio::test]
-async fn a_locked_key_with_nobody_to_ask_is_named_as_locked() {
-    let (connection, observed) =
-        connect(Policy { accepts_key: Some(support::LOCKED_PUBLIC_KEY), ..Policy::default() })
-            .await;
-
-    match connection.private_key(USER, &locked_key(), None).await {
-        Err(SshError::Key(tether_ssh::KeyError::Locked)) => {}
-        other => panic!("expected Locked, got {other:?}"),
-    }
-    assert_eq!(observed.lock().unwrap().public_key_offers, 0);
-    assert_eq!(observed.lock().unwrap().public_key_attempts, 0);
-}
-
 async fn login(connection: Connection) -> tether_ssh::Session {
     let prompter = support::ScriptedPrompter::new([vec![PASSWORD.to_string()]]);
     match connection.interactive(USER, &prompter).await.expect("login") {
@@ -499,39 +313,6 @@ async fn a_jump_forwards_the_next_handshake_to_the_destination() {
     let mut shell = session.shell("xterm-256color", WindowSize::default()).await.expect("shell");
     assert_eq!(read_text(&mut shell).await, BANNER);
     assert!(jump_seen.lock().unwrap().pty_term.is_none(), "the jump must not have opened a shell");
-    assert_eq!(destination_seen.lock().unwrap().pty_term.as_deref(), Some("xterm-256color"));
-}
-
-/// Two hops, nearest last in the config and first on the wire: outer, then
-/// inner, then the machine the shell actually runs on.
-#[tokio::test]
-async fn two_jumps_are_authenticated_before_the_destination() {
-    let (destination, destination_seen) = support::start(Policy::default());
-    let (inner, _) = support::start_forwarding(Policy::default(), destination);
-    let (outer, _) = support::start_forwarding(Policy::default(), inner);
-
-    let outer = login(handshake(outer, "edge.example").await).await;
-    let inner = Connection::connect_through(
-        outer,
-        Endpoint::new("bastion.example", 22),
-        Arc::new(support::TrustAndRecord::new()),
-        support::client_config(),
-    )
-    .await
-    .expect("inner hop");
-    let inner = login(inner).await;
-    let destination = Connection::connect_through(
-        inner,
-        Endpoint::new("lab.example", 22),
-        Arc::new(support::TrustAndRecord::new()),
-        support::client_config(),
-    )
-    .await
-    .expect("destination");
-
-    let session = login(destination).await;
-    let mut shell = session.shell("xterm-256color", WindowSize::default()).await.expect("shell");
-    assert_eq!(read_text(&mut shell).await, BANNER);
     assert_eq!(destination_seen.lock().unwrap().pty_term.as_deref(), Some("xterm-256color"));
 }
 

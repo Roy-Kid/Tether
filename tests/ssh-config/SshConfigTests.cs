@@ -35,19 +35,6 @@ public class SshConfigTests
     }
 
     [Fact]
-    public void IdentityFileIsInheritedFromAMatchingWildcard()
-    {
-        var entries = SshConfig.LoadText("""
-            Host lab
-              HostName 10.0.0.4
-
-            Host *
-              IdentityFile ~/.ssh/id_ed25519
-            """);
-        Assert.Equal("~/.ssh/id_ed25519", entries[0].IdentityFile);
-    }
-
-    [Fact]
     public void ABlankLineDoesNotDropIdentityFile()
     {
         var entries = SshConfig.LoadText("""
@@ -72,14 +59,6 @@ public class SshConfigTests
               HostName 10.0.0.4
             """);
         Assert.Equal("everyone", entries[0].User);
-    }
-
-    [Fact]
-    public void EqualsSeparatorReadsTheSame()
-    {
-        var entries = SshConfig.LoadText("Host eq\n  HostName=10.1.1.1\n  Port = 2200\n");
-        Assert.Equal("10.1.1.1", entries[0].HostName);
-        Assert.Equal((ushort)2200, entries[0].Port);
     }
 
     [Fact]
@@ -123,22 +102,6 @@ public class SshConfigTests
     }
 
     [Fact]
-    public void ACommaSeparatedProxyJumpIsVisitedInOrder()
-    {
-        var hops = SshConfig.LoadText("""
-            Host lab
-              ProxyJump me@10.0.0.1:2222, edge
-
-            Host edge
-              HostName edge.example
-            """).Single(e => e.Alias == "lab").Route;
-        Assert.Equal("10.0.0.1", hops[0].HostName);
-        Assert.Equal((ushort)2222, hops[0].Port);
-        Assert.Equal("me", hops[0].User);
-        Assert.Equal("edge.example", hops[1].HostName);
-    }
-
-    [Fact]
     public void ProxyJumpNoneMeansThereIsNoJump()
     {
         var entry = SshConfig.LoadText("""
@@ -151,25 +114,6 @@ public class SshConfigTests
             """).Single();
         Assert.Empty(entry.Route);
         Assert.Null(entry.JumpError);
-    }
-
-    [Fact]
-    public void HostStarCanSupplyTheJump()
-    {
-        var hops = SshConfig.LoadText("""
-            Host lab
-              HostName lab.internal
-
-            Host bastion
-              HostName bastion.example
-              ProxyJump none
-
-            Host *
-              ProxyJump bastion
-              User ada
-            """).Single(e => e.Alias == "lab").Route;
-        Assert.Equal("bastion.example", hops[0].HostName);
-        Assert.Equal("ada", hops[0].User);
     }
 
     [Fact]

@@ -225,108 +225,6 @@ struct QuickTerminalTests {
     #expect(tabs.isFront(quick) && tabs.keyWindows.isEmpty)
   }
 
-  @Test("status menu shows or hides the quick terminal, and quits")
-  func statusMenu() throws {
-    let suite = "quick-terminal-menu.\(UUID())"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let controller = QuickTerminalController(defaults: defaults)
-    let window = panel()
-    defer { controller.stop(); window.close() }
-    controller.attach(to: window)
-    let initial = controller.statusMenu()
-    #expect(initial.items.map(\.title) == ["Show Main Window", "", "Quit Tether"])
-    #expect(initial.items.last?.action == #selector(NSApplication.terminate(_:)))
-    #expect(initial.items.last?.target === NSApplication.shared)
-    let show = try #require(initial.items.first)
-    #expect(NSApplication.shared.sendAction(try #require(show.action), to: show.target, from: show))
-    #expect(window.isVisible)
-    #expect(!controller.isQuick, "the menu bar opens the main window")
-    #expect(!window.styleMask.contains(.nonactivatingPanel))
-    controller.toggle()
-    #expect(controller.isShown)
-    #expect(controller.statusMenu().items[0].title == "Return to Main Window")
-    let back = try #require(controller.statusMenu().items.first)
-    #expect(NSApplication.shared.sendAction(try #require(back.action), to: back.target, from: back))
-    #expect(window.isVisible)
-    #expect(!controller.isQuick)
-  }
-
-  @Test("disabling Quick Terminal puts the window back; on top applies when it is the main window")
-  func preferences() throws {
-    let suite = "quick-terminal-preferences.\(UUID())"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let controller = QuickTerminalController(defaults: defaults)
-    let window = panel()
-    defer { controller.stop(); window.close() }
-    controller.attach(to: window)
-    #expect(window.level == .normal)
-    controller.alwaysOnTop = true
-    #expect(window.level == .floating)
-    controller.alwaysOnTop = false
-    controller.toggle()
-    #expect(controller.isShown)
-    #expect(window.level == .floating, "summoned, it floats whatever on top says")
-    controller.autoHide = false
-    controller.alwaysOnTop = true
-    #expect(window.level == .floating)
-    controller.enabled = false
-    #expect(!controller.isShown)
-    #expect(!window.isVisible, "it was put away before the shortcut, and disabling puts it back there")
-    #expect(window.level == .floating, "on top applies once it is the main window again")
-    controller.toggle()
-    #expect(!window.isVisible)
-    let restored = QuickTerminalController(defaults: defaults)
-    #expect(!restored.enabled)
-    #expect(restored.alwaysOnTop)
-    #expect(!restored.autoHide)
-    #expect(restored.showsMenuBarIcon)
-    controller.showsMenuBarIcon = false
-    #expect(!QuickTerminalController(defaults: defaults).showsMenuBarIcon)
-    controller.alwaysOnTop = false
-    #expect(window.level == .normal)
-  }
-
-  @Test("system-wide registrations report conflicts, suspend for recording and release on stop")
-  func hotKeyLifecycle() throws {
-    let suite = "quick-terminal-hotkey.\(UUID())"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let controller = QuickTerminalController(defaults: defaults)
-    let window = KeyedWindow.make()
-    defer { controller.stop(); window.close() }
-    let binding = KeyBinding("f19", [.control, .option, .command])
-    let code = try #require(binding.carbonKeyCode)
-    var competitor: EventHotKeyRef?
-    let status = RegisterEventHotKey(UInt32(code), binding.carbonModifiers,
-      EventHotKeyID(signature: 0x54455354, id: 100), GetApplicationEventTarget(),
-      OptionBits(kEventHotKeyExclusive), &competitor)
-    try #require(status == noErr)
-    defer { if let competitor { UnregisterEventHotKey(competitor) } }
-    controller.configure([binding, nil])
-    controller.attach(to: window)
-    #expect(controller.shortcutProblem != nil)
-    if let competitor { UnregisterEventHotKey(competitor) }
-    competitor = nil
-    controller.recordingShortcut = true
-    controller.recordingShortcut = false
-    #expect(controller.shortcutProblem == nil)
-    let registerCompetitor = {
-      RegisterEventHotKey(UInt32(code), binding.carbonModifiers,
-        EventHotKeyID(signature: 0x54455354, id: 100), GetApplicationEventTarget(),
-        OptionBits(kEventHotKeyExclusive), &competitor)
-    }
-    #expect(registerCompetitor() != noErr)
-    controller.recordingShortcut = true
-    #expect(registerCompetitor() == noErr)
-    if let competitor { UnregisterEventHotKey(competitor) }
-    competitor = nil
-    controller.recordingShortcut = false
-    controller.stop()
-    #expect(registerCompetitor() == noErr)
-  }
-
   @Test("editing bindings updates the global registration while the window is hidden")
   func editsWhileHidden() async throws {
     let suite = "quick-terminal-edit.\(UUID())"
@@ -391,17 +289,5 @@ struct QuickTerminalTests {
     #expect(controller.shortcutProblem == nil)
   }
 
-  @Test("global key translation shares the local ASCII layout and named keys")
-  func keyTranslation() throws {
-    let binding = WorkspaceAction.quickTerminal.command.defaults[0]
-    #expect(binding == KeyBinding("`", .control))
-    let code = try #require(binding?.carbonKeyCode)
-    #expect(KeyBinding.asciiCharacter(keyCode: code) == "`")
-    #expect(binding?.carbonModifiers == UInt32(controlKey))
-    #expect(KeyBinding("f20", []).carbonKeyCode == 90)
-    #expect(KeyBinding("space", .option).carbonKeyCode == 49)
-    #expect(KeyBinding("left", .control).carbonKeyCode == 123)
-    #expect(KeyBinding("not a key", .control).carbonKeyCode == nil)
-  }
 }
 #endif

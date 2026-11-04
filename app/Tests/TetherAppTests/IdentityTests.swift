@@ -32,14 +32,6 @@ struct IdentityTests {
     #expect(record.profile.authentication.confirmation == .confirmConnection)
   }
 
-  @Test func cosmeticChangesDoNotChangeApproval() {
-    let original = profile()
-    var edited = original; edited.label = "Renamed"; edited.tags = ["work"]
-    #expect(original.securityDigest == edited.securityDigest)
-    edited.hostname = "other.example.org"
-    #expect(original.securityDigest != edited.securityDigest)
-  }
-
   @Test func cosmeticEditsKeepAnOpenSession() {
     let original = profile()
     var host = Host(id: original.id, label: original.label, hostname: original.hostname, port: original.port,

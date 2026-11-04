@@ -158,28 +158,6 @@ struct EditingTests {
     #expect(!FileManager.default.fileExists(atPath: again.path))
   }
 
-  /// However the editor saves — over the same file, or a new one renamed
-  /// over it — the save is noticed and written back on its own.
-  @Test("a save is noticed however the editor writes it", arguments: [false, true])
-  func noticesSaves(atomically: Bool) async throws {
-    let source = StubSource(tree)
-    let opened = Opened()
-    let model = tab(source, opened: opened)
-    await model.edit([entry(Self.notes)])
-    let url = try #require(opened.urls.first)
-    try await Task.sleep(for: .milliseconds(50))
-    if atomically {
-      try Data("renamed over".utf8).write(to: url, options: .atomic)
-    } else {
-      let handle = try FileHandle(forWritingTo: url)
-      try handle.truncate(atOffset: 0)
-      try handle.write(contentsOf: Data("written in place".utf8))
-      try handle.close()
-    }
-    for _ in 0..<200 where source.writeBacks.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(source.writeBacks.map(\.contents) == [atomically ? "renamed over" : "written in place"])
-  }
-
   /// A second check while one runs waits for it; it is not taken for a
   /// change on the far side.
   @Test("two checks at once write once, and see no conflict")
@@ -347,16 +325,6 @@ struct EditingTests {
     #expect(asked == 1)
   }
 
-  @Test("a file on this machine opens as itself")
-  func localOpensInPlace() async throws {
-    let source = StubSource(tree)
-    source.isLocal = true
-    let opened = Opened()
-    let model = tab(source, opened: opened)
-    await model.edit([entry(Self.notes)])
-    #expect(opened.urls == [URL(fileURLWithPath: Self.notes)])
-    #expect(model.editing.records.isEmpty)
-  }
 }
 
 /// The write-back itself, over this machine's own `sftp-server`: what a real

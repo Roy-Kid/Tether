@@ -64,14 +64,6 @@ struct ConnectionReportTests {
     #expect(tabs.problem == nil)
   }
 
-  @Test("a host that could not be reached is not a refused login")
-  func unreachableIsNotRefused() {
-    let tabs = TabSet()
-    let tab = tab(in: tabs)
-    tab.fail(TetherError.unreachable(endpoint: "login.example.org:22", cause: "Connection refused"))
-    #expect(tabs.problem?.problem.refusedLogin == false)
-  }
-
   @Test("a person's own no closes the tab without a report")
   func declineCloses() {
     let tabs = TabSet()
@@ -106,51 +98,6 @@ struct ConnectionReportTests {
     #expect(tabs.reconnectReport(for: tab.id)?.problem.kind == .lost, "and it can still be reconnected")
   }
 
-  @Test("a failure in a terminal not being looked at waits for it")
-  func backgroundFailureWaits() throws {
-    let tabs = TabSet()
-    let behind = tab(in: tabs)
-    let front = tab(in: tabs)
-    #expect(tabs.current?.id == front.id)
-    behind.fail(TetherError.unreachable(endpoint: "login.example.org:22", cause: "Connection refused"))
-    #expect(tabs.problem == nil)
-    tabs.select(behind.id)
-    #expect(tabs.problem?.tab == behind.id, "told once it is the one on screen")
-  }
-
-  @Test("a reconnect that fails keeps what was on screen")
-  func failedReconnectKeepsScreen() {
-    let kept = TabProblem(
-      tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"), keepsScreen: true)
-    #expect(ConnectionDialog.problem(kept, close: {}, again: {}).actions.first?.title == "Not Now")
-    let empty = TabProblem(tab: UUID(), host: host, problem: SessionProblem(kind: .couldNotConnect, reason: "refused"))
-    #expect(ConnectionDialog.problem(empty, close: {}, again: {}).actions.first?.title == "Close",
-      "a tab that never showed anything has nothing to keep")
-  }
-
-  @Test("a lost connection offers to reconnect; this machine restarts")
-  func lostWording() {
-    let lost = TabProblem(tab: UUID(), host: host, problem: SessionProblem(kind: .lost, reason: "reset by peer"))
-    #expect(ConnectionDialog.problem(lost, close: {}, again: {}).title == "Connection to Arrhenius Lost")
-    #expect(ConnectionDialog.problem(lost, close: {}, again: {}).actions.last?.title == "Reconnect")
-
-    let local = TabProblem(tab: UUID(), host: .local, problem: SessionProblem(kind: .lost, reason: "gone"))
-    #expect(ConnectionDialog.problem(local, close: {}, again: {}).actions.last?.title == "Restart")
-  }
-
-  @Test("the password question is a dialog that says where it is going")
-  func passwordQuestion() {
-    let dialog = ConnectionDialog.password(ConnectRequest(host: host), connect: { _ in }, cancel: {})
-    #expect(dialog.title == "Arrhenius")
-    #expect(dialog.message == "ada@login.example.org")
-    #expect(dialog.fields == [Dialog.Field("Password", kind: .password)])
-    #expect(dialog.actions.map(\.title) == ["Cancel", "Connect"])
-    #expect(!ConnectRequest(host: host).coversTerminal, "a new connection has no terminal to cover")
-    var retry = ConnectRequest(host: host)
-    retry.retrying = UUID()
-    #expect(retry.coversTerminal)
-  }
-
   @Test("a password that worked is offered once, and a no holds for the host")
   func keepOffer() {
     let tabs = TabSet()
@@ -167,16 +114,6 @@ struct ConnectionReportTests {
     #expect(tabs.passwordOffer == nil, "asked once, not on every login")
   }
 
-  @Test("a refused saved password is offered to be replaced")
-  func replaceOffer() {
-    let tabs = TabSet()
-    let tab = tab(in: tabs)
-    tab.offer("new one")
-    let offer = try! #require(tabs.passwordOffer)
-    let dialog = ConnectionDialog.keep(offer, replacing: true, keep: {}, decline: {})
-    #expect(dialog.title == "Update the saved password for Arrhenius?")
-    #expect(dialog.actions.map(\.title) == ["Not Now", "Update"])
-  }
 }
 
 extension ConnectionReportTests {

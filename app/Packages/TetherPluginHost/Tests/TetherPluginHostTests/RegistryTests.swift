@@ -3,30 +3,6 @@ import Testing
 
 @testable import TetherPluginHost
 
-@Test func missingManifestIdentifiesTheSelectedFolder() throws {
-  let root = try Fixture.make()
-  defer { try? FileManager.default.removeItem(at: root) }
-  try FileManager.default.removeItem(at: root.appending(path: "manifest.json"))
-  #expect(throws: PackageFailure.manifestMissing(root.path)) {
-    try PackageValidator.validate(directory: root)
-  }
-}
-
-@Test func unreadableManifestPreservesTheFileAndReason() throws {
-  let root = try Fixture.make()
-  defer { try? FileManager.default.removeItem(at: root) }
-  let manifest = root.appending(path: "manifest.json")
-  try FileManager.default.removeItem(at: manifest)
-  try FileManager.default.createDirectory(at: manifest, withIntermediateDirectories: false)
-  do {
-    _ = try PackageValidator.validate(directory: root)
-    Issue.record("a directory cannot be read as a manifest")
-  } catch PackageFailure.manifestUnreadable(let path, let reason) {
-    #expect(path == manifest.path)
-    #expect(!reason.isEmpty)
-  }
-}
-
 @Test func settingsURLMustNameTheNerveSettingsWindow() throws {
   let rejected = try Fixture.make(settingsURL: "https://example.com/settings")
   defer { try? FileManager.default.removeItem(at: rejected) }

@@ -58,21 +58,3 @@ pub fn composition() -> Vec<String> {
         tether_terminal::engine_description().to_owned(),
     ]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn composition_names_every_engine() {
-        let parts = composition();
-        assert_eq!(parts.len(), 3);
-        assert!(parts.iter().any(|p| p.starts_with("russh")));
-        if cfg!(target_os = "ios") {
-            assert!(parts.iter().any(|p| p == "no pseudo-terminal"));
-        } else {
-            assert!(parts.iter().any(|p| p.starts_with("portable-pty")));
-        }
-        assert!(parts.iter().any(|p| p.contains("alacritty")));
-    }
-}

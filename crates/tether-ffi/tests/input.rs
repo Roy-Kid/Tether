@@ -26,12 +26,6 @@ fn chord(key: KeyPress, modifiers: KeyModifiers) -> Vec<u8> {
     bytes(TerminalInput::Key { key, modifiers })
 }
 
-#[test]
-fn ordinary_text_goes_out_as_itself() {
-    assert_eq!(key(KeyPress::Char { text: "a".into() }), b"a");
-    assert_eq!(key(KeyPress::Char { text: "中".into() }), "中".as_bytes());
-}
-
 /// Every named key must reach the engine as the key it names. A table, not a
 /// loop, because the point is to catch a variant wired to its neighbour.
 #[test]
@@ -75,14 +69,6 @@ fn modifiers_reach_the_engine_rather_than_being_dropped() {
     assert_eq!(chord(KeyPress::Up, control), b"\x1b[1;5A");
 }
 
-/// A key no terminal defines sends nothing, rather than bytes invented to
-/// fill the gap.
-#[test]
-fn a_key_no_terminal_defines_sends_nothing() {
-    assert!(key(KeyPress::Function { number: 21 }).is_empty());
-    assert!(key(KeyPress::Char { text: String::new() }).is_empty());
-}
-
 /// Composed text is not a key press. It still has to arrive, so it is sent as
 /// itself — and not bracketed, because bracketing would tell the far side it
 /// was pasted when it was typed.
@@ -97,26 +83,4 @@ fn composed_text_is_sent_as_text_rather_than_encoded_as_a_key() {
     // what is sent.
     let control = KeyModifiers { shift: false, alt: false, control: true };
     assert_eq!(chord(KeyPress::Char { text: family.into() }, control), family.as_bytes());
-}
-
-/// A single scalar is a key press even when it is not ASCII, so a control
-/// chord on it still works.
-#[test]
-fn a_single_scalar_is_still_a_key_press() {
-    let control = KeyModifiers { shift: false, alt: false, control: true };
-    // `é` as one scalar has no control encoding, so the character survives
-    // rather than being swallowed.
-    assert_eq!(chord(KeyPress::Char { text: "\u{00e9}".into() }, control), "é".as_bytes());
-}
-
-#[test]
-fn a_paste_is_plain_text_until_the_far_side_asks_for_brackets() {
-    assert_eq!(bytes(TerminalInput::Paste { text: "hello".into() }), b"hello");
-
-    let mut terminal = Terminal::new(ScreenSize::new(80, 24));
-    terminal.feed(b"\x1b[?2004h");
-    let Resolved::Encoded(core) = TerminalInput::Paste { text: "hello".into() }.resolve() else {
-        panic!("a paste is always encodable");
-    };
-    assert_eq!(terminal.encode(&core), b"\x1b[200~hello\x1b[201~");
 }

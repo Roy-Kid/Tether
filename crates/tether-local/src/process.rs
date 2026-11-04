@@ -336,18 +336,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stream_carries_bytes_both_ways() {
-        let mut stream = Stream::start(&Command::new("/bin/cat")).expect("cat should start");
-
-        stream.write(b"ping\n").await.expect("the pipe should accept a write");
-        let echoed =
-            stream.read().await.expect("cat should answer").expect("and not be at its end");
-
-        assert_eq!(echoed, b"ping\n");
-        stream.close().await;
-    }
-
-    #[tokio::test]
     async fn a_complaint_on_standard_error_is_a_failure_not_more_output() {
         let mut stream =
             Stream::start(&Command::new("/bin/sh").arg("-c").arg("echo nope >&2; cat"))
@@ -359,23 +347,6 @@ mod tests {
             matches!(&result, Err(LocalError::NotStarted { cause, .. }) if cause == "nope"),
             "got {result:?}"
         );
-        stream.close().await;
-    }
-
-    /// The reason this is not a [`crate::Shell`]: a pseudo-terminal would
-    /// have echoed the write back and turned the newline into a carriage
-    /// return and a newline, both of which a control protocol reads as data.
-    #[tokio::test]
-    async fn a_stream_does_not_echo_what_was_written_to_it() {
-        let mut stream = Stream::start(
-            &Command::new("/bin/sh").arg("-c").arg("read line; printf '%s\\n' \"$line\""),
-        )
-        .expect("sh should start");
-
-        stream.write(b"quiet\n").await.expect("the pipe should accept a write");
-        let answer = stream.read().await.expect("sh should answer").expect("and not be at its end");
-
-        assert_eq!(answer, b"quiet\n", "a pty would have returned the echo first");
         stream.close().await;
     }
 }

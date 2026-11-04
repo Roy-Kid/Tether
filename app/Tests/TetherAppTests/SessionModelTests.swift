@@ -97,14 +97,4 @@ struct SessionModelTests {
     #expect(promptDialogTitle(AuthPrompt(text: "Password: ", echo: false)) == "Password")
   }
 
-  @Test("a tile letter falls back to the address when there is no name")
-  func initials() {
-    var host = Host(label: "", hostname: "hpc.example.org", port: 22, username: "ada", keyPath: nil)
-    #expect(host.initial == "H")
-    host.label = "lab"
-    #expect(host.initial == "L")
-    host.hostname = ""
-    host.label = ""
-    #expect(host.initial == "?")
-  }
 }

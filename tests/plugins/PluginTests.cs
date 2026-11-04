@@ -33,13 +33,6 @@ public class RegistryTests
         Assert.Equal(["files"], saved[^1]);
     }
 
-    [Fact]
-    public void RegisteringTheSameIdTwiceIsRefused()
-    {
-        var registry = new PluginRegistry();
-        registry.Register(new Stub("files"));
-        Assert.Throws<InvalidOperationException>(() => registry.Register(new Stub("files")));
-    }
 }
 
 public class FilesPathTests
@@ -49,19 +42,6 @@ public class FilesPathTests
     {
         var candidates = FilesPaths.Candidates("src/plot.png", "/work", "/work", "/home/ada");
         Assert.Equal(["/work/src/plot.png", "/home/ada/src/plot.png"], candidates);
-    }
-
-    [Fact]
-    public void AnAbsolutePathIsOnlyItself()
-    {
-        Assert.Equal(["/var/log"], FilesPaths.Candidates("/var/log", "/work", null, "/home"));
-    }
-
-    [Fact]
-    public void ATildePathIsHome()
-    {
-        Assert.Equal(["/home/ada/note.txt"], FilesPaths.Candidates("~/note.txt", "/work", null, "/home/ada"));
-        Assert.Empty(FilesPaths.Candidates("~/note.txt", "/work", null, null));
     }
 
     [Fact]

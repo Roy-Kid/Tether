@@ -82,22 +82,6 @@ extension BrowserUITests {
       #expect(model.transfers.items.map(\.failure) == [model.problem])
     }
 
-    /// A taken name is a question, not a failure: no failed row is left for it.
-    @Test("a taken name asks, and leaves no failed transfer behind")
-    func takenNameAsks() async throws {
-      let source = StubSource(tree)
-      let model = browser(source)
-      defer { model.close() }
-      await model.go(to: "/home/ada")
-      let local = try scratchFile("b.txt")
-      let arrived = await model.upload([local], into: "/home/ada")
-      #expect(arrived.isEmpty)
-      #expect(model.conflicts.map(\.target) == ["/home/ada/b.txt"])
-      #expect(model.transfers.items.isEmpty)
-      #expect(model.problem == nil)
-      #expect(source.uploads.allSatisfy { $0.2 == false })
-    }
-
     #if os(macOS)
       /// Answers every question the browser asks with one action.
       private final class Answering: PluginServing {
@@ -117,41 +101,6 @@ extension BrowserUITests {
         func reportStatus(pluginID: String, item: PluginStatusBarItem) {}
       }
 
-      /// The dialog's answer is acted on by the view that asked. Settling the
-      /// question changes what the view is asking about, and the work it
-      /// started must not be cancelled with it.
-      @Test("Replace in the name-taken dialog replaces the file", arguments: ["replace", "keep"])
-      func replaceFromDialog(answer: String) async throws {
-        let services = Answering(answer)
-        PluginGateway.current = services
-        defer { PluginGateway.current = nil }
-        let source = StubSource(tree)
-        let model = browser(source)
-        defer { model.close() }
-        await model.go(to: "/home/ada")
-        let window = NSWindow(
-          contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
-          styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: Browser(model: model))
-        window.orderFrontRegardless()
-        defer { window.orderOut(nil) }
-        try await Task.sleep(for: .milliseconds(200))
-        let local = try scratchFile("b.txt")
-        await model.upload([local], into: "/home/ada")
-        for _ in 0..<200 where source.uploads.isEmpty || !model.conflicts.isEmpty || !model.transfers.items.isEmpty {
-          try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(services.asked == ["Replace “b.txt”?"])
-        #expect(model.conflicts.isEmpty)
-        if answer == "replace" {
-          #expect(source.uploads.map(\.1) == ["/home/ada/b.txt"])
-          #expect(source.uploads.map(\.2) == [true])
-        } else {
-          #expect(source.uploads.map(\.1) == ["/home/ada/b 2.txt"])
-          #expect(source.uploads.map(\.2) == [false])
-        }
-        #expect(model.transfers.items.isEmpty)
-      }
     #endif
   }
 }

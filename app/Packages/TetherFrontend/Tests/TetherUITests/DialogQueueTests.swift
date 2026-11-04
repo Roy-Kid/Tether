@@ -94,20 +94,6 @@ struct DialogQueueTests {
     #expect(await second.value == DialogReply(action: 1, role: .confirm, values: ["424242"]))
   }
 
-  @Test("the chosen action runs with what was typed")
-  func actionRuns() async {
-    let surface = RecordingSurface()
-    let queue = DialogQueue(surface: surface)
-    var renamed: String?
-
-    let rename = dialog("Rename", fields: [Dialog.Field("Name", initial: "Terminal 1")]) { renamed = $0.first }
-    let reply = Task { await queue.ask(rename) }
-    await settle { !surface.shown.isEmpty }
-    surface.tap(1, values: ["build", "stray"])
-    #expect(await reply.value?.values == ["build"], "one value per field, whatever the surface handed back")
-    #expect(renamed == "build")
-  }
-
   @Test("a withdrawn question leaves the screen and is not answered")
   func withdrawal() async {
     let surface = RecordingSurface()
@@ -140,34 +126,6 @@ struct DialogQueueTests {
     _ = await first.value
     await settle()
     #expect(surface.shown == ["Approve"])
-  }
-
-  @Test("an answer after withdrawal is ignored")
-  func lateAnswer() async {
-    let surface = RecordingSurface()
-    let queue = DialogQueue(surface: surface)
-    var ran = false
-
-    let asking = Task { await queue.ask(dialog("Password") { _ in ran = true }) }
-    await settle { !surface.shown.isEmpty }
-    asking.cancel()
-    _ = await asking.value
-    surface.tap(1, values: ["late"])
-    #expect(!ran, "the person who asked has gone")
-  }
-
-  @Test("nowhere to show it is an unanswered question, and the next still gets its turn")
-  func noSurface() async {
-    let surface = RecordingSurface()
-    surface.available = false
-    let queue = DialogQueue(surface: surface)
-    #expect(await queue.ask(dialog("Approve")) == nil)
-
-    surface.available = true
-    let reply = Task { await queue.ask(dialog("Verification code")) }
-    await settle { !surface.shown.isEmpty }
-    surface.tap(0)
-    #expect(await reply.value?.role == .cancel)
   }
 
   /// A Mac sheet whose window closes under it, or any other ending the
@@ -224,8 +182,4 @@ struct DialogQueueTests {
     #expect(close.cancelAction == 0)
   }
 
-  @Test("an empty message is no message")
-  func emptyMessage() {
-    #expect(Dialog.notice("Could Not Connect", message: "").message == nil)
-  }
 }

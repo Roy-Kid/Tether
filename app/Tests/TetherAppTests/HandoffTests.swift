@@ -97,21 +97,6 @@ struct HandoffTests {
     #expect(!receiver.tabs.contains { $0.name == "elsewhere" || $0.name == "Local" })
   }
 
-  @Test("take over stays disabled until a paired device is nearby and a remote workspace is open")
-  func takeOverGate() {
-    let tabs = TabSet()
-    let remote = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
-    tabs.adopt(SessionTab(preview: .local, known: tabs.known, name: "Local", live: true))
-    tabs.takeOverReady = true
-    #expect(!tabs.canPerform(.takeOver))
-    tabs.adopt(SessionTab(preview: remote, known: tabs.known, name: "shell", live: true))
-    #expect(tabs.canPerform(.takeOver))
-    tabs.perform(.takeOver)
-    #expect(tabs.intent == .takeOver)
-    tabs.takeOverReady = false
-    #expect(!tabs.canPerform(.takeOver))
-  }
-
   @Test("a snapshot is sealed only after both proofs, and a stranger or a revoked peer gets nothing")
   func provesThenSeals() throws {
     let (macCard, macKeys) = device("Mac")

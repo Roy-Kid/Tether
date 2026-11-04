@@ -197,32 +197,6 @@ struct SharedRenderTests {
     }
   }
 
-  @Test("invalid imports preserve the catalogue and selected font")
-  func invalidFont() {
-    let before = TerminalFonts.faces()
-    #expect(throws: RenderingError.self) { try RenderingFonts.register(Data("invalid font".utf8)) }
-    #expect(TerminalFonts.faces() == before)
-  }
-  @Test("font import deduplicates faces and reloads stable identities")
-  func importAndReload() throws {
-    TerminalFonts.prepare()
-    let collection = CTFontCollectionCreateFromAvailableFonts(nil)
-    let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] ?? []
-    let source = try #require(descriptors.compactMap { CTFontDescriptorCopyAttribute($0, kCTFontURLAttribute) as? URL }.first {
-      let size = (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
-      return size < 5 * 1024 * 1024
-    })
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let first = try TerminalFonts.importFont(source, into: directory)
-    let second = try TerminalFonts.importFont(source, into: directory)
-    #expect(first == second)
-    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-    #expect(files.count == 1)
-    #expect(try RenderingFonts.register(Data(contentsOf: files[0])) == first)
-    #expect(first.allSatisfy { face in RenderingFonts.faces().filter { $0.id == face.id }.count == 1 })
-  }
-
   @Test("new CJK glyphs remain visible after atlas churn")
   func atlasChurn() async throws {
     TerminalFonts.prepare()

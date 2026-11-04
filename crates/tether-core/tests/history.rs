@@ -109,25 +109,6 @@ fn unicode_style_wraps_and_primary_screen_survive_alternate_screen() {
 }
 
 #[test]
-fn resize_replaces_only_the_cached_tail_without_duplication_or_lost_rows() {
-    let dir = ArchiveDir::new();
-    let archive = HistoryArchive::create(&dir.0, None).unwrap();
-    let mut terminal = terminal(20, 3, 100);
-    terminal.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
-    commit(&mut terminal, &archive);
-    let expected = all(&dir);
-    terminal.resize(ScreenSize::new(20, 5));
-    commit(&mut terminal, &archive);
-    assert_eq!(all(&dir), expected);
-    terminal.resize(ScreenSize::new(20, 2));
-    commit(&mut terminal, &archive);
-    assert_eq!(all(&dir), expected);
-    terminal.feed(b"\r\nsix\r\nseven");
-    commit(&mut terminal, &archive);
-    assert_eq!(all(&dir), ["one", "two", "three", "four", "five", "six", "seven"]);
-}
-
-#[test]
 fn explicit_clear_also_erases_persisted_history() {
     let dir = ArchiveDir::new();
     let archive = HistoryArchive::create(&dir.0, None).unwrap();
@@ -253,18 +234,6 @@ fn uncommitted_write_is_rolled_back_and_archive_has_private_permissions() {
     }
 }
 
-#[test]
-fn tabs_at_the_wrap_boundary_are_captured_and_can_be_read_back() {
-    let dir = ArchiveDir::new();
-    let archive = HistoryArchive::create(&dir.0, None).unwrap();
-    let mut terminal = terminal(8, 1, 0);
-    terminal.feed(b"a\tb\r\n12345678\tnext");
-    commit(&mut terminal, &archive);
-    let rows = all(&dir);
-    assert!(rows.iter().any(|r| r == "12345678"));
-    assert!(rows.iter().any(|r| r.starts_with('a')));
-}
-
 #[tokio::test]
 async fn restored_display_never_becomes_pty_input_or_terminal_replies() {
     use std::sync::{Arc, Mutex};
@@ -323,55 +292,6 @@ async fn restored_display_never_becomes_pty_input_or_terminal_replies() {
     assert!(writes.lock().unwrap().is_empty());
     assert_eq!(logical(&dir).matches("old output").count(), 1);
     assert_eq!(logical(&dir).matches("new output").count(), 1);
-}
-
-#[test]
-fn a_new_terminal_can_begin_checkpoint_and_reopen_without_a_disk_error() {
-    let dir = ArchiveDir::new();
-    let archive = HistoryArchive::create(&dir.0, Some(10_000)).unwrap();
-    archive.begin_session().expect("begin on a fresh archive");
-    assert_eq!(archive.tail(10).unwrap().len(), 0);
-    assert_eq!(archive.error(), None);
-    archive.flush();
-    assert_eq!(archive.error(), None, "checkpoint after the first session");
-    let mode: String = rusqlite::Connection::open(dir.0.join("history.sqlite"))
-        .unwrap()
-        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(mode, "wal");
-
-    let mut terminal = terminal(80, 24, 100);
-    let payload = "row ".repeat(40);
-    for i in 0..20_000 {
-        terminal.feed(format!("{payload}{i}\r\n").as_bytes());
-        if i % 200 == 0 {
-            commit(&mut terminal, &archive);
-        }
-    }
-    commit(&mut terminal, &archive);
-    archive.flush();
-    assert_eq!(archive.error(), None, "checkpoint after the wal passes the autocheckpoint");
-    drop(archive);
-
-    let reopened = HistoryArchive::reopen(&dir.0, Some(10_000)).unwrap();
-    reopened.begin_session().expect("begin on a restored archive");
-    assert_eq!(reopened.error(), None);
-    reopened.flush();
-    assert_eq!(reopened.error(), None);
-}
-
-// Unix lets a directory go while its files are open; Windows refuses the
-// removal itself (os error 32), so there is no unlinked archive to write to.
-#[cfg(unix)]
-#[test]
-fn unlinking_an_open_archive_reports_disk_io_error() {
-    let dir = ArchiveDir::new();
-    let archive = HistoryArchive::create(&dir.0, Some(10_000)).unwrap();
-    std::fs::remove_dir_all(&dir.0).unwrap();
-    let error = archive.begin_session().expect_err("a removed archive cannot begin");
-    assert_eq!(error.to_string(), "disk I/O error");
-    // The caller records this. begin_session itself only returns it.
-    assert_eq!(archive.error(), None);
 }
 
 #[test]

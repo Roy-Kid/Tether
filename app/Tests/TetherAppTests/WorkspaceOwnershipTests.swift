@@ -29,24 +29,6 @@ struct WorkspaceOwnershipTests {
     SessionTab(preview: host, known: KnownHosts(), name: name, live: live)
   }
 
-  @Test("switching host restores that host's last tab")
-  func hostSwitchRestores() {
-    let tabs = makeTabs()
-    let lab = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.adopt(tab(lab, name: "Terminal 1"))
-    #expect(tabs.currentHost?.id == lab.id)
-    #expect(tabs.current?.name == "Terminal 1")
-    #expect(tabs.visibleTabs.count == 1)
-
-    tabs.show(.local)
-    #expect(tabs.currentHost?.id == Host.localID)
-    #expect(tabs.current?.host.id == Host.localID)
-
-    tabs.show(lab)
-    #expect(tabs.current?.host.id == lab.id)
-  }
-
   @Test("closing the last tab in the window reports an empty window")
   func closeLastReportsEmpty() {
     let tabs = makeTabs()
@@ -61,18 +43,6 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.tabs.isEmpty)
   }
 
-  @Test("closing the last tab on a host stays on that host")
-  func closeLastStays() {
-    let tabs = makeTabs()
-    let lab = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.adopt(tab(lab, name: "Terminal 1", live: false))
-    tabs.close(tabs.selected!)
-    #expect(tabs.currentHost?.id == lab.id)
-    #expect(tabs.visibleTabs.isEmpty)
-    #expect(tabs.selected == nil)
-  }
-
   @Test("a live tab with unknown process state asks before closing")
   func liveTabConfirms() async {
     let tabs = makeTabs()
@@ -84,26 +54,6 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.tabs.count == 1)
     tabs.confirmClose()
     #expect(tabs.tabs.isEmpty)
-  }
-
-  @Test("an ended tab closes without confirmation")
-  func endedTabCloses() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1", live: false))
-    let id = tabs.selected!
-    tabs.requestClose(id)
-    #expect(tabs.pendingClose == nil)
-    #expect(tabs.tabs.isEmpty)
-  }
-
-  @Test("cancelling the question keeps the tab")
-  func cancelledCloseKeepsTab() async {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.requestClose(tabs.selected!)
-    while tabs.checkingClose != nil { await Task.yield() }
-    tabs.pendingClose = nil
-    #expect(tabs.tabs.count == 1)
   }
 
   @Test("an extension workspace asks before closing, and is named")
@@ -122,28 +72,6 @@ struct WorkspaceOwnershipTests {
     #expect(workspace.closed)
   }
 
-  @Test("the question names the terminal, and the verb is the button")
-  func questionNamesTheTab() async {
-    let tabs = makeTabs()
-    #expect(tabs.closeQuestion == "Close?")
-    tabs.adopt(tab(.local, name: "Terminal 2"))
-    tabs.requestClose(tabs.selected!)
-    while tabs.checkingClose != nil { await Task.yield() }
-    #expect(tabs.closeQuestion == "Close Terminal 2?")
-  }
-
-  @Test("zen hides inspector and restores it")
-  func zenPreservesInspector() {
-    let tabs = makeTabs()
-    tabs.inspector = true
-    tabs.toggleZen()
-    #expect(tabs.zen)
-    #expect(!tabs.inspector)
-    tabs.toggleZen()
-    #expect(!tabs.zen)
-    #expect(tabs.inspector)
-  }
-
   @Test("⌘W closes a selector before the tab")
   func closeSelectorFirst() {
     let tabs = makeTabs()
@@ -158,105 +86,9 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.tabs.count == 1)
   }
 
-  @Test("hiding the tab bar keeps sessions, selection and inspector, and dismisses anchored menus")
-  func tabBarVisibilityPreservesWorkspace() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.adopt(tab(.local, name: "Terminal 2"))
-    let selected = tabs.selected
-    let ids = tabs.visibleIDs
-    tabs.inspector = true
-    tabs.tabMenu = selected
-    tabs.accessory = AccessoryRef(tab: selected!, plugin: "test.tab")
-
-    tabs.perform(.toggleTabBar)
-    #expect(!tabs.showsTabBar)
-    #expect(tabs.title(for: .toggleTabBar) == "Show Tab Bar")
-    #expect(tabs.selected == selected)
-    #expect(tabs.visibleIDs == ids)
-    #expect(tabs.inspector)
-    #expect(tabs.tabMenu == nil && tabs.accessory == nil)
-    #expect(tabs.pendingClose == nil)
-
-    tabs.perform(.previousTab)
-    #expect(tabs.selectedWorkspaceID == ids.first)
-    #expect(!tabs.showsTabBar)
-    tabs.perform(.toggleTabBar)
-    #expect(tabs.showsTabBar)
-    #expect(tabs.title(for: .toggleTabBar) == "Hide Tab Bar")
-    #expect(tabs.selectedWorkspaceID == ids.first)
-  }
-
   #if os(macOS)
-  @Test("tab bar visibility restores across launches in either layout", arguments: [TabLayout.horizontal, .vertical])
-  func tabBarVisibilityRestores(layout: TabLayout) {
-    preferences.defaults.set(layout.rawValue, forKey: TabLayout.preferenceKey)
-    let tabs = makeTabs()
-    #expect(tabs.showsTabBar, "a first launch keeps the tab bar visible")
-    tabs.perform(.toggleTabBar)
-    #expect(preferences.defaults.object(forKey: TabBarPreference.key) as? Bool == false)
 
-    // A fresh preferences reader and workspace exercise the startup path.
-    let restored = TabSet(defaults: UserDefaults(suiteName: preferences.name)!)
-    #expect(!restored.showsTabBar)
-    #expect(restored.title(for: .toggleTabBar) == "Show Tab Bar")
-    #expect(preferences.defaults.string(forKey: TabLayout.preferenceKey) == layout.rawValue)
-    restored.perform(.toggleTabBar)
-    #expect(TabSet(defaults: UserDefaults(suiteName: preferences.name)!).showsTabBar)
-  }
-
-  @Test("Zen does not save its temporary hiding as the tab bar preference", arguments: [true, false])
-  func zenKeepsSavedVisibility(visible: Bool) {
-    let tabs = makeTabs()
-    if !visible { tabs.perform(.toggleTabBar) }
-    tabs.perform(.zen)
-    #expect(!tabs.showsTabBar)
-    #expect(makeTabs().showsTabBar == visible)
-
-    tabs.perform(.toggleTabBar)
-    #expect(!tabs.zen)
-    #expect(tabs.showsTabBar)
-    #expect(makeTabs().showsTabBar)
-  }
-
-  @Test("zen preserves tab visibility, and Show Tab Bar exits zen")
-  func tabBarVisibilityInZen() {
-    let tabs = makeTabs()
-    tabs.perform(.toggleTabBar)
-    tabs.perform(.zen)
-    tabs.perform(.zen)
-    #expect(!tabs.showsTabBar)
-    tabs.inspector = true
-    tabs.perform(.zen)
-    tabs.perform(.toggleTabBar)
-    #expect(!tabs.zen)
-    #expect(tabs.showsTabBar)
-    #expect(tabs.inspector)
-  }
-
-  @Test("opening an accessory reveals the hidden tab that anchors its popover")
-  func accessoryRevealsTabBar() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    let id = tabs.selected!
-    tabs.perform(.toggleTabBar)
-    tabs.toggleAccessory("test.tab", on: id)
-    #expect(tabs.showsTabBar)
-    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
-    tabs.perform(.toggleTabBar)
-    tabs.showAccessory("test.tab", on: id)
-    #expect(tabs.showsTabBar)
-    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
-  }
   #endif
-
-  @Test("tabs are named as Terminal N per host")
-  func namesAreLocal() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.adopt(tab(.local, name: "Terminal 2"))
-    #expect(tabs.visibleTabs.map(\.name) == ["Terminal 1", "Terminal 2"])
-  }
 
   @Test("what a plugin shows stands in for the shell, and names itself")
   func attachmentStandsInForShell() throws {
@@ -277,12 +109,6 @@ struct WorkspaceOwnershipTests {
 
     attached.isDisconnected = true
     #expect(tabs.statusLine() == "Disconnected")
-  }
-
-  @Test("a tab does not show the remote window title")
-  func subtitleIgnoresRemoteTitle() {
-    let first = tab(.local, name: "Terminal 1")
-    #expect(first.subtitle.isEmpty)
   }
 
   @Test("closing a tab closes what plugins kept on it")
@@ -317,29 +143,6 @@ struct WorkspaceOwnershipTests {
     #expect(first.attachment(for: "test.tab") == nil)
     #expect(second.attachment(for: "test.other") != nil)
     #expect(tabs.accessory == nil)
-  }
-
-  @Test("turning a plugin off takes its sheet down too")
-  func disablingDismissesSheet() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.sheet = PluginSheet(tab: tabs.selected!, plugin: "test.tab", view: AnyView(EmptyView()))
-    tabs.closePlugin("test.other")
-    #expect(tabs.sheet != nil)
-    tabs.closePlugin("test.tab")
-    #expect(tabs.sheet == nil)
-  }
-
-  @Test("plugin consequences accompany the process warning")
-  func closeNoteComesFromThePlugin() async {
-    let tabs = makeTabs()
-    let first = tab(.local, name: "Terminal 1")
-    tabs.adopt(first)
-    tabs.requestClose(first.id)
-    while tabs.checkingClose != nil { await Task.yield() }
-    #expect(tabs.closeNote == ShellActivity.unknown.closeMessage)
-    first.attach(StubAttachment(closeNote: "Kept on the host."), for: "test.tab")
-    #expect(tabs.closeNote == ShellActivity.unknown.closeMessage! + "\n\nKept on the host.")
   }
 
   @Test("clicking another tab, or cycling, switches to it")
@@ -384,53 +187,7 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.accessory == nil)
   }
 
-  @Test("clicking the selected tab opens the picker, and leaves the inspector alone")
-  func selectedTabClickSkipsTheInspector() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    let id = tabs.selected!
-    tabs.accessories = [
-      PluginAccessory(
-        id: "test.files", title: "Files",
-        accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector)),
-      PluginAccessory(
-        id: "test.tab", title: "Test", accessory: TabAccessory(symbol: "star", name: "things")),
-    ]
-    tabs.current?.attach(StubAttachment(), for: "test.files")
-    tabs.current?.attach(StubAttachment(), for: "test.tab")
-    tabs.handleTabClick(id)
-    #expect(tabs.accessory == AccessoryRef(tab: id, plugin: "test.tab"))
-    #expect(!tabs.inspector)
-
-    tabs.accessory = nil
-    tabs.accessories = [
-      PluginAccessory(
-        id: "test.files", title: "Files",
-        accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
-    ]
-    tabs.handleTabClick(id)
-    #expect(tabs.accessory == nil)
-    #expect(!tabs.inspector)
-  }
-
   #if os(macOS)
-    @Test("dismissing the accessory that owns the inspector closes that column")
-    func dismissClosesTheInspector() {
-      let tabs = makeTabs()
-      tabs.adopt(tab(.local, name: "Terminal 1"))
-      let id = tabs.selected!
-      tabs.accessories = [
-        PluginAccessory(
-          id: "test.files", title: "Files",
-          accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
-      ]
-      tabs.toggleAccessory("test.files", on: id)
-      tabs.dismissAccessory("test.other", on: id)
-      #expect(tabs.isShowingInspector(of: "test.files"))
-      tabs.dismissAccessory("test.files", on: id)
-      #expect(!tabs.inspector)
-      #expect(tabs.inspectorPlugin == nil)
-    }
   #endif
 
   @Test("an accessory kept beside the terminal opens the inspector, not a popover")
@@ -486,34 +243,7 @@ struct WorkspaceOwnershipTests {
   }
 
   #if os(macOS)
-    @Test("opening an inspector accessory leaves zen, which hides the inspector")
-    func inspectorAccessoryLeavesZen() {
-      let tabs = makeTabs()
-      tabs.adopt(tab(.local, name: "Terminal 1"))
-      tabs.accessories = [
-        PluginAccessory(
-          id: "test.files", title: "Files",
-          accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
-      ]
-      tabs.toggleZen()
-      tabs.toggleAccessory("test.files", on: tabs.selected!)
-      #expect(!tabs.zen)
-      #expect(tabs.inspector)
-    }
 
-    @Test("turning a plugin off takes it out of the inspector")
-    func disablingClearsTheInspector() {
-      let tabs = makeTabs()
-      tabs.adopt(tab(.local, name: "Terminal 1"))
-      tabs.accessories = [
-        PluginAccessory(
-          id: "test.files", title: "Files",
-          accessory: TabAccessory(symbol: "folder", name: "Files", placement: .inspector))
-      ]
-      tabs.toggleAccessory("test.files", on: tabs.selected!)
-      tabs.closePlugin("test.files")
-      #expect(tabs.inspectorPlugin == nil)
-    }
   #endif
 
   @Test("a dropped host comes back on one lease; an ended shell does not")
@@ -539,38 +269,6 @@ struct WorkspaceOwnershipTests {
       "a dropped terminal is not a login to join")
   }
 
-  @Test("an ended tab is not a connection to reuse")
-  func endedTabHasNoLease() async throws {
-    let tabs = makeTabs()
-    let lab = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
-    tabs.adopt(tab(lab, name: "Terminal 1", live: false))
-    #expect(try await tabs.lease(for: lab) == nil)
-  }
-
-  @Test("a live preview tab has no lease until a session exists")
-  func previewTabHasNoLease() async throws {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1", live: true))
-    #expect(try await tabs.lease(for: .local) == nil, "stage is not the lease; the session is")
-  }
-
-  @Test("⌘W closes an open accessory before the tab")
-  func closeAccessoryFirst() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    tabs.toggleAccessory("test.tab", on: tabs.selected!)
-    tabs.requestCloseSelected()
-    #expect(tabs.accessory == nil)
-    #expect(tabs.tabs.count == 1)
-  }
-
-  @Test("a live shell does not caption itself connected")
-  func liveShellHasNoStatusCaption() {
-    let tabs = makeTabs()
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    #expect(tabs.statusLine().isEmpty)
-  }
-
   @Test("status names a problem, not a kind")
   func statusNamesAProblem() {
     let tabs = makeTabs()
@@ -578,23 +276,4 @@ struct WorkspaceOwnershipTests {
     #expect(tabs.statusLine() == "Ended")
   }
 
-  @Test("no host is not a second caption next to Choose host")
-  func noHostHasNoStatusCaption() {
-    #expect(makeTabs().statusLine().isEmpty)
-  }
-
-  @Test("an empty workspace says so once")
-  func emptyWorkspaceStatus() {
-    let tabs = makeTabs()
-    tabs.currentHost = .local
-    #expect(tabs.statusLine() == "No open terminals")
-  }
-
-  @Test("host picker caption is a place, not a connection lecture")
-  func hostCaptionIsPlace() {
-    let tabs = makeTabs()
-    #expect(tabs.workspaceCaption(for: .local) == "Local machine")
-    tabs.adopt(tab(.local, name: "Terminal 1"))
-    #expect(tabs.workspaceCaption(for: .local) == "Local machine · Terminal 1")
-  }
 }

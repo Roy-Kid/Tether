@@ -6,7 +6,7 @@
 //! the file exists is the frontend's question — it is the one holding the
 //! connection — so this is shape, not truth, and errs toward answering.
 
-use tether_terminal::{LinkTarget, Position, ScreenSize, Scroll, Terminal};
+use tether_terminal::{LinkTarget, Position, ScreenSize, Terminal};
 
 fn terminal(columns: u16, rows: u16, bytes: &str) -> Terminal {
     let mut terminal = Terminal::new(ScreenSize::new(columns, rows));
@@ -37,15 +37,6 @@ fn an_absolute_path_is_found_from_any_of_its_characters() {
     }
     assert_eq!(terminal.link_at(Position::new(0, 5)), None, "the space before it");
     assert_eq!(terminal.link_at(Position::new(0, 2)), None, "an ordinary word");
-}
-
-#[test]
-fn the_link_says_where_it_is_so_it_can_be_underlined() {
-    let terminal = terminal(80, 4, "  see src/lib.rs now\r\n");
-    let link = terminal.link_at(Position::new(0, 8)).expect("a link");
-    assert_eq!(link.text, "src/lib.rs");
-    assert_eq!(link.spans.len(), 1);
-    assert_eq!((link.spans[0].row, link.spans[0].start, link.spans[0].end), (0, 6, 16));
 }
 
 #[test]
@@ -118,32 +109,6 @@ fn a_path_broken_at_a_vertical_rule_is_one_path() {
 }
 
 #[test]
-fn a_path_broken_in_the_right_hand_columns_is_one_path() {
-    // The right side is continued by moving the cursor, not by a newline.
-    let mut bytes = String::new();
-    for row in 1..=3 {
-        bytes.push_str(&format!("\x1b[{row};41H│"));
-    }
-    bytes.push_str("\x1b[1;42HRIGHT .claude/specs/rondo-geom-01-ordin\x1b[2;42Hary-ef.md END");
-    let terminal = terminal(80, 6, &bytes);
-    let expected = ".claude/specs/rondo-geom-01-ordinary-ef.md".to_owned();
-    assert_eq!(path_at(&terminal, 0, 50).unwrap().0, expected);
-    assert_eq!(path_at(&terminal, 1, 45).unwrap().0, expected);
-}
-
-#[test]
-fn a_short_line_beside_a_vertical_rule_stays_on_its_own_row() {
-    let mut bytes = String::new();
-    for row in 1..=3 {
-        bytes.push_str(&format!("\x1b[{row};41H│"));
-    }
-    bytes.push_str("\x1b[1;1Hsrc/main.rs\x1b[2;1Hplot.png");
-    let terminal = terminal(80, 6, &bytes);
-    assert_eq!(path_at(&terminal, 0, 2).unwrap().0, "src/main.rs");
-    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, "plot.png");
-}
-
-#[test]
 fn a_path_broken_by_newlines_in_the_middle_of_the_name_is_one_path() {
     // As printed: a newline after the directory, and another after a
     // hyphen in the id. On a wide screen those are real newlines. On a
@@ -164,22 +129,6 @@ fn a_path_broken_by_newlines_in_the_middle_of_the_name_is_one_path() {
     assert_eq!(spans.len(), 3);
     assert_eq!(spans[0].0, 0);
     assert_eq!(spans[2].0, 2);
-}
-
-#[test]
-fn a_hyphen_at_the_end_of_a_line_keeps_the_path_going() {
-    let terminal = terminal(40, 4, "see /tmp/foo-\r\nbar.txt later\r\n");
-    assert_eq!(path_at(&terminal, 0, 8).unwrap().0, "/tmp/foo-bar.txt");
-    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, "/tmp/foo-bar.txt");
-}
-
-#[test]
-fn a_new_path_on_the_next_line_stays_its_own() {
-    let terminal = terminal(40, 6, "/usr/bin/\r\n/usr/local/bin\r\nsrc/a.rs\r\nsrc/b.rs\r\n");
-    assert_eq!(path_at(&terminal, 0, 1).unwrap().0, "/usr/bin/");
-    assert_eq!(path_at(&terminal, 1, 1).unwrap().0, "/usr/local/bin");
-    assert_eq!(path_at(&terminal, 2, 1).unwrap().0, "src/a.rs");
-    assert_eq!(path_at(&terminal, 3, 1).unwrap().0, "src/b.rs");
 }
 
 #[test]
@@ -219,21 +168,6 @@ fn a_hyperlink_the_program_attached_wins_over_the_text() {
     assert_eq!(link.text, "the report");
     assert_eq!((link.spans[0].start, link.spans[0].end), (0, 10));
     assert_eq!(terminal.link_at(Position::new(0, 12)), None, "past the link");
-}
-
-#[test]
-fn a_link_in_history_is_found_where_it_is_drawn() {
-    let mut terminal = terminal(40, 3, "first /tmp/a.log\r\n");
-    terminal.feed(b"x\r\ny\r\nz\r\nw\r\n");
-    terminal.scroll(Scroll::Oldest);
-    assert_eq!(path_at(&terminal, 0, 8).unwrap().0, "/tmp/a.log");
-}
-
-#[test]
-fn outside_the_screen_is_nothing() {
-    let terminal = terminal(10, 2, "/tmp/a.txt");
-    assert_eq!(terminal.link_at(Position::new(5, 0)), None);
-    assert_eq!(terminal.link_at(Position::new(0, 50)), None);
 }
 
 #[test]

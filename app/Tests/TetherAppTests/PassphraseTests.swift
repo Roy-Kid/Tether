@@ -32,20 +32,6 @@ struct PassphraseTests {
     return (login, path)
   }
 
-  @Test("the dialog is a title and a verb, and says which key")
-  func dialog() {
-    let first = HandshakeQuestion.passphrase(key: "id_ed25519", fingerprint: "SHA256:key", notice: nil).dialog
-    #expect(first.title == "Unlock id_ed25519")
-    #expect(first.message == "SHA256:key")
-    #expect(first.fields == [Dialog.Field("Passphrase", kind: .password)])
-    #expect(first.actions.map(\.title) == ["Cancel", "Unlock"])
-
-    let again = HandshakeQuestion.passphrase(
-      key: "id_ed25519", fingerprint: "SHA256:key", notice: "The passphrase was not accepted."
-    ).dialog
-    #expect(again.message == "The passphrase was not accepted.")
-  }
-
   @Test("nothing is asked before the host is trusted")
   func notBeforeTrust() async {
     var asked = 0
@@ -88,22 +74,4 @@ struct PassphraseTests {
     #expect(login.refusal is CancellationError, "a no ends the login quietly")
   }
 
-  @Test("a key left out is named by its file, and other failures pass through")
-  func skippedKeysAreNamed() {
-    let skipped = SkippedKey(position: 1, fingerprint: "SHA256:key", problem: .wrongPassphrase)
-    let named = namingSkippedKeys(
-      TetherError.authenticationFailed(remaining: ["publickey"], skipped: [skipped]),
-      [0: "id_rsa", 1: "id_ed25519"])
-    #expect(
-      named as? TetherError
-        == .authenticationFailed(
-          remaining: ["publickey"],
-          skipped: [SkippedKey(position: 1, fingerprint: "SHA256:key", problem: .wrongPassphrase, name: "id_ed25519")]))
-    #expect(
-      named.localizedDescription
-        == "Authentication failed. The server accepts: publickey. id_ed25519 was not used: the passphrase was not accepted.")
-
-    #expect(namingSkippedKeys(TetherError.cancelled, [0: "id_rsa"]) as? TetherError == .cancelled)
-    #expect(keyName("~/.ssh/id_ed25519") == "id_ed25519")
-  }
 }

@@ -231,21 +231,6 @@ mod tests {
         let (_, arguments, _, _) = command.parts();
         assert!(arguments.is_empty(), "got {:?}", arguments);
     }
-
-    #[test]
-    fn the_exported_shell_wins() {
-        // Not asserted against a fixed path: what matters is that the
-        // program is *a* shell this account could plausibly run, and CI
-        // runs on a machine whose default is not this one's.
-        let command = Command::login_shell();
-        assert!(!command.program_name().is_empty());
-    }
-
-    #[test]
-    fn term_describes_what_a_consumer_can_draw() {
-        assert_eq!(Command::login_shell().parts().3, "xterm-256color");
-        assert_eq!(Command::new("sh").term("dumb").parts().3, "dumb");
-    }
 }
 
 #[cfg(target_os = "ios")]

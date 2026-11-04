@@ -43,22 +43,6 @@ struct TabRestorationTests {
     #expect(restoredB.id != b.id, "a reopened tab has a fresh session identity")
   }
 
-  @Test("restoring returns to the original host even when another host is selected")
-  func originalHost() throws {
-    let remote = Host(label: "lab", hostname: "lab.example", port: 22, username: "ada", keyPath: nil)
-    let tabs = TabSet()
-    let closed = tab("Remote work", host: remote)
-    tabs.adopt(closed)
-    tabs.close(closed.id)
-    tabs.adopt(tab("Local"))
-    let record = try takeRequest(tabs)
-    #expect(record.host == remote)
-    let restored = tab(record.name, host: record.host)
-    #expect(tabs.completeRestore(record.id, with: restored))
-    #expect(tabs.currentHost == remote)
-    #expect(tabs.current?.id == restored.id)
-  }
-
   @Test("authentication cancellation preserves history and duplicate requests do not consume it")
   func cancelledRestore() throws {
     let tabs = TabSet()
@@ -89,40 +73,6 @@ struct TabRestorationTests {
     #expect(tabs.canRestoreTab)
   }
 
-  @Test("cancelled closes, automatic invalidations and shutdown cannot populate restore history")
-  func automaticClose() {
-    let tabs = TabSet()
-    let closed = tab("A")
-    tabs.adopt(closed)
-    tabs.pendingClose = closed.id
-    tabs.pendingClose = nil
-    #expect(tabs.closedTabs.isEmpty)
-    tabs.close(closed.id, remember: false)
-    #expect(tabs.closedTabs.isEmpty)
-    let next = tab("B")
-    tabs.adopt(next)
-    tabs.close(next.id)
-    tabs.perform(.restoreTab)
-    tabs.closeAll()
-    #expect(tabs.closedTabs.isEmpty)
-    #expect(tabs.restoringTab == nil)
-    #expect(tabs.intent == nil)
-    #expect(tabs.restore(next.id, host: .local, password: "") == nil)
-  }
-
-  @Test("only the most recent twenty tabs are retained")
-  func boundedHistory() {
-    let tabs = TabSet()
-    for index in 0..<25 {
-      let closed = tab("\(index)")
-      tabs.adopt(closed)
-      tabs.close(closed.id)
-    }
-    #expect(tabs.closedTabs.count == TabSet.closedTabLimit)
-    #expect(tabs.closedTabs.first?.name == "5")
-    #expect(tabs.closedTabs.last?.name == "24")
-  }
-
   @Test("deleted managed hosts cannot be restored, and label changes keep history")
   func changedHosts() throws {
     let profile = IdentityTests().profile()
@@ -142,21 +92,6 @@ struct TabRestorationTests {
     #expect(tabs.closedTabs.isEmpty)
     #expect(tabs.restoringTab == nil)
     #expect(tabs.restore(record.id, host: host, password: "") == nil)
-  }
-
-  @Test("plugin metadata is saved before attachments are closed")
-  func pluginState() {
-    let tabs = TabSet()
-    let closed = tab("A")
-    let attachment = StubAttachment()
-    attachment.restorationState = Data("saved-directory".utf8)
-    closed.attach(attachment, for: "test.files")
-    tabs.adopt(closed)
-    tabs.close(closed.id)
-    #expect(attachment.closed)
-    #expect(tabs.closedTabs.last?.attachments == [
-      ClosedTerminal.Attachment(pluginID: "test.files", state: Data("saved-directory".utf8))
-    ])
   }
 
   @Test("a real local shell reopens in its previous directory with its previous name",

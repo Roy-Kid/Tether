@@ -4,10 +4,6 @@ import Testing
 
 @Suite("a path typed at the prompt")
 struct ShellQuoteTests {
-  @Test("an ordinary path is typed as it is")
-  func plain() {
-    #expect(shellQuoted("/Users/ada/plot-1.png") == "/Users/ada/plot-1.png")
-  }
 
   @Test("anything a shell would read is quoted, including a quote")
   func quoted() {

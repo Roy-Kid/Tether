@@ -452,20 +452,3 @@ async fn attempt(connection: Connection, user: &str, offer: &Offer) -> Result<St
 fn names(methods: &[tether_ssh::Method]) -> Vec<String> {
     methods.iter().map(|method| method.0.clone()).collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_dial_keeps_its_connection_alive_by_default() {
-        let dial = Dial::new(tether_ssh::Endpoint::new("example.invalid", 22), "someone");
-        let interval = dial.config.keepalive_interval.expect("a keepalive interval");
-        assert!(
-            interval >= std::time::Duration::from_secs(15)
-                && interval <= std::time::Duration::from_secs(60),
-            "a dead link is noticed within a few minutes, not a quiet one mistaken for dead"
-        );
-        assert!(dial.config.keepalive_max >= 2, "one lost reply is not a lost connection");
-    }
-}

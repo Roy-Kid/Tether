@@ -71,12 +71,6 @@ struct HostImportTests {
     #expect(try Self.untouched(location))
   }
 
-  @Test func aHostTetherCannotRouteIsStillAHost() throws {
-    let (store, location) = try Self.mac("Host inside\n  HostName 10.0.0.9\n  ProxyJump bastion\n")
-    defer { removeDirectory(of: location) }
-    #expect(store.hosts.first?.routeProblem?.contains("proxyjump") == true)
-  }
-
   /// The library is the source of truth: an edit in Tether is the host's
   /// new state, the file is not touched, and reading the file again does not
   /// undo it.

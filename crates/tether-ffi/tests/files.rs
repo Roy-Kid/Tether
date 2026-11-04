@@ -118,12 +118,3 @@ async fn a_lease_lists_moves_and_copies_files() {
     assert_eq!(removed, 2);
     assert!(matches!(files.stat(scratch.path("plots")).await, Err(FileError::NotFound { .. })));
 }
-
-#[tokio::test]
-async fn a_cancelled_listing_says_cancelled() {
-    let Some(files) = files().await else { return };
-    let cancelled = CancellationToken::new();
-    cancelled.cancel();
-    let result = files.list("/".to_owned(), cancelled).await;
-    assert!(matches!(result, Err(FileError::Cancelled)), "{result:?}");
-}

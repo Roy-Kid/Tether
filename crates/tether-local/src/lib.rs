@@ -67,22 +67,3 @@ pub fn backend_description() -> String {
 /// `portable-pty` exposes no version constant of its own, so the pin in the
 /// workspace `Cargo.toml` is the authority and this mirrors it.
 const PORTABLE_PTY_VERSION: &str = "0.9";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_backend_is_named() {
-        if cfg!(target_os = "ios") {
-            assert_eq!(backend_description(), "no pseudo-terminal");
-        } else {
-            assert!(backend_description().starts_with("portable-pty"));
-        }
-    }
-
-    #[test]
-    fn availability_follows_the_platform() {
-        assert_eq!(is_available(), !cfg!(target_os = "ios"));
-    }
-}

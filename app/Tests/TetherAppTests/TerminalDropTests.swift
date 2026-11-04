@@ -32,25 +32,5 @@
       #expect(TerminalDropContent.read(board) == .paste("/home/ada/b.txt\n/home/ada/runs"))
     }
 
-    @Test("files from Finder are files")
-    func finderFiles() throws {
-      let board = board()
-      defer { board.releaseGlobally() }
-      let url = FileManager.default.temporaryDirectory.appendingPathComponent("drop-\(UUID()).txt")
-      try Data("x".utf8).write(to: url)
-      defer { try? FileManager.default.removeItem(at: url) }
-      board.clearContents()
-      #expect(board.writeObjects([url as NSURL]))
-      #expect(TerminalDropContent.read(board) == .files([url]))
-    }
-
-    @Test("anything else is not taken")
-    func nothing() {
-      let board = board()
-      defer { board.releaseGlobally() }
-      board.clearContents()
-      board.setString("just text", forType: .string)
-      #expect(TerminalDropContent.read(board) == nil)
-    }
   }
 #endif

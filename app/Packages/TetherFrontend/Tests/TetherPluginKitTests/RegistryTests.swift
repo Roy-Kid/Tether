@@ -72,42 +72,6 @@ private final class MarkPlugin: TetherPlugin {
   func observeTabMarks(_ notify: @escaping @MainActor () -> Void) { onMarks = notify }
 }
 
-@Test @MainActor
-func tabMarksNotifyTheRegistry() {
-  let name = "TetherTests.marks.\(UUID())"
-  let defaults = UserDefaults(suiteName: name)!
-  defer { defaults.removePersistentDomain(forName: name) }
-  let registry = PluginRegistry(defaults: defaults)
-  let plugin = MarkPlugin()
-  registry.register(plugin)
-  #expect(registry.tabIndicatorEpoch == 0)
-  plugin.onMarks?()
-  #expect(registry.tabIndicatorEpoch == 1)
-  registry.setEnabled(false, id: plugin.metadata.id)
-  let hidden = registry.tabIndicatorEpoch
-  #expect(hidden == 2)
-  plugin.onMarks?()
-  #expect(registry.tabIndicatorEpoch == hidden)
-  registry.setEnabled(true, id: plugin.metadata.id)
-  #expect(registry.tabIndicatorEpoch == hidden &+ 1)
-}
-
-@Test @MainActor
-func tabSymbolComesFromTheFirstEnabledPlugin() {
-  let registry = PluginRegistry(defaults: UserDefaults(suiteName: "TetherTests.symbols.\(UUID())")!)
-  let plugin = ExamplePlugin()
-  let terminal = PluginTerminalIdentity(host: "lab", terminal: "pts/1")
-  registry.register(plugin)
-  #expect(registry.tabSymbol(for: terminal) == nil)
-  plugin.tabSymbols = [.init(target: terminal, symbol: "terminal.fill")]
-  #expect(registry.tabSymbol(for: terminal) == "terminal.fill")
-  plugin.tabSymbols = [.init(target: terminal, symbol: "")]
-  #expect(registry.tabSymbol(for: terminal) == nil, "an empty symbol is not a mark")
-  registry.setEnabled(false, id: plugin.metadata.id)
-  plugin.tabSymbols = [.init(target: terminal, symbol: "terminal.fill")]
-  #expect(registry.tabSymbol(for: terminal) == nil)
-}
-
 @Test
 func preferenceNamespacesDoNotOverlap() {
   let name = "TetherTests.\(UUID())"
@@ -164,80 +128,6 @@ func aTabPluginOpensNoWorkspace() {
   #expect(registry.plugins.first is any TabPlugin, "the host finds tab plugins by conformance")
 }
 
-/// Most accessories are something to choose from, and a popover is where a
-/// choice is made. One that is worth keeping open beside the terminal says
-/// so, and the host puts it in the inspector instead.
-@Test
-func anAccessoryOpensAsAPopoverUnlessItSaysOtherwise() {
-  #expect(TabAccessory(symbol: "star", name: "things").placement == .popover)
-  #expect(
-    TabAccessory(symbol: "folder", name: "Files", placement: .inspector).placement == .inspector)
-}
-
-/// Dropping files on a tab is offered to what is attached to it. An
-/// attachment that says nothing about drops has not accepted one.
-@Test @MainActor
-func anAttachmentDeclinesDroppedFilesByDefault() {
-  let attachment = ExampleAttachment()
-  #expect(!attachment.receive(files: [URL(fileURLWithPath: "/tmp/a.png")]))
-}
-
-/// Text a plugin wants typed at the prompt goes through the host, which owns
-/// the terminal. A context built without it types nothing.
-@Test @MainActor
-func aTabTypesThroughTheHost() {
-  var typed: [String] = []
-  let plugin = PluginContext(
-    connection: nil, hostLabel: "", hostID: UUID(),
-    openWorkspace: { _ in }, reconnect: { throw CancellationError() })
-  let quiet = TabContext(
-    id: UUID(), plugin: plugin, focus: {}, dismissAccessory: {}, present: { _ in },
-    dismissSheet: {})
-  quiet.insertText("ignored")
-  let typing = TabContext(
-    id: UUID(), plugin: plugin, focus: {}, dismissAccessory: {}, present: { _ in },
-    dismissSheet: {}, insertText: { typed.append($0) })
-  typing.insertText("'/tmp/a b.png' ")
-  #expect(typed == ["'/tmp/a b.png' "])
-}
-
-/// Pointing at a path in the terminal is offered to what is attached to the
-/// tab. An attachment that says nothing about links offers nothing.
-@Test @MainActor
-func anAttachmentOffersNothingForALinkByDefault() {
-  let link = TerminalLink(
-    text: "plot.png", kind: .path(path: "plot.png", line: nil, column: nil),
-    spans: [LinkSpan(row: 0, start: 0, end: 8)])
-  #expect(ExampleAttachment().actions(for: PointedLink(link: link, directory: { nil })) == nil)
-}
-
-/// A plugin resolving a relative path asks the tab where its shell is, and
-/// can bring its own accessory up to show what it found.
-@Test @MainActor
-func aTabSaysWhereItsShellIsAndCanShowItsAccessory() async {
-  var shown = 0
-  let plugin = PluginContext(
-    connection: nil, hostLabel: "", hostID: UUID(),
-    openWorkspace: { _ in }, reconnect: { throw CancellationError() })
-  let quiet = TabContext(
-    id: UUID(), plugin: plugin, focus: {}, dismissAccessory: {}, present: { _ in },
-    dismissSheet: {})
-  #expect(quiet.workingDirectory() == nil)
-  #expect(await quiet.resolveWorkingDirectory(nil) == nil)
-  let told = TabContext(
-    id: UUID(), plugin: plugin, focus: {}, dismissAccessory: {}, present: { _ in },
-    dismissSheet: {}, workingDirectory: { "/home/ada/runs" }, showAccessory: { shown += 1 })
-  #expect(told.workingDirectory() == "/home/ada/runs")
-  #expect(await told.resolveWorkingDirectory(nil) == "/home/ada/runs")
-  let pane = TabContext(
-    id: UUID(), plugin: plugin, focus: {}, dismissAccessory: {}, present: { _ in },
-    dismissSheet: {}, workingDirectory: { "/home/ada" },
-    resolveWorkingDirectory: { _ in "/srv/project" })
-  #expect(await pane.resolveWorkingDirectory(nil) == "/srv/project")
-  told.showAccessory()
-  #expect(shown == 1)
-}
-
 /// Two plugins' offers for one link read as one menu, and the link is there
 /// if either finds it.
 @Test @MainActor
@@ -257,26 +147,6 @@ func offersForALinkCombine() async {
   #expect(combined.commands.map(\.title) == ["A", "B"])
   #expect(await combined.exists?() == true)
   #expect(LinkActions.combining([]) == nil)
-}
-
-@Test @MainActor
-func tabIndicatorsUseExactTerminalIdentityAndEnabledPluginLifetime() {
-  let name = "TetherIndicators.\(UUID())"
-  let defaults = UserDefaults(suiteName: name)!
-  defer { defaults.removePersistentDomain(forName: name) }
-  let registry = PluginRegistry(defaults: defaults)
-  let plugin = ExamplePlugin()
-  let target = PluginTerminalIdentity(host: "Studio", terminal: "/dev/ttys001")
-  plugin.tabIndicators = [.init(target: target, color: 0xFF9F0A, label: "Needs you")]
-  registry.register(plugin)
-  #expect(registry.tabIndicator(onAnyOf: [target])?.color == 0xFF9F0A)
-  #expect(registry.tabIndicator(onAnyOf: [.init(host: "remote", terminal: target.terminal)]) == nil)
-  #expect(registry.tabIndicator(onAnyOf: [.init(host: target.host, terminal: "/dev/ttys002")]) == nil)
-  registry.setEnabled(false, id: plugin.metadata.id)
-  #expect(registry.tabIndicator(onAnyOf: [target]) == nil)
-  registry.setEnabled(true, id: plugin.metadata.id)
-  plugin.tabIndicators = []
-  #expect(registry.tabIndicator(onAnyOf: [target]) == nil)
 }
 
 @Test @MainActor

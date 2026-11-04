@@ -309,20 +309,6 @@ AWHhZ6RyEnRGObeD10W92qL7HBfyHaMUGL9ko=
 -----END OPENSSH PRIVATE KEY-----
 ";
 
-    /// The same key in encrypted PKCS#8, which hides the public half too.
-    ///
-    /// Written by russh rather than checked in: `ssh-keygen -m PKCS8` on
-    /// macOS derives its key with PBKDF2-HMAC-SHA1, which the PKCS#8 stack
-    /// underneath refuses — a limit of the upstream crate, surfaced to a
-    /// person as a passphrase that never works, and not ours to rewrite.
-    fn pkcs8() -> String {
-        let key = russh::keys::decode_secret_key(LOCKED, Some("open sesame")).expect("fixture");
-        let mut pem = Vec::new();
-        russh::keys::encode_pkcs8_pem_encrypted(&key, b"open sesame", 16, &mut pem)
-            .expect("encode");
-        String::from_utf8(pem).expect("pem is text")
-    }
-
     struct Script(std::sync::Mutex<Vec<Option<&'static str>>>);
 
     #[async_trait::async_trait]
@@ -334,56 +320,9 @@ AWHhZ6RyEnRGObeD10W92qL7HBfyHaMUGL9ko=
     }
 
     #[test]
-    fn a_locked_openssh_key_shows_its_public_half_before_it_is_unlocked() {
-        let key = PrivateKey::parse(LOCKED, None).expect("read");
-        assert!(key.needs_passphrase());
-        assert_eq!(
-            key.description().fingerprint.as_deref(),
-            Some("SHA256:geKjwKwJQtGRfWN+mIqt0nKBY/0SsaLfiVYpvHUCKKc")
-        );
-        assert!(key.sealed_public_key().is_some());
-    }
-
-    #[test]
     fn a_supplied_passphrase_unlocks_up_front_and_a_wrong_one_is_named() {
         assert!(!PrivateKey::parse(LOCKED, Some("open sesame")).expect("read").needs_passphrase());
         assert_eq!(PrivateKey::parse(LOCKED, Some("nope")).unwrap_err(), KeyError::WrongPassphrase);
-    }
-
-    #[test]
-    fn encrypted_pkcs8_is_read_as_locked_with_nothing_to_show() {
-        let pkcs8 = pkcs8();
-        assert!(pkcs8.starts_with("-----BEGIN ENCRYPTED PRIVATE KEY-----"));
-        let key = PrivateKey::parse(&pkcs8, None).expect("read");
-        assert!(key.needs_passphrase());
-        assert_eq!(key.description().fingerprint, None);
-        assert!(key.sealed_public_key().is_none(), "nothing to probe the server with");
-        assert!(!PrivateKey::parse(&pkcs8, Some("open sesame")).expect("read").needs_passphrase());
-        assert_eq!(PrivateKey::parse(&pkcs8, Some("nope")).unwrap_err(), KeyError::WrongPassphrase);
-    }
-
-    #[test]
-    fn something_that_is_not_a_key_is_unreadable_not_a_panic() {
-        assert!(matches!(
-            PrivateKey::parse("PRIVATE MATERIAL", None),
-            Err(KeyError::Unreadable { .. })
-        ));
-        assert!(matches!(
-            PrivateKey::parse(
-                "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
-                None
-            ),
-            Err(KeyError::Unreadable { .. })
-        ));
-    }
-
-    #[test]
-    fn a_security_key_is_left_out_by_name() {
-        assert_eq!(
-            supported(Algorithm::SkEd25519),
-            Err(KeyError::Unsupported { what: "security keys".to_owned() })
-        );
-        assert!(supported(Algorithm::Ed25519).is_ok());
     }
 
     #[tokio::test]

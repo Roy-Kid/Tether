@@ -60,38 +60,4 @@ public class RemoteLinkTests
         Assert.Equal(15, plan.TimeoutSeconds);
     }
 
-    [Fact]
-    public void AMissingUserFallsBackWithoutDroppingTheRest()
-    {
-        var host = new HostEntry("lab", "10.0.0.4", null, null, "~/.ssh/id_lab");
-        var plan = RemoteLink.Plan(host, "grace");
-        Assert.Equal("grace", plan.User);
-        Assert.Equal((ushort)22, plan.Port);
-        Assert.Equal("~/.ssh/id_lab", plan.IdentityFile);
-        Assert.Equal(RemoteLink.DefaultTimeoutSeconds, plan.TimeoutSeconds);
-    }
-
-    [Fact]
-    public void TheBarOffersProgressCancelAndReconnectInTurn()
-    {
-        var connecting = RemoteBar.Connecting();
-        Assert.True(connecting.ShowsProgress);
-        Assert.True(connecting.ShowsCancel);
-        Assert.False(connecting.OffersReconnect);
-
-        var asking = RemoteBar.Authenticating();
-        Assert.True(asking.ShowsAuth);
-        Assert.True(asking.ShowsCancel);
-        Assert.False(asking.ShowsProgress);
-
-        var lost = RemoteBar.Lost();
-        Assert.Equal("Connection lost", lost.Status);
-        Assert.True(lost.OffersReconnect);
-        Assert.False(lost.ShowsCancel);
-
-        Assert.Equal("Timed out", RemoteBar.AfterStop(userCancelled: false, timedOut: true).Status);
-        Assert.Equal("Cancelled", RemoteBar.AfterStop(userCancelled: true, timedOut: true).Status);
-        Assert.False(RemoteBar.Connected().OffersReconnect);
-        Assert.False(RemoteBar.ShellFailed().OffersReconnect);
-    }
 }

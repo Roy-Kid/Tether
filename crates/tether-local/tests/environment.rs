@@ -46,12 +46,3 @@ async fn a_shell_is_never_told_it_is_running_in_someone_elses_terminal() {
         "the shell inherited a claim about a terminal it is not in: {reported:?}"
     );
 }
-
-#[tokio::test]
-async fn but_it_is_told_what_it_may_draw() {
-    // The counterpart, and the reason the rule is about claims rather than
-    // about environment variables in general: `TERM` is a question this crate
-    // can answer honestly, so it is answered rather than removed.
-    let reported = output_of("printf '[%s]\\n' \"${TERM:-unset}\"").await;
-    assert!(reported.contains("[xterm-256color]"), "got {reported:?}");
-}

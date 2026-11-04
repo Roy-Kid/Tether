@@ -125,29 +125,6 @@
         #expect(model.transfers.items.map(\.failure) == ["Read failed."])
       }
 
-      @Test("with no file session the promise fails at once")
-      func disconnected() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let entry = try #require(model.entry("/home/ada/b.txt"))
-        let fetch = FileFetch(entry: entry, session: nil, cache: model.cache, transfers: model.transfers)
-        let promise = FilePromise(fetch)
-        let url = try dropFolder().appendingPathComponent("b.txt")
-        let calls = Completions()
-        let started = Date()
-        write(promise, to: url, into: calls)
-        try await eventually { !calls.all.isEmpty }
-        #expect(Date().timeIntervalSince(started) < 1)
-        try await settle()
-        #expect(calls.all.count == 1)
-        let error = try #require(calls.all.first ?? nil)
-        #expect((error as? FileError).map { if case .disconnected = $0 { true } else { false } } == true)
-        #expect(source.downloads.isEmpty)
-        try await eventually { model.transfers.items.first?.failure != nil }
-        #expect(model.transfers.items.first?.failure != nil)
-      }
-
       @Test("stopping the row cancels the promise quietly and leaves nothing behind")
       func stopped() async throws {
         let source = StubSource(tree)
@@ -168,26 +145,6 @@
         #expect(!FileManager.default.fileExists(atPath: url.path))
         try await eventually { model.transfers.items.isEmpty }
         #expect(model.transfers.items.isEmpty, "a stopped copy is not a failure")
-      }
-
-      @Test("a folder that cannot be written refuses before anything is fetched")
-      func unwritable() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let folder = try dropFolder()
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
-        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
-        let calls = Completions()
-        write(try promise(model), to: folder.appendingPathComponent("b.txt"), into: calls)
-        try await eventually { !calls.all.isEmpty }
-        try await settle()
-        #expect(calls.all.count == 1)
-        let error = try #require(calls.all.first ?? nil)
-        #expect((error as? CocoaError)?.code == .fileWriteNoPermission)
-        #expect(source.downloads.isEmpty)
-        try await eventually { model.transfers.items.first?.failure != nil }
-        #expect(model.transfers.items.first?.failure != nil)
       }
 
       @Test("a name already taken is never replaced")
@@ -243,120 +200,10 @@
         #expect(FilePromise.fileType(for: "Makefile") == .data)
       }
 
-      @Test("outside this app only files can be dropped; inside, paths go to the terminal")
-      func operations() {
-        #expect(DraggedRow.operations(.outsideApplication, carriesFiles: false) == [])
-        #expect(DraggedRow.operations(.outsideApplication, carriesFiles: true) == .copy)
-        #expect(DraggedRow.operations(.withinApplication, carriesFiles: false) == [.copy, .generic])
-        #expect(DraggedRow.operations(.withinApplication, carriesFiles: true) == [.copy, .generic])
-      }
-
-      @Test("a row in the selection drags the whole selection; one outside drags itself")
-      func selectionIsDragged() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let b = try #require(model.entry("/home/ada/b.txt"))
-        let runs = try #require(model.entry("/home/ada/runs"))
-        model.selection = ["/home/ada/c.txt", "/home/ada/b.txt"]
-        #expect(model.draggedEntries(b).map(\.path) == ["/home/ada/b.txt", "/home/ada/c.txt"])
-        #expect(model.draggedEntries(runs).map(\.path) == ["/home/ada/runs"])
-      }
-
-      /// The rows' drag source holds a press until it is a click or a drag,
-      /// and hands every click to the list as it was. The press's next events
-      /// are scripted: posting to the application's queue outside a running
-      /// app stops the run loop this test runs on, and the run ends early.
-      @Test("a press on a row becomes a drag only past the threshold; anything else is the list's")
-      func pressesReachTheList() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let (window, content) = try await hostBrowser(model)
-        defer { window.orderOut(nil) }
-        let row = try #require(self.row("/home/ada/c.txt", in: content))
-        let other = try #require(self.row("/home/ada/b.txt", in: content))
-        let center = row.convert(NSPoint(x: row.bounds.midX, y: row.bounds.midY), to: nil)
-
-        #expect(row.claims(try press(.leftMouseDown, at: center, in: window)))
-        #expect(!other.claims(try press(.leftMouseDown, at: center, in: window)), "another row's press")
-        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .control)),
-          "a control click is the menu")
-        // A selection is not held to see whether it drags: held, each shift
-        // or ⌘ click waited for the button to come up before the list saw it.
-        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .shift)),
-          "a shift click extends the selection at once")
-        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, flags: .command)),
-          "a ⌘ click toggles a row at once")
-        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window, count: 2)),
-          "a double-click opens")
-        model.renaming = "/home/ada/c.txt"
-        #expect(!row.claims(try press(.leftMouseDown, at: center, in: window)), "a name being edited")
-        model.renaming = nil
-
-        let down = try press(.leftMouseDown, at: center, in: window)
-        let up = try press(.leftMouseUp, at: center, in: window)
-        let wobble = try press(.leftMouseDragged, at: NSPoint(x: center.x + 2, y: center.y), in: window)
-        let far = try press(.leftMouseDragged, at: NSPoint(x: center.x + 2, y: center.y + 5), in: window)
-
-        var click = Script(row, [up])
-        #expect(!row.becomesDrag(down))
-        #expect(click.taken.isEmpty, "the release stays queued for the list")
-        click = Script(row, [wobble, up])
-        #expect(!row.becomesDrag(down), "movement short of the threshold is still a click")
-        #expect(click.taken == [.leftMouseDragged])
-        let drag = Script(row, [wobble, far])
-        #expect(row.becomesDrag(down))
-        #expect(drag.taken == [.leftMouseDragged, .leftMouseDragged])
-        #expect(source.downloadsOnMain.isEmpty, "pressing fetches nothing")
-      }
-
-      @Test("a drag is one item a row, drawn as that row: one file counts as one")
-      func draggingItems() async throws {
-        let source = StubSource(tree)
-        let model = try await browser(source)
-        defer { model.close() }
-        let (window, content) = try await hostBrowser(model)
-        defer { window.orderOut(nil) }
-        let row = try #require(self.row("/home/ada/b.txt", in: content))
-        let b = try #require(model.entry("/home/ada/b.txt"))
-        let runs = try #require(model.entry("/home/ada/runs"))
-
-        model.selection = ["/home/ada/b.txt", "/home/ada/c.txt", "/home/ada/runs"]
-        let mixed = row.draggingItems(model.draggedEntries(b), model: model)
-        #expect(mixed.count == 3)
-        let promised = mixed.compactMap { ($0.item as? FilePromise)?.writer.fetch.entry.path }
-        #expect(promised.sorted() == ["/home/ada/b.txt", "/home/ada/c.txt"])
-        let folderItem = try #require(mixed.compactMap { $0.item as? NSPasteboardItem }.first)
-        #expect(folderItem.data(forType: .droppedPath) == Data("/home/ada/runs".utf8))
-        #expect(mixed.allSatisfy(drawn), "each row is drawn")
-
-        // The count a drag shows is its items: one file used to show two.
-        model.selection = []
-        let single = row.draggingItems(model.draggedEntries(b), model: model)
-        #expect(single.count == 1)
-        #expect(single.first?.item is FilePromise)
-        #expect(drawn(single.first))
-        let folder = row.draggingItems(model.draggedEntries(runs), model: model)
-        #expect(folder.count == 1)
-        #expect(folder.first?.item is NSPasteboardItem)
-        #expect(source.downloadsOnMain.isEmpty)
-      }
-
       /// Whether an item shows a picture with pixels in it.
       private func drawn(_ item: NSDraggingItem?) -> Bool {
         let image = item?.imageComponents?.first?.contents as? NSImage
         return image?.representations.isEmpty == false
-      }
-
-      private func hostBrowser(_ model: FilesTab) async throws -> (NSWindow, NSView) {
-        let window = NSWindow(
-          contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 400),
-          styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: Browser(model: model))
-        window.orderFrontRegardless()
-        try await Task.sleep(for: .milliseconds(400))
-        return (window, try #require(window.contentView))
       }
 
       private func row(_ path: String, in view: NSView) -> RowDragView? {

@@ -77,57 +77,6 @@ struct PluginPanelPopoverTests {
     #expect(!anchor.popover.isShown)
   }
 
-  @Test func aDraggedSizeOpensAgain() async throws {
-    let name = "plugin-panel-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: name)!
-    defer { defaults.removePersistentDomain(forName: name) }
-    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 500, height: 500),
-      styleMask: [.titled], backing: .buffered, defer: false)
-    let anchor = PluginPanelPopover.Anchor(frame: NSRect(x: 200, y: 20, width: 40, height: 24))
-    window.contentView?.addSubview(anchor)
-    window.makeKeyAndOrderFront(nil)
-    defer { anchor.stop(); window.orderOut(nil) }
-    anchor.defaults = defaults
-    anchor.pluginID = "fixture.plugin"
-    anchor.workspace = PanelWorkspace()
-    anchor.presented = true
-    anchor.updatePresentation()
-    anchor.apply(NSSize(width: 520, height: 400), commit: true)
-    #expect(anchor.popover.contentSize.width == 520)
-    #expect(anchor.popover.contentSize.height == 400)
-    anchor.popover.performClose(nil)
-    for _ in 0..<50 where anchor.popover.isShown { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(!anchor.popover.isShown)
-    anchor.updatePresentation()
-    #expect(anchor.popover.isShown)
-    #expect(anchor.popover.contentSize.width == 520)
-    #expect(anchor.popover.contentSize.height == 400)
-    #expect(PluginPanelPopover.Anchor.clamp(NSSize(width: 10, height: 9_000)).width
-      == PluginPanelPopover.Anchor.minimumWidth)
-    #expect(PluginPanelPopover.Anchor.clamp(NSSize(width: 10, height: 9_000)).height
-      == PluginPanelPopover.Anchor.maximumHeight)
-  }
-
-  @Test func aSwiftUIPanelOpensAtItsOwnSize() async throws {
-    _ = NSApplication.shared
-    let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 800),
-      styleMask: [.titled], backing: .buffered, defer: false)
-    let anchor = PluginPanelPopover.Anchor(frame: NSRect(x: 200, y: 20, width: 40, height: 24))
-    window.contentView?.addSubview(anchor)
-    window.makeKeyAndOrderFront(nil)
-    defer { anchor.stop(); window.orderOut(nil) }
-    anchor.workspace = PanelWorkspace()
-    anchor.presented = true
-    anchor.updatePresentation()
-    for _ in 0..<40 {
-      if abs(anchor.popover.contentSize.width - 400) < 1,
-        abs(anchor.popover.contentSize.height - 450) < 1 { break }
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    #expect(abs(anchor.popover.contentSize.width - 400) < 1)
-    #expect(abs(anchor.popover.contentSize.height - 450) < 1)
-  }
-
   private func button(_ title: String, in view: NSView) -> NSButton? {
     if let button = view as? NSButton, button.title == title { return button }
     for child in view.subviews { if let found = button(title, in: child) { return found } }

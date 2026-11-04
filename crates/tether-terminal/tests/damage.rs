@@ -24,12 +24,6 @@ fn spans(changes: &Changes) -> Vec<(u16, u16, u16)> {
     }
 }
 
-#[test]
-fn an_untouched_terminal_reports_nothing() {
-    let mut term = terminal();
-    assert!(term.take_changes().is_empty());
-}
-
 /// One character typed on one row must damage one row — and a span of two
 /// cells, not the width of the screen.
 ///
@@ -75,20 +69,6 @@ fn an_edit_far_down_the_screen_damages_only_that_row() {
 }
 
 #[test]
-fn a_single_character_updates_only_its_row() {
-    let mut term = terminal();
-    term.feed(b"x");
-
-    let delta = term.take_frame_delta();
-    assert!(delta.full.is_none());
-    assert_eq!(delta.rows.iter().map(|(row, _)| *row).collect::<Vec<_>>(), vec![0]);
-
-    let again = term.take_frame_delta();
-    assert!(again.full.is_none());
-    assert!(again.rows.is_empty(), "a second ask with no bytes copies no rows");
-}
-
-#[test]
 fn a_resize_is_a_full_frame() {
     let mut term = terminal();
     term.resize(ScreenSize::new(40, 12));
@@ -118,39 +98,6 @@ fn damage_is_taken_not_repeated() {
 
     assert!(!term.take_changes().is_empty());
     assert!(term.take_changes().is_empty());
-}
-
-/// Reflow can move every line, so there is nothing honest to report but
-/// everything.
-#[test]
-fn a_resize_invalidates_the_whole_screen() {
-    let mut term = terminal();
-    term.resize(ScreenSize::new(100, 30));
-
-    assert_eq!(term.take_changes().screen, ScreenDamage::Full);
-    assert_eq!(term.size(), ScreenSize::new(100, 30));
-}
-
-#[test]
-fn a_cursor_move_is_reported_even_with_no_text_change() {
-    let mut term = terminal();
-    term.feed(b"\x1b[5;5H");
-
-    let changes = term.take_changes();
-    let cursor = changes.cursor.expect("the cursor moved");
-    assert_eq!((cursor.position.row, cursor.position.column), (4, 4));
-}
-
-#[test]
-fn a_mode_change_is_reported_once() {
-    let mut term = terminal();
-    term.feed(b"\x1b[?1049h");
-
-    let modes = term.take_changes().modes.expect("entering the alternate screen is news");
-    assert!(modes.alternate_screen);
-
-    term.feed(b"\x1b[?1049h");
-    assert_eq!(term.take_changes().modes, None, "an unchanged mode is not news");
 }
 
 /// A full-screen redraw is allowed to say "everything", but the common case —

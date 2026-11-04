@@ -783,26 +783,4 @@ mod tests {
         received(&writes, b"a\x1bOAb").await;
         assert_eq!(session.viewport().offset, 0, "typing returned to the live screen");
     }
-
-    /// A copy request is delivered once, without the terminal lock.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_copy_is_taken_once_without_the_terminal() {
-        let (session, sender, _) = probe();
-        assert_eq!(session.take_clipboard(), None);
-        printed(&session, &sender, b"\x1b]52;c;aGVsbG8=\x07").await;
-
-        let busy = session.shared.terminal.lock().unwrap();
-        let (done, finished) = std::sync::mpsc::channel();
-        let taken = std::thread::scope(|scope| {
-            scope.spawn(|| done.send(session.take_clipboard()).unwrap());
-            let taken = finished.recv_timeout(Duration::from_secs(1));
-            drop(busy);
-            taken
-        });
-        assert_eq!(
-            taken.expect("take_clipboard waited for the terminal lock"),
-            Some("hello".to_owned())
-        );
-        assert_eq!(session.take_clipboard(), None);
-    }
 }

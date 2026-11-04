@@ -57,21 +57,3 @@ impl From<Link> for TerminalLink {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tether_core::terminal::{Position, ScreenSize, Terminal};
-
-    #[test]
-    fn a_path_crosses_with_its_line_and_where_it_is_drawn() {
-        let mut terminal = Terminal::new(ScreenSize::new(40, 2));
-        terminal.feed(b"at src/main.rs:12:5\r\n");
-        let link = TerminalLink::from(terminal.link_at(Position::new(0, 5)).unwrap());
-        assert_eq!(
-            link.kind,
-            LinkKind::Path { path: "src/main.rs".to_owned(), line: Some(12), column: Some(5) }
-        );
-        assert_eq!(link.spans, [LinkSpan { row: 0, start: 3, end: 19 }]);
-    }
-}

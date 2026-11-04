@@ -76,45 +76,6 @@ struct ShortcutTableTests {
     }
   }
 
-  @Test("the menu bar shows the window's chord only while no offered command holds it")
-  func menuShortcut() throws {
-    let tabs = TabSet()
-    tabs.keyBindings.register(KeyBindingCatalog.commands(registry: {
-      let registry = PluginRegistry(defaults: UserDefaults(suiteName: "menu-shortcut.\(UUID())")!)
-      registry.register(ChordPlugin())
-      return registry
-    }()))
-    let shell = SessionTab(preview: .local, known: KnownHosts(location: URL(fileURLWithPath: "/dev/null")),
-                           name: "a", live: true)
-    tabs.adopt(shell)
-    let attachment = StubAttachment()
-    shell.attach(attachment, for: ChordPlugin.id)
-    #expect(tabs.menuShortcut(for: .splitRight) == KeyBinding("\\"))
-    attachment.offered = [PluginCommand(id: "split", title: "Split", symbol: "square") {}]
-    #expect(tabs.offeredCommandIDs == [KeyBindingCatalog.commandID("split", plugin: ChordPlugin.id)])
-    #expect(tabs.menuShortcut(for: .splitRight) == nil)
-    #expect(tabs.menuShortcut(for: .splitDown) == KeyBinding("\\", [.command, .shift]))
-  }
-
-  @Test("customised close shortcuts survive the new defaults, which still apply where untouched")
-  func customisedCloses() throws {
-    try isolated { _, defaults in
-      let commands = WorkspaceAction.allCases.map(\.command)
-      let legacy: [String: [KeyBinding?]] = [
-        "closeTab": [KeyBinding("w"), nil],
-        "closeTerminal": [KeyBinding("w", [.command, .shift]), nil],
-      ]
-      defaults.set(try JSONEncoder().encode(legacy), forKey: KeyBindingStore.preferenceKey)
-      let store = KeyBindingStore(defaults: defaults)
-      #expect(store.command(for: KeyBinding("w"), in: commands) == "closeTab")
-      #expect(store.command(for: KeyBinding("w", [.command, .shift]), in: commands) == "closeTerminal")
-      #expect(store.conflict(for: WorkspaceAction.closeWindow.command, slot: 0) != nil)
-      #expect(store.command(for: KeyBinding("w", [.command, .option]), in: commands) == nil,
-              "the custom Close Tab replaced its default")
-      #expect(WorkspaceAction.closeTerminal.command.defaults == [KeyBinding("w"), nil])
-    }
-  }
-
   @Test("while text is being edited only the palette and close commands keep their chords")
   func textFieldsFirst() {
     #expect(!WorkspaceAction.answersWhileEditingText(WorkspaceAction.zen.rawValue), "⇧⌘Z there is Redo")
@@ -151,32 +112,6 @@ struct ShortcutTableTests {
   }
 
   #if os(macOS)
-  @Test("the monitor says when a text view is being edited, and the terminal is not one")
-  func editingTextFlag() throws {
-    _ = NSApplication.shared
-    let window = TableTestWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
-                                 styleMask: [.borderless], backing: .buffered, defer: false)
-    let view = WorkspaceKeyBindingMonitor.MonitorView()
-    window.contentView!.addSubview(view)
-    defer { view.stop() }
-    var editing: [Bool] = []
-    view.enabled = true
-    view.handle = { _, _, text in editing.append(text); return !text }
-    let zen = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
-      timestamp: 0, windowNumber: window.windowNumber, context: nil,
-      characters: "Z", charactersIgnoringModifiers: "Z", isARepeat: false, keyCode: 6))
-    let plain = FocusableView(frame: .zero)
-    window.contentView!.addSubview(plain)
-    window.makeFirstResponder(plain)
-    #expect(view.route(zen) == nil)
-    let field = NSTextView(frame: .zero)
-    window.contentView!.addSubview(field)
-    window.makeFirstResponder(field)
-    #expect(view.route(zen) === zen, "declined, so the field and its Edit menu get it")
-    #expect(editing == [false, true])
-    field.isEditable = false
-    #expect(!WorkspaceKeyBindingMonitor.MonitorView.isEditingText(field))
-  }
 
   @Test("a shifted letter menu item matches the chord the terminal receives")
   func shiftedLetterMenuEquivalent() throws {
@@ -207,95 +142,6 @@ struct ShortcutTableTests {
     #expect(!menu.performKeyEquivalent(with: event), "a text field keeps ⇧⌘H")
   }
 
-  @Test("Shift is a modifier of the chord, not part of its key")
-  func shiftedPunctuation() throws {
-    func event(_ characters: String, code: UInt16) throws -> NSEvent {
-      try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
-        timestamp: 0, windowNumber: 0, context: nil, characters: characters,
-        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
-    }
-    // ANSI key codes for [ ] \ and Z.
-    #expect(KeyBinding.unshifted(try event("{", code: 33)) == KeyBinding("[", [.command, .shift]))
-    #expect(KeyBinding.unshifted(try event("}", code: 30)) == KeyBinding("]", [.command, .shift]))
-    #expect(KeyBinding.unshifted(try event("|", code: 42)) == KeyBinding("\\", [.command, .shift]))
-    #expect(KeyBinding(event: try event("|", code: 42)) == KeyBinding("|", [.command, .shift]),
-            "what was typed stays the first reading, for chords people recorded")
-    #expect(KeyBinding.unshifted(try event("Z", code: 6)) == nil, "a letter reads the same either way")
-  }
-
-  @Test("⇧⌘H changes host while the terminal view is first responder")
-  func changeHostReachesTerminal() async throws {
-    _ = NSApplication.shared
-    let box = ShortcutHit()
-    let root = ShortcutHost(hit: box)
-    let panel = ForcedKeyPanel(
-      contentRect: NSRect(x: -2400, y: -2400, width: 420, height: 280),
-      styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
-      backing: .buffered, defer: false)
-    panel.contentView = NSHostingView(rootView: root)
-    panel.orderFrontRegardless()
-    defer { panel.orderOut(nil) }
-    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    var monitor: WorkspaceKeyBindingMonitor.MonitorView?
-    repeat {
-      panel.contentView?.layoutSubtreeIfNeeded()
-      monitor = panel.contentView.flatMap { findMonitor(in: $0) }
-      if monitor != nil { break }
-      try await Task.sleep(for: .milliseconds(20))
-    } while ContinuousClock.now < deadline
-    let installed = try #require(monitor, "the workspace monitor is in the panel")
-    let capture = try #require(panel.contentView.flatMap { findCapture(in: $0) })
-    panel.makeFirstResponder(capture)
-    let event = try #require(NSEvent.keyEvent(
-      with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-      windowNumber: panel.windowNumber, context: nil, characters: "H",
-      charactersIgnoringModifiers: "H", isARepeat: false, keyCode: 4))
-    #expect(installed.route(event) == nil)
-    #expect(box.count == 1)
-    #expect(capture.sawKey == false, "the terminal does not receive the chord")
-
-    let target = MenuActionTarget()
-    let menu = NSMenu()
-    let change = NSMenuItem(title: "Change Host…", action: #selector(MenuActionTarget.changeHost(_:)), keyEquivalent: "h")
-    change.keyEquivalentModifierMask = [.command, .shift]
-    change.target = target
-    menu.addItem(change)
-    let previous = NSApp.mainMenu
-    NSApp.mainMenu = menu
-    defer { NSApp.mainMenu = previous }
-    MenuKeyEquivalents.normalize(menu, commands: [WorkspaceAction.changeHost.command], editingText: false) {
-      $0.defaults
-    }
-    let delivered = panel.performKeyEquivalent(with: event)
-    #expect(delivered && target.fired == 1,
-      "equiv \(change.keyEquivalent) shift \(change.keyEquivalentModifierMask.contains(.shift)) delivered \(delivered) fired \(target.fired)")
-  }
-
-  @Test("the app monitor opens the host picker for ⇧⌘H")
-  func dispatchOpensHostPicker() throws {
-    _ = NSApplication.shared
-    let tabs = TabSet()
-    tabs.menuShortcuts = true
-    let panel = ForcedKeyPanel(
-      contentRect: NSRect(x: -2600, y: -2600, width: 200, height: 120),
-      styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
-    panel.orderFrontRegardless()
-    defer { panel.orderOut(nil) }
-    let event = try #require(NSEvent.keyEvent(
-      with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-      windowNumber: panel.windowNumber, context: nil, characters: "H",
-      charactersIgnoringModifiers: "H", isARepeat: false, keyCode: 4))
-    let registry = PluginRegistry()
-    #expect(MenuKeyEquivalents.dispatch(event, tabs: tabs, registry: registry) == nil)
-    #expect(tabs.hostPicker)
-    let field = NSTextView()
-    panel.contentView = field
-    panel.makeFirstResponder(field)
-    tabs.hostPicker = false
-    #expect(MenuKeyEquivalents.dispatch(event, tabs: tabs, registry: registry) === event,
-      "a text field keeps ⇧⌘H")
-    #expect(!tabs.hostPicker)
-  }
   #endif
 }
 

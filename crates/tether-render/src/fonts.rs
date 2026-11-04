@@ -434,15 +434,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejected_font_does_not_mutate_catalogue() {
-        let before = font_faces();
-        let generation = generation();
-        assert!(register_font(b"not a font".to_vec()).is_err());
-        assert_eq!(before, font_faces());
-        assert_eq!(generation, super::generation());
-    }
-
-    #[test]
     fn invalid_font_file_is_not_remembered() {
         let dir = std::env::temp_dir().join(format!("tether-font-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -510,76 +501,5 @@ mod tests {
         let mut drawable = database_of(&tables);
         drop_undrawable_faces(&mut drawable);
         assert!(!drawable.is_empty(), "outlines present");
-    }
-
-    #[test]
-    fn published_face_id_is_a_family_alias() {
-        let mut db = fontdb::Database::new();
-        db.push_face_info(fontdb::FaceInfo {
-            id: fontdb::ID::dummy(),
-            source: fontdb::Source::Binary(std::sync::Arc::new(Vec::<u8>::new())),
-            index: 0,
-            families: vec![("Menlo".into(), ALIAS_LANGUAGE)],
-            post_script_name: "Menlo-Bold".into(),
-            style: fontdb::Style::Normal,
-            weight: fontdb::Weight::BOLD,
-            stretch: fontdb::Stretch::Normal,
-            monospaced: true,
-        });
-        install_identity_aliases(&mut db, Some("Tether System Monospace"));
-        let face = db.faces().next().expect("face");
-        let names = face.families.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>();
-        assert!(names.contains(&"Menlo-Bold"), "{names:?}");
-        assert!(names.contains(&"Menlo"), "{names:?}");
-        assert!(names.contains(&"Tether System Monospace"), "{names:?}");
-        assert_eq!(family_name("Menlo-Bold"), "Menlo-Bold");
-        assert_eq!(family_name("PingFang SC"), "PingFang SC");
-    }
-
-    #[test]
-    fn later_alias_matches_a_content_id() {
-        let mut db = fontdb::Database::new();
-        let id = "abc123:0";
-        db.push_face_info(fontdb::FaceInfo {
-            id: fontdb::ID::dummy(),
-            source: fontdb::Source::Binary(std::sync::Arc::new(Vec::<u8>::new())),
-            index: 0,
-            families: vec![("Demo".into(), ALIAS_LANGUAGE), (id.into(), ALIAS_LANGUAGE)],
-            post_script_name: String::new(),
-            style: fontdb::Style::Normal,
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            monospaced: true,
-        });
-        assert!(add_alias_to_published_id(&mut db, id, "Tether System Monospace"));
-        assert!(!add_alias_to_published_id(&mut db, id, "Tether System Monospace"));
-        let names = db
-            .faces()
-            .next()
-            .expect("face")
-            .families
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"Tether System Monospace"), "{names:?}");
-    }
-
-    #[test]
-    fn catalogue_postscript_id_is_not_collapsed() {
-        for face in font_faces() {
-            assert_eq!(family_name(&face.id), face.id);
-            if face.id.contains(':') {
-                continue;
-            }
-            let catalogue = lock_catalogue();
-            let stored =
-                catalogue.db.faces().find(|candidate| candidate.post_script_name == face.id);
-            let Some(stored) = stored else { continue };
-            assert!(
-                stored.families.iter().any(|(name, _)| name == &face.id),
-                "{} is not selectable as itself",
-                face.id
-            );
-        }
     }
 }

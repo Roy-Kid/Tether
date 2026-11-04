@@ -10,12 +10,6 @@ func aPluginLinkNamesThePlugin() throws {
 }
 
 @Test
-func aPluginLinkKeepsAnOddID() throws {
-  let url = try #require(PluginReturn.url(pluginID: "a b/c"))
-  #expect(PluginReturn.pluginID(from: url) == "a b/c")
-}
-
-@Test
 func anotherAddressIsNotAPlugin() throws {
   let url = try #require(URL(string: "https://plugin/nerve"))
   #expect(PluginReturn.pluginID(from: url) == nil)

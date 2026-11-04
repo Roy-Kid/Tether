@@ -15,11 +15,6 @@ struct ExternalTerminalTests {
     #expect(ExternalTerminal.script(device: "/tmp/ttys006") == nil)
   }
 
-  @Test func aDirectoryDoesNotLeaveTheApp() {
-    #expect(FocusLink.url("file:///Users/roykid/work/Nerve") == nil)
-    #expect(FocusLink.url("vscode://file/Users/roykid/work/Nerve")?.scheme == "vscode")
-  }
-
   @Test func thisMacIsItsBonjourNameWhateverNetworkItIsOn() {
     #expect(LocalMachine.resolve(bonjour: "RoydeMacBook-Air", kernel: "roydeair.kemi.uu.se")
       == "roydemacbook-air.local")

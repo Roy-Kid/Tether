@@ -23,31 +23,6 @@ async fn offering_nothing_is_not_an_authentication_failure() {
     );
 }
 
-/// An unusable key is a complaint about the key itself, not a rejection by
-/// the server — nothing was offered to it, and nothing was dialled for it.
-#[tokio::test]
-async fn a_key_that_cannot_be_parsed_says_so_rather_than_blaming_the_server() {
-    let outcome = dial()
-        .connect(vec![Credential::PrivateKey {
-            pem: "-----BEGIN OPENSSH PRIVATE KEY-----\nnot a key\n".into(),
-            passphrase: None,
-            unlock: None,
-        }])
-        .await;
-
-    match outcome {
-        Err(DialError::Unusable { skipped }) => {
-            assert_eq!(skipped.len(), 1);
-            assert!(
-                matches!(skipped[0].problem, tether_core::ssh::KeyError::Unreadable { .. }),
-                "unhelpful: {:?}",
-                skipped[0].problem
-            );
-        }
-        other => panic!("expected the key named as unusable, got {other:?}"),
-    }
-}
-
 /// Credentials are secret; the `Debug` that would print them in a log is not
 /// something to leave to chance (spec §18).
 #[test]

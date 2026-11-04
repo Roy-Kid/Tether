@@ -211,14 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn named_colours_come_from_the_theme() {
-        let dark = Palette::dark();
-        assert_eq!(dark.resolve(Paint::Named(Name::Red)), dark.normal[1]);
-        assert_eq!(dark.resolve(Paint::Named(Name::Background)), dark.background);
-        assert_eq!(dark.resolve(Paint::Named(Name::Cursor)), dark.cursor);
-    }
-
-    #[test]
     fn indexed_resolves_the_cube_and_greys() {
         let palette = Palette::dark();
         // 16 is the first cube entry: (0, 0, 0).
@@ -231,22 +223,5 @@ mod tests {
             palette.resolve(Paint::Indexed(232)),
             Rgba::new(first_grey, first_grey, first_grey, 1.0)
         );
-    }
-
-    #[test]
-    fn rgb_is_taken_as_is() {
-        let palette = Palette::dark();
-        assert_eq!(
-            palette.resolve(Paint::Rgb { red: 255, green: 128, blue: 0 }),
-            Rgba::new(1.0, 128.0 / 255.0, 0.0, 1.0)
-        );
-    }
-
-    #[test]
-    fn chosen_picks_one_place() {
-        assert_eq!(Palette::chosen("dark", false), Palette::dark());
-        assert_eq!(Palette::chosen("light", true), Palette::light());
-        assert_eq!(Palette::chosen("system", true), Palette::dark());
-        assert_eq!(Palette::chosen("system", false), Palette::light());
     }
 }

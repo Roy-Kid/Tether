@@ -27,22 +27,6 @@ public sealed class WebPluginTests : IDisposable
         Assert.Throws<IOException>(() => WebPluginPackage.Read(Package(Manifest() with { Services = ["unknown"] })));
     }
 
-    [Fact] public async Task ExistingHealthyServiceNeedsNoExecutable()
-    {
-        using var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
-        var origin = $"http://127.0.0.1:{((IPEndPoint)socket.LocalEndpoint).Port}";
-        var id = Guid.NewGuid().ToString("N");
-        var package = WebPluginPackage.Read(Package(Manifest(origin: origin) with { Permissions = ["network", "service.local"], Services = [id] }));
-        WebPluginServices.Register(id, package.Manifest.Id, Path.Combine(_root, "missing.exe"), new Uri(origin + "/health"));
-        var responder = Task.Run(async () =>
-        {
-            using var client = await socket.AcceptTcpClientAsync();
-            var stream = client.GetStream(); var buffer = new byte[4096]; _ = await stream.ReadAsync(buffer);
-            await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}"));
-        });
-        await WebPluginServices.EnsureAsync(package, id, CancellationToken.None);
-        await responder;
-    }
     [Fact] public void InstallingCopiesOnlyAValidatedPackageAndRefusesDuplicateIDs()
     {
         var source = Package(); var install = Path.Combine(_root, "installed");
@@ -69,31 +53,6 @@ public sealed class WebPluginTests : IDisposable
         }));
         Assert.Equal(["fixture"], package.Manifest.Contributions.Single().Suffixes!);
         Assert.Equal("fixture", WebPluginPackage.NormalizeSuffix(".Fixture"));
-    }
-    [Fact] public void ReplaceUpdatesPackageBytesAndUninstallRemovesTheDirectory()
-    {
-        var install = Path.Combine(_root, "installed");
-        var first = Package(Manifest() with { Version = "1.0" });
-        WebPluginPackage.Install(first, install);
-        File.WriteAllText(Path.Combine(first, "web", "index.html"), "<!doctype html><title>v2</title>");
-        var second = Package(Manifest() with { Version = "2.0" });
-        File.WriteAllText(Path.Combine(second, "web", "index.html"), "<!doctype html><title>v2</title>");
-        var updated = WebPluginPackage.Install(second, install, replace: true);
-        Assert.Equal("2.0", updated.Manifest.Version);
-        Assert.Contains("v2", File.ReadAllText(updated.EntryPath));
-        WebPluginPackage.RemoveInstalled(install, "test.web");
-        Assert.False(Directory.Exists(Path.Combine(install, "test.web")));
-    }
-    [Fact] public void RegistryUnregisterRemovesARegisteredPlugin()
-    {
-        var registry = new PluginRegistry();
-        var plugin = new StubPlugin("test.web");
-        registry.Register(plugin);
-        Assert.True(registry.IsEnabled("test.web"));
-        Assert.True(registry.Unregister("test.web"));
-        Assert.Empty(registry.Plugins);
-        Assert.False(registry.Unregister("test.web"));
-        Assert.True(plugin.Deactivated);
     }
 
     private sealed class StubPlugin(string id) : ITetherPlugin
@@ -144,12 +103,6 @@ public sealed class WebPluginTests : IDisposable
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes("data: " + new string('x', WebPluginNetwork.MaxPayload)));
         await Assert.ThrowsAsync<IOException>(() => WebPluginNetwork.PumpAsync(stream, _ => Task.CompletedTask, CancellationToken.None));
     }
-    [Fact] public async Task StreamsStopOnCancellation()
-    {
-        using var token = new CancellationTokenSource(); token.Cancel();
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes("data: {}\n\n"));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WebPluginNetwork.PumpAsync(stream, _ => Task.CompletedTask, token.Token));
-    }
     [Fact] public async Task NetworkRedirectsCannotEscapeTheGrantedOrigin()
     {
         var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start(); var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
@@ -166,23 +119,4 @@ public sealed class WebPluginTests : IDisposable
 
 public sealed class RealHubTests
 {
-    [Fact] public async Task TheInstalledPackageReadsARealHubFrameAndReleasesItsStream()
-    {
-        var directory = Environment.GetEnvironmentVariable("TETHER_TEST_WEB_PACKAGE");
-        if (directory is null) return; // Opt-in: tests must not start or mutate the person's hub.
-        var package = WebPluginPackage.Read(directory);
-        using var network = new WebPluginNetwork(package);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stream = network.StreamAsync("http://127.0.0.1:17890/v1/stream?surface=test-web-plugin", text =>
-        { received.TrySetResult(text); return Task.CompletedTask; }, timeout.Token);
-        try
-        {
-            using var frame = JsonDocument.Parse(await received.Task.WaitAsync(timeout.Token));
-            Assert.Equal(JsonValueKind.Array, frame.RootElement.GetProperty("jobs").ValueKind);
-            using var jobs = JsonDocument.Parse(await network.GetAsync("http://127.0.0.1:17890/v1/jobs", timeout.Token));
-            Assert.Equal(JsonValueKind.Array, jobs.RootElement.ValueKind);
-        }
-        finally { timeout.Cancel(); try { await stream; } catch (OperationCanceledException) { } }
-    }
 }

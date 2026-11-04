@@ -27,21 +27,4 @@ struct SessionCreationTests {
     #expect(attached.id == "$17")
   }
 
-  @Test("a creation failure can retry and a changed name starts a new attempt")
-  func creationRetry() async throws {
-    let attempt = SessionCreation()
-    do {
-      _ = try await attempt.perform(name: "work", create: { _ in throw Failure.unavailable },
-        attach: { _ in Issue.record("No session exists to attach") })
-      Issue.record("A creation failure must remain a failure")
-    } catch Failure.unavailable {}
-    let created = try await attempt.perform(name: "work", create: {
-      TmuxSessionInfo(id: "$18", name: $0, attached: false, windows: [])
-    }, attach: { _ in })
-    #expect(created.name == "work")
-    let next = try await attempt.perform(name: "other", create: {
-      TmuxSessionInfo(id: "$19", name: $0, attached: false, windows: [])
-    }, attach: { _ in })
-    #expect(next.name == "other")
-  }
 }

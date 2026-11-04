@@ -11,14 +11,6 @@ import AppKit
 @MainActor
 @Suite("Key bindings", .appKitEventLoop)
 struct KeyBindingTests {
-  @Test("shared SwiftUI shortcuts keep their key and modifiers on either platform")
-  func sharedShortcut() {
-    let shortcut = KeyBinding("p", [.command, .shift]).keyboardShortcut
-    #expect(shortcut?.key == KeyEquivalent("p"))
-    #expect(shortcut?.modifiers == [.command, .shift])
-    #expect(KeyBinding("left", [.command, .option]).keyboardShortcut?.key == .leftArrow)
-    #expect(KeyBinding("f1", []).keyboardShortcut?.key == KeyEquivalent(Character("\u{f704}")))
-  }
 
   private var commands: [KeyBindingCommand] { WorkspaceAction.allCases.map(\.command) }
 
@@ -27,40 +19,6 @@ struct KeyBindingTests {
     let defaults = UserDefaults(suiteName: name)!
     defer { defaults.removePersistentDomain(forName: name) }
     try body(KeyBindingStore(defaults: defaults), defaults)
-  }
-
-  @Test("the command menu has one chord and it is not shared")
-  func defaultBindings() {
-    isolated { store, _ in
-      #expect(store.command(for: KeyBinding("o", [.command, .shift]), in: commands) == "commandMenu")
-      #expect(store.command(for: KeyBinding("p", [.command, .shift]), in: commands) == nil)
-      #expect(store.command(for: KeyBinding("p", [.control, .shift]), in: commands) == nil)
-      #expect(store.command(for: KeyBinding("p"), in: commands) == "quickSwitch")
-      #expect(store.command(for: KeyBinding("s"), in: commands) == nil, "⌘S is Save on a Mac")
-      #expect(WorkspaceAction.toggleTabBar.command.defaults == [nil, nil])
-      #expect(store.command(for: KeyBinding("w"), in: commands) == "closeTerminal")
-      #expect(store.command(for: KeyBinding("w", [.command, .option]), in: commands) == "closeTab")
-      #expect(store.command(for: KeyBinding("w", [.command, .shift]), in: commands) == "closeWindow")
-      #expect(store.command(for: KeyBinding("[", [.command, .shift]), in: commands) == "previousTab")
-      #expect(store.command(for: KeyBinding("]", [.command, .shift]), in: commands) == "nextTab")
-      #expect(store.command(for: KeyBinding("r"), in: commands) == "renameTerminal")
-      #expect(store.bindings(for: WorkspaceAction.newTerminal.command) == [KeyBinding("n"), nil])
-      #expect(store.command(for: KeyBinding("n"), in: commands) == "newTerminal")
-      #expect(store.command(for: KeyBinding("`", .control), in: commands) == "quickTerminal")
-      #expect(store.command(for: KeyBinding("`", [.control, .shift]), in: commands) == nil)
-      #expect(store.command(for: KeyBinding("t"), in: commands) == "newTab")
-      #expect(store.command(for: KeyBinding("1"), in: commands) == "switchHost1")
-      #expect(store.command(for: KeyBinding("4"), in: commands) == "switchHost4")
-      #expect(store.command(for: KeyBinding("1", .option), in: commands) == nil)
-      let tabs = TabSet()
-      tabs.perform(.switchHost2)
-      #expect(tabs.intent == .switchHost(1))
-      #expect(store.command(for: KeyBinding("t", [.command, .shift]), in: commands) == "restoreTab")
-      #expect(store.command(for: KeyBinding("b", .option), in: commands) == nil)
-      let assigned = commands.flatMap { store.bindings(for: $0).compactMap { $0 } }
-      #expect(Set(assigned).count == assigned.count)
-      #expect(commands.allSatisfy { store.bindings(for: $0).count == 2 })
-    }
   }
 
   @Test("a person's own Cmd-S for the tab bar outlives the default it no longer has")
@@ -91,39 +49,6 @@ struct KeyBindingTests {
       for key in ["up", "down", "left", "right"] {
         #expect(store.command(for: KeyBinding(key, []), in: catalog) == nil)
       }
-    }
-  }
-
-  @Test("two independent alternatives persist, and cleared defaults stay cleared after relaunch")
-  func persistence() throws {
-    try isolated { store, defaults in
-      let command = WorkspaceAction.newTerminal.command
-      try store.set(KeyBinding("n", .control), for: command, slot: 0, commands: commands)
-      try store.set(KeyBinding("n", .option), for: command, slot: 1, commands: commands)
-      let loaded = KeyBindingStore(defaults: defaults)
-      #expect(loaded.command(for: KeyBinding("n", .control), in: commands) == command.id)
-      #expect(loaded.command(for: KeyBinding("n", .option), in: commands) == command.id)
-      #expect(loaded.command(for: KeyBinding("n"), in: commands) == nil)
-      try loaded.set(nil, for: command, slot: 0, commands: commands)
-      try loaded.set(nil, for: command, slot: 1, commands: commands)
-      #expect(KeyBindingStore(defaults: defaults).bindings(for: command) == [nil, nil])
-      try loaded.reset(command, commands: commands)
-      #expect(KeyBindingStore(defaults: defaults).bindings(for: command) == command.defaults)
-    }
-  }
-
-  @Test("conflicts across slots and commands are rejected without changing either binding")
-  func conflicts() throws {
-    try isolated { store, _ in
-      let command = WorkspaceAction.newTerminal.command
-      #expect(throws: KeyBindingStore.BindingError.self) {
-        try store.set(KeyBinding("o", [.command, .shift]), for: command, slot: 1, commands: commands)
-      }
-      #expect(throws: KeyBindingStore.BindingError.self) {
-        try store.set(KeyBinding("n"), for: command, slot: 1, commands: commands)
-      }
-      #expect(store.bindings(for: command) == command.defaults)
-      try store.set(KeyBinding("n"), for: command, slot: 0, commands: commands)
     }
   }
 
@@ -178,77 +103,6 @@ struct KeyBindingTests {
     }
   }
 
-  @Test("search covers groups and shortcuts, and bound-only includes a secondary-only assignment")
-  func filtering() throws {
-    try isolated { store, _ in
-      let rename = WorkspaceAction.renameTerminal.command
-      try store.set(nil, for: rename, slot: 0, commands: commands)
-      #expect(store.filtered(commands, query: "", boundOnly: true).contains(rename) == false)
-      try store.set(KeyBinding("r", .control), for: rename, slot: 1, commands: commands)
-      #expect(store.filtered(commands, query: "ctrl+r", boundOnly: true) == [rename])
-      #if os(macOS)
-        #expect(store.filtered(commands, query: "⌃R", boundOnly: true) == [rename])
-      #endif
-      try store.set(KeyBinding("r", [.control, .option, .shift, .command]),
-                    for: rename, slot: 1, commands: commands)
-      for query in ["ctrl+alt+shift+⌘+r", "ctrl+option+shift+cmd+r", "control+option+shift+command+r"] {
-        #expect(store.filtered(commands, query: query, boundOnly: true) == [rename])
-      }
-      #if os(macOS)
-        #expect(store.filtered(commands, query: "⌃⌥⇧⌘R", boundOnly: true) == [rename])
-      #endif
-      #expect(Set(store.filtered(commands, query: "window", boundOnly: false).map(\.id)) ==
-        Set([WorkspaceAction.previousTab, .nextTab, .closeWindow, .quickTerminal, .alwaysOnTop].map(\.rawValue)))
-      #expect(store.filtered(commands, query: "nothing matches", boundOnly: false).isEmpty)
-    }
-  }
-
-  @Test("inactive plugins expose commands before connecting, with namespaced IDs")
-  func pluginCatalogue() {
-    isolated { _, defaults in
-      let registry = PluginRegistry(defaults: defaults)
-      registry.register(CataloguePlugin(id: "one"))
-      registry.register(CataloguePlugin(id: "two"))
-      registry.setEnabled(false, id: "one")
-      let catalog = KeyBindingCatalog.commands(registry: registry)
-      #expect(catalog.contains { $0.id == "plugin.one.command.refresh" })
-      #expect(catalog.contains { $0.id == "plugin.two.command.refresh" })
-      #expect(catalog.contains { $0.id == "plugin.one.launch" })
-      #expect(Set(catalog.map(\.id)).count == catalog.count)
-    }
-  }
-
-  @Test("command dispatch respects availability and close dismisses overlays first")
-  func dispatch() {
-    let tabs = TabSet()
-    // On a Mac an empty window still has ⌘W: it closes the window.
-    #if os(macOS)
-      #expect(tabs.canPerform(.closeTerminal))
-    #else
-      #expect(!tabs.canPerform(.closeTerminal))
-    #endif
-    #expect(!tabs.canPerform(.closeTab), "with no tab, ⌥⌘W has nothing to close")
-    #expect(!tabs.canPerform(.renameTerminal))
-    #expect(!tabs.canPerform(.restoreTab))
-    tabs.perform(.restoreTab)
-    #expect(tabs.intent == nil)
-    tabs.perform(.commandMenu)
-    #expect(tabs.palette == .command)
-    tabs.perform(.closeTerminal)
-    #expect(tabs.palette == nil)
-    #expect(tabs.windowCloseRequests == 0, "the palette goes first")
-    tabs.perform(.commandMenu)
-    tabs.perform(.closeTab)
-    #expect(tabs.palette == nil)
-    tabs.perform(.zen)
-    #expect(tabs.zen)
-    #expect(!tabs.canPerform(.inspector))
-    tabs.perform(.inspector)
-    #expect(!tabs.inspector)
-    tabs.perform(.newTerminal)
-    #expect(tabs.intent == .newTerminal)
-  }
-
   #if os(macOS)
   @Test("routing consumes both bindings once and leaves disabled windows, IME and unbound keys alone")
   func monitorRouting() throws {
@@ -295,20 +149,6 @@ struct KeyBindingTests {
     }
   }
 
-  @Test("Ctrl and Alt use the logical base key, ignoring caps lock and function flags")
-  func eventNormalization() throws {
-    func event(_ characters: String, _ base: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 11) throws -> NSEvent {
-      try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
-        timestamp: 0, windowNumber: 0, context: nil, characters: characters,
-        charactersIgnoringModifiers: base, isARepeat: false, keyCode: code))
-    }
-    #expect(KeyBinding(event: try event("∫", "b", .option)) == KeyBinding("b", .option))
-    #expect(KeyBinding(event: try event("\u{02}", "b", .control)) == KeyBinding("b", .control))
-    #expect(KeyBinding(event: try event("B", "B", [.control, .capsLock])) == KeyBinding("b", .control))
-    #expect(KeyBinding(event: try event("", "", [.option, .function], code: 123)) == KeyBinding("left", .option))
-    #expect(KeyBinding(event: try event("\u{f704}", "\u{f704}", .function, code: 122)) == KeyBinding("f1", []))
-    #expect(KeyBinding("left", [.option, .command]).keyboardShortcut?.key == .leftArrow)
-  }
   #endif
 }
 

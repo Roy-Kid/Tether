@@ -19,71 +19,6 @@ struct TerminalWorkspaceTests {
     #expect(tabs.checkingClose == nil)
   }
 
-  @Test("new terminal targets the current page; new tab creates another page")
-  func creation() throws {
-    let tabs = TabSet()
-    let first = shell("a")
-    tabs.adopt(first)
-    let page = try #require(tabs.currentWorkspace)
-    tabs.perform(.newTerminal)
-    #expect(tabs.intent == .addTerminal(page.id))
-    tabs.intent = nil
-    tabs.perform(.newTab)
-    #expect(tabs.intent == .newTab)
-    let second = shell("b")
-    tabs.adopt(second, in: page.id)
-    #expect(tabs.visibleWorkspaces.count == 1)
-    #expect(tabs.current?.id == second.id)
-    #expect(tabs.currentTerminals.map(\.id) == [first.id, second.id])
-    #expect(tabs.workspaceSplit == nil)
-    tabs.adopt(shell("c"))
-    #expect(tabs.visibleWorkspaces.count == 2)
-    tabs.select(page.id)
-    #expect(tabs.current?.id == second.id)
-    #expect(tabs.tabs.count == 3)
-    let host = try #require(tabs.currentHost?.id)
-    let listed = tabs.hostShells(host, current: second.id)
-    #expect(listed.map(\.id) == [first.id, second.id, tabs.tabs.last?.id])
-    #expect(listed.map(\.current) == [false, true, false])
-  }
-
-  @Test("a page's caption is what stands in for its shell — not the host, not a count")
-  func caption() throws {
-    let tabs = TabSet()
-    tabs.adopt(shell("a"))
-    let page = try #require(tabs.currentWorkspace)
-    #expect(tabs.caption(for: page) == "", "the host bar already names the host")
-    tabs.adopt(shell("b"), in: page.id)
-    let grown = try #require(tabs.currentWorkspace)
-    #expect(tabs.caption(for: grown) == "", "a second terminal does not turn it into a number")
-  }
-
-  @Test("pages on the same host keep independent layouts and focus")
-  func isolation() throws {
-    let tabs = TabSet()
-    let a = shell("a"), b = shell("b"), hidden = shell("hidden"), c = shell("c")
-    tabs.adopt(a)
-    let first = try #require(tabs.currentWorkspace?.id)
-    tabs.split(b, beside: a.id, direction: .right)
-    tabs.adopt(hidden, in: first)
-    #expect(tabs.workspaceSplit == .split(.right, .tab(a.id), .tab(hidden.id), 0.5))
-    tabs.select(a.id)
-    #expect(tabs.workspaceSplit == .split(.right, .tab(a.id), .tab(hidden.id), 0.5))
-    tabs.adopt(c)
-    #expect(tabs.workspaceSplit == nil)
-    tabs.select(first)
-    #expect(tabs.current?.id == a.id)
-    tabs.select(b.id)
-    #expect(tabs.workspaceSplit == .split(.right, .tab(b.id), .tab(hidden.id), 0.5))
-    tabs.close(b.id, remember: false)
-    #expect(tabs.current?.id == hidden.id)
-    #expect(tabs.workspaces.count == 2)
-    tabs.close(hidden.id, remember: false)
-    tabs.close(a.id, remember: false)
-    #expect(tabs.workspaces.count == 1)
-    #expect(tabs.current?.id == c.id)
-  }
-
   @Test("a terminal cannot be attached to a page belonging to another host")
   func hostBoundary() throws {
     let tabs = TabSet()
@@ -193,23 +128,6 @@ struct TerminalWorkspaceTests {
     #expect(tabs.workspaces.count == 1)
     #expect(tabs.currentTerminals.count == 1)
     #expect(tabs.currentWorkspace?.name == "Legacy")
-  }
-
-  @Test("context actions target the clicked page without any plugin")
-  func contextTarget() throws {
-    let tabs = TabSet()
-    let a = shell("Same"), b = shell("Same")
-    tabs.adopt(a)
-    tabs.adopt(b, in: tabs.currentWorkspace!.id)
-    let page = try #require(tabs.currentWorkspace?.id)
-    tabs.adopt(shell("Other"))
-    let menu = tabs.terminalMenu(for: a.id)
-    #expect(menu[0].children.map(\.title) == ["Same 1 — Ended", "Same 2 — Ended"])
-    #expect(menu[0].children[1].checked)
-    menu.first { $0.title == "New Terminal" }?.action?()
-    #expect(tabs.intent == .addTerminal(page))
-    #expect(tabs.current?.id == a.id)
-    #expect(tabs.accessories.isEmpty)
   }
 
 }

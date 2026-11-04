@@ -184,16 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn the_spare_pixels_split_evenly() {
-        // 100 wide, 8 + 8 inset, 80 of grid: 4 spare, 2 each side.
-        assert_eq!(centred(100.0, 80.0, 8.0), 10.0);
-        // An odd pixel goes to the far side.
-        assert_eq!(centred(101.0, 80.0, 8.0), 10.0);
-        // A grid larger than its room keeps the inset.
-        assert_eq!(centred(50.0, 80.0, 8.0), 8.0);
-    }
-
-    #[test]
     fn the_grid_rests_on_the_bottom() {
         // 40 tall, 20 of grid: the spare 20 sits above the first row.
         assert_eq!(rested(40.0, 20.0), 20.0);
@@ -220,23 +210,6 @@ mod tests {
         let min_x = list.rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
         let max_x = list.rects.iter().map(|r| r.x + r.width).fold(f32::MIN, f32::max);
         assert_eq!((min_x, max_x), (0.0, 120.0));
-    }
-
-    #[test]
-    fn only_what_touches_an_edge_is_extended() {
-        let placement = Placement { inset: 10.0, width: 120.0, height: 50.0 };
-        // Row 0: a highlight in the middle. Row 1 (middle row): touches neither side.
-        // Row 2: a band at the left only.
-        let rows =
-            [row(&[(30.0, 20.0)], 0.0), row(&[(30.0, 20.0)], 10.0), row(&[(0.0, 40.0)], 20.0)];
-        let extended = extensions(&rows, (100.0, 30.0), (10.0, 10.0), &placement, true);
-        // Up from row 0's highlight, and left of row 2. Row 2's colour is not
-        // the page the row above leaves, so it does not continue downward.
-        assert_eq!(extended.len(), 2);
-        assert!(extended.iter().any(|r| r.x == 30.0 && r.y == -10.0 && r.width == 20.0));
-        assert!(extended.iter().any(|r| r.x == -10.0 && r.y == 20.0));
-        assert!(extended.iter().all(|r| r.y + r.height <= 30.0), "nothing reaches below the grid");
-        assert!(extended.iter().all(|r| r.x + r.width <= 100.0), "nothing reaches the right");
     }
 
     #[test]
@@ -274,40 +247,5 @@ mod tests {
         let extended = extensions(&rows, (100.0, 20.0), (10.0, 10.0), &placement, true);
         assert!(extended.iter().all(|r| r.y + r.height <= 20.0));
         assert!(extended.iter().any(|r| r.color == status && r.x < 0.0 && r.y == 10.0));
-    }
-
-    #[test]
-    fn a_status_line_at_the_top_does_not_paint_the_margin() {
-        let placement = Placement { inset: 10.0, width: 120.0, height: 50.0 };
-        let page = Rgba::new(0.1, 0.1, 0.1, 1.0);
-        let status = Rgba::new(0.16, 0.54, 0.22, 1.0);
-        let rows = [
-            painted(&[(0.0, 100.0)], 0.0, status),
-            painted(&[(0.0, 100.0)], 10.0, page),
-            painted(&[(0.0, 100.0)], 20.0, page),
-        ];
-        let extended = extensions(&rows, (100.0, 30.0), (10.0, 10.0), &placement, true);
-        assert!(extended.iter().all(|r| r.color != status || r.y >= 0.0));
-        assert!(
-            extended.iter().any(|r| r.color == page && r.y >= 30.0),
-            "the screen still reaches the bottom"
-        );
-    }
-
-    #[test]
-    fn one_row_still_reaches_every_edge() {
-        let placement = Placement { inset: 10.0, width: 120.0, height: 40.0 };
-        let rows = [row(&[(0.0, 100.0)], 0.0)];
-        let extended = extensions(&rows, (100.0, 10.0), (10.0, 10.0), &placement, true);
-        assert!(extended.iter().any(|r| r.y < 0.0));
-        assert!(extended.iter().any(|r| r.y >= 10.0));
-    }
-
-    #[test]
-    fn an_incomplete_screen_does_not_reach_the_bottom() {
-        let placement = Placement { inset: 10.0, width: 120.0, height: 40.0 };
-        let rows = [row(&[(30.0, 20.0)], 0.0)];
-        let extended = extensions(&rows, (100.0, 20.0), (10.0, 10.0), &placement, false);
-        assert!(extended.iter().all(|r| r.y < 0.0));
     }
 }

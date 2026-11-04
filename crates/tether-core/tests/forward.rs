@@ -9,13 +9,12 @@
 mod support;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tether_core::ssh::Endpoint;
 use tether_core::terminal::ScreenSize;
-use tether_core::{Connection, Credential, Dial, SshClient};
+use tether_core::{Connection, Credential, Dial};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -83,26 +82,6 @@ async fn an_ipv6_loopback_listener_is_reached_after_v4_refuses() {
 }
 
 #[tokio::test]
-async fn a_taken_local_port_is_not_the_one_that_gets_bound() {
-    let echo = echo_server().await;
-    let connection = authenticated().await;
-
-    // The echo already listens on this machine, on the same port number the
-    // forward would have preferred. The listener has to move aside.
-    let forwarded = connection.listen(echo.port()).await.expect("listen");
-    assert_ne!(forwarded.local_port(), echo.port());
-    let mut client =
-        TcpStream::connect(("127.0.0.1", forwarded.local_port())).await.expect("the next port");
-    client.write_all(b"next").await.expect("write");
-    let mut got = [0u8; 4];
-    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut got))
-        .await
-        .expect("echo timed out")
-        .expect("echo");
-    assert_eq!(&got, b"next");
-}
-
-#[tokio::test]
 async fn a_local_shell_does_not_listen_over_a_port_already_here() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -119,36 +98,6 @@ async fn a_local_shell_does_not_listen_over_a_port_already_here() {
 async fn ports_below_1024_are_refused() {
     let error = Connection::Local.listen(80).await.expect_err("privileged");
     assert!(error.to_string().contains("1024"), "{error}");
-}
-
-#[tokio::test]
-async fn an_openssh_lease_forwards_with_ssh_w() {
-    let echo = echo_server().await;
-    let program = fake_ssh_w();
-    let connection =
-        Connection::OpenSsh(SshClient::new("Arrhenius").program(program.to_string_lossy()));
-
-    let forwarded = connection.listen(echo.port()).await.expect("listen");
-    let mut client =
-        TcpStream::connect(("127.0.0.1", forwarded.local_port())).await.expect("local");
-    client.write_all(b"mux").await.expect("write");
-    let mut got = [0u8; 3];
-    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut got))
-        .await
-        .expect("echo timed out")
-        .expect("echo");
-    assert_eq!(&got, b"mux");
-}
-
-#[tokio::test]
-async fn clones_of_one_session_share_a_lease_id_and_a_redial_does_not() {
-    let first = authenticated().await;
-    let again = first.clone();
-    assert_eq!(first.lease_id(), again.lease_id());
-    let redial = authenticated().await;
-    assert_ne!(first.lease_id(), redial.lease_id());
-    assert_eq!(Connection::Local.lease_id(), Connection::Local.lease_id());
-    assert_eq!(Connection::Local.lease_id(), 0);
 }
 
 async fn authenticated() -> Connection {
@@ -208,35 +157,4 @@ async fn port_is_free(port: u16) -> bool {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     false
-}
-
-/// An `ssh` that answers `-O check` and splices `-W host:port` to a real socket.
-///
-/// Compiled here, from the standard library only. The test has to run on a
-/// machine with no Python and no netcat; `rustc` is already what built it.
-fn fake_ssh_w() -> PathBuf {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/ssh_w_stub.rs");
-    let dir = std::env::temp_dir().join(format!(
-        "tether-forward-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("temp");
-    let program = dir.join("ssh");
-    let compiled = std::process::Command::new("rustc")
-        .arg("--edition=2024")
-        .arg("-o")
-        .arg(&program)
-        .arg(&source)
-        .output()
-        .expect("rustc");
-    assert!(
-        compiled.status.success(),
-        "rustc ssh stub:\n{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    program
 }

@@ -6,14 +6,6 @@ import Tether
 
 @Suite("selecting text")
 struct GridSelectionTests {
-  @Test("a drag copies the cells it covers, in either direction")
-  func characterRange() throws {
-    let frame = screen([row("hello")], columns: 5)
-    let forward = try #require(GridText.selection(.character, from: point(0, 1), to: point(0, 3), in: frame))
-    let backward = try #require(GridText.selection(.character, from: point(0, 3), to: point(0, 1), in: frame))
-    #expect(GridText.string(in: frame, selection: forward) == "ell")
-    #expect(GridText.string(in: frame, selection: backward) == "ell")
-  }
 
   @Test("a path broken over rows copies as one path when those rows are one link")
   func brokenPathCopiesWhole() throws {
@@ -77,14 +69,6 @@ struct GridSelectionTests {
     let text = GridText.string(in: frame, selection: selection)
     #expect(text == "ab      cd")
     #expect(!text.contains("secret"))
-  }
-
-  @Test("trailing spaces are dropped and leading ones stay")
-  func trimsTrailing() throws {
-    let frame = screen([row("ab  ")], columns: 4)
-    let selection = try #require(
-      GridText.selection(.character, from: point(0, 0), to: point(0, 3), in: frame))
-    #expect(GridText.string(in: frame, selection: selection) == "ab")
   }
 
   @Test("a double click takes the word, and whitespace is not a word")

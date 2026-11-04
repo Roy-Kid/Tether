@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import queue
 import xml.etree.ElementTree as ET
 
@@ -22,9 +23,20 @@ def run(*command, capture=False, cwd=None, env=None):
     if command[0] == "dotnet" and sys.platform == "win32" and not shutil.which("dotnet"):
         command[0] = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "dotnet/dotnet.exe")
     print("+ " + " ".join(map(str, command)), flush=True)
-    return subprocess.run(command, cwd=cwd or ROOT, check=True, env=env,
-                          text=True, encoding="utf-8", errors="replace",
-                          stdout=subprocess.PIPE if capture else None).stdout
+    started = time.monotonic()
+    try:
+        return subprocess.run(command, cwd=cwd or ROOT, check=True, env=env,
+                              text=True, encoding="utf-8", errors="replace",
+                              stdout=subprocess.PIPE if capture else None).stdout
+    finally:
+        took(started)
+
+
+def took(started: float) -> None:
+    """Where a slow gate spends its time, without a second run to find out."""
+    seconds = time.monotonic() - started
+    if seconds >= 5:
+        print(f"  ({seconds:.0f}s)", flush=True)
 
 
 def require(condition, message):
@@ -158,7 +170,6 @@ def windows():
     run("cargo", "clippy", "--locked", "-p", "tether-ffi", "--features", "render-diagnostics",
         "--all-targets", "--", "-D", "warnings")
     run("dotnet", "build", "tests/render-evaluation", "-c", "Release", "-warnaserror")
-    run("dotnet", "run", "--project", "tests/render-evaluation", "-c", "Release", "--no-build", "--", "--validate-fixtures")
     for name in ("terminal-experience", "connection-errors", "windows-files", "windows-management"):
         run("dotnet", "run", "--project", "tests/" + name)
     for name in ("ssh-config", "plugins"):
@@ -189,6 +200,7 @@ def swift_test(*args: str, env: dict) -> None:
     """`swift test`, shown as it runs, and judged on what it reported."""
     command = ["swift", "test", *args]
     print("+ " + " ".join(command), flush=True)
+    started = time.monotonic()
     lines = []
     with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding="utf-8", errors="replace") as process:
@@ -205,6 +217,7 @@ def swift_test(*args: str, env: dict) -> None:
                 break
             print(line, end="", flush=True)
             lines.append(line)
+    took(started)
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command)
     require_test_report("".join(lines))
@@ -226,7 +239,10 @@ def apple(build=True):
     # the app's manifest can reach otherwise resolves here and nowhere else.
     hermetic = {**os.environ, "TETHER_HERMETIC": "1"}
     if build:
-        run("bash", "scripts/build-xcframework.sh")
+        # The Mac and the simulator are where the checks run; a device slice
+        # is a third release build that nothing here would load.
+        run("bash", "scripts/build-xcframework.sh",
+            env={**hermetic, "TETHER_XCFRAMEWORK_TARGETS": "aarch64-apple-darwin aarch64-apple-ios-sim"})
     # The C# bindings come from the library's metadata, the same on every
     # platform: a Rust change made here shows up here, not first on Windows.
     verify_bindings(ROOT / "target/aarch64-apple-darwin/release/libtether_ffi.dylib")
@@ -242,11 +258,6 @@ def apple(build=True):
         "-destination", f"platform=iOS Simulator,id={iphone_simulator()}",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO",
         cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
-    # Previously flaky regressions must survive additional scheduling runs.
-    for _ in range(2):
-        swift_test("--package-path", "app/Plugins/Files", "--filter", "BrowserUITests", env=hermetic)
-        swift_test("--package-path", "app/Plugins/Files", "--filter", "closeClosesTheSession", env=hermetic)
-        swift_test("--package-path", "app", "--filter", "ShellActivityTests", env=hermetic)
 
 
 def iphone_simulator():

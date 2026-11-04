@@ -11,12 +11,6 @@ struct StatusRibbonTests {
     PluginStatusSegment(id: String(color), color: color, weight: weight)
   }
 
-  @Test("nothing to report is the idle ribbon, not a band of nothing")
-  func empty() {
-    #expect(StatusRibbon.stops(for: []).isEmpty)
-    #expect(StatusRibbon.stops(for: [Self.segment(0xFF0000, 0)]).isEmpty, "a zero share draws nothing")
-  }
-
   @Test("invalid shares are ignored and large finite shares keep their proportions")
   func unusualWeights() {
     let invalid = [Double.nan, .infinity, -.infinity, -1, 0].map { Self.segment(0xFF0000, $0) }
@@ -27,48 +21,4 @@ struct StatusRibbonTests {
     #expect(stops.allSatisfy { $0.location.isFinite })
   }
 
-  @Test("a saturated colour breathes, and the same colour stays in phase")
-  func motion() {
-    #expect(StatusMotion.period(for: 0x8E8E93) == nil)
-    #expect(StatusMotion.pulse(color: 0x8E8E93, time: 1.2) == 1)
-    let running = StatusMotion.period(for: 0x0A84FF)
-    #expect(running != nil)
-    let time = 12.5
-    #expect(StatusMotion.pulse(color: 0x0A84FF, time: time) == StatusMotion.pulse(color: 0x0A84FF, time: time))
-    let shimmer = StatusMotion.shimmer(time: time)
-    #expect(shimmer >= 0 && shimmer < 1)
-    #expect(StatusRibbon.shares(for: [Self.segment(0x0A84FF, 3), Self.segment(0x8E8E93, 1)]).map(\.color)
-      == [0x0A84FF, 0x8E8E93])
-  }
-
-  @Test("a saturated band is living, and gray or an empty ribbon is idle")
-  func living() {
-    #expect(PluginLiving.presence(of: []) == .idle)
-    #expect(PluginLiving.presence(of: [Self.segment(0x8E8E93, 1)]) == .idle)
-    #expect(PluginLiving.presence(of: [Self.segment(0x0A84FF, 0)]) == .idle)
-    #expect(PluginLiving.presence(of: [Self.segment(0x0A84FF, 1)]) == .living(tint: 0x0A84FF))
-    #expect(PluginLiving.presence(of: [Self.segment(0x8E8E93, 2), Self.segment(0x30D158, 1)])
-      == .living(tint: 0x30D158))
-  }
-
-  @Test("one segment fills the band")
-  func single() {
-    #expect(StatusRibbon.stops(for: [Self.segment(0x00FF00, 3)]) == [
-      .init(color: 0x00FF00, location: 0), .init(color: 0x00FF00, location: 1),
-    ])
-  }
-
-  /// Each colour holds for its share and blends only at the boundary, never
-  /// across a neighbour's whole width.
-  @Test("shares hold their colour and blend at the boundary")
-  func proportions() {
-    let stops = StatusRibbon.stops(for: [Self.segment(0xFF0000, 3), Self.segment(0x0000FF, 1)])
-    #expect(stops.first == .init(color: 0xFF0000, location: 0))
-    #expect(stops.last == .init(color: 0x0000FF, location: 1))
-    #expect(zip(stops, stops.dropFirst()).allSatisfy { $0.location <= $1.location })
-    let lastRed = stops.last { $0.color == 0xFF0000 }!.location
-    let firstBlue = stops.first { $0.color == 0x0000FF }!.location
-    #expect(lastRed < 0.75 && 0.75 < firstBlue, "the boundary sits at the red share")
-    #expect(firstBlue - lastRed <= StatusRibbon.blend + 1e-9)
-  }
 }

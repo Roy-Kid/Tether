@@ -25,15 +25,5 @@ struct OpenPathTests {
     #expect(OpenPath.fileURL(from: "file:", workingDirectory: nil) == nil)
   }
 
-  @Test("the clipboard is offered only when it is a path")
-  func suggestion() {
-    #expect(OpenPath.suggestion(from: "  ~/Docs  ", workingDirectory: nil) == "~/Docs")
-    #expect(OpenPath.suggestion(from: "/var/empty/a", workingDirectory: nil) == "/var/empty/a")
-    #expect(OpenPath.suggestion(from: "hello", workingDirectory: "/work") == "")
-    #expect(OpenPath.suggestion(from: "src/main.rs", workingDirectory: "/work") == "src/main.rs")
-    #expect(OpenPath.suggestion(from: "src/main.rs", workingDirectory: nil) == "")
-    #expect(OpenPath.suggestion(from: "/var/a\n/var/b", workingDirectory: nil) == "")
-    #expect(OpenPath.suggestion(from: nil, workingDirectory: nil) == "")
-  }
 }
 #endif

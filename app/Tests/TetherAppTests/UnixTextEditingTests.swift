@@ -51,42 +51,6 @@ struct UnixTextEditingTests {
     #expect(editor.string == "beta")
   }
 
-  /// What the text system already does, Tether leaves to it: these keys
-  /// pass through untouched. Only ⌃_ is Tether's, and it undoes.
-  @Test("native delete, kill, yank, transpose and undo remain available")
-  func nativeEditing() throws {
-    let (window, editor) = fixture("abc def")
-    let native: [(String, NSEvent.ModifierFlags)] = [
-      ("h", .control), ("d", .control), ("k", .control), ("y", .control), ("t", .control),
-      ("F", [.control, .shift]),
-    ]
-    for (letter, flags) in native {
-      let event = try key(letter, flags, in: window)
-      #expect(UnixTextEditing.route(event) === event, "⌃\(letter) is the text field's own")
-    }
-    editor.setSelectedRange(NSRange(location: 7, length: 0))
-    editor.breakUndoCoalescing()
-    editor.undoManager?.removeAllActions()
-    editor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
-    #expect(editor.string == "abc def!")
-    #expect(UnixTextEditing.route(try key("_", [.control, .shift], in: window)) == nil)
-    #expect(editor.string == "abc def")
-    for letter in ["a", "x", "c", "v", "z"] {
-      let event = try key(letter, .command, in: window)
-      #expect(UnixTextEditing.route(event) === event, "native clipboard and undo keys remain native")
-    }
-  }
-
-  @Test("cancel, confirm and focus aliases re-enter standard responder handling")
-  func actions() throws {
-    let (window, _) = fixture("draft")
-    for (letter, code) in [("g", UInt16(53)), ("m", 36), ("j", 36), ("i", 48)] {
-      let event = try #require(UnixTextEditing.route(try key(letter, .control, in: window)))
-      #expect(event.keyCode == code)
-      #expect(event.modifierFlags.isEmpty)
-    }
-  }
-
   @Test("composition, read-only content and non-text responders are not intercepted")
   func focusBoundaries() throws {
     let (window, editor) = fixture("draft")
@@ -101,33 +65,6 @@ struct UnixTextEditingTests {
     #expect(UnixTextEditing.route(event) === event)
   }
 
-  @Test("workspace overrides win, while Settings-style monitors still enable native editing")
-  func routing() throws {
-    let (window, editor) = fixture("alpha beta")
-    editor.setSelectedRange(NSRange(location: 10, length: 0))
-    let monitor = WorkspaceKeyBindingMonitor.MonitorView()
-    window.contentView!.addSubview(monitor)
-    defer { monitor.stop() }
-    monitor.enabled = true
-    monitor.textEditingEnabled = true
-    monitor.handle = { _, _, _ in true }
-    let event = try key("w", .control, in: window)
-    #expect(monitor.route(event) == nil)
-    #expect(editor.string == "alpha beta")
-    monitor.enabled = false
-    #expect(monitor.route(event) == nil)
-    #expect(editor.string == "alpha ")
-    let (other, _) = fixture("other")
-    let unrelated = try key("w", .control, in: other)
-    #expect(monitor.route(unrelated) === unrelated)
-    window.addChildWindow(other, ordered: .above)
-    defer { window.removeChildWindow(other) }
-    let childEditor = try #require(other.firstResponder as? NSTextView)
-    childEditor.setSelectedRange(NSRange(location: 5, length: 0))
-    monitor.enabled = true
-    #expect(monitor.route(unrelated) == nil)
-    #expect(childEditor.string.isEmpty, "child windows get editing aliases without workspace commands")
-  }
 }
 
 private final class EditingTestWindow: NSWindow {

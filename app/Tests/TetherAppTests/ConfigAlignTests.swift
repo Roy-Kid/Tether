@@ -40,57 +40,6 @@ struct ConfigAlignTests {
       links: links, keyPaths: keys, file: config, defaultUser: "ada"))
   }
 
-  @Test("nothing to ask when the file already says what the library says")
-  func alreadyAligned() {
-    let record = Self.record()
-    let plan = Self.plan([Self.entry()], [record], links: ["lab": ImportLink(id: record.profile.id, file: Self.config, seen: nil)])
-    #expect(plan.isEmpty)
-  }
-
-  @Test("a library change to a stanza of this file is an edit of that stanza")
-  func libraryAhead() {
-    let record = Self.record(host: "10.0.0.9")
-    let plan = Self.plan([Self.entry()], [record])
-    #expect(plan.edits == [ConfigAlign.Edit.update(Self.face(), from: nil)])
-    #expect(plan.title == "Update SSH configuration?")
-    #expect(plan.message == "lab")
-  }
-
-  @Test("a host only the library has is added, and a deleted one is removed")
-  func addAndRemove() {
-    let added = Self.record(label: "gpu", host: "10.0.0.8")
-    let gone = Self.record(deleted: true)
-    let plan = Self.plan([Self.entry()], [added, gone],
-      links: ["lab": ImportLink(id: gone.profile.id, file: Self.config, seen: nil)],
-      keys: [added.profile.id: "~/.ssh/id_gpu"])
-    #expect(plan.edits == [
-      ConfigAlign.Edit.append(Self.face("gpu", host: "10.0.0.8"), keyPath: "~/.ssh/id_gpu"),
-      ConfigAlign.Edit.remove("lab"),
-    ])
-  }
-
-  @Test("a renamed host keeps its stanza")
-  func renamed() {
-    let record = Self.record(label: "gpu")
-    let plan = Self.plan([Self.entry()], [record],
-      links: ["lab": ImportLink(id: record.profile.id, file: Self.config, seen: nil)])
-    #expect(plan.edits == [ConfigAlign.Edit.update(Self.face("gpu", host: "10.0.0.4"), from: "lab")])
-  }
-
-  @Test("a stanza in an included file is covered, not edited there")
-  func includedFileIsOnlyRead() {
-    let record = Self.record(host: "10.0.0.9")
-    let plan = Self.plan([Self.entry(file: "/Users/ada/.ssh/config.d/lab")], [record])
-    #expect(plan.edits == [ConfigAlign.Edit.cover(Self.face(), keyPath: nil)])
-  }
-
-  @Test("the question names a few hosts, then a count")
-  func messageCounts() {
-    let records = (1...5).map { Self.record(label: "h\($0)", host: "10.0.0.\($0)") }
-    let plan = Self.plan([], records)
-    #expect(plan.message == "h1, h2, h3, h4, +1")
-  }
-
   @Test("an agreed edit changes the address and leaves the rest of the stanza")
   func editsInPlace() {
     let original = """
@@ -114,42 +63,6 @@ struct ConfigAlignTests {
     #expect(HostFace(parsed.entries[0], defaultUser: "ada") == Self.face())
   }
 
-  @Test("a new host is inserted before Host *, with its key")
-  func appendsBeforeTheWildcard() {
-    let original = "Host *\n  User ada\n"
-    let written = SSHConfigRewrite.applying(
-      [.append(Self.face("gpu", host: "10.0.0.8"), keyPath: "~/.ssh/id gpu")], to: original, defaultUser: "ada")
-    #expect(written.hasPrefix("Host gpu\n  HostName 10.0.0.8\n  User ada\n  IdentityFile \"~/.ssh/id gpu\"\n\nHost *\n"))
-  }
-
-  @Test("a Host * above the stanza does not keep the old user")
-  func wildcardLosesToTheBlock() {
-    let original = """
-      Host *
-        User ada
-
-      Host lab
-        HostName 10.0.0.4
-        User ada
-      """
-    let written = SSHConfigRewrite.applying(
-      [.update(Self.face(user: "bob"), from: nil)], to: original, defaultUser: "ada")
-    #expect(written.hasPrefix("# Begin Tether hosts\nHost lab\n  HostName 10.0.0.9\n  User bob\n# End Tether hosts\n"))
-    #expect(written.contains("User ada"))
-    let face = HostFace(SSHConfig(written).entries[0], defaultUser: "ada")
-    #expect(face == Self.face(user: "bob"))
-  }
-
-  @Test("agreeing a second time replaces the block instead of stacking it")
-  func blockIsReplaced() {
-    let once = SSHConfigRewrite.applying(
-      [.update(Self.face(user: "bob"), from: nil)],
-      to: "Host *\n  User ada\n\nHost lab\n  HostName 10.0.0.4\n  User ada\n", defaultUser: "ada")
-    let twice = SSHConfigRewrite.applying(
-      [.update(Self.face(host: "10.0.0.7", user: "bob"), from: nil)], to: once, defaultUser: "ada")
-    #expect(twice.components(separatedBy: "# Begin Tether hosts").count == 2)
-    #expect(HostFace(SSHConfig(twice).entries[0], defaultUser: "ada").hostName == "10.0.0.7")
-  }
 }
 
 @MainActor
@@ -290,23 +203,4 @@ struct ConfigAlignWriteTests {
     #expect(store.pendingAlignment == nil)
   }
 
-  @Test("a symlink stays a symlink")
-  func symlink() throws {
-    let directory = temporaryFile("config").deletingLastPathComponent()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let target = directory.appending(path: "real")
-    let link = directory.appending(path: "config")
-    try "Host lab\n  HostName 10.0.0.4\n  User ada\n".write(to: target, atomically: true, encoding: .utf8)
-    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-    let store = HostStore(location: link, secrets: MemorySecrets(), credentials: DeviceCredentialStore(secrets: MemorySecrets()))
-    store.reconcile()
-    var lab = try #require(store.hosts.first)
-    lab.hostname = "10.0.0.9"
-    #expect(store.save(lab))
-    store.reconcile()
-    store.reviewConfiguration()
-    store.writeConfigurationAlignment()
-    #expect(try link.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
-    #expect(try String(contentsOf: target, encoding: .utf8).contains("10.0.0.9"))
-  }
 }

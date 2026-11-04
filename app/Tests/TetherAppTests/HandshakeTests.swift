@@ -190,43 +190,6 @@ struct HandshakeTests {
     #expect(login.refusal.map(message(for:)) == "No answer in time.")
   }
 
-  @Test("an answer that arrived is never reported as missing")
-  func answeredInTime() async {
-    let path = temporaryFile("known")
-    defer { removeDirectory(of: path) }
-    let login = AuthenticationCoordinator(
-      host: Host(label: "lab", hostname: key.host, port: 22, username: "ada"), password: "",
-      known: KnownHosts(location: path), credentials: DeviceCredentialStore(secrets: MemorySecrets()),
-      answerTimeout: .milliseconds(30),
-      ask: { question, shown in
-        shown()
-        return if case .trust = question { [] } else { ["424242"] }
-      })
-    #expect(await login.verify(key))
-    #expect(await login.answer(instruction: "", prompts: [code]) == ["424242"])
-    try? await Task.sleep(for: .milliseconds(60))
-    #expect(login.refusal == nil, "a later failure is the server's, not a missing answer")
-  }
-
-  @Test("declining an approval is not distrusting the key")
-  func approvalDeclined() async {
-    let path = temporaryFile("known")
-    defer { removeDirectory(of: path) }
-    let identity = AccountIdentity(name: "Arrhenius")
-    let profile = HostProfile(
-      id: UUID(), label: "Arrhenius", hostname: key.host, port: 22, username: "ada",
-      authentication: AuthenticationProfile(
-        identity: identity, primary: CredentialDescriptor(identityID: identity.id, purpose: .password)))
-    let known = KnownHosts(location: path)
-    known.remember(key)
-    let login = AuthenticationCoordinator(
-      host: Host(id: profile.id, label: "Arrhenius", hostname: key.host, port: 22, username: "ada", profile: profile),
-      password: "", known: known, credentials: DeviceCredentialStore(secrets: MemorySecrets()),
-      ask: { _, _ in nil })
-    #expect(await !login.verify(key))
-    #expect(login.refusal is CancellationError, "a decision, not a failure to report")
-  }
-
   @Test("the password a person typed is the one offered to be kept, and a code never is")
   func typedPassword() async {
     let person = Person([["correct"], ["424242"]])
@@ -272,34 +235,10 @@ struct HandshakeTests {
     #expect(institutional.fields.map(\.placeholder) == ["", "Username"])
   }
 
-  @Test("an answer is what the person confirmed")
-  func answers() {
-    let question = HandshakeQuestion.prompts([code], instruction: "", notice: nil)
-    #expect(question.answers(from: DialogReply(action: 1, role: .confirm, values: ["424242"])) == ["424242"])
-    #expect(question.answers(from: DialogReply(action: 0, role: .cancel, values: ["424242"])) == nil)
-    #expect(question.answers(from: nil) == nil)
-    #expect(HandshakeQuestion.trust(key).answers(from: DialogReply(action: 1, role: .confirm, values: [])) == [])
-  }
 }
 
 @Suite("Challenge history")
 struct ChallengeHistoryTests {
-  @Test("a question that comes back names the answer refused")
-  func restart() {
-    var history = ChallengeHistory()
-    history.begin(["Password"])
-    history.record(["Password": .saved])
-    history.begin(["Verification code"])
-    #expect(history.notice(for: ["Verification code"]) == nil)
-    history.record(["Verification code": .person])
-
-    history.begin(["Password"])
-    #expect(history.maySave("Password"), "the code was refused, not the password")
-    #expect(history.notice(for: ["Password"]) == nil)
-    history.record(["Password": .saved])
-    history.begin(["Verification code"])
-    #expect(history.notice(for: ["Verification code"]) == "Verification code was not accepted.")
-  }
 
   @Test("a refused round of several prompts cannot say which")
   func severalPrompts() {

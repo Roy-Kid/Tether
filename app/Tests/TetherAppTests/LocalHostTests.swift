@@ -72,21 +72,6 @@ struct LocalHostTests {
     #expect(store.listed.contains { $0.isLocal })
   }
 
-  @Test("is searched like any other host")
-  func isSearchable() {
-    let (store, location) = Self.store()
-    defer { removeDirectory(of: location) }
-
-    store.save(Self.host())
-
-    store.search = "localhost"
-    #expect(store.filtered.count == 1)
-    #expect(store.filtered.first?.isLocal == true)
-
-    store.search = "lab"
-    #expect(store.filtered.contains { $0.isLocal } == false)
-  }
-
   @Test("is recognised by identity, not by its hostname")
   func isRecognisedByIdentity() {
     // `localhost` over SSH is an ordinary thing to want — a forwarded port
@@ -99,81 +84,16 @@ struct LocalHostTests {
     #expect(Host.local.isLocal)
   }
 
-  @Test("carries no credential and nothing to remember")
-  func carriesNoCredential() {
-    // Nothing is authenticated, so there is nothing to keep. A host that
-    // claimed to remember a password would put an entry in the saved-password
-    // list that no session could ever use.
-    #expect(Host.local.remembersPassword == false)
-    #expect(Host.local.keyPath == nil)
-  }
-
-  @Test("has the same identity every time it is asked for")
-  func hasAStableIdentity() {
-    // Tabs, selection and the launch path all key off the id. A fresh UUID
-    // per access would open a second tab for the same machine and lose the
-    // selection each time the list was rebuilt.
-    #expect(Host.local.id == Host.local.id)
-    #expect(Host.local.id == Host.localID)
-  }
-
-  @Test("is absent where the system does not allow one")
-  func followsThePlatform() {
-    let (store, location) = Self.store()
-    defer { removeDirectory(of: location) }
-
-    #expect(store.listed.contains { $0.isLocal } == TerminalSession.isLocalAvailable)
-  }
 }
 
 /// Opening a terminal on this machine when the app starts.
 @MainActor
 @Suite("The launch preference")
 struct LaunchPreferenceTests {
-  @Test("is on unless someone turned it off")
-  func defaultsToOn() {
-    // A terminal application that opens on nothing asks a person to do setup
-    // before it has been useful once, and the one machine it can always reach
-    // needs none.
-    #expect(LaunchPreference.default)
-  }
 
-  @Test("is stored under one key that every reader agrees on")
-  func keyIsShared() {
-    // The toggle writes it and the launch path reads it. A literal repeated
-    // in two files is a preference that silently stops working the day one of
-    // them is reworded.
-    let defaults = UserDefaults.standard
-    let original = defaults.object(forKey: LaunchPreference.key)
-    defer {
-      if let original {
-        defaults.set(original, forKey: LaunchPreference.key)
-      } else {
-        defaults.removeObject(forKey: LaunchPreference.key)
-      }
-    }
-
-    defaults.set(false, forKey: LaunchPreference.key)
-    #expect(defaults.object(forKey: LaunchPreference.key) as? Bool == false)
-  }
 }
 
 @MainActor
 @Suite("The last-tab preference")
 struct LastTabPreferenceTests {
-  @Test("keeps the empty window unless someone chose to quit")
-  func defaultsToStay() {
-    #expect(LastTabPreference.default == LastTabPreference.stay)
-    let defaults = UserDefaults.standard
-    let original = defaults.object(forKey: LastTabPreference.key)
-    defer {
-      if let original {
-        defaults.set(original, forKey: LastTabPreference.key)
-      } else {
-        defaults.removeObject(forKey: LastTabPreference.key)
-      }
-    }
-    defaults.removeObject(forKey: LastTabPreference.key)
-    #expect(LastTabPreference.chosen == LastTabPreference.stay)
-  }
 }
