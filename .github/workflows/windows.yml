@@ -25,9 +25,10 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          # What a job builds is in these scripts; when they change, the
-          # cache is saved anew instead of restoring one without it forever.
-          key: ${{ hashFiles('scripts/check.py', 'scripts/build-xcframework.sh') }}
+          # rust-cache saves nothing after an exact match: the key moves when
+          # what the build makes does. Not with check.py, or every edit to
+          # the gate starts every job cold.
+          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
       - name: Restore the C# binding generator
         id: bindgen
         uses: actions/cache@v4
