@@ -23,13 +23,43 @@ def run(*command, capture=False, cwd=None, env=None):
     if command[0] == "dotnet" and sys.platform == "win32" and not shutil.which("dotnet"):
         command[0] = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "dotnet/dotnet.exe")
     print("+ " + " ".join(map(str, command)), flush=True)
+    if not capture:
+        stream(command, cwd=cwd, env=env)
+        return None
+    return subprocess.run(command, cwd=cwd or ROOT, check=True, env=env,
+                          text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE).stdout
+
+
+# A command that prints nothing this long is stuck, not slow: two gates once
+# sat for eighty minutes on each other's windows, and a CI simulator run for
+# ninety, with no line printed.
+SILENCE_MINUTES = 10
+
+
+def stream(command: list[str], cwd=None, env=None) -> str:
+    """Run `command`, shown as it runs; its output, or an error once it has
+    failed or gone silent."""
     started = time.monotonic()
-    try:
-        return subprocess.run(command, cwd=cwd or ROOT, check=True, env=env,
-                              text=True, encoding="utf-8", errors="replace",
-                              stdout=subprocess.PIPE if capture else None).stdout
-    finally:
-        took(started)
+    lines = []
+    with subprocess.Popen(command, cwd=cwd or ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding="utf-8", errors="replace") as process:
+        heard = queue.Queue()
+        threading.Thread(target=lambda: [heard.put(line) for line in process.stdout] + [heard.put(None)],
+                         daemon=True).start()
+        while True:
+            try:
+                line = heard.get(timeout=SILENCE_MINUTES * 60)
+            except queue.Empty:
+                process.kill()
+                raise RuntimeError(f"{' '.join(command)} printed nothing for {SILENCE_MINUTES} minutes.")
+            if line is None:
+                break
+            print(line, end="", flush=True)
+            lines.append(line)
+    took(started)
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command)
+    return "".join(lines)
 
 
 def took(started: float) -> None:
@@ -191,36 +221,11 @@ def require_test_report(output: str) -> None:
     require(started or "Executed " in output, "No test ran.")
 
 
-# A test run that prints nothing this long is stuck, not slow: two gates once
-# sat for eighty minutes on each other's windows with no line printed.
-SILENCE_MINUTES = 10
-
-
 def swift_test(*args: str, env: dict) -> None:
-    """`swift test`, shown as it runs, and judged on what it reported."""
+    """`swift test`, judged on what it reported."""
     command = ["swift", "test", *args]
     print("+ " + " ".join(command), flush=True)
-    started = time.monotonic()
-    lines = []
-    with subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, encoding="utf-8", errors="replace") as process:
-        heard = queue.Queue()
-        threading.Thread(target=lambda: [heard.put(line) for line in process.stdout] + [heard.put(None)],
-                         daemon=True).start()
-        while True:
-            try:
-                line = heard.get(timeout=SILENCE_MINUTES * 60)
-            except queue.Empty:
-                process.kill()
-                raise RuntimeError(f"swift test {' '.join(args)} printed nothing for {SILENCE_MINUTES} minutes.")
-            if line is None:
-                break
-            print(line, end="", flush=True)
-            lines.append(line)
-    took(started)
-    if process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, command)
-    require_test_report("".join(lines))
+    require_test_report(stream(command, env=env))
 
 
 def require_pinned_xcode():
