@@ -36,6 +36,10 @@ jobs:
       - name: Install check dependencies
         run: python3 -m pip install -r scripts/check-requirements.txt
       - uses: Swatinem/rust-cache@v2
+        with:
+          # What a job builds is in these scripts; when they change, the
+          # cache is saved anew instead of restoring one without it forever.
+          key: ${{ hashFiles('scripts/check.py', 'scripts/build-xcframework.sh') }}
       # The shaping regression measures actual CJK glyph advances.
       - name: Install fonts for terminal shaping tests
         run: |
@@ -77,6 +81,9 @@ jobs:
         run: python3 -m pip install -r scripts/check-requirements.txt
       - uses: Swatinem/rust-cache@v2
         with:
+          # What a job builds is in these scripts; when they change, the
+          # cache is saved anew instead of restoring one without it forever.
+          key: ${{ hashFiles('scripts/check.py', 'scripts/build-xcframework.sh') }}
           cache-on-failure: true
       # Swift and Xcode rebuilt everything from nothing on every run: most of
       # this job's time. The last run's build directories are restored and
@@ -107,7 +114,8 @@ jobs:
   fuzz:
     name: fuzz
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The night's pass is ten minutes for each of five targets.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       # `cargo-fuzz` needs nightly and a sanitizer; `fuzz/` is its own workspace.
@@ -127,6 +135,9 @@ jobs:
           python-version: '3.12'
       - uses: Swatinem/rust-cache@v2
         with:
+          # What a job builds is in these scripts; when they change, the
+          # cache is saved anew instead of restoring one without it forever.
+          key: ${{ hashFiles('scripts/check.py', 'scripts/build-xcframework.sh') }}
           workspaces: ". -> target\nfuzz -> target"
       - name: Check
         env:

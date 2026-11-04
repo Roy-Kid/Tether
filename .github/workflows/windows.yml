@@ -24,6 +24,10 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # What a job builds is in these scripts; when they change, the
+          # cache is saved anew instead of restoring one without it forever.
+          key: ${{ hashFiles('scripts/check.py', 'scripts/build-xcframework.sh') }}
       - name: Restore the C# binding generator
         id: bindgen
         uses: actions/cache@v4
