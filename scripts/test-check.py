@@ -15,6 +15,90 @@ spec = importlib.util.spec_from_file_location("gate", ROOT / "scripts/check.py")
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 
+spec = importlib.util.spec_from_file_location("bindgen", ROOT / "scripts/ensure-bindgen.py")
+bindgen = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bindgen)
+
+
+class BindgenTests(unittest.TestCase):
+    def probe(self, version):
+        return subprocess.CompletedProcess([], 0, f"uniffi-bindgen {version}\n", "")
+
+    def test_correct_version_skips_cargo_on_both_platforms(self):
+        for platform, executable in (("darwin", "/tools/uniffi-bindgen-cs"),
+                                     ("win32", r"C:\tools\uniffi-bindgen-cs.exe")):
+            with self.subTest(platform=platform), patch.object(bindgen.sys, "platform", platform), \
+                    patch.object(bindgen.shutil, "which", return_value=executable) as which, \
+                    patch.object(bindgen.subprocess, "run", return_value=self.probe(bindgen.VERSION)) as run:
+                bindgen.ensure_bindgen()
+                which.assert_called_once_with("uniffi-bindgen-cs.exe" if platform == "win32" else "uniffi-bindgen-cs")
+                run.assert_called_once_with([executable, "--version"], check=True, capture_output=True, text=True)
+
+    def test_missing_installs_without_force_and_wrong_version_replaces_on_both_platforms(self):
+        for platform, executable in (("darwin", "/tools/uniffi-bindgen-cs"),
+                                     ("win32", r"C:\tools\uniffi-bindgen-cs.exe")):
+            for version in (None, "0.10.0+v0.30.0", "0.11.0+v0.30.0"):
+                missing = version is None
+                with self.subTest(platform=platform, version=version), \
+                        patch.object(bindgen.sys, "platform", platform), \
+                        patch.object(bindgen.shutil, "which", side_effect=[None if missing else executable, executable]), \
+                        patch.object(bindgen.subprocess, "run") as run:
+                    installed = subprocess.CompletedProcess([], 0)
+                    run.side_effect = ([installed] if missing else [self.probe(version), installed]) + [self.probe(bindgen.VERSION)]
+                    bindgen.ensure_bindgen()
+                    commands = [call.args[0] for call in run.call_args_list]
+                    install = ["cargo", "install", "--locked", "uniffi-bindgen-cs", "--git",
+                               "https://github.com/NordSecurity/uniffi-bindgen-cs", "--tag", "v0.11.0+v0.31.0"]
+                    if not missing:
+                        install.append("--force")
+                    self.assertEqual(commands, ([] if missing else [[executable, "--version"]]) +
+                                     [install, [executable, "--version"]])
+                    self.assertEqual(run.call_args_list[-2].kwargs, {"check": True})
+
+    def test_unrecognized_output_fails_without_installing(self):
+        for output in ("", "uniffi-bindgen v0.11.0+v0.31.0\n", "uniffi-bindgen-cs 0.11.0+v0.31.0\n",
+                       "other-tool 0.11.0+v0.31.0\n", "uniffi-bindgen 0.11.0+v0.31.0\nextra\n"):
+            with self.subTest(output=output), patch.object(bindgen.shutil, "which", return_value="bindgen"), \
+                    patch.object(bindgen.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output, "")) as run:
+                with self.assertRaisesRegex(RuntimeError, "Cannot identify"):
+                    bindgen.ensure_bindgen()
+                run.assert_called_once()
+
+    def test_failed_probe_fails_without_installing(self):
+        for error in (subprocess.CalledProcessError(2, ["bindgen", "--version"], stderr="probe failed"),
+                      PermissionError("not executable"), FileNotFoundError("disappeared")):
+            with self.subTest(error=error), patch.object(bindgen.shutil, "which", return_value="bindgen"), \
+                    patch.object(bindgen.subprocess, "run", side_effect=error) as run:
+                with self.assertRaises(type(error)):
+                    bindgen.ensure_bindgen()
+                run.assert_called_once()
+
+    def test_install_failure_propagates_exit_status(self):
+        for version in (None, "0.10.0+v0.30.0"):
+            with self.subTest(version=version), patch.object(bindgen, "installed_version", return_value=version) as probe, \
+                    patch.object(bindgen.subprocess, "run", side_effect=subprocess.CalledProcessError(17, ["cargo", "install"])) as run, \
+                    patch.object(bindgen.sys, "stderr"):
+                self.assertEqual(bindgen.main(), 17)
+                run.assert_called_once()
+                probe.assert_called_once()
+
+    def test_install_must_leave_the_expected_version_on_path(self):
+        for actual in (None, "0.10.0+v0.30.0"):
+            with self.subTest(actual=actual), patch.object(bindgen, "installed_version", side_effect=[None, actual]), \
+                    patch.object(bindgen.subprocess, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "after installation"):
+                    bindgen.ensure_bindgen()
+                run.assert_called_once()
+
+    def test_ci_always_checks_bindgen_even_on_cache_hit(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
+        for job, python in (("apple", "python3"), ("windows", "python")):
+            steps = [step for step in jobs[job]["steps"] if "ensure-bindgen.py" in step.get("run", "")]
+            self.assertEqual(len(steps), 1, job)
+            self.assertEqual(steps[0]["run"], f"{python} scripts/ensure-bindgen.py")
+            self.assertNotIn("if", steps[0])
+
 
 
 class GateTests(unittest.TestCase):
@@ -165,6 +249,8 @@ class GateTests(unittest.TestCase):
                     found = re.fullmatch(r"python3? scripts/check\.py --job ([\w-]+)", command)
                     if found:
                         checks.append(found.group(1))
+                    elif command in ("python3 scripts/ensure-bindgen.py", "python scripts/ensure-bindgen.py"):
+                        pass
                     else:
                         self.assertRegex(command, f"^{setup.pattern}", f"{path.name} {name} runs outside the gate")
                 self.assertEqual(checks, [name], f"{path.name} {name}")
