@@ -1,193 +1,80 @@
 # Tether UI contract
 
-Native platform controls and system materials are the visual authority.
-Windows Terminal, OTTY (otty.sh), and Ely GPUI Components inform hierarchy and
-interaction; their custom rendering does not replace SwiftUI/AppKit or WinUI.
-macOS remains the operation reference: a new tab uses the startup profile,
-closing a background tab keeps the selection, the last tab closes the window,
-the host chooser stays in the status bar, settings stay a separate window, and
-files stay the current tab's inspector. Do not add a profile dropdown, tab drag,
-tear-off, or in-tab settings. The Mac selected-tab underline and the 12-unit
-canvas inset are not Windows chrome. Use native tabs, integrated caption
-buttons, and a visible new-tab button that opens the startup profile.
+Cross-platform rules that the token sources do not already state. This file
+does not restate their numbers. A figure here that disagrees with a source
+below is stale.
 
-Settings / Appearance / Application theme offers Use system theme, Dark and Light.
-The choice persists and applies immediately to all windows and existing/new
-terminal sessions. Chrome uses native theme resources; terminal rendering and
-terminal color-query responses use the same existing dark/light palette. Old
-settings files default to system appearance without losing their shell choice.
-Compilation and settings round-trip checks passed; interactive checks are left
-to the user, as requested.
+External terminal apps inform hierarchy and interaction. They do not supply
+tokens, and their rendering does not replace SwiftUI, AppKit or WinUI.
 
-Startup and every new tab open the selected local profile. Settings now exposes
-Startup / Default profile: PowerShell (7 when installed, Windows PowerShell
-fallback), Windows PowerShell, Command Prompt (cmd), and WSL (default distribution).
-Resolve executable paths before starting a session. Selection changes affect new
-tabs; existing sessions continue unchanged. The old OpenLocalOnStart flag is retired.
+## Authority
 
-Native TabCloseRequested handles middle-click, the close button and Ctrl+F4;
-Ctrl+W uses the same close path. Closing a background tab preserves selection;
-closing the last tab closes the window. Actual smoke tests started all four shells,
-received terminal output and disposed them. Workspace regression checks passed for
-background, selected and final-tab closing. Build passed without warnings.
-
-The product is a quiet terminal workspace: compact navigation, dominant content,
-and low-emphasis connection context. Shared roles and composition take precedence
-over equal pixels. This contract is intentionally limited to evidence in the current app.
-
-## Evidence and authority
-
-Read the actual implementation: `app/Packages/TetherFrontend/Sources/TetherUI/Chrome.swift`
-(Theme, UIStyle, ChromeButtonStyle), `app/Sources/TetherApp/Design.swift`,
-`WorkspaceChrome.swift`, `WorkspaceView.swift`, `Sidebar.swift`, `HostEditor.swift`,
-`Palettes.swift`, `SessionView.swift`, `TetherApp.swift`, and the Tmux picker.
-`InterfacePreviews.swift` supplies the offline twenty-tab state.
-The app icon asset is blue/orange artwork; it does not establish UI accent colors.
-The SVGs in `design/compact-zen/final` are generated illustrations, not current Mac
-captures: their literal palette and connected-status prose conflict with current code.
-They are not token authority. Previous migration/spec/harness notes were not used.
-
-## Shared product rules
-
-| Role | Contract / evidence |
+| What | Where |
 | --- | --- |
-| Spacing | 2 tight, 4 small, 6 inline, 8 group, 12 inset, 16 section. Use the role, not a nearby arbitrary number. |
-| Text | Compact title 12, supporting detail 11, semibold group header 10, input 13 on desktop. Platform UI font; terminal metrics are independent. |
-| Surfaces | Window, chrome/sidebar, raised panel/selection, terminal canvas. Subtle separators, primary and secondary text. Resolve roles through platform appearance and contrast settings. |
-| Color meaning | Accent = selection/action; success = connected; warning/danger = exceptional status. Never use accent to mean connected. No branding hex palette is evidenced for chrome. |
-| Shapes | Row radius 4, floating-panel radius 10. One-unit separators; two-unit selected-tab accent rule. No rounded card around the terminal. |
-| Widths | Tab title cap 180; host picker 280; chooser list maximum height 280. Other evidenced concepts: command panel 420, tree 260; implement only when used. |
-| States | Selection is distinct from keyboard focus. Mac custom controls use accent opacity .12 selected, .06 hover, .18 pressed, .45 disabled. These express emphasis, not mandatory Windows compositing formulas. |
+| Window chrome law (icon-only, compact strip, alerts) | `.claude/notes/law.md`, `app-ui-chrome` |
+| Mac workspace shape | `design/compact-zen/final/SPEC.md` |
+| Apple colour, type, spacing, radii, state opacities | `Theme` and `UIStyle` in `app/Packages/TetherFrontend/Sources/TetherUI/Chrome.swift` |
+| Apple window metrics | `Chrome` in `app/Sources/TetherApp/Design.swift` |
+| Windows roles | `app-win/Design.xaml` |
+| Windows caption and status composition | `app-win/MainWindow.xaml` |
+| Release check sizes | `docs/ui-calibration.md` |
 
-Tabs represent named workspaces, with a primary title, optional secondary context,
-reserved close affordance and visible selection. Overflow scrolls and selected tabs
-remain reachable. Terminal tabs do not need a decorative terminal icon on every tab.
-The quick host chooser uses a single-line name with secondary context in a tooltip; host management uses name/address rows. Search precedes results. Native
-keyboard activation and dismissal must work. Connection status is quiet when healthy;
-exceptions need text or an accessible label, not color alone.
+Those check sizes are calibration frames. The window minimum is
+`Chrome.windowMinWidth` and `Chrome.windowMinHeight`.
 
-The primary desktop composition is tabs / flexible canvas / host status. Mac uses a
-12-unit canvas inset; the Windows canvas is flush with the window, and the selected
-tab uses the terminal background so the two read as one surface. Mac uses 36-unit tabs and a 24-unit status bar, minimum 860×520,
-default 1100×700. The host control leads; settings trails. A permanent host sidebar
-is not the current Mac workspace composition. Inspectors are optional secondary
-content (Mac 240–360, ideal 280); zen hides auxiliary chrome. Neither is implemented
-by this foundation task.
+`design/compact-zen/final/*.svg` are illustrations. Their palette and
+status prose are not tokens. The app icon is not the accent colour.
 
-## Windows adaptation
+Use the named role. A nearby literal is not a new token.
 
-Use native window caption, snap/resize behavior, Segoe UI, focus visuals, TabView
-keyboard selection/overflow/close controls, Flyout light dismissal, ListView and
-TextBox behavior, dialogs and system scrollbars. Never copy traffic-light offsets,
-AppKit titlebar hooks, SF Symbols or menu-bar conventions. Keep existing Ctrl+N/W.
+## Kept apart on purpose
 
-WinUI resources in `app-win/Design.xaml` supply the implemented roles. Native
-TabView templates retain their state machinery. The selected tab fill is the
-terminal canvas brush, and unselected tabs stay transparent on the caption strip.
-Status controls have 32-unit minimum height (33 including separator), rather than squeezing Windows controls into 24.
-Rows may grow with text scaling; fixed pixel matching is not the acceptance test.
-The terminal palette remains independent from chrome appearance.
+macOS puts a new tab, a split, zoom and Zen in the menu bar and the command
+menu. Windows uses the native caption and `TabView`, including that control's
+add button. Windows does not copy traffic-light offsets, AppKit titlebar
+hooks, SF Symbols or a menu bar. Rows may grow with text scaling. Matching a
+Mac pixel is not the acceptance test.
 
-Only resources and existing native controls are shared. No component registry,
-parallel token manifest, generated contract, or framework is needed. Unused tree,
-inspector, panel and host-tile concepts are deliberately not implemented yet.
+Mac selection is the accent wash (`UIStyle.selectionOpacity`). A split pane's
+tab also draws `UIStyle.Mark.rule` along its bottom edge. Windows selected
+tabs use `TerminalCanvasBrush`; unselected tabs stay transparent. That rule
+is not a Windows control.
 
-## Inconsistencies and boundaries
+Terminal inset belongs to the platform that draws it:
+`TerminalSurface.defaultInset` on Apple, `TerminalInset` in `Design.xaml` on
+Windows.
 
-- Mac host search uses 12-point title text while UIStyle input is 13; Windows uses
-  the explicit input role. Its isolated vertical padding of 5 is not a new token.
-- Host management uses body/caption text and a 30×34 tile; compact choosers use
-  smaller roles. Do not collapse these different contexts into one universal row.
-- Theme comments describe a recessed terminal, but actual colors are dynamic OS
-  roles and terminal appearance is independently configurable. Do not canonize a
-  specific luminance order for every appearance.
-- Windows Add/Manage host buttons previously had empty handlers; this task removes
-  these misleading actions, without implementing editing or changing SSH behavior.
-- Windows session status is read from its existing model. It does not expose every
-  Mac connection stage or a complete status-change notification; live transition
-  parity requires a separate model/UI integration decision, not cosmetic inference.
-- Native tab curvature and caption height are intentional. Final density judgment,
-  icon treatment for empty states, and visual parity need current Mac captures.
+Host search uses `UIStyle.title`. The command field uses `UIStyle.input`.
+Host management rows use `UIStyle.Mark.tileWidth` and `tileHeight`. Compact
+choosers stay on the compact roles. These rows stay separate.
 
-## Validation
+Accent means selection or an action. Connected uses the success role.
+Warning and danger are exceptional status. Selection is separate from
+keyboard focus. The opacities are the named `UIStyle` values.
 
-Build with Visual Studio MSBuild, `app-win/TetherApp.Windows.csproj /p:Platform=x64`.
-Both Visual Studio MSBuild and `dotnet build app-win/TetherApp.Windows.csproj -p:Platform=x64 --no-restore` pass. No SDK or business-logic changes were made.
+The terminal is not wrapped in a rounded card. A dragged Mac tab reorders
+or splits (`TabDrag`); it does not tear off a window. The Windows `TabView`
+does not drag or reorder tabs. The tab strip has no profile menu. Settings
+stay a separate window, and the Default profile picker stays there.
 
-Debug executable accepts `--ui-preview` (dark) and `--ui-preview --light`. This uses
-the real workspace XAML and native tabs, twenty deterministic labels including a
-long final title, disconnected host context, and an empty canvas. It does not load
-settings, open terminals, access SSH config or credentials. Client size is 860×520
-DIPs after display scaling. Host chooser uses three offline sample hosts and supports filtering to an empty result; settings
-and session close actions are inert. Choosing a preview host only changes its displayed label. This is a layout fixture, not a simulated session.
+Chrome colours are the platform's semantic colours. Appearance does not
+freeze one luminance order. The terminal palette is independent of chrome
+appearance.
 
-Windows light/dark appearance, selected-tab accent treatment, and host flyout search focus were inspected. Selected-tab reveal now waits for the next render/layout boundary and runs again when the strip resizes, using native ListView.ScrollIntoView. The twenty-tab fixture confirmed the horizontal offset moves from zero to approximately 1503 DIPs. Final screenshot confirmation of overflow remains pending; runtime scroll behavior was verified.
+Frosted Glass and the shared backdrop are `WorkspaceAppearance` and
+`WorkspaceBackdrop` in `Design.swift`. An opaque clear, and glyph edges on
+a transparent background, are the terminal render tests. On Windows the
+workspace backdrop is the main window's Mica Alt, and the host chooser uses
+`DesktopAcrylicBackdrop`. The terminal canvas brush stays the opaque palette
+colour. WinUI owns focus, contrast, disabled transparency and power-saving
+fallbacks.
 
-Current Mac captures are unavailable (confirmed by the user). Windows captures can
-therefore validate implementation behavior and source-derived composition only;
-a controlled cross-platform visual comparison remains pending. For that comparison,
-capture the Mac twenty-tab preview at 860×520 in both appearances, with the same
-selection and text scale. Compare content bounds, text roles, density and selection,
-excluding native caption and glyph rasterization. The Mac preview omits the status
-bar and canvas inset; those must be compared against RootView/HostStatusBar separately.
+## Fixture
 
-Next: obtain those Mac captures and review this workspace before applying the same
-resources to one host chooser/editor flow. Keep full terminal lifecycle, plugins,
-settings redesign, zen and inspectors outside that step unless explicitly scoped.
+`--ui-preview` and `--ui-preview --light`, in `app-win/MainWindow.Preview.cs`,
+show the real workspace XAML in the same offline twenty-tab state as
+`InterfacePreviews.swift`. The fixture loads no settings, terminals, SSH
+config or credentials.
 
-Host chooser copy follows WorkspaceChrome.swift: `Find a host…` and `No matching hosts.` (including an empty host collection). The 280-DIP width includes panel padding. Search supports Up/Down selection and Enter activation; Escape remains native Flyout behavior. Build passed; keyboard interaction still needs manual verification.
-
-## Native material refinement · 2026-10
-
-The comparison found three immediate gaps: opaque navigation surfaces hiding
-system materials, floating panels drawing their own rim and shadow over the
-material, and weak distinction between selected, hovered and inactive controls.
-OTTY's [window and split documentation](https://docs.otty.sh/user-interface/window-tab-split)
-and [native screenshots](https://otty.sh/) emphasize the separation of navigation
-and terminal content. The [Ely terminal gallery](https://elygpui.com/components/terminal/terminal-terminaltabs-terminalsplit-terminaltoolbar-shellselector-terminalsearch-terminallink/)
-is a reference for component consistency, spacing and restrained state colors.
-
-On Apple platforms, system appearance remains the default. Appearance chooses
-System, Light or Dark; Theme chooses Soft, Classic or (on Mac) Frosted Glass.
-The existing terminalColorStyle preference retains Soft/Classic selections.
-Frosted Glass uses the Classic palette and exposes a 50–100% Background Opacity
-slider, initially 60%. Changes apply immediately and persist across launches.
-
-Opaque themes use Theme.window and an opaque native window. Frosted Glass uses
-one NSGlassEffectView behind the entire workspace. Titlebar, status bar,
-terminal padding and inspectors expose this common backdrop. The terminal palette's background
-tint is applied once at the root; glass regions never add their own palette tint.
-Using windowBackgroundColor here turns the whole terminal gray, so the shared
-glass tint must come from the same palette that supplies terminal color replies. Native lists
-hide their solid content backgrounds in glass mode. Only default terminal
-backgrounds become transparent: glyphs, ANSI colors and explicit RGB cell
-backgrounds keep their original colors. Reverse-video glyphs remain opaque. Transparent render clears use premultiplied
-RGB so the compositor cannot add a gray or colored wash.
-The renderer prefers an unorm attachment containing sRGB bytes and glyphon's
-Web color mode, matching the native compositor's premultiplied sRGB contract.
-Antialiased text is tested with transparent backgrounds; checking only solid
-color blocks cannot detect bright fringes from incorrect gamma/alpha handling.
-The rendering palette and remote color-query responses share the same RGB
-values; background alpha is presentation only. Reduce Transparency or Increased
-Contrast restores opaque backgrounds without discarding the selected theme.
-Transient controls and overlays retain their existing native materials.
-
-Windows uses Mica Alt for the tabbed main window. The sidebar/status background
-uses the system's translucent commanding-layer color instead of an opaque fill.
-Settings titlebar backgrounds are transparent so the existing Mica backdrop can
-show. The transient host chooser uses DesktopAcrylicBackdrop. WinUI owns focus,
-contrast, disabled-transparency and power-saving fallbacks; see
-[Microsoft's Mica guidance](https://learn.microsoft.com/en-us/windows/apps/design/style/mica).
-The terminal canvas stays opaque for legibility. No backdrop effect is simulated
-with blur images or a second renderer.
-
-Validation: native Mac dark/light checks, app and frontend tests, and iOS
-simulator compilation. Windows API availability and XAML structure were checked
-against the declared WinUI SDK; Windows compilation and visual verification must
-run on a Windows host.
-
-The host chooser and tab selection use the existing ChromeButtonStyle roles:
-quiet borderless host button, accent selection wash and the shared row radius.
-Tabs do not draw a separate opaque rounded panel over the window material.
-Frosted Glass preserves Classic ANSI colors. Soft is an explicit palette choice;
-window translucency must not silently substitute desaturated terminal colors.
+Host-chooser placeholder and empty copy are the strings in
+`WorkspaceChrome.swift` and `MainWindow.xaml.cs`.
