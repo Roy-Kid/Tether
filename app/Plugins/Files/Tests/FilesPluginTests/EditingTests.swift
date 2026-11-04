@@ -270,7 +270,9 @@ struct EditingTests {
     for _ in 0..<200 where source.writeBacks.count < 1 { try await Task.sleep(for: .milliseconds(10)) }
     #expect(source.writeBacks.map(\.contents) == ["one"])
     try Data("two".utf8).write(to: url, options: .atomic)
-    for _ in 0..<200 where source.writeBacks.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    for _ in 0..<200 where source.writeBacks.count < 2 || model.editing.states[Self.notes] != .synced {
+      try await Task.sleep(for: .milliseconds(10))
+    }
     #expect(source.writeBacks.map(\.contents) == ["one", "two"])
     #expect(model.editing.states[Self.notes] == .synced)
   }
@@ -287,7 +289,9 @@ struct EditingTests {
     let url = try #require(opened.urls.first)
     let original = try node(url)
     source.revise(Self.notes, "from the server")
-    for _ in 0..<200 where (try? text(url)) != "from the server" {
+    // The bytes land off the main actor; the state follows once it is back.
+    for _ in 0..<200
+    where (try? text(url)) != "from the server" || model.editing.states[Self.notes] != .synced {
       try await Task.sleep(for: .milliseconds(10))
     }
     #expect(try text(url) == "from the server")
@@ -297,7 +301,9 @@ struct EditingTests {
     #expect(source.writeBacks.isEmpty, "bringing the far side in is not an edit")
 
     try save("and mine", to: url)
-    for _ in 0..<200 where source.writeBacks.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    for _ in 0..<200 where source.writeBacks.isEmpty || model.editing.states[Self.notes] != .synced {
+      try await Task.sleep(for: .milliseconds(10))
+    }
     #expect(source.writeBacks.map(\.contents) == ["and mine"])
     #expect(model.editing.states[Self.notes] == .synced)
   }
