@@ -241,6 +241,9 @@ final class TabSet {
 
   /// Move an existing terminal to one side of another. Same host only.
   /// The session stays; only the layout changes. Dropping a tab on itself does nothing.
+  ///
+  /// This is the merge: a tab dropped on another tab's terminal becomes one
+  /// split. Reordering the strip is [`reorder`], and it leaves the pages apart.
   @discardableResult
   func place(_ dragged: UUID, beside target: UUID, edge: SplitDirection) -> Bool {
     guard dragged != target,
@@ -274,6 +277,62 @@ final class TabSet {
     }
     workspaces[page].layout = rooted.replacing(target, with: panes)
     workspaces[page].focused = dragged
+    select(dragged)
+    persistHistory()
+    return true
+  }
+
+  /// Move `dragged` to sit beside `target` in the strip. Same host only.
+  ///
+  /// Pages stay pages. A terminal dragged out of a split becomes a page of
+  /// its own at the new place; one dragged within its page only changes
+  /// that page's chip order. Merging into a split is [`place`].
+  @discardableResult
+  func reorder(_ dragged: UUID, beside target: UUID, before: Bool) -> Bool {
+    guard dragged != target,
+      let moving = tabs.first(where: { $0.id == dragged }),
+      let staying = tabs.first(where: { $0.id == target }),
+      moving.host.id == staying.host.id,
+      let source = workspaces.firstIndex(where: { $0.terminalIDs.contains(dragged) }),
+      workspaces.contains(where: { $0.terminalIDs.contains(target) })
+    else { return false }
+
+    if workspaces[source].terminalIDs.contains(target) {
+      var ids = workspaces[source].terminalIDs
+      ids.removeAll { $0 == dragged }
+      guard let at = ids.firstIndex(of: target) else { return false }
+      ids.insert(dragged, at: before ? at : at + 1)
+      guard ids != workspaces[source].terminalIDs else { return false }
+      workspaces[source].terminalIDs = ids
+      workspaces[source].focused = dragged
+      select(dragged)
+      persistHistory()
+      return true
+    }
+
+    let carried: TerminalWorkspace
+    if workspaces[source].terminalIDs.count == 1 {
+      carried = workspaces.remove(at: source)
+    } else {
+      let host = workspaces[source].host
+      workspaces[source].terminalIDs.removeAll { $0 == dragged }
+      let remaining = workspaces[source].layout?.removing(dragged)
+      workspaces[source].layout = (remaining?.ids.count ?? 0) > 1 ? remaining : nil
+      if workspaces[source].focused == dragged {
+        workspaces[source].focused = remaining?.ids.first ?? workspaces[source].terminalIDs[0]
+      }
+      carried = TerminalWorkspace(
+        id: UUID(), host: host, name: "Tab \(visibleWorkspaces.count + 1)",
+        terminalIDs: [dragged], focused: dragged)
+    }
+
+    guard let targetIndex = workspaces.firstIndex(where: { $0.terminalIDs.contains(target) }) else {
+      workspaces.append(carried)
+      select(dragged)
+      persistHistory()
+      return true
+    }
+    workspaces.insert(carried, at: min(before ? targetIndex : targetIndex + 1, workspaces.count))
     select(dragged)
     persistHistory()
     return true

@@ -25,9 +25,12 @@ struct GridSelectionTests {
     let selection = try #require(GridText.covering(link))
     #expect(selection.start == point(0, 0))
     #expect(selection.end == point(2, 4))
-    let whole = GridText.string(in: frame, selection: selection) { _ in true }
+    #expect(GridText.spans(selection, in: frame) == link.spans)
+    #expect(GridText.string(in: frame, selection: selection) == "/home/ada/sessions/%2Fwork/plot-1.png")
+    let rectangular = GridSelection(anchor: selection.anchor, head: selection.head)
+    let whole = GridText.string(in: frame, selection: rectangular) { _ in true }
     #expect(whole == "/home/ada/sessions/%2Fwork/plot-1.png")
-    let broken = GridText.string(in: frame, selection: selection)
+    let broken = GridText.string(in: frame, selection: rectangular)
     #expect(broken == "/home/ada/sessions/\n%2Fwork/plot-\n1.png")
   }
 

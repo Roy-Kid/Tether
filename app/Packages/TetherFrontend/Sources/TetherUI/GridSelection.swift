@@ -34,6 +34,10 @@ struct GridPoint: Equatable, Hashable, Sendable {
 struct GridSelection: Equatable, Sendable {
   var anchor: GridPoint
   var head: GridPoint
+  /// Set when this is one link. A rectangle from `anchor` to `head` would
+  /// take the rest of each row; a wrapped path is only its own spans, and
+  /// those rows are one path.
+  var spans: [LinkSpan]? = nil
 
   var start: GridPoint { head.isBefore(anchor) ? head : anchor }
   var end: GridPoint { head.isBefore(anchor) ? anchor : head }
@@ -75,6 +79,17 @@ enum GridText {
   static func string(
     in frame: ScreenFrame, selection: GridSelection, continuing: (Int) -> Bool = { _ in false }
   ) -> String {
+    if let spans = selection.spans, !spans.isEmpty {
+      var text = ""
+      for span in spans {
+        let row = Int(span.row)
+        guard frame.lines.indices.contains(row), span.end > span.start else { continue }
+        let through = Int(span.end) - 1
+        guard through >= Int(span.start) else { continue }
+        text += slice(frame.lines[row], from: Int(span.start), through: through)
+      }
+      return text
+    }
     let columns = Int(frame.columns)
     guard columns > 0 else { return "" }
     let start = selection.start
@@ -101,13 +116,15 @@ enum GridText {
     guard head >= 0 else { return nil }
     return GridSelection(
       anchor: GridPoint(row: Int(first.row), column: Int(first.start)),
-      head: GridPoint(row: Int(last.row), column: head))
+      head: GridPoint(row: Int(last.row), column: head),
+      spans: link.spans)
   }
 
   /// One rectangle per row, in the same spans a link uses: `end` is one past
   /// the last column. A wide character is covered whole when any of its
   /// columns is, so the highlight matches the text that is copied.
   static func spans(_ selection: GridSelection, in frame: ScreenFrame) -> [LinkSpan] {
+    if let spans = selection.spans, !spans.isEmpty { return spans }
     let columns = Int(frame.columns)
     let rows = Int(frame.rows)
     guard columns > 0, rows > 0 else { return [] }

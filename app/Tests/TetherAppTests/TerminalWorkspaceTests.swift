@@ -113,6 +113,80 @@ struct TerminalWorkspaceTests {
     for id in archived.historyIDs { #expect(FileManager.default.fileExists(atPath: store.location(id).path)) }
   }
 
+  @Test("dragging a tab reorders the strip and leaves each page its own")
+  func reorderDoesNotMerge() throws {
+    let tabs = TabSet()
+    let a = shell("a"), b = shell("b"), c = shell("c")
+    tabs.adopt(a)
+    tabs.adopt(b)
+    tabs.adopt(c)
+    let ids = tabs.workspaces.map(\.id)
+    #expect(tabs.reorder(c.id, beside: a.id, before: true))
+    #expect(tabs.workspaces.map(\.terminalIDs) == [[c.id], [a.id], [b.id]])
+    #expect(tabs.workspaces.map(\.id) == [ids[2], ids[0], ids[1]])
+    #expect(tabs.workspaces.allSatisfy { $0.layout == nil && $0.terminalIDs.count == 1 })
+    #expect(tabs.selected == c.id)
+    #expect(!tabs.reorder(c.id, beside: c.id, before: false))
+  }
+
+  @Test("dragging inside a split only reorders that page's chips")
+  func reorderInsideSplit() throws {
+    let tabs = TabSet()
+    let a = shell("a"), b = shell("b"), c = shell("c")
+    tabs.adopt(a)
+    tabs.split(b, beside: a.id, direction: .right)
+    let page = try #require(tabs.workspace(containing: a.id))
+    tabs.adopt(c)
+    #expect(tabs.reorder(b.id, beside: a.id, before: true))
+    let split = try #require(tabs.workspace(containing: a.id))
+    #expect(split.id == page.id)
+    #expect(split.terminalIDs == [b.id, a.id])
+    #expect(split.layout == page.layout)
+    #expect(tabs.workspaces.map(\.terminalIDs) == [[b.id, a.id], [c.id]])
+  }
+
+  @Test("dragging one pane out of a split makes its own page")
+  func reorderExtractsPane() throws {
+    let tabs = TabSet()
+    let a = shell("a"), b = shell("b"), c = shell("c")
+    tabs.adopt(a)
+    tabs.split(b, beside: a.id, direction: .right)
+    let page = try #require(tabs.workspace(containing: a.id)?.id)
+    tabs.adopt(c)
+    #expect(tabs.reorder(b.id, beside: c.id, before: true))
+    #expect(tabs.workspaces.map(\.terminalIDs) == [[a.id], [b.id], [c.id]])
+    #expect(tabs.workspaces.map(\.id)[0] == page)
+    #expect(tabs.workspace(containing: a.id)?.layout == nil)
+    #expect(tabs.workspace(containing: a.id)?.focused == a.id)
+    #expect(tabs.workspace(containing: b.id)?.id != tabs.workspace(containing: c.id)?.id)
+    #expect(tabs.selected == b.id)
+  }
+
+  @Test("a tab from another host stays where it is")
+  func reorderHostBoundary() {
+    let tabs = TabSet()
+    tabs.adopt(shell("local"))
+    let local = tabs.tabs[0].id
+    let remote = Host(label: "remote", hostname: "example.invalid", port: 22, username: "test")
+    tabs.adopt(shell("remote", host: remote))
+    let remoteID = tabs.tabs[1].id
+    let before = tabs.workspaces.map(\.terminalIDs)
+    #expect(!tabs.reorder(remoteID, beside: local, before: true))
+    #expect(tabs.workspaces.map(\.terminalIDs) == before)
+  }
+
+  @Test("dropping a tab on a pane still merges the two")
+  func placeStillMerges() throws {
+    let tabs = TabSet()
+    let a = shell("a"), b = shell("b")
+    tabs.adopt(a)
+    tabs.adopt(b)
+    #expect(tabs.place(b.id, beside: a.id, edge: .right))
+    #expect(tabs.workspaces.count == 1)
+    #expect(tabs.workspaces[0].terminalIDs == [a.id, b.id])
+    #expect(tabs.workspaces[0].layout == .split(.right, .tab(a.id), .tab(b.id), 0.5))
+  }
+
   @Test("v1 history becomes a single-terminal page")
   func legacyHistory() throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

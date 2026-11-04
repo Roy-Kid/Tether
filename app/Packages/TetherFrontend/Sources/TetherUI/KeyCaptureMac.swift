@@ -368,15 +368,9 @@ final class KeyCaptureView: NSView, @MainActor NSTextInputClient {
     if event.clickCount >= 3 {
       begin(.line, at: point)
     } else if event.clickCount == 2 {
-      if let link = link(at: event.locationInWindow), let covered = GridText.covering(link) {
-        dragKind = .character
-        dragAnchor = covered.start
-        dragHead = covered.end
-        dragArmed = true
-        onSelection(.highlight(.character, covered.start, covered.end))
-      } else {
-        begin(.word, at: point)
-      }
+      // A path broken over rows is one word. `resolved` reads the link and
+      // keeps its spans, which a rectangle of the rows would widen.
+      begin(.word, at: point)
     } else if event.modifierFlags.contains(.shift), let selection {
       dragKind = .character
       dragAnchor = selection.anchor

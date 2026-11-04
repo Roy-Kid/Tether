@@ -282,8 +282,15 @@ public struct TerminalSurface: View {
     guard row >= selection.start.row, next <= selection.end.row, next <= Int(UInt16.max) else {
       return false
     }
-    guard let link = links.find(UInt16(next), 0) else { return false }
-    return link.spans.contains { $0.row == UInt16(row) }
+    let probes = [0, selection.start.column, selection.end.column]
+    for column in probes where column >= 0 && column <= Int(UInt16.max) {
+      if let link = links.find(UInt16(next), UInt16(column)),
+        link.spans.contains(where: { $0.row == UInt16(row) })
+      {
+        return true
+      }
+    }
+    return false
   }
 
   private func link(at point: GridPoint) -> TerminalLink? {

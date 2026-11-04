@@ -479,8 +479,8 @@ impl Terminal {
     /// is a row that fills up to a vertical rule: a split writes the rest
     /// on the next row of that column range, with a newline, because the
     /// rule is not the edge of the screen. A path a program broke with a
-    /// newline in the middle of the name — after `-` or `%`, or into a
-    /// `%2F` — is one path too.
+    /// newline in the middle of the name — after `/`, `-`, `%`, `_`, or
+    /// into a `%2F`, indent on the next line included — is one path too.
     ///
     /// Shape, not truth. Whether a path exists is for whoever holds the
     /// connection to ask.
@@ -522,7 +522,14 @@ impl Terminal {
     fn mend_broken_path(&self, mut glyphs: Vec<Glyph>, mut hit: usize, mut found: Link) -> Link {
         while let Some(first) = found.spans.first().copied() {
             let left = self.span_left(Position::new(first.row, first.start));
-            if first.row == 0 || first.start != left {
+            // At the left edge, or indented with nothing but blanks before it.
+            // A word in front means this line did not continue the previous one.
+            let preceded = glyphs.iter().any(|glyph| {
+                glyph.row == first.row
+                    && glyph.column < first.start
+                    && !glyph.text.chars().all(char::is_whitespace)
+            });
+            if first.row == 0 || preceded {
                 break;
             }
             let previous = first.row - 1;
@@ -538,8 +545,20 @@ impl Terminal {
             while start > 0 && !link::breaks_token(&before[start - 1].text) {
                 start -= 1;
             }
-            if !link::continues(&before[end].text, glyph_text(&found, &glyphs, true)) {
+            if !link::continues(&before[end].text, &found.text) {
                 break;
+            }
+            // An indented remainder is still the path. The spaces are not,
+            // or they would split the token from what came above.
+            let indent = glyphs
+                .iter()
+                .take_while(|glyph| {
+                    glyph.row == first.row && glyph.text.chars().all(char::is_whitespace)
+                })
+                .count();
+            if indent > 0 {
+                glyphs.drain(..indent);
+                hit = hit.saturating_sub(indent);
             }
             let added = end - start + 1;
             if glyphs.len() + added > link::LINE_LIMIT {
@@ -573,17 +592,30 @@ impl Terminal {
             if more.first().map(|glyph| glyph.column) != Some(left) {
                 break;
             }
-            if !link::continues(glyph_text(&found, &glyphs, false), &more[0].text) {
+            let start = more
+                .iter()
+                .position(|glyph| !glyph.text.chars().all(char::is_whitespace))
+                .unwrap_or(more.len());
+            if start >= more.len() {
                 break;
             }
-            let end =
-                more.iter().position(|glyph| link::breaks_token(&glyph.text)).unwrap_or(more.len());
-            if end == 0 || glyphs.len() + end > link::LINE_LIMIT {
+            let end = start
+                + more[start..]
+                    .iter()
+                    .position(|glyph| link::breaks_token(&glyph.text))
+                    .unwrap_or(more.len() - start);
+            let next_token: String =
+                more[start..end].iter().map(|glyph| glyph.text.as_str()).collect();
+            if !link::continues(glyph_text(&found, &glyphs, false), &next_token) {
+                break;
+            }
+            let taken = end - start;
+            if taken == 0 || glyphs.len() + taken > link::LINE_LIMIT {
                 break;
             }
             let blank_after = more[end..].iter().all(|glyph| link::breaks_token(&glyph.text));
             pop_trailing_separators(&mut glyphs, hit);
-            glyphs.extend(more.into_iter().take(end));
+            glyphs.extend(more.into_iter().skip(start).take(taken));
             let Some(grown) = link::find(&glyphs, hit) else { break };
             if grown.spans.last().map(|span| (span.row, span.end)) <= Some((last.row, last.end)) {
                 break;

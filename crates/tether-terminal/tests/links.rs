@@ -132,6 +132,39 @@ fn a_path_broken_by_newlines_in_the_middle_of_the_name_is_one_path() {
 }
 
 #[test]
+fn a_path_broken_after_a_slash_is_one_path() {
+    let terminal = terminal(40, 4, "see /home/ada/runs/\r\nplot.png later\r\n");
+    let expected = "/home/ada/runs/plot.png".to_owned();
+    assert_eq!(path_at(&terminal, 0, 8).unwrap().0, expected);
+    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, expected);
+    assert_eq!(terminal.link_at(Position::new(1, 10)), None, "the word after it");
+}
+
+#[test]
+fn an_indented_remainder_after_a_slash_is_one_path() {
+    let terminal = terminal(40, 4, "/home/ada/runs/\r\n    plot.png\r\n");
+    let expected = "/home/ada/runs/plot.png".to_owned();
+    assert_eq!(path_at(&terminal, 0, 2).unwrap().0, expected);
+    assert_eq!(path_at(&terminal, 1, 6).unwrap().0, expected);
+    assert_eq!(terminal.link_at(Position::new(1, 1)), None, "the indent");
+}
+
+#[test]
+fn a_word_on_the_next_line_is_not_part_of_the_directory() {
+    let terminal = terminal(40, 4, "see /home/ada/runs/\r\nlater today\r\n");
+    assert_eq!(path_at(&terminal, 0, 8).unwrap().0, "/home/ada/runs/");
+    assert_eq!(terminal.link_at(Position::new(1, 1)), None, "later");
+}
+
+#[test]
+fn a_path_broken_after_an_underscore_is_one_path() {
+    let terminal = terminal(16, 4, "out /tmp/run_\r\n42/energy.dat\r\n");
+    let expected = "/tmp/run_42/energy.dat".to_owned();
+    assert_eq!(path_at(&terminal, 0, 6).unwrap().0, expected);
+    assert_eq!(path_at(&terminal, 1, 2).unwrap().0, expected);
+}
+
+#[test]
 fn a_line_that_merely_ends_at_the_edge_is_not_joined_to_the_next() {
     // Exactly twenty characters, then a newline: two lines, not one.
     let terminal = terminal(20, 4, "aaaaaaaaaa/bbbbbbbbb\r\nccc/ddd.txt\r\n");

@@ -111,14 +111,15 @@ struct WorkspaceTabBar: View {
               frames: anchors.reduce(into: [:]) { $0[$1.key] = proxy[$1.value] },
               closeable: Set([tabs.selected, hovering].compactMap { $0 }),
               closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
+              vertical: layout == .vertical,
               editing: inlineRenameID,
               onPrimary: { id in
                 if id == addTabID { tabs.perform(.newTab) }
                 else { tabs.handleTabClick(id) }
               },
               onClose: { if $0 != addTabID { onClose($0) } },
-              onPlace: { dragged, target, edge in
-                _ = tabs.place(dragged, beside: target, edge: edge)
+              onReorder: { dragged, target, before in
+                _ = tabs.reorder(dragged, beside: target, before: before)
               },
               makeMenu: { $0 == addTabID ? NSMenu() : tabMenu($0) })
               .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,22 +140,9 @@ struct WorkspaceTabBar: View {
     layout == .vertical ? Chrome.tabSidebarRow : Chrome.tab
   }
 
-  /// What sits in front of a terminal tab's name.
-  ///
-  /// A plugin's `tabSymbols` entry wins, then the attachment that is standing
-  /// in for the shell. Otherwise it is a terminal: the same mark for every
-  /// host, because a local shell is a host like any other.
+  /// What sits in front of a terminal tab's name. The split pane uses the same mark.
   private func symbol(for tab: SessionTab) -> String {
-    // A symbol lives on the plugin. Reading the epoch is what draws a new one.
-    _ = registry?.tabIndicatorEpoch
-    if tab.handoff, !tab.isLive { return "arrow.left.arrow.right" }
-    if let identity = tab.pluginTerminalIdentity,
-      let symbol = registry?.tabSymbol(for: identity), !symbol.isEmpty
-    {
-      return symbol
-    }
-    if let shown = tab.shown, !shown.symbol.isEmpty { return shown.symbol }
-    return "terminal"
+    terminalChipSymbol(for: tab, registry: registry)
   }
 
   /// The status circle for this terminal, or for a pane it is showing.
@@ -451,6 +439,68 @@ struct WorkspaceTabBar: View {
   #endif
 }
 
+/// The chip of a terminal that shares its window with another. The strip still
+/// lists every terminal; this row is that chip, drawn above the grid so the
+/// name and the selection rule are not covered by the surface that paints it.
+struct SplitPaneTab: View {
+  var title: String
+  var symbol: String
+  var indicator: PluginTabIndicator?
+  var disconnected: Bool
+  var selected: Bool
+  var onSelect: () -> Void
+
+  var body: some View {
+    let titleColor: Color = selected ? Theme.text : Theme.subtle
+    Button(action: onSelect) {
+      HStack(spacing: UIStyle.Space.inline) {
+        // One mark in front of the name. A live status dot takes the
+        // icon's place; the terminal glyph is not drawn beside it.
+        if let indicator, !disconnected {
+          StatusDot(color: indicator.color, label: indicator.label)
+        } else if disconnected {
+          Image(systemName: "bolt.slash.fill")
+            .font(UIStyle.symbol)
+            .foregroundStyle(Theme.warning)
+            .accessibilityHidden(true)
+        } else {
+          Image(systemName: symbol)
+            .font(UIStyle.symbol)
+            .foregroundStyle(titleColor)
+            .accessibilityHidden(true)
+        }
+        Text(title)
+          .font(UIStyle.title.weight(.medium))
+          .foregroundStyle(titleColor)
+          .lineLimit(1)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, UIStyle.Space.inset)
+      .frame(maxWidth: .infinity, minHeight: Chrome.tab, maxHeight: Chrome.tab, alignment: .leading)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(ChromeButtonStyle(hoverOpacity: 0))
+    .background {
+      ZStack {
+        WorkspaceMaterial()
+        Theme.accent.opacity(selected ? UIStyle.selectionOpacity : 0)
+      }
+    }
+    .overlay(alignment: .bottom) {
+      if selected {
+        Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
+      } else {
+        Divider()
+      }
+    }
+    .help([title, indicator?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+    .accessibilityLabel(title)
+    .accessibilityIdentifier("splitPaneTab")
+    .accessibilityValue(disconnected ? "Disconnected" : (indicator?.label ?? ""))
+    .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+}
+
 /// The accessory popover is attached only while this chip is the open tab.
 private struct TabAccessoryPopover<Popover: View>: ViewModifier {
   var presented: Bool
@@ -484,16 +534,68 @@ private struct TabFrameKey: PreferenceKey {
 /// titlebar, and is answered as one: it drags the window.
 enum TabDrag {
   static let type = NSPasteboard.PasteboardType("dev.tether.tab")
+
+  /// A chip reorders. Another tab's terminal splits. `x` and `y` are from
+  /// the target's top-left, so the top half is the smaller `y`.
+  enum Gesture: Equatable {
+    case reorder(before: Bool)
+    case split(SplitDirection)
+  }
+
+  /// Which side of a chip the pointer is on. A horizontal strip uses left
+  /// and right; a vertical strip uses top and bottom.
+  static func reorder(
+    x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, vertical: Bool
+  ) -> Gesture? {
+    guard width > 0, height > 0 else { return nil }
+    return .reorder(before: vertical ? y < height / 2 : x < width / 2)
+  }
+
+  /// Which side of a terminal the dragged tab takes. The whole pane is the
+  /// target: a wide one splits left and right, a tall one up and down.
+  static func split(x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) -> Gesture? {
+    guard let edge = SplitDirection.drop(x: x, y: y, width: width, height: height, band: nil)
+    else { return nil }
+    return .split(edge)
+  }
+
+  /// Where the mark is drawn, in the layer's own space. A reorder is a line
+  /// on the near side. A split fills the half the pointer is in.
+  static func mark(_ gesture: Gesture, in frame: CGRect, vertical: Bool) -> (rect: CGRect, opacity: Float) {
+    switch gesture {
+    case .reorder(let before):
+      let thickness: CGFloat = 2
+      let rect: CGRect = if vertical {
+        before
+          ? CGRect(x: frame.minX, y: frame.maxY - thickness, width: frame.width, height: thickness)
+          : CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: thickness)
+      } else {
+        before
+          ? CGRect(x: frame.minX, y: frame.minY, width: thickness, height: frame.height)
+          : CGRect(x: frame.maxX - thickness, y: frame.minY, width: thickness, height: frame.height)
+      }
+      return (rect, 1)
+    case .split(let edge):
+      let rect: CGRect = switch edge {
+      case .left: CGRect(x: frame.minX, y: frame.minY, width: frame.width / 2, height: frame.height)
+      case .right: CGRect(x: frame.midX, y: frame.minY, width: frame.width / 2, height: frame.height)
+      case .up: CGRect(x: frame.minX, y: frame.midY, width: frame.width, height: frame.height / 2)
+      case .down: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height / 2)
+      }
+      return (rect, 0.35)
+    }
+  }
 }
 
 private struct TabStripCatcher: NSViewRepresentable {
   var frames: [UUID: CGRect]
   var closeable: Set<UUID>
   var closeWidth: CGFloat
+  var vertical: Bool
   var editing: UUID?
   var onPrimary: (UUID) -> Void
   var onClose: (UUID) -> Void
-  var onPlace: (UUID, UUID, SplitDirection) -> Void
+  var onReorder: (UUID, UUID, Bool) -> Void
   var makeMenu: (UUID) -> NSMenu
 
   func makeNSView(context: Context) -> Catcher {
@@ -506,10 +608,11 @@ private struct TabStripCatcher: NSViewRepresentable {
     view.frames = frames
     view.closeable = closeable
     view.closeWidth = closeWidth
+    view.vertical = vertical
     view.editing = editing
     view.onPrimary = onPrimary
     view.onClose = onClose
-    view.onPlace = onPlace
+    view.onReorder = onReorder
     view.makeMenu = makeMenu
   }
 
@@ -517,14 +620,15 @@ private struct TabStripCatcher: NSViewRepresentable {
     var frames: [UUID: CGRect] = [:]
     var closeable: Set<UUID> = []
     var closeWidth: CGFloat = 18
+    var vertical = false
     var editing: UUID?
     var onPrimary: ((UUID) -> Void)?
     var onClose: ((UUID) -> Void)?
-    var onPlace: ((UUID, UUID, SplitDirection) -> Void)?
+    var onReorder: ((UUID, UUID, Bool) -> Void)?
     var makeMenu: ((UUID) -> NSMenu)?
     private var pressed: (id: UUID, point: NSPoint)?
     private var didDrag = false
-    private var highlight: (id: UUID, edge: SplitDirection, frame: CGRect)?
+    private var highlight: (id: UUID, before: Bool, frame: CGRect)?
 
     // The strip lies in the titlebar, where a clear view otherwise lets the
     // window take the press as a drag and the tab never hears it.
@@ -595,10 +699,14 @@ private struct TabStripCatcher: NSViewRepresentable {
       }
       guard dragged != target else { setHighlight(nil); return [] }
       let point = frame.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
-      let edge = SplitDirection.drop(
+      guard case .reorder(let before) = TabDrag.reorder(
         x: point.x - frame.minX, y: point.y - frame.minY,
-        width: frame.width, height: frame.height, band: nil) ?? .right
-      setHighlight((target, edge, frame))
+        width: frame.width, height: frame.height, vertical: vertical)
+      else {
+        setHighlight(nil)
+        return []
+      }
+      setHighlight((id: target, before: before, frame: frame))
       return .move
     }
 
@@ -608,7 +716,7 @@ private struct TabStripCatcher: NSViewRepresentable {
       defer { setHighlight(nil) }
       guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
         let highlight else { return false }
-      onPlace?(dragged, highlight.id, highlight.edge)
+      onReorder?(dragged, highlight.id, highlight.before)
       return true
     }
 
@@ -623,20 +731,21 @@ private struct TabStripCatcher: NSViewRepresentable {
       if mark.superlayer == nil { layer?.addSublayer(mark) }
     }
 
-    private func setHighlight(_ next: (id: UUID, edge: SplitDirection, frame: CGRect)?) {
+    private func setHighlight(_ next: (id: UUID, before: Bool, frame: CGRect)?) {
       highlight = next
       guard let next else { mark.isHidden = true; return }
-      let thickness: CGFloat = 3
-      let frame = next.frame
-      let rect: CGRect
-      switch next.edge {
-      case .left: rect = CGRect(x: frame.minX, y: frame.minY, width: thickness, height: frame.height)
-      case .right: rect = CGRect(x: frame.maxX - thickness, y: frame.minY, width: thickness, height: frame.height)
-      case .up: rect = CGRect(x: frame.minX, y: frame.maxY - thickness, width: frame.width, height: thickness)
-      case .down: rect = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: thickness)
-      }
+      let drawn = TabDrag.mark(.reorder(before: next.before), in: placed(next.frame), vertical: vertical)
+      mark.opacity = drawn.opacity
       mark.isHidden = false
-      mark.frame = rect
+      mark.frame = drawn.rect
+    }
+
+    /// SwiftUI reports a chip from its top-left. The layer grows upward
+    /// unless this view is flipped, so a sidebar chip has to be turned over
+    /// before a mark drawn from its frame lands on it.
+    private func placed(_ frame: CGRect) -> CGRect {
+      guard !isFlipped else { return frame }
+      return CGRect(x: frame.minX, y: bounds.height - frame.maxY, width: frame.width, height: frame.height)
     }
 
     override func rightMouseDown(with event: NSEvent) {

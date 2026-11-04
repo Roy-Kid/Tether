@@ -93,9 +93,11 @@ pub(crate) fn breaks_token(text: &str) -> bool {
 
 /// The next line keeps going as the same path.
 ///
-/// A program sometimes prints a long path with a newline in the middle of
-/// it: after a `-`, after a `%`, or straight into a `%2F` encoding. A new
-/// absolute path or a new file on the next line is a different path.
+/// `previous` is the last glyph of the path so far. `next` is the whole
+/// token on the following line, indent already skipped. A program breaks a
+/// long path after `-` or `%`, after a directory `/`, or on `_` `+` `=` `#`
+/// `@`, and sometimes straight into a `%2F`. A new absolute path is a
+/// different path. So is a word: `/runs/` and then `later` are not one file.
 pub(crate) fn continues(previous: &str, next: &str) -> bool {
     if previous.is_empty() || next.is_empty() || breaks_token(next) {
         return false;
@@ -103,7 +105,15 @@ pub(crate) fn continues(previous: &str, next: &str) -> bool {
     if next.starts_with('/') || next.starts_with('~') {
         return false;
     }
-    previous.ends_with('-') || previous.ends_with('%') || next.starts_with('%')
+    // The piece after `-` or `%` is often not a path until it is joined
+    // (`run-` then `42`, or a uuid). `%2F` is the encoding continuing.
+    if previous.ends_with('-') || previous.ends_with('%') || next.starts_with('%') {
+        return true;
+    }
+    if previous.ends_with(['/', '_', '+', '=', '#', '@']) {
+        return looks_like_path(next);
+    }
+    false
 }
 
 fn token_around(line: &[Glyph], hit: usize) -> Option<Range<usize>> {

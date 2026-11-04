@@ -634,10 +634,15 @@ struct RootView: View {
   #if os(macOS)
   @ViewBuilder
   private var macCanvas: some View {
+    // The pane tab reads marks while it is built. The split does not hold
+    // the registry, so the epoch has to be read here or a new mark never
+    // arrives on a pane that is already on screen.
+    let _ = registry.tabIndicatorEpoch
     if let layout = tabs.workspaceSplit, let workspace = tabs.currentWorkspace?.id {
       SplitCanvas(
         layout: layout, selected: tabs.selected, inputAllowed: terminalInputAllowed,
         pane: { AnyView(workspaceContent($0)) },
+        header: { AnyView(paneHeader($0)) },
         onReplace: { tabs.replaceLayout(of: workspace, with: $0) },
         onCommit: { tabs.commitLayout() },
         onSelect: { tabs.select($0) },
@@ -647,6 +652,22 @@ struct RootView: View {
     }
   }
   #endif
+
+  /// The tab of a pane that shares the window. Same name, mark and selection
+  /// rule as its chip. It is a row above the grid, because a rule drawn over
+  /// the grid is covered by the surface that paints the cells.
+  @ViewBuilder
+  private func paneHeader(_ id: UUID) -> some View {
+    if let tab = tabs.tabs.first(where: { $0.id == id }) {
+      SplitPaneTab(
+        title: tabs.displayTitle(for: id),
+        symbol: terminalChipSymbol(for: tab, registry: registry),
+        indicator: registry.indicator(on: tab),
+        disconnected: tab.isDisconnected,
+        selected: tabs.selected == id,
+        onSelect: { tabs.select(id) })
+    }
+  }
 
   @ViewBuilder
   private func workspaceContent(_ id: UUID) -> some View {
@@ -673,7 +694,10 @@ struct RootView: View {
       if let id = tabs.selected {
         workspaceContent(id)
           #if os(macOS)
-            .overlay { PaneDrop(target: id) { dragged, edge in _ = tabs.place(dragged, beside: id, edge: edge) } }
+            .overlay {
+              PaneDrop(target: id) { dragged, edge in _ = tabs.place(dragged, beside: id, edge: edge) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
           #endif
       } else if tabs.currentHost != nil {
         EmptyWorkspace()
@@ -1776,6 +1800,7 @@ extension RootView {
     let selected: UUID?
     let inputAllowed: Bool
     let pane: (UUID) -> AnyView
+    let header: (UUID) -> AnyView
     let onReplace: (WorkspaceSplit) -> Void
     let onCommit: () -> Void
     let onSelect: (UUID) -> Void
@@ -1784,29 +1809,39 @@ extension RootView {
     var body: some View {
       switch layout {
       case .tab(let id):
-        pane(id)
-          .terminalInputEnabled(inputAllowed && selected == id)
-          .frame(minWidth: 120, maxWidth: .infinity, minHeight: 80, maxHeight: .infinity)
-          .clipped()
-          .contentShape(Rectangle())
-          .simultaneousGesture(TapGesture().onEnded { onSelect(id) })
-          .overlay { PaneDrop(target: id) { dragged, edge in onPlace(dragged, id, edge) } }
-          .overlay(alignment: .top) {
-            if selected == id {
-              Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
-                .allowsHitTesting(false)
+        // The tab is a row, not a line over the cells. The surface that
+        // paints the grid covers an overlay drawn on top of it, which is
+        // why a focused pane's rule used to vanish once two terminals shared
+        // the window.
+        VStack(spacing: 0) {
+          header(id)
+            .frame(height: Chrome.tab)
+            .frame(maxWidth: .infinity)
+            .layoutPriority(1)
+          pane(id)
+            .terminalInputEnabled(inputAllowed && selected == id)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { onSelect(id) })
+            .overlay {
+              PaneDrop(target: id) { dragged, edge in onPlace(dragged, id, edge) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-          }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       case .split(let direction, let first, let second, let fraction):
         let vertical = direction == .up || direction == .down
         DividedPanes(axis: vertical ? .vertical : .horizontal, fraction: fraction, onFraction: { next in
           onReplace(.split(direction, first, second, next))
         }, onCommit: onCommit) {
           SplitCanvas(layout: first, selected: selected, inputAllowed: inputAllowed, pane: pane,
+            header: header,
             onReplace: { onReplace(.split(direction, $0, second, fraction)) },
             onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
         } second: {
           SplitCanvas(layout: second, selected: selected, inputAllowed: inputAllowed, pane: pane,
+            header: header,
             onReplace: { onReplace(.split(direction, first, $0, fraction)) },
             onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
         }
@@ -1827,7 +1862,8 @@ extension RootView {
       GeometryReader { geometry in
         let horizontal = axis == .horizontal
         let length = horizontal ? geometry.size.width : geometry.size.height
-        let minimum: CGFloat = horizontal ? 120 : 80
+        // Width keeps a readable line. Height keeps the pane's tab and a few rows.
+        let minimum: CGFloat = horizontal ? 120 : Chrome.tab + 48
         let size = Self.length(fraction, usable: length, minimum: minimum)
         Group {
           if horizontal {
@@ -1882,8 +1918,12 @@ extension RootView {
     }
   }
 
-  /// Drop a dragged tab on the side of a pane. The overlay stays out of the
-  /// way until a drag is in progress, so typing and clicking still reach the shell.
+  /// Drop a dragged tab on another tab's terminal. The whole pane is the
+  /// target, and the half under the pointer is the side. The mark is
+  /// [`TabDrag.mark`]. The view fills the pane: a bare `NSView` lays out at
+  /// zero, and a zero-sized target draws no mark and takes no drop. The
+  /// overlay stays out of the way until a drag is in progress, so typing
+  /// and clicking still reach the shell.
   private struct PaneDrop: NSViewRepresentable {
     var target: UUID
     var onPlace: (UUID, SplitDirection) -> Void
@@ -1899,6 +1939,12 @@ extension RootView {
       view.onPlace = onPlace
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Dropper, context: Context) -> CGSize? {
+      guard let width = proposal.width, let height = proposal.height,
+        width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+      return CGSize(width: width, height: height)
+    }
+
     final class Dropper: NSView {
       var target: UUID?
       var onPlace: ((UUID, SplitDirection) -> Void)?
@@ -1908,16 +1954,29 @@ extension RootView {
       override func hitTest(_ point: NSPoint) -> NSView? {
         guard let event = window?.currentEvent, event.type == .leftMouseDragged else { return nil }
         let local = convert(point, from: superview)
-        return bounds.contains(local) ? self : nil
+        if bounds.contains(local) { return self }
+        // A hosting view can hand the point across in the other orientation.
+        // A half pane rejects the unflipped point; the full canvas used to hide that.
+        let turned = NSPoint(x: local.x, y: bounds.height - local.y)
+        return bounds.contains(turned) ? self : nil
       }
 
       override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        wantsLayer = true
-        layer?.backgroundColor = .clear
-        mark.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
-        mark.isHidden = true
-        if mark.superlayer == nil { layer?.addSublayer(mark) }
+        attachMark()
+      }
+
+      override func layout() {
+        super.layout()
+        attachMark()
+        guard let edge else { return }
+        let drawn = TabDrag.mark(.split(edge), in: bounds, vertical: false)
+        mark.frame = drawn.rect
+        mark.opacity = drawn.opacity
+      }
+
+      override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingUpdated(sender)
       }
 
       override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -1928,9 +1987,10 @@ extension RootView {
         }
         let local = convert(sender.draggingLocation, from: nil)
         let point = bounds.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
-        guard let side = SplitDirection.drop(
-          x: point.x - bounds.minX, y: point.y - bounds.minY,
-          width: bounds.width, height: bounds.height, band: 0.28)
+        guard bounds.contains(point) else { hide(); return [] }
+        let x = point.x - bounds.minX
+        let y = isFlipped ? point.y - bounds.minY : bounds.maxY - point.y
+        guard case .split(let side) = TabDrag.split(x: x, y: y, width: bounds.width, height: bounds.height)
         else {
           hide()
           return []
@@ -1949,18 +2009,21 @@ extension RootView {
         return true
       }
 
+      private func attachMark() {
+        wantsLayer = true
+        layer?.backgroundColor = .clear
+        layer?.zPosition = 1
+        mark.backgroundColor = NSColor.controlAccentColor.cgColor
+        if mark.superlayer !== layer { layer?.addSublayer(mark) }
+      }
+
       private func show(_ side: SplitDirection) {
         edge = side
-        let thickness = min(bounds.width, bounds.height) * 0.28
-        let rect: CGRect
-        switch side {
-        case .left: rect = CGRect(x: 0, y: 0, width: thickness, height: bounds.height)
-        case .right: rect = CGRect(x: bounds.width - thickness, y: 0, width: thickness, height: bounds.height)
-        case .up: rect = CGRect(x: 0, y: bounds.height - thickness, width: bounds.width, height: thickness)
-        case .down: rect = CGRect(x: 0, y: 0, width: bounds.width, height: thickness)
-        }
+        attachMark()
+        let drawn = TabDrag.mark(.split(side), in: bounds, vertical: false)
+        mark.opacity = drawn.opacity
         mark.isHidden = false
-        mark.frame = rect
+        mark.frame = drawn.rect
       }
 
       private func hide() {

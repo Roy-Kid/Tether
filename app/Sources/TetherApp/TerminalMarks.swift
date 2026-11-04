@@ -23,3 +23,22 @@ extension PluginRegistry {
     return tabIndicator(onAnyOf: terminals.map { PluginTerminalIdentity(host: host, terminal: $0) })
   }
 }
+
+/// What sits in front of a terminal's name, on the strip and on a split pane.
+///
+/// A plugin's `tabSymbols` entry wins, then the attachment that is standing
+/// in for the shell. Otherwise it is a terminal: the same mark for every
+/// host, because a local shell is a host like any other. Reading the epoch
+/// is what draws a new symbol.
+@MainActor
+func terminalChipSymbol(for tab: SessionTab, registry: PluginRegistry?) -> String {
+  _ = registry?.tabIndicatorEpoch
+  if tab.handoff, !tab.isLive { return "arrow.left.arrow.right" }
+  if let identity = tab.pluginTerminalIdentity,
+    let symbol = registry?.tabSymbol(for: identity), !symbol.isEmpty
+  {
+    return symbol
+  }
+  if let shown = tab.shown, !shown.symbol.isEmpty { return shown.symbol }
+  return "terminal"
+}
