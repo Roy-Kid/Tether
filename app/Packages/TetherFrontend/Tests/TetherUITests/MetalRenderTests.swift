@@ -6,8 +6,10 @@ import Tether
 import Testing
 @testable import TetherUI
 
+/// Offscreen, so nothing here is a phone's: the Mac's run covers it, and a
+/// simulator without a GPU spent a minute and a half repeating it.
 @MainActor
-@Suite("Shared wgpu rendering", .serialized)
+@Suite("Shared wgpu rendering", .serialized, .enabled(if: !isPhone))
 struct SharedRenderTests {
   private func screen(_ text: String? = nil, cursor: CaretShape = .hidden, hiddenBackground: CellColor = .named(name: .red)) -> ScreenFrame {
     func style(bold: Bool = false, italic: Bool = false, lines: Bool = false, hidden: Bool = false) -> CellStyle {
@@ -260,3 +262,9 @@ struct SharedRenderTests {
     }
   }
 }
+
+#if os(iOS)
+  private let isPhone = true
+#else
+  private let isPhone = false
+#endif

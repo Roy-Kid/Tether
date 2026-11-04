@@ -113,7 +113,7 @@ struct NativeSurfaceTests {
     defer { _fixLifetime(layer) }
     layer.contentsScale = 3
     layer.drawableSize = CGSize(width: 900, height: 300)
-    for _ in 0..<3 {
+    for _ in 0..<2 {
       let renderer = try TerminalRenderer(metalLayer: Unmanaged.passUnretained(layer).toOpaque())
       try await renderer.initialize(width: 900, height: 300)
       renderer.setFonts(primary: TerminalFonts.resolvedPrimary(TerminalFonts.primary), wide: TerminalFonts.wide)

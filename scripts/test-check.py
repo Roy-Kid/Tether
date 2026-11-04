@@ -171,7 +171,8 @@ class GateTests(unittest.TestCase):
             calls.append((("swift", "test", *args), env))
         with patch.object(gate, "ROOT", self.root), patch.object(gate, "run", side_effect=command), \
                 patch.object(gate, "swift_test", side_effect=tests), \
-                patch.object(gate, "iphone_simulator", return_value="00000000-0000-0000-0000-000000000000"):
+                patch.object(gate, "iphone_simulator", return_value="00000000-0000-0000-0000-000000000000"), \
+                patch.object(gate, "boot_in_background"):
             gate.apple(build=False)
         return calls
 

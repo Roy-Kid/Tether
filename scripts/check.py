@@ -240,6 +240,10 @@ def require_pinned_xcode():
 
 def apple(build=True):
     require_pinned_xcode()
+    # A simulator takes minutes to boot and nothing waits on it until the
+    # phone's tests: it boots while everything else builds.
+    simulator = iphone_simulator()
+    boot_in_background(simulator)
     # What CI has: this repository and nothing beside it. A sibling checkout
     # the app's manifest can reach otherwise resolves here and nowhere else.
     hermetic = {**os.environ, "TETHER_HERMETIC": "1"}
@@ -262,9 +266,15 @@ def apple(build=True):
     # The phone's own frontend tests are `#if os(iOS)`: `swift test` on a Mac
     # compiles them out, so they run on a simulator or nowhere.
     run("xcodebuild", "test", "-scheme", "TetherFrontend-Package",
-        "-destination", f"platform=iOS Simulator,id={iphone_simulator()}",
+        "-destination", f"platform=iOS Simulator,id={simulator}",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO",
         cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
+
+
+def boot_in_background(simulator: str) -> None:
+    """Already booted is fine; a failure here shows up in the test that
+    needed it."""
+    subprocess.Popen(["xcrun", "simctl", "boot", simulator], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def iphone_simulator():
