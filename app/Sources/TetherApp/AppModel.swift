@@ -56,6 +56,10 @@ final class AppModel {
     registry.register(NervePlugin())
     #endif
     self.registry = registry
+    tabs.reservedTerminals = { [weak registry] connection in
+      guard let registry else { return nil }
+      return await registry.reservedTerminals(on: connection)
+    }
     #if TETHER_NERVE
     // A row click in the hosted panel uses the same landing as the web page.
     // The panel is created above; the closure is read when the row is clicked.

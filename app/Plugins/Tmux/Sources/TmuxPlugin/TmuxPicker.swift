@@ -211,7 +211,7 @@ struct TmuxPicker: View {
           Image(systemName: "chevron.left")
             .font(UIStyle.accessory)
             .foregroundStyle(Theme.subtle)
-          Text(session.name)
+          Text(session.name.isEmpty ? session.id : session.name)
             .font(UIStyle.header)
             .foregroundStyle(Theme.subtle)
           Spacer(minLength: 0)
@@ -322,7 +322,8 @@ struct TmuxPicker: View {
   private func tmuxSessionLine(
     _ session: TmuxSessionInfo, windows: [TmuxListedWindow], owned: Bool
   ) -> String {
-    var line = "\(session.name): \(windows.count) windows"
+    let title = session.name.isEmpty ? session.id : session.name
+    var line = "\(title): \(windows.count) windows"
     if owned || session.attached { line += " (attached)" }
     return line
   }
@@ -364,12 +365,9 @@ struct TmuxPicker: View {
 
   private func commitRename() {
     if model.namingSession {
-      let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !name.isEmpty else {
-        model.namingSession = false
-        return
-      }
-      model.draftName = name
+      // Return commits. An empty field is tmux's number. Clicking away from
+      // a blank field is the cancel, and does not come through here.
+      model.draftName = draft.trimmingCharacters(in: .whitespacesAndNewlines)
       model.create { [model] in
         guard model.namingSession else { return }
         model.namingSession = false
@@ -454,7 +452,7 @@ struct TmuxPicker: View {
 
   private func createSession() {
     guard !model.namingSession else { return }
-    draft = model.suggestedSessionName()
+    draft = ""
     keyboardFocused = false
     model.namingSession = true
     keyboardSelection = "naming-session"
@@ -662,11 +660,16 @@ private struct TreeRow: View {
         }
         .onChange(of: focused) { _, on in
           // Becoming the field blurs the list first. That is not the person
-          // leaving the name, so it does not commit.
+          // leaving the name, so it does not commit. A blank field is a
+          // cancel: committing it used to create a session nobody named.
           guard claimed, !on, !escaped else { return }
           Task { @MainActor in
             guard claimed, !escaped, !focused else { return }
-            onCommit()
+            if draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              onCancel()
+            } else {
+              onCommit()
+            }
           }
         }
         #if os(macOS)

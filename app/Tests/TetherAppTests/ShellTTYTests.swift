@@ -37,6 +37,17 @@ struct ShellTTYTests {
     #expect(ShellTTY.choose(candidates: both, sizes: [:], columns: 120, rows: 40) == nil)
   }
 
+  @Test("a tmux pane is not this shell, whatever spelling the listing used")
+  func panesAreNotTheShell() {
+    #expect(
+      ShellTTY.excludingPanes(["/dev/pts/5", "/dev/pts/8"], panes: ["pts/8"])
+        == ["/dev/pts/5"])
+    #expect(
+      ShellTTY.excludingPanes(["/dev/ttys004", "/dev/ttys005"], panes: ["s005"])
+        == ["/dev/ttys004"])
+    #expect(ShellTTY.excludingPanes(["/dev/pts/5"], panes: []) == ["/dev/pts/5"])
+  }
+
   @Test("stty is only asked about pty names the parser emits")
   func sizeCommand() {
     let command = ShellTTY.sizeCommand(for: ["/dev/pts/5", "/dev/ttys003"])

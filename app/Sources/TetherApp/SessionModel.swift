@@ -168,6 +168,10 @@ final class SessionTab: Identifiable {
       host: host.isLocal ? LocalMachine.name : host.sshTarget, terminal: terminalName)
   }
   private var ttySearch: Task<Void, Never>?
+  /// Bumped when a search is replaced, so the one it replaced cannot clear
+  /// the replacement. A nil answer waits before another try.
+  private var ttyGeneration = 0
+  private var ttyMissedAt: Date?
   /// Set when the view has reported a size. Until then the pty is still the
   /// 80×24 it was opened at, which cannot pick this shell out of several.
   private var sized = false
@@ -345,6 +349,9 @@ final class SessionTab: Identifiable {
     session = nil
     closeCheck.reset()
     ttySearch?.cancel()
+    ttySearch = nil
+    ttyGeneration += 1
+    ttyMissedAt = nil
     shellTTY = nil
     noteDamage(nil)
     problemRaised = false
@@ -714,6 +721,18 @@ final class SessionTab: Identifiable {
   }
   var terminalName: String? { session?.terminalName ?? shellTTY }
 
+  /// Devices a plugin is showing on this connection. Nil when nobody answered.
+  @ObservationIgnored
+  var reservedTerminals: (RemoteConnection) async -> [String]? = { _ in nil }
+
+  /// What a plugin reads. A miss starts another look, because the plugin is
+  /// waiting on the name. The chip reads `terminalName` and must not: a view
+  /// refresh would otherwise list processes on every frame.
+  func terminalNameForPlugin() -> String? {
+    if terminalName == nil { ensureShellTTY() }
+    return terminalName
+  }
+
   /// Checks this session at the close gesture, without writing into its
   /// input. Usually answered already: see `CloseCheck`.
   func activityForClose() async -> ShellActivity {
@@ -725,7 +744,8 @@ final class SessionTab: Identifiable {
     guard isLive else { return .idle }
     guard let session, let connection = session.connection else { return .unknown }
     let activity = await ShellActivity.check(
-      on: connection, terminal: terminalName, columns: columns, rows: rows, matchSize: sized)
+      on: connection, terminal: terminalName, columns: columns, rows: rows, matchSize: sized,
+      reservedTerminals: { await self.reservedTerminals(connection) })
     guard isLive else { return .idle }
     // A reconnect while the query was in flight makes its answer obsolete.
     guard self.session === session else { return .unknown }
@@ -800,19 +820,48 @@ final class SessionTab: Identifiable {
   /// One search at a time: a resize while the previous listing is in flight
   /// drops that listing, so an 80×24 answer cannot arrive after the real one.
   private func identifyShellTTY() {
+    ttyMissedAt = nil
+    beginShellTTYSearch(replacing: true)
+  }
+
+  /// Starts a search when a plugin asked for the name and the last answer
+  /// was none. A resize replaces an in-flight listing; a later ask does not,
+  /// or the plugin's wait would cancel the search it is waiting on.
+  /// The gap is short on purpose: the plugin polls for about three seconds,
+  /// and a longer wait used to expire before the next look could finish.
+  private func ensureShellTTY() {
+    if let ttyMissedAt, Date().timeIntervalSince(ttyMissedAt) < 0.4 { return }
+    beginShellTTYSearch(replacing: false)
+  }
+
+  private func beginShellTTYSearch(replacing: Bool) {
     guard shellTTY == nil, session?.terminalName == nil, let connection = session?.connection
     else { return }
+    if replacing {
+      ttySearch?.cancel()
+    } else if ttySearch != nil {
+      return
+    }
+    ttyGeneration += 1
+    let generation = ttyGeneration
     let columns = self.columns
     let rows = self.rows
     let matchSize = sized
-    ttySearch?.cancel()
+    let ask = reservedTerminals
     ttySearch = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(200))
-      guard let self, !Task.isCancelled else { return }
+      guard let self, !Task.isCancelled, self.ttyGeneration == generation else { return }
       let found = await ShellTTY.find(
-        on: connection, columns: columns, rows: rows, matchSize: matchSize)
-      guard !Task.isCancelled, self.shellTTY == nil else { return }
-      self.shellTTY = found
+        on: connection, columns: columns, rows: rows, matchSize: matchSize,
+        reservedTerminals: { await ask(connection) })
+      guard !Task.isCancelled, self.ttyGeneration == generation else { return }
+      if self.shellTTY == nil, let found {
+        self.shellTTY = found
+        self.ttyMissedAt = nil
+      } else if self.shellTTY == nil {
+        self.ttyMissedAt = Date()
+      }
+      if self.ttyGeneration == generation { self.ttySearch = nil }
     }
   }
 

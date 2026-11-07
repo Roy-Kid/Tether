@@ -1,5 +1,6 @@
 import Foundation
 import Tether
+import TetherPluginKit
 
 /// The far-side tty of this tab's shell, when the producer does not record one.
 ///
@@ -18,18 +19,39 @@ enum ShellTTY {
   /// shell is 80×24 until then, which is also every other untouched client,
   /// so a size comparison would name the wrong tty.
   static func find(
-    on connection: RemoteConnection, columns: UInt16, rows: UInt16, matchSize: Bool
+    on connection: RemoteConnection, columns: UInt16, rows: UInt16, matchSize: Bool,
+    reservedTerminals: @MainActor () async -> [String]? = { nil }
   ) async -> String? {
     guard let listed = try? await connection.execute(listCommand),
       let text = String(data: listed.stdout, encoding: .utf8)
     else { return nil }
     let found = candidates(in: text)
     if found.count <= 1 { return found.first }
-    guard matchSize, let command = sizeCommand(for: found),
+    var sizes: [String: (columns: UInt16, rows: UInt16)] = [:]
+    if matchSize, let command = sizeCommand(for: found),
       let sized = try? await connection.execute(command),
       let text = String(data: sized.stdout, encoding: .utf8)
-    else { return nil }
-    return choose(candidates: found, sizes: parseSizes(text), columns: columns, rows: rows)
+    {
+      sizes = parseSizes(text)
+      if let chosen = choose(candidates: found, sizes: sizes, columns: columns, rows: rows) {
+        return chosen
+      }
+    }
+    // A pane is the size of the client that shows it, so the two tie and
+    // this shell's pty is never chosen. The pane is not this terminal.
+    // Nil is not an empty list: nobody answered, so nothing is guessed.
+    guard let panes = await reservedTerminals() else { return nil }
+    let remaining = excludingPanes(found, panes: panes)
+    if remaining.count == 1 { return remaining[0] }
+    guard matchSize else { return nil }
+    return choose(candidates: remaining, sizes: sizes, columns: columns, rows: rows)
+  }
+
+  /// Drops pane ptys from a process-table guess. Spellings differ
+  /// (`pts/8` and `/dev/pts/8`); both name the same device.
+  static func excludingPanes(_ candidates: [String], panes: [String]) -> [String] {
+    let paneNames = Set(panes.map(TerminalName.canonical))
+    return candidates.filter { !paneNames.contains(TerminalName.canonical($0)) }
   }
 
   struct Row {

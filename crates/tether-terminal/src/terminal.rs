@@ -351,6 +351,18 @@ fn pop_trailing_separators(glyphs: &mut Vec<Glyph>, hit: usize) {
     }
 }
 
+/// The first glyph of the token `hit` sits in.
+fn token_start(glyphs: &[Glyph], hit: usize) -> Option<usize> {
+    if hit >= glyphs.len() || link::breaks_token(&glyphs[hit].text) {
+        return None;
+    }
+    let mut start = hit;
+    while start > 0 && !link::breaks_token(&glyphs[start - 1].text) {
+        start -= 1;
+    }
+    Some(start)
+}
+
 impl Terminal {
     pub fn new(size: ScreenSize) -> Self {
         Self::with_options(size, Options::default())
@@ -481,6 +493,9 @@ impl Terminal {
     /// rule is not the edge of the screen. A path a program broke with a
     /// newline in the middle of the name — after `/`, `-`, `%`, `_`, or
     /// into a `%2F`, indent on the next line included — is one path too.
+    /// A break before `%` (`mcp` then `%3A...`) is that same address from the
+    /// lower line as well, even though `&` and `:` keep that line from being
+    /// a path on its own.
     ///
     /// Shape, not truth. Whether a path exists is for whoever holds the
     /// connection to ask.
@@ -507,13 +522,85 @@ impl Terminal {
                 spans: link::spans(&line[start..end]),
             });
         }
-        let found = link::find(&line, hit)?;
-        match found.target {
-            LinkTarget::Path { .. } | LinkTarget::Url(_) => {
-                Some(self.mend_broken_path(line, hit, found))
-            }
-            _ => Some(found),
+        match link::find(&line, hit) {
+            Some(found) => match found.target {
+                LinkTarget::Path { .. } | LinkTarget::Url(_) => {
+                    Some(self.mend_broken_path(line, hit, found))
+                }
+                _ => Some(found),
+            },
+            // The lower piece of a break before `%` is not a link until the
+            // line above is joined onto it. `mcp` / `%3Aconnect&...` is one.
+            None => self.recover_broken_link(line, hit),
         }
+    }
+
+    /// Joins lines above a fragment until the text classifies, then mends
+    /// outward the usual way. Stops at the first line that does not continue.
+    fn recover_broken_link(&self, mut glyphs: Vec<Glyph>, mut hit: usize) -> Option<Link> {
+        for _ in 0..self.size.rows {
+            let token_start = token_start(&glyphs, hit)?;
+            let first_row = glyphs[token_start].row;
+            let first_column = glyphs[token_start].column;
+            if first_row == 0 {
+                return None;
+            }
+            let preceded = glyphs.iter().any(|glyph| {
+                glyph.row == first_row
+                    && glyph.column < first_column
+                    && !glyph.text.chars().all(char::is_whitespace)
+            });
+            if preceded {
+                return None;
+            }
+            let left = self.span_left(Position::new(first_row, first_column));
+            let (before, _, _) = self.logical_line(Position::new(first_row - 1, left));
+            if before.last().map(|glyph| glyph.row) != Some(first_row - 1) {
+                return None;
+            }
+            let end = before.iter().rposition(|glyph| !link::breaks_token(&glyph.text))?;
+            let mut start = end;
+            while start > 0 && !link::breaks_token(&before[start - 1].text) {
+                start -= 1;
+            }
+            let mut token_end = token_start + 1;
+            while token_end < glyphs.len() && !link::breaks_token(&glyphs[token_end].text) {
+                token_end += 1;
+            }
+            let next_text: String =
+                glyphs[token_start..token_end].iter().map(|glyph| glyph.text.as_str()).collect();
+            if !link::continues(&before[end].text, &next_text) {
+                return None;
+            }
+            let indent = glyphs
+                .iter()
+                .take_while(|glyph| {
+                    glyph.row == first_row && glyph.text.chars().all(char::is_whitespace)
+                })
+                .count();
+            if indent > 0 {
+                glyphs.drain(..indent);
+                hit = hit.saturating_sub(indent);
+            }
+            let added = end - start + 1;
+            if glyphs.len() + added > link::LINE_LIMIT {
+                return None;
+            }
+            pop_trailing_separators(&mut glyphs, hit);
+            let mut joined = before[start..=end].to_vec();
+            joined.extend_from_slice(&glyphs);
+            hit += added;
+            glyphs = joined;
+            if let Some(found) = link::find(&glyphs, hit) {
+                return Some(match found.target {
+                    LinkTarget::Path { .. } | LinkTarget::Url(_) => {
+                        self.mend_broken_path(glyphs, hit, found)
+                    }
+                    _ => found,
+                });
+            }
+        }
+        None
     }
 
     /// Pulls in adjacent lines when they are the same path with a newline

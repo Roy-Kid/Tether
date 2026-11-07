@@ -190,6 +190,44 @@ fn a_web_address_is_a_url_not_a_path() {
 }
 
 #[test]
+fn a_url_broken_before_a_percent_is_one_url_from_either_line() {
+    // The lower line holds `&` and `:`, so it is not a path. The address is
+    // still one, including from the `%` the break landed on.
+    let url = "https://www.figma.com/oauth/mcp?response_type=code&client_id=uAZKBmPi7YVbk7qIwqqmQW&code_challenge=7_sL2DfcgPax72WBq_JXoDKZB9c9NnO7oShwgaycQrs&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A53558%2Fcallback&state=Kz4O0yHgo9fVxIE3ACX84ofAC3P57JBApxRtcyzuVOc&scope=mcp%3Aconnect&resource=https%3A%2F%2Fmcp.figma.com%2Fmcp";
+    let broken = url.replacen("scope=mcp%", "scope=mcp\r\n%", 1);
+    let wide = terminal(400, 6, &format!("{broken}\r\n"));
+    for (row, column) in [(0, 10), (0, 280), (1, 0), (1, 4)] {
+        let link = wide.link_at(Position::new(row, column));
+        assert_eq!(
+            link.as_ref().map(|link| link.target.clone()),
+            Some(LinkTarget::Url(url.to_owned())),
+            "row {row} column {column} got {link:?}"
+        );
+        let rows: Vec<u16> = link.unwrap().spans.iter().map(|span| span.row).collect();
+        assert!(rows.contains(&0) && rows.contains(&1), "spans {rows:?}");
+    }
+
+    let indented = terminal(400, 4, &url.replacen("scope=mcp%", "scope=mcp\r\n    %", 1));
+    let link = indented.link_at(Position::new(1, 6)).expect("indented percent");
+    assert_eq!(link.target, LinkTarget::Url(url.to_owned()));
+    assert_eq!(indented.link_at(Position::new(1, 1)), None, "the indent");
+
+    // 142 columns soft-wraps on that same boundary.
+    let narrow = terminal(142, 8, &format!("{url}\r\n"));
+    let link = narrow.link_at(Position::new(2, 0)).expect("percent row");
+    assert_eq!(link.target, LinkTarget::Url(url.to_owned()));
+    let rows: Vec<u16> = link.spans.iter().map(|span| span.row).collect();
+    assert!(rows.contains(&1) && rows.contains(&2), "spans {rows:?}");
+}
+
+#[test]
+fn a_percent_line_under_an_ordinary_word_is_not_a_link() {
+    let terminal = terminal(40, 4, "hello\r\n%3Anot-a-url\r\n");
+    assert_eq!(terminal.link_at(Position::new(1, 0)), None);
+    assert_eq!(terminal.link_at(Position::new(0, 1)), None);
+}
+
+#[test]
 fn a_hyperlink_the_program_attached_wins_over_the_text() {
     let terminal = terminal(
         80,

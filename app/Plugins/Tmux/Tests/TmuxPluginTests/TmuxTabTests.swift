@@ -201,6 +201,20 @@ struct TmuxCommandTests {
     #expect(TmuxCommands.renameWindow(2, to: "bad\nname") == nil)
   }
 
+  @Test("no client is not the same as a client we cannot name")
+  func idleServer() {
+    #expect(TmuxClients.idle(nil) == false)
+    #expect(TmuxClients.idle("") == true)
+    #expect(TmuxClients.idle("\n") == true)
+    #expect(TmuxClients.idle("pts/5|$1\n") == false)
+    #expect(TmuxClients.noServer(Data(), Data("no server running".utf8)) == true)
+    #expect(
+      TmuxClients.noServer(Data("No server running on /tmp/tmux-501/default".utf8), Data())
+        == true)
+    #expect(TmuxClients.noServer(Data("pts/5|$1".utf8), Data()) == false)
+    #expect(TmuxClients.noServer(Data(), Data("command not found".utf8)) == false)
+  }
+
 }
 
 @MainActor

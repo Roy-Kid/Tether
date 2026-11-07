@@ -80,6 +80,10 @@ final class TabSet {
     var quickTerminal: QuickTerminalController
   #endif
   var tabs: [SessionTab] = []
+  /// Devices a plugin is showing, asked when several ptys could be this shell.
+  /// Nil from the closure means nobody answered.
+  @ObservationIgnored
+  var reservedTerminals: (RemoteConnection) async -> [String]? = { _ in nil }
   var workspaces: [TerminalWorkspace] = []
   var renamingWorkspace: UUID?
   private var closingWorkspace: UUID?
@@ -485,6 +489,7 @@ final class TabSet {
   }
 
   func adopt(_ tab: SessionTab, at index: Int? = nil, in workspaceID: UUID? = nil) {
+    tab.reservedTerminals = reservedTerminals
     if let workspaceID {
       if checkingClose == workspaceID { cancelClose() }
       guard let page = workspaces.first(where: { $0.id == workspaceID }),

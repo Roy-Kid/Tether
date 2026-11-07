@@ -26,7 +26,8 @@ enum ShellActivity: Equatable, Sendable {
 
   static func check(
     on connection: RemoteConnection, terminal: String?, columns: UInt16, rows: UInt16,
-    matchSize: Bool
+    matchSize: Bool,
+    reservedTerminals: @escaping @MainActor () async -> [String]? = { nil }
   ) async -> ShellActivity {
     // A lost SSH connection must not leave the close gesture waiting indefinitely.
     await withTaskGroup(of: ShellActivity.self) { group in
@@ -35,7 +36,8 @@ enum ShellActivity: Equatable, Sendable {
         if let terminal { tty = terminal }
         else {
           tty = await ShellTTY.find(
-            on: connection, columns: columns, rows: rows, matchSize: matchSize)
+            on: connection, columns: columns, rows: rows, matchSize: matchSize,
+            reservedTerminals: reservedTerminals)
         }
         guard !Task.isCancelled, let tty,
           let output = try? await connection.execute(listCommand), output.status == 0,

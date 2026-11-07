@@ -136,6 +136,18 @@ public final class TmuxPlugin: TabPlugin {
     panesByHost[host] = panes
   }
 
+  /// Pane devices on this connection. Nil when tmux did not answer, so a
+  /// missing server is not an empty pane list.
+  public func reservedTerminals(on connection: RemoteConnection) async -> [String]? {
+    guard let listed = try? await connection.execute("tmux list-panes -a -F '#{pane_tty}'"),
+      (listed.status ?? 1) == 0,
+      let text = String(data: listed.stdout, encoding: .utf8)
+    else { return nil }
+    return text.split(whereSeparator: \.isNewline).map {
+      String($0).trimmingCharacters(in: .whitespaces)
+    }.filter { !$0.isEmpty }
+  }
+
   /// The pane Nerve named is this host's session. Focus the tab already
   /// showing it, or attach it on a shell that is still free. A pane list
   /// belongs to one saved host; its tabs say which machine that is, so a

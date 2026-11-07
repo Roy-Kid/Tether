@@ -191,6 +191,10 @@ public protocol TetherPlugin: AnyObject {
   /// The host asks after its own shells, so a pane behind a shell can still
   /// land on the tab that is showing it.
   func claimTerminal(host: String, terminal: String) -> Bool
+  /// Terminals this plugin is showing on `connection`. The host will not
+  /// treat one of them as the shell. Nil when the plugin did not answer;
+  /// an empty list means it answered and is showing none.
+  func reservedTerminals(on connection: RemoteConnection) async -> [String]?
   /// Tells the host when `tabIndicators` or `tabSymbols` change. The host
   /// does not observe a plugin's stored properties through `any TetherPlugin`.
   func observeTabMarks(_: @escaping @MainActor () -> Void)
@@ -210,6 +214,7 @@ extension TetherPlugin {
   public func settings() -> AnyView { AnyView(Text("No additional settings")) }
   public func receiveStatus(_ item: PluginStatusBarItem) {}
   public func claimTerminal(host: String, terminal: String) -> Bool { false }
+  public func reservedTerminals(on connection: RemoteConnection) async -> [String]? { nil }
   public func observeTabMarks(_: @escaping @MainActor () -> Void) {}
 }
 
@@ -269,6 +274,20 @@ public final class PluginRegistry {
         plugin.tabIndicators.first { mark in terminals.contains { $0.matches(mark.target) } }
       }.first
   }
+  /// Terminals enabled plugins are showing on `connection`. Nil when none
+  /// of them answered, which is not the same as an empty list.
+  public func reservedTerminals(on connection: RemoteConnection) async -> [String]? {
+    var answered = false
+    var names: [String] = []
+    for plugin in plugins where isEnabled(plugin.metadata.id) {
+      if let listed = await plugin.reservedTerminals(on: connection) {
+        answered = true
+        names.append(contentsOf: listed)
+      }
+    }
+    return answered ? names : nil
+  }
+
   /// The first enabled plugin's symbol for this terminal, registration order.
   public func tabSymbol(for terminal: PluginTerminalIdentity) -> String? {
     plugins.lazy.filter { self.isEnabled($0.metadata.id) }

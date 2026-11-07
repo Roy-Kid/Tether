@@ -1517,7 +1517,7 @@ extension RootView {
     return TabContext(
       id: id,
       plugin: pluginContext(for: tab, pluginID: pluginID, pluginName: plugin.metadata.name),
-      terminalName: { [weak tab] in tab?.terminalName },
+      terminalName: { [weak tab] in tab?.terminalNameForPlugin() },
       terminalHost: { [weak tab] in tab?.pluginTerminalIdentity?.host },
       focus: { tabs.select(id) },
       dismissAccessory: { tabs.dismissAccessory(pluginID, on: id) },

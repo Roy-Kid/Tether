@@ -236,20 +236,13 @@ impl RemoteConnection {
         directory: Option<String>,
         cancellation: Arc<CancellationToken>,
     ) -> Result<TmuxSessionInfo, TetherError> {
-        let quoted = tether_tmux::quote(&name).map_err(error)?;
-        if name.trim().is_empty() {
-            return Err(error("Enter a session name"));
-        }
-        let start_directory =
-            directory.map(|directory| tether_tmux::quote(&directory).map_err(error)).transpose()?;
-        let directory_option =
-            start_directory.map(|directory| format!("-c {directory} ")).unwrap_or_default();
-        let command =
-            format!("tmux new-session -d -P -F '#{{session_id}}' {directory_option}-s {quoted}");
+        // A blank name is not a name we invent. tmux's own default is the
+        // lowest free number, which is what `new-session` does without `-s`.
+        let command = new_session_command(&name, directory.as_deref())?;
         tokio::select! {
             _ = cancellation.inner.cancelled() => Err(error("Cancelled")),
             result = self.query(&command) => {
-                let id = result?.trim().to_owned(); validate_session(&id)?;
+                let (id, name) = parse_created_session(&result?)?;
                 Ok(TmuxSessionInfo { id, name, attached: false, windows: Vec::new() })
             }
         }
@@ -318,7 +311,8 @@ impl RemoteConnection {
         };
         for line in text.lines() {
             let Some((client_tty, session_id)) = line.split_once('|') else { continue };
-            if client_tty == tty {
+            // `ps` says `pts/5`, a pty name says `/dev/pts/5`. Those are one device.
+            if same_tty(client_tty, &tty) {
                 validate_session(session_id)?;
                 return Ok(Some(session_id.to_owned()));
             }
@@ -341,6 +335,61 @@ impl RemoteConnection {
         Ok(captured.text())
     }
 }
+/// `new-session` without `-s` when the person did not give a name, so tmux
+/// picks the next free number. The format line is how that name comes back.
+fn new_session_command(name: &str, directory: Option<&str>) -> Result<String, TetherError> {
+    let mut command = String::from("tmux new-session -d -P -F '#{session_id}|#{session_name}'");
+    if let Some(directory) = directory {
+        let quoted = tether_tmux::quote(directory).map_err(error)?;
+        command.push_str(" -c ");
+        command.push_str(&quoted);
+    }
+    let name = name.trim();
+    if !name.is_empty() {
+        let quoted = tether_tmux::quote(name).map_err(error)?;
+        command.push_str(" -s ");
+        command.push_str(&quoted);
+    }
+    Ok(command)
+}
+
+fn parse_created_session(text: &str) -> Result<(String, String), TetherError> {
+    // A login banner shares this stream on some hosts. The line tmux prints
+    // is the one that names a session; the others are not.
+    for line in text.lines() {
+        let line = line.trim();
+        let Some((id, name)) = line.split_once('|') else { continue };
+        if validate_session(id).is_err() {
+            continue;
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        return Ok((id.to_owned(), name.to_owned()));
+    }
+    Err(error("tmux did not name the session"))
+}
+
+/// One device, however `ps` or tmux spelled it. Matches `TerminalName.canonical`.
+fn same_tty(left: &str, right: &str) -> bool {
+    canonical_tty(left) == canonical_tty(right)
+}
+
+fn canonical_tty(raw: &str) -> String {
+    let mut value = raw.trim().to_ascii_lowercase();
+    if let Some(rest) = value.strip_prefix("/dev/") {
+        value = rest.to_owned();
+    }
+    if let Some(rest) = value.strip_prefix('s')
+        && !rest.is_empty()
+        && rest.bytes().all(|b| b.is_ascii_digit())
+    {
+        return format!("tty{value}");
+    }
+    value
+}
+
 fn validate_session(id: &str) -> Result<(), TetherError> {
     if !id.starts_with('$')
         || id.len() < 2
@@ -532,6 +581,44 @@ mod tests {
     #[test]
     fn underscores_from_c0_replacement_are_not_sessions() {
         assert!(assemble_sessions("$28_0_ATV\n", "").is_err());
+    }
+
+    #[test]
+    fn an_empty_name_does_not_hide_the_sessions_after_it() {
+        let listed = assemble_sessions("$1|0|\n$2|1|work\n", "").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "");
+        assert_eq!(listed[1].name, "work");
+    }
+
+    #[test]
+    fn a_blank_name_lets_tmux_choose() {
+        let command = new_session_command("  ", None).unwrap();
+        assert!(!command.contains(" -s "));
+        assert!(command.contains("#{session_id}|#{session_name}"));
+        let named = new_session_command("it's", Some("/tmp/a b")).unwrap();
+        assert!(named.contains("-s 'it'\\''s'"));
+        assert!(named.contains("-c '/tmp/a b'"));
+    }
+
+    #[test]
+    fn the_created_line_is_the_name_tmux_assigned() {
+        let (id, name) = parse_created_session("$4|0\n").unwrap();
+        assert_eq!(id, "$4");
+        assert_eq!(name, "0");
+        let (id, name) = parse_created_session("Welcome\n$4|0\n").unwrap();
+        assert_eq!(id, "$4");
+        assert_eq!(name, "0");
+        assert!(parse_created_session("$4|").is_err());
+        assert!(parse_created_session("not-a-session|0").is_err());
+    }
+
+    #[test]
+    fn pty_spellings_of_one_device_match() {
+        assert!(same_tty("/dev/pts/5", "pts/5"));
+        assert!(same_tty("/dev/ttys004", "ttys004"));
+        assert!(same_tty("s004", "/dev/ttys004"));
+        assert!(!same_tty("/dev/pts/5", "/dev/pts/6"));
     }
 }
 

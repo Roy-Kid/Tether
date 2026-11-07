@@ -110,6 +110,7 @@ import TmuxPlugin
     func openAdditionalWindow() {
       let tabs = TabSet()
       tabs.quickTerminal = model.tabs.quickTerminal
+      tabs.reservedTerminals = model.tabs.reservedTerminals
       let window = WorkspaceWindow(
         hosting: RootHost(model: model, ownedSessions: tabs)
           .environment(\.workspaceHidesOnClose, false),

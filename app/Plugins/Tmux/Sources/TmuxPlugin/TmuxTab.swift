@@ -25,7 +25,9 @@ public final class TmuxTab: TabAttachment {
   public var busy = false
   public var draftName = ""
   /// A new session's name is being typed in the list. Nothing is created until
-  /// that name is committed, and nothing asks for it in a sheet.
+  /// that name is committed. Return on an empty field leaves the name to
+  /// tmux, which uses the next free number. Leaving the field blank creates
+  /// nothing.
   public var namingSession = false
   /// Escape in the name field also reaches the picker's cancel. Set for that
   /// turn so cancelling the name does not close the picker.
@@ -111,7 +113,9 @@ public final class TmuxTab: TabAttachment {
   public var shownTerminals: [String] { shellSessionID.map(paneTTYs(of:)) ?? [] }
   public var subtitle: String {
     guard let id = shellSessionID else { return "" }
-    return sessions.first { $0.id == id }?.name ?? shellSessionName
+    if let name = sessions.first(where: { $0.id == id })?.name, !name.isEmpty { return name }
+    if !shellSessionName.isEmpty { return shellSessionName }
+    return id
   }
   /// The chip takes the session name. The host does not invent one.
   public var tabTitle: String { subtitle }
@@ -439,10 +443,11 @@ public final class TmuxTab: TabAttachment {
         {
           notePanes(listed: text)
         }
-        if let tty = tab.terminalName() {
+        if let tty = tab.terminalName() ?? shellTTY {
           // A switch that starts while this question is in flight wins.
           // A failed question leaves the client already known: tmux missing
-          // is not the same as this shell having detached.
+          // is not the same as this shell having detached. A tty not learned
+          // yet is not a detach either, so a name we already have stays.
           clientEpoch &+= 1
           let epoch = clientEpoch
           do {
@@ -453,7 +458,7 @@ public final class TmuxTab: TabAttachment {
           } catch {
             // The question failed. The client already known stays.
           }
-        } else if !closed {
+        } else if !closed, shellTTY == nil {
           noteShellClient(tty: nil, session: nil)
         }
       } catch {
@@ -488,22 +493,10 @@ public final class TmuxTab: TabAttachment {
     sessionsLoaded = true
   }
 
-  /// A name nobody in the current list has. The row starts with it selected.
-  public func suggestedSessionName() -> String {
-    let taken = Set(listedSessions.map(\.name))
-    var name = "untitled"
-    var number = 2
-    while taken.contains(name) {
-      name = "untitled \(number)"
-      number += 1
-    }
-    return name
-  }
-
   /// Reports success only after the new session is running in this terminal.
+  /// An empty name is left for tmux, which numbers the session itself.
   public func create(onSuccess: @escaping @MainActor () -> Void) {
     let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty else { return }
     let directory = tab.workingDirectory()
     run { [self] in
       let connection = try lease()
@@ -547,7 +540,9 @@ public final class TmuxTab: TabAttachment {
       guard name != previous else { return }
       tab.renameShell(id, name)
     case .session(let session):
-      guard name != session.name else { return }
+      // Clearing the field and leaving it is not a rename. tmux refuses an
+      // empty name, and sending one used to leave the session unusable.
+      guard !name.isEmpty, name != session.name else { return }
       renameSession(session, to: name)
     case .window(let window):
       guard name != window.name else { return }
@@ -590,9 +585,27 @@ public final class TmuxTab: TabAttachment {
     let connection = try lease()
     // A remote tty is learned after connect. Attaching before that answer
     // would type into a client that is already there.
-    guard let tty = await terminalTTY() else {
+    if let tty = await terminalTTY() {
+      try await open(connection, tty: tty, chosen: chosen, windowID: windowID)
+      return
+    }
+    if closed || Task.isCancelled { return }
+    // No pty yet. A server with no client cannot be the one on screen, so
+    // attaching here does not cover another client. A client we cannot name
+    // stays put: switching one of several would move a different terminal.
+    let listed = try await connection.execute(TmuxClients.listCommand)
+    guard TmuxClients.idle(TmuxClients.listing(
+      status: listed.status, stdout: listed.stdout, stderr: listed.stderr))
+      || TmuxClients.noServer(listed.stdout, listed.stderr)
+    else {
       throw TmuxTabError.rejected("This terminal has no name yet.")
     }
+    try attachByTyping(chosen, windowID: windowID)
+  }
+
+  private func open(
+    _ connection: RemoteConnection, tty: String, chosen: TmuxSessionInfo, windowID: UInt32?
+  ) async throws {
     if closed || Task.isCancelled { return }
     let current = try await connection.tmuxSession(forClientTTY: tty)
     if closed || Task.isCancelled { return }
@@ -615,6 +628,10 @@ public final class TmuxTab: TabAttachment {
       if let windowID { try await exec(TmuxCommands.selectWindow(windowID)) }
       return
     }
+    try attachByTyping(chosen, windowID: windowID)
+  }
+
+  private func attachByTyping(_ chosen: TmuxSessionInfo, windowID: UInt32?) throws {
     holdFollowers()
     guard let line = TmuxCommands.attachLine(name: chosen.name, id: chosen.id, window: windowID) else {
       throw TmuxTabError.rejected(TmuxCommands.rejectedName)
@@ -648,14 +665,16 @@ public final class TmuxTab: TabAttachment {
   }
 
   /// The shell's tty, waiting briefly when a remote session has not learned
-  /// it yet. Unknown stays unknown: attaching before that is known is how a
-  /// second client used to cover the one already on screen.
+  /// it yet. The wait is long enough for one look that starts as we ask:
+  /// a miss just before this used to expire, and every session then failed
+  /// the same way. Unknown stays unknown: attaching before that is known is
+  /// how a second client used to cover the one already on screen.
   private func terminalTTY() async -> String? {
-    if let tty = tab.terminalName() { return tty }
-    for _ in 0..<10 {
+    if let tty = tab.terminalName() ?? shellTTY { return tty }
+    for _ in 0..<15 {
       if closed || Task.isCancelled { return nil }
       try? await Task.sleep(for: .milliseconds(200))
-      if let tty = tab.terminalName() { return tty }
+      if let tty = tab.terminalName() ?? shellTTY { return tty }
     }
     return nil
   }
@@ -938,6 +957,22 @@ enum TmuxClients {
     if status == 0 { return out }
     if (out + "\n" + err).localizedCaseInsensitiveContains("no clients") { return "" }
     return nil
+  }
+
+  /// The server answered and no client is attached. Unknown is not idle:
+  /// attaching then is how a second client used to cover the one on screen.
+  static func idle(_ listing: String?) -> Bool {
+    guard let listing else { return false }
+    return listing.split(whereSeparator: \.isNewline).allSatisfy {
+      $0.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+  }
+
+  /// No tmux server means no client. A missing binary does not: that failure
+  /// is the command's own complaint.
+  static func noServer(_ stdout: Data, _ stderr: Data) -> Bool {
+    let text = String(decoding: stdout, as: UTF8.self) + "\n" + String(decoding: stderr, as: UTF8.self)
+    return text.localizedCaseInsensitiveContains("no server running")
   }
 }
 
