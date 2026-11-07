@@ -105,8 +105,7 @@ jobs:
           path: ~/.cargo/bin/uniffi-bindgen-cs
           key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}
       - name: Install the C# binding generator
-        if: steps.bindgen.outputs.cache-hit != 'true'
-        run: cargo install --force --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
+        run: python3 scripts/ensure-bindgen.py
       - name: Check
         run: python3 scripts/check.py --job apple
 
@@ -182,8 +181,7 @@ jobs:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
           key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}
       - name: Install the C# binding generator
-        if: steps.bindgen.outputs.cache-hit != 'true'
-        run: cargo install --force --locked uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0
+        run: python scripts/ensure-bindgen.py
       - name: Check
         run: python scripts/check.py --job windows
       - uses: actions/upload-artifact@v4
