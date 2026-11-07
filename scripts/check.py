@@ -104,8 +104,16 @@ def renderer_boundaries(root=ROOT):
                 require(not re.search(r"\bCanvas\s*[{(]", source), f"Independent terminal painter: {path}")
 
 
+def sdk_crates_have_no_gpui():
+    """The desktop preview is the only crate allowed to link GPUI."""
+    for path in (ROOT / "crates").glob("*/Cargo.toml"):
+        require("gpui" not in path.read_text(encoding="utf-8"),
+                f"SDK crate depends on gpui: {path.relative_to(ROOT)}")
+
+
 def source_checks():
     renderer_boundaries(ROOT)
+    sdk_crates_have_no_gpui()
     try:
         import yaml
     except ImportError as error:
@@ -150,19 +158,34 @@ def common():
     run(sys.executable, "scripts/test-check.py")
     run(sys.executable, "scripts/test-render-evaluation.py")
     source_checks()
+    # GPUI's Win32 and Cocoa backends do not link on Linux. Every other host
+    # checks the same desktop preview the Apple job compiles on its own.
+    workspace = ["--workspace"]
     if sys.platform.startswith("linux"):
         languages = run("fc-match", "--format=%{lang}", ":lang=zh-cn", capture=True)
         require("zh" in languages, "Install fonts-dejavu-core and fonts-noto-cjk before checking.")
+        workspace.append("--exclude")
+        workspace.append("tether-desktop")
     run("cargo", "fmt", "--all", "--check")
     # Clippy over every target compiles the whole workspace at once (what
     # once caught two calls to functions that no longer existed); the tests
     # build what they link. A separate full build added a minute and nothing.
-    run("cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings")
-    run("cargo", "test", "--locked", "--workspace")
+    run("cargo", "clippy", "--locked", *workspace, "--all-targets", "--", "-D", "warnings")
+    run("cargo", "test", "--locked", *workspace)
     for crate, backend in (("tether-terminal", "russh"), ("tether-local", "russh"),
                            ("tether-ssh", "portable-pty")):
-        require(backend not in run("cargo", "tree", "--locked", "-p", crate, capture=True),
-                f"{crate} reaches forbidden backend {backend}")
+        tree = run("cargo", "tree", "--locked", "-p", crate, capture=True)
+        require(backend not in tree, f"{crate} reaches forbidden backend {backend}")
+        require("gpui" not in tree.split(), f"{crate} links gpui")
+    if not sys.platform.startswith("linux"):
+        desktop = run("cargo", "tree", "--locked", "-p", "tether-desktop", capture=True).split()
+        # The preview hosts the existing renderer. It reaches it through
+        # tether-ffi, and the SDK crates still must not link GPUI.
+        for name in ("tether-ffi", "tether-render"):
+            require(name in desktop, f"tether-desktop does not link {name}")
+        for crate in ("tether-core", "tether-files", "tether-tmux", "tether-render", "tether-ffi"):
+            tree = run("cargo", "tree", "--locked", "-p", crate, capture=True)
+            require("gpui" not in tree.split(), f"{crate} links gpui")
 
 
 def stage_native(release=False):
@@ -253,6 +276,10 @@ def require_pinned_xcode():
 
 def apple(build=True):
     require_pinned_xcode()
+    # The same GPUI desktop binary Windows checks in the workspace gate.
+    # This job does not run that gate, so the preview is compiled here too.
+    run("cargo", "clippy", "--locked", "-p", "tether-desktop", "--all-targets", "--", "-D", "warnings")
+    run("cargo", "test", "--locked", "-p", "tether-desktop")
     # A simulator takes minutes to boot and nothing waits on it until the
     # phone's tests: it boots while everything else builds.
     simulator = iphone_simulator()

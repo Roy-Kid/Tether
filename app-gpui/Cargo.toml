@@ -1,0 +1,17 @@
+[package]
+name = "tether-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Tether desktop preview. One GPUI UI for Windows and macOS."
+
+# Upstream Zed tag v1.28.0-pre, commit 8e1ba5b4e08e8b96c03dee14ca584581e9f33a3a.
+# Republished as gpui-unofficial because crates.io `gpui` 0.2.2 predates the
+# platform split. The library target is still named `gpui`.
+[dependencies]
+gpui = { package = "gpui-unofficial", version = "=1.28.0-pre", default-features = false, features = ["windows-manifest"] }
+gpui_platform = { package = "gpui-platform-gpui-unofficial", version = "=1.28.0-pre", features = ["font-kit"] }
+raw-window-handle = "0.6.2"
+tether-ffi = { path = "../crates/tether-ffi", features = ["render"] }
+tokio = { workspace = true }

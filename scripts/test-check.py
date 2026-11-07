@@ -152,6 +152,50 @@ class GateTests(unittest.TestCase):
         with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", side_effect=command):
             gate.common()
 
+    def test_linux_skips_the_desktop_preview(self):
+        calls = []
+
+        def command(*args, **kwargs):
+            calls.append(args)
+            return "en|zh-cn"
+
+        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), \
+                patch.object(gate, "run", side_effect=command):
+            gate.common()
+        clippy = next(args for args in calls if args[:2] == ("cargo", "clippy"))
+        test = next(args for args in calls if args[:2] == ("cargo", "test"))
+        self.assertEqual(clippy[clippy.index("--exclude") + 1], "tether-desktop")
+        self.assertEqual(test[test.index("--exclude") + 1], "tether-desktop")
+
+    def test_other_hosts_keep_the_desktop_preview_in_the_workspace(self):
+        calls = []
+
+        def command(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("cargo", "tree") and args[-1] == "tether-desktop":
+                return "tether-ffi tether-render gpui-unofficial"
+            return ""
+
+        with patch.object(gate.sys, "platform", "win32"), patch.object(gate, "source_checks"), \
+                patch.object(gate, "run", side_effect=command):
+            gate.common()
+        clippy = next(args for args in calls if args[:2] == ("cargo", "clippy"))
+        self.assertNotIn("--exclude", clippy)
+        trees = [args for args in calls if args[:2] == ("cargo", "tree")]
+        self.assertTrue(any(args[-1] == "tether-desktop" for args in trees))
+
+    def test_sdk_crates_cannot_depend_on_gpui(self):
+        crate = self.root / "crates" / "tether-core"
+        crate.mkdir(parents=True)
+        manifest = crate / "Cargo.toml"
+        manifest.write_text('[dependencies]\ngpui = "1"\n')
+        with patch.object(gate, "ROOT", self.root):
+            with self.assertRaisesRegex(RuntimeError, "gpui"):
+                gate.sdk_crates_have_no_gpui()
+        manifest.write_text('[dependencies]\nserde = "1"\n')
+        with patch.object(gate, "ROOT", self.root):
+            gate.sdk_crates_have_no_gpui()
+
     def test_missing_cjk_font_blocks(self):
         with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", return_value="en|fr"):
             with self.assertRaisesRegex(RuntimeError, "fonts-noto-cjk"):
@@ -266,6 +310,17 @@ class GateTests(unittest.TestCase):
         # CI's Xcode 26.6 failed to type-check a test Xcode 27.1 compiled.
         with self.assertRaisesRegex(RuntimeError, r"\.xcode-version"):
             self.apple_commands("26.6")
+
+    def test_apple_compiles_the_same_desktop_preview(self):
+        calls = self.apple_commands("27.1")
+        commands = [args for args, _env in calls]
+        version = commands.index(("xcodebuild", "-version"))
+        clippy = next(index for index, args in enumerate(commands)
+                      if args[:2] == ("cargo", "clippy") and "tether-desktop" in args)
+        tested = next(index for index, args in enumerate(commands)
+                      if args[:2] == ("cargo", "test") and "tether-desktop" in args)
+        self.assertLess(version, clippy)
+        self.assertLess(clippy, tested)
 
     def test_swift_builds_without_sibling_checkouts(self):
         # A sibling checkout resolved here and nowhere else.
