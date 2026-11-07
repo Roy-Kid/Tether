@@ -81,14 +81,13 @@ together. Read it before touching architecture.
 ## Working here
 
 Install the repository-local commit gate once per clone with
-`python scripts/install-hooks.py`. It rejects partial staging and runs the same
-host-platform checks as CI. See `docs/commit-checks.md` for tool requirements,
-the audited failure history and cross-platform coverage. Run
-`python scripts/check.py` to check the working tree before staging. Commits go
-straight to dev and master. A push runs only the Windows tests
-(`windows.yml`), the one thing a Mac cannot check before committing; the whole
-gate runs on CI nightly (`ci.yml`). Each CI job is one `check.py --job <name>`,
-the same function a commit runs.
+`python scripts/install-hooks.py`. It rejects partial staging. On a Mac a
+commit runs `linux` only: source checks, `cargo fmt`, Clippy, and `cargo test`.
+`apple` and `fuzz` are the slow compiles, so they run in CI when dev or master
+is pushed, and again nightly. See `docs/commit-checks.md`. Run
+`python scripts/check.py --job apple` for that matrix locally. Commits go
+straight to dev and master. A push also runs the Windows tests
+(`windows.yml`). Each CI job is one `check.py --job <name>`.
 
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place

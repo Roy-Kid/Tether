@@ -18,15 +18,18 @@ take several minutes because it runs builds and tests.
 `linux`, `apple`, `windows`, `windows-tests`, `fuzz` — and a workflow job is setup steps and a
 single `python scripts/check.py --job <name>`, nothing else; `test-check.py`
 fails if a workflow runs anything outside the gate, or if the workflows' jobs
-and the gate's differ. A commit on a Mac runs `linux`, `apple` and `fuzz`
-(the push-length fuzz: every recorded crash, then ten seconds a target; the
-nightly run sets `TETHER_FUZZ_SECONDS=600`). `--job` runs one job.
+and the gate's differ. A commit on a Mac runs `linux` only: source checks,
+`cargo fmt`, Clippy, and `cargo test`. `apple` compiles seven Swift packages,
+an iOS slice and the phone's tests; `fuzz` brings up nightly. Those two run
+when dev or master is pushed (fuzz for ten seconds a target) and again each
+night (`TETHER_FUZZ_SECONDS=600`). `--job apple` or `--job fuzz` runs one of
+them locally.
 
-**A push runs only what a Mac cannot.** Commits go straight to dev and
+**A push runs what the commit did not.** Commits go straight to dev and
 master; there is no staging branch. A push to either runs `windows-tests`
 (`windows.yml`): the workspace's tests and the .NET suites on Windows, no lint.
-The whole gate — `linux`, `apple`, `fuzz` and the full `windows` — runs in
-`ci.yml` each night on master and on demand.
+It also runs `apple` and the short `fuzz`. `linux` and the full `windows`
+package run in `ci.yml` each night and on demand.
 
 | Previous failure | Gate that catches recurrence |
 | --- | --- |
@@ -58,10 +61,10 @@ CI. Generated bindings are compared in a temporary directory without rewriting
 the index or source. PowerShell syntax is parsed before building. Warnings fail
 the WinUI build and release publish.
 
-macOS commits run common checks, build a debug Apple XCFramework (the Mac and
-simulator slices: no check loads a device one), and execute all Swift suites,
-the app's iOS simulator build and the frontend's tests on an iOS simulator,
-which boots while the rest builds. They require the appropriate Xcode SDK and
+The `apple` job builds a debug Apple XCFramework (the Mac and simulator
+slices: no check loads a device one) and runs every Swift suite, the app's
+iOS simulator build and the frontend's tests on an iOS simulator, which boots
+while the rest builds. It needs the Xcode named in `.xcode-version` and the
 Rust Apple targets. What ships is built in release by `build-xcframework.sh`.
 The Files browser UI suites share one serialized parent because windows,
 clipboard contents and the plugin dialog gateway are process-wide state.
@@ -75,9 +78,10 @@ Hook files alone do not enable a hook. Verify installation with
 Rerun the installer if either setting is absent; Git does not transfer local
 hook configuration when cloning a repository.
 
-Linux commits run common checks. The fuzz job replays stored regressions, then
-runs every target for ten seconds (`TETHER_FUZZ_SECONDS`); the nightly run
-gives each 600. They require CJK fonts, nightly Rust, and cargo-fuzz.
+A Linux commit runs the same `linux` job, which needs CJK fonts for the
+shaping tests. The fuzz job replays stored regressions, then runs every
+target for ten seconds on a push and for 600 each night
+(`TETHER_FUZZ_SECONDS`). It needs nightly Rust and cargo-fuzz.
 
 A local pass counts only on CI's compilers and inputs. Both compilers are
 pinned in the repository: `rust-toolchain.toml` (cargo obeys it here and on

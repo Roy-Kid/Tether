@@ -235,8 +235,12 @@ def require_test_report(output: str) -> None:
 
 
 def swift_test(*args: str, env: dict) -> None:
-    """`swift test`, judged on what it reported."""
-    command = ["swift", "test", *args]
+    """`swift test`, judged on what it reported.
+
+    Indexing and full DWARF are for a debugger. The gate builds seven
+    packages and never reads either, and they are most of that time.
+    """
+    command = ["swift", "test", "--disable-index-store", "-debug-info-format", "none", *args]
     print("+ " + " ".join(command), flush=True)
     require_test_report(stream(command, env=env))
 
@@ -274,13 +278,16 @@ def apple(build=True):
                     "app/Plugins/Tmux", "app/Plugins/Files", "app/Plugins/Ports", "app"):
         swift_test("--package-path", package, env=hermetic)
     run("xcodebuild", "-scheme", "TetherApp", "-destination", "generic/platform=iOS Simulator",
-        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "build",
+        "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64",
+        "ONLY_ACTIVE_ARCH=YES", "COMPILER_INDEX_STORE_ENABLE=NO", "DEBUG_INFORMATION_FORMAT=dwarf",
+        "build",
         cwd=ROOT / "app", env=hermetic)
     # The phone's own frontend tests are `#if os(iOS)`: `swift test` on a Mac
     # compiles them out, so they run on a simulator or nowhere.
     run("xcodebuild", "test", "-scheme", "TetherFrontend-Package",
         "-destination", f"platform=iOS Simulator,id={simulator}",
         "-derivedDataPath", ROOT / "artifacts/ios-check", "CODE_SIGNING_ALLOWED=NO",
+        "COMPILER_INDEX_STORE_ENABLE=NO",
         cwd=ROOT / "app/Packages/TetherFrontend", env=hermetic)
 
 
@@ -306,7 +313,9 @@ def fuzz():
 
 
 # A CI job is one of these, and runs nothing else (test-check.py holds the
-# workflows to it). The commit gate runs every job its host can.
+# workflows to it). A commit runs the job that is one workspace build.
+# `apple` compiles seven Swift packages and an iOS slice, and `fuzz` brings
+# up nightly; both run when the branch is pushed, not before the commit.
 JOBS = {
     "linux": lambda: common(),
     "apple": lambda: apple(),
@@ -314,7 +323,7 @@ JOBS = {
     "windows-tests": windows_tests,
     "fuzz": lambda: fuzz(),
 }
-HOST_JOBS = {"darwin": ("linux", "apple", "fuzz"), "win32": ("windows",)}
+HOST_JOBS = {"darwin": ("linux",), "win32": ("windows",)}
 
 
 def drop_inherited_sdk():
@@ -353,7 +362,7 @@ def main():
     args = parser.parse_args()
     if args.staged:
         checked_tree = staged_clean()
-    jobs = args.job or HOST_JOBS.get(sys.platform, ("linux", "fuzz"))
+    jobs = args.job or HOST_JOBS.get(sys.platform, ("linux",))
     for job in jobs:
         print(f"== job {job}", flush=True)
         JOBS[job]()

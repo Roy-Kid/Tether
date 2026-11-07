@@ -53,7 +53,12 @@ glyphon = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
 
 # The xcframework is a release build. Thin LTO and stripped symbols are what
-# ship; debug builds stay unoptimised so tests stay quick.
+# ship; debug builds stay unoptimised so tests stay quick. Line tables keep
+# a panic readable. Full DWARF is most of a debug compile, and the tests
+# never read it.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 strip = "symbols"

@@ -1,16 +1,19 @@
-# Every job is setup, then one `scripts/check.py --job <name>`: the commit gate
-# runs the same function for every job its host can, so a job here is a check
-# that already ran before the push, or one this host cannot run (Windows).
+# Every job is setup, then one `scripts/check.py --job <name>`.
 # `scripts/test-check.py` holds this file to that shape.
 #
-# The whole gate, every night and on demand. A commit has already passed it
-# on a Mac before it exists; what a push still needs is `windows.yml`.
+# A Mac commit runs `linux` only. `apple` and `fuzz` are the slow compiles,
+# so they run on a push to dev or master (fuzz for ten seconds a target)
+# and again each night, when fuzz is ten minutes a target. `linux` and the
+# full `windows` package run nightly and on demand: a commit already ran
+# `linux`, and a push already ran `windows-tests`.
 name: CI
 
 on:
+  push:
+    branches: [dev, master]
   workflow_dispatch:
   # The night's fuzz pass is ten minutes a target, where something new is
-  # found; the gate's short pass replays every recorded crash.
+  # found; a push replays every recorded crash, then ten seconds a target.
   schedule:
     - cron: "0 3 * * *"
 
@@ -21,6 +24,7 @@ env:
 jobs:
   linux:
     name: linux
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -154,6 +158,7 @@ jobs:
 
   windows:
     name: windows
+    if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
