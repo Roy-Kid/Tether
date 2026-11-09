@@ -39,38 +39,58 @@ impl MenuTarget {
     }
 }
 
-/// Opens `entries` at the pointer. Call it outside any GPUI update: the
-/// menu runs AppKit's tracking loop, which delivers other events meanwhile.
+/// Opens `entries` at the pointer and returns the chosen item's `choice`.
+/// Call it outside any GPUI update: the menu runs AppKit's tracking loop,
+/// which delivers other events meanwhile.
 pub fn menu(entries: &[Entry]) -> Option<usize> {
     let marker = MainThreadMarker::new()?;
     let target = MenuTarget::new(marker);
-    let menu = NSMenu::new(marker);
-    menu.setAutoenablesItems(false);
-    for (index, entry) in entries.iter().enumerate() {
-        let Entry::Item { title, enabled, checked } = entry else {
-            menu.addItem(&NSMenuItem::separatorItem(marker));
-            continue;
-        };
-        // SAFETY: `choose:` is the target's one action and takes the item.
-        let item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(marker),
-                &NSString::from_str(title),
-                Some(sel!(choose:)),
-                &NSString::from_str(""),
-            )
-        };
-        let target: &AnyObject = &target;
-        // SAFETY: the target outlives the menu, which is closed when this returns.
-        unsafe { item.setTarget(Some(target)) };
-        item.setTag(index as isize);
-        item.setEnabled(*enabled);
-        if *checked {
-            item.setState(NSControlStateValueOn);
-        }
-        menu.addItem(&item);
-    }
+    let menu = build(entries, &target, marker);
     CHOSEN.with(|chosen| chosen.set(None));
     menu.popUpMenuPositioningItem_atLocation_inView(None, NSEvent::mouseLocation(), None);
     CHOSEN.with(Cell::take).and_then(|tag| usize::try_from(tag).ok())
+}
+
+fn build(entries: &[Entry], target: &MenuTarget, marker: MainThreadMarker) -> Retained<NSMenu> {
+    let menu = NSMenu::new(marker);
+    menu.setAutoenablesItems(false);
+    for entry in entries {
+        match entry {
+            Entry::Separator => menu.addItem(&NSMenuItem::separatorItem(marker)),
+            Entry::Submenu { title, entries } => {
+                let item = titled(title, None, marker);
+                item.setSubmenu(Some(&build(entries, target, marker)));
+                menu.addItem(&item);
+            }
+            Entry::Item { title, enabled, checked, choice } => {
+                let item = titled(title, Some(sel!(choose:)), marker);
+                let target: &AnyObject = target;
+                // SAFETY: the target outlives the menu, which closes before `menu` returns.
+                unsafe { item.setTarget(Some(target)) };
+                item.setTag(*choice as isize);
+                item.setEnabled(*enabled);
+                if *checked {
+                    item.setState(NSControlStateValueOn);
+                }
+                menu.addItem(&item);
+            }
+        }
+    }
+    menu
+}
+
+fn titled(
+    title: &str,
+    action: Option<objc2::runtime::Sel>,
+    marker: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    // SAFETY: `choose:` is the target's one action and takes the item.
+    unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(marker),
+            &NSString::from_str(title),
+            action,
+            &NSString::from_str(""),
+        )
+    }
 }

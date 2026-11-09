@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use tether_desktop::selection::{self, Selection};
 use tether_ffi::{
-    FontMetricsDto, OverlayDto, PaletteDto, RenderSurface, RgbaDto, ScreenFrame, SelectionDto,
-    Session,
+    FontMetricsDto, LinkUnderlineDto, OverlayDto, PaletteDto, RenderSurface, RgbaDto, ScreenFrame,
+    SelectionDto, Session, TerminalLink,
 };
 use tether_ui::{Chrome, Rect};
 
@@ -44,6 +44,8 @@ pub struct Pane {
     pub(crate) pointer: Pointer,
     /// The screen last drawn: what a selection is read from.
     pub(crate) frame: Option<ScreenFrame>,
+    /// The web link under the pointer while ⌘ is held: underlined, and what ⌘-click opens.
+    pub(crate) hovered: Option<TerminalLink>,
     /// The overlay's colours: the accent, and the accent at `textSelectionOpacity`.
     accent: u32,
 }
@@ -66,6 +68,7 @@ impl Pane {
             selection: None,
             pointer: Pointer::default(),
             frame: None,
+            hovered: None,
             accent,
         }
     }
@@ -246,17 +249,36 @@ impl Pane {
 
     /// The selection, as the renderer tints it (`TerminalSurface.renderOverlay`).
     fn overlay(&self, frame: &ScreenFrame) -> Option<OverlayDto> {
-        let spans = selection::spans(self.selection?, frame);
-        let (first, last) = (spans.first()?, spans.last()?);
-        let accent = srgb(self.accent);
-        Some(OverlayDto {
-            selection: Some(SelectionDto {
+        let spans =
+            self.selection.map(|chosen| selection::spans(chosen, frame)).unwrap_or_default();
+        let selection = match (spans.first(), spans.last()) {
+            (Some(first), Some(last)) => Some(SelectionDto {
                 anchor_column: first.start as u32,
                 anchor_row: first.row as u32,
                 focus_column: (last.end - 1) as u32,
                 focus_row: last.row as u32,
             }),
-            link_underlines: Vec::new(),
+            _ => None,
+        };
+        // A web link is known to exist, so its underline is solid.
+        let underlines: Vec<LinkUnderlineDto> = self
+            .hovered
+            .iter()
+            .flat_map(|link| &link.spans)
+            .map(|span| LinkUnderlineDto {
+                row: span.row.into(),
+                start: span.start.into(),
+                end: span.end.into(),
+                confirmed: true,
+            })
+            .collect();
+        if selection.is_none() && underlines.is_empty() {
+            return None;
+        }
+        let accent = srgb(self.accent);
+        Some(OverlayDto {
+            selection,
+            link_underlines: underlines,
             selection_color: RgbaDto { alpha: TEXT_SELECTION_OPACITY, ..accent },
             link_color: accent,
         })

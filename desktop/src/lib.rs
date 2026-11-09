@@ -10,6 +10,7 @@ pub mod dialog;
 pub mod foreground;
 pub mod keys;
 pub mod labels;
+pub mod links;
 pub mod selection;
 pub mod split;
 pub mod tab_menu;

@@ -6,8 +6,18 @@
 //! triple, and Shift extends the selection on screen. A drag that ends
 //! copies; a click that never moved clears.
 
+use tether_desktop::links;
 use tether_desktop::selection::{self, Kind, Point, Selection};
-use tether_ffi::{KeyModifiers, MouseTracking, PointerButton, PointerPhase, TerminalInput};
+use tether_ffi::{
+    KeyModifiers, MouseTracking, PointerButton, PointerPhase, TerminalInput, TerminalLink,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cursor {
+    Arrow,
+    Hand,
+    Text,
+}
 
 use crate::pane::Pane;
 
@@ -44,7 +54,7 @@ impl Press {
 }
 
 impl Pane {
-    fn tracking(&self) -> MouseTracking {
+    pub(crate) fn tracking(&self) -> MouseTracking {
         self.frame.as_ref().map(|frame| frame.mouse).unwrap_or_default()
     }
 
@@ -127,6 +137,36 @@ impl Pane {
         }
         self.highlight(kind, anchor, pointer.head.unwrap_or(anchor));
         self.copy()
+    }
+
+    /// The link at a window point, if the text there names one.
+    pub fn link_at(&self, x: f32, y: f32) -> Option<TerminalLink> {
+        let (row, column) = self.cell_within(x, y)?;
+        self.session.link_at(row, column)
+    }
+
+    /// ⌘ over a web link underlines it; anything else clears the underline.
+    pub fn hover(&mut self, x: f32, y: f32, command: bool) {
+        let link = command
+            .then(|| self.link_at(x, y))
+            .flatten()
+            .filter(|link| links::web_address(link).is_some());
+        if link != self.hovered {
+            self.hovered = link;
+            self.draw();
+        }
+    }
+
+    /// What the pointer looks like here (`resetCursorRects`): an arrow for a
+    /// program that takes the mouse, a hand over a link, a text beam otherwise.
+    pub fn cursor(&self) -> Cursor {
+        if self.tracking() != MouseTracking::Off {
+            Cursor::Arrow
+        } else if self.hovered.is_some() {
+            Cursor::Hand
+        } else {
+            Cursor::Text
+        }
     }
 
     /// ⌘C: the selection on screen.

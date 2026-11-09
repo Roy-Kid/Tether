@@ -13,7 +13,7 @@ use tether_desktop::split::{Divider, PaneId};
 use tether_ffi::PointerButton;
 use tether_ui::{Chrome, Ink, Kind, Rect, Workspace, layout};
 
-use crate::pointer::Press;
+use crate::pointer::{Cursor, Press};
 use crate::workspace::{Desktop, Drag};
 
 /// The buttons a terminal hears, as AppKit's three mouse handlers do.
@@ -64,7 +64,20 @@ impl Render for Desktop {
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 this.drag_to(event, cx);
-            }));
+            }))
+            // ⌘ let go: no link is underlined any more (`flagsChanged`).
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _, _| {
+                    if !event.modifiers.platform {
+                        for pane in this.panes.values_mut() {
+                            if pane.hovered.is_some() {
+                                pane.hovered = None;
+                                pane.draw();
+                            }
+                        }
+                    }
+                },
+            ));
         // Ups are heard anywhere in the window: a drag that leaves its terminal still ends.
         BUTTONS
             .into_iter()
@@ -154,35 +167,47 @@ impl Desktop {
         let area = BUTTONS.into_iter().fold(at(placed.terminal), |area, button| {
             area.on_mouse_down(
                 button,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.pointer_down(pane, button, event, cx);
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.pointer_down(pane, button, event, window, cx);
                 }),
             )
         });
-        area.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, _| {
-            // Over a terminal with no press in progress: a program that wants every move.
-            if this.pointer_pane.is_none()
-                && event.pressed_button.is_none()
-                && let Some(target) = this.panes.get_mut(&pane)
-            {
+        let cursor = match self.panes.get(&pane).map(|target| target.cursor()) {
+            Some(Cursor::Arrow) => CursorStyle::Arrow,
+            Some(Cursor::Hand) => CursorStyle::PointingHand,
+            _ => CursorStyle::IBeam,
+        };
+        area.cursor(cursor)
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                // Over a terminal with no press in progress: ⌘ points at links, and
+                // a program that wants every move hears it.
+                if this.pointer_pane.is_none()
+                    && event.pressed_button.is_none()
+                    && let Some(target) = this.panes.get_mut(&pane)
+                {
+                    let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+                    let before = target.cursor();
+                    target.hover(x, y, event.modifiers.platform);
+                    target.moved(x, y, false, press(event.modifiers, 0));
+                    if target.cursor() != before {
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_scroll(cx.listener(move |this, event: &ScrollEvent, _, cx| {
+                let Some(target) = this.panes.get_mut(&pane) else { return };
+                // A trackpad's travel is points, divided by the row; a wheel's is rows.
+                let rows = match event.delta {
+                    ScrollDelta::Pixels(delta) => match target.line_points() {
+                        Some(line) => f32::from(delta.y) / line,
+                        None => return,
+                    },
+                    ScrollDelta::Lines(delta) => delta.y,
+                };
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-                target.moved(x, y, false, press(event.modifiers, 0));
-            }
-        }))
-        .on_scroll(cx.listener(move |this, event: &ScrollEvent, _, cx| {
-            let Some(target) = this.panes.get_mut(&pane) else { return };
-            // A trackpad's travel is points, divided by the row; a wheel's is rows.
-            let rows = match event.delta {
-                ScrollDelta::Pixels(delta) => match target.line_points() {
-                    Some(line) => f32::from(delta.y) / line,
-                    None => return,
-                },
-                ScrollDelta::Lines(delta) => delta.y,
-            };
-            let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-            target.wheel(rows, x, y, event.modifiers.shift);
-            cx.stop_propagation();
-        }))
+                target.wheel(rows, x, y, event.modifiers.shift);
+                cx.stop_propagation();
+            }))
     }
 
     fn divider(&self, divider: &Divider, ink: Ink, cx: &mut Context<Self>) -> gpui::Div {
@@ -223,12 +248,30 @@ impl Desktop {
         pane: PaneId,
         button: MouseButton,
         event: &MouseDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.select(pane, cx);
         let Some(target) = self.panes.get_mut(&pane) else { return };
         let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-        target.press(pointer_button(button), x, y, press(event.modifiers, event.click_count));
+        let modifiers = event.modifiers;
+        // ⌘ belongs to links: a program in the terminal cannot ask for it.
+        if button == MouseButton::Left && modifiers.platform {
+            if let Some(address) =
+                target.link_at(x, y).as_ref().and_then(tether_desktop::links::web_address)
+            {
+                cx.open_url(address);
+            }
+            return;
+        }
+        // A right click is the menu, unless a program has the mouse and Shift is up.
+        let program = target.tracking() != tether_ffi::MouseTracking::Off && !modifiers.shift;
+        if button == MouseButton::Right && !program {
+            let link = target.link_at(x, y);
+            self.open_terminal_menu(pane, link, window, cx);
+            return;
+        }
+        target.press(pointer_button(button), x, y, press(modifiers, event.click_count));
         self.pointer_pane = Some(pane);
     }
 
