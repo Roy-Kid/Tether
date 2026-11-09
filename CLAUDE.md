@@ -114,7 +114,7 @@ cargo tree -p tether-terminal    # must show no russh
 cargo tree -p tether-local       # must show no russh either
 cargo tree -p tether-ui          # must show no wgpu and no tether-render
 cargo tree -p tether-render      # must show no gpui
-cargo tree -p tether-desktop     # must show no xgpui: the toolkit is --features gui
+cargo tree -p tether-desktop     # must show no gpui: the toolkit is --features gui
 cargo test -p tether-ui --features test-support   # the chrome's click tests
 cargo run -p tether-desktop --features gui        # the GPUI host
 

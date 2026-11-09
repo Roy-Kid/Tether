@@ -29,9 +29,9 @@ gui = [
 [dependencies]
 tether-ui = { path = "../crates/tether-ui" }
 tether-ffi = { path = "../crates/tether-ffi" }
-gpui = { package = "xgpui", version = "3.0.1", optional = true, default-features = false }
+gpui = { workspace = true, optional = true }
 # `font-kit` is the Mac text system. Without it GPUI installs one that draws no glyphs.
-gpui_platform = { package = "xgpui-platform", version = "2.0.3", optional = true, features = ["font-kit"] }
+gpui_platform = { workspace = true, optional = true, features = ["font-kit"] }
 tokio = { workspace = true, optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 

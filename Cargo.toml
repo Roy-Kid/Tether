@@ -53,6 +53,12 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "d
 glyphon = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
 
+# Zed's GPUI, at Zed's latest stable release tag (Decisions/0022). Both lines
+# move together; `scripts/bump-gpui.py` moves them. GPUI is not on crates.io
+# past 0.2.2, which predates the platform crates, so the tag is the version.
+gpui = { git = "https://github.com/zed-industries/zed", tag = "v1.27.0", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", tag = "v1.27.0" }
+
 # The xcframework is a release build. Thin LTO and stripped symbols are what
 # ship; debug builds stay unoptimised so tests stay quick. Line tables keep
 # a panic readable. Full DWARF is most of a debug compile, and the tests

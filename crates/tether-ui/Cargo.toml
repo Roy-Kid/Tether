@@ -14,6 +14,6 @@ gpui = ["dep:gpui"]
 test-support = ["gpui", "gpui/test-support"]
 
 [dependencies]
-# Registry package `xgpui`, library name `gpui`. No platform crate: that one
-# opens the native window, and the window belongs to the host.
-gpui = { package = "xgpui", version = "3.0.1", optional = true, default-features = false }
+# No platform crate: that one opens the native window, and the window
+# belongs to the host.
+gpui = { workspace = true, optional = true }

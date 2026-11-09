@@ -201,16 +201,17 @@ def dependency_boundaries():
                            ("tether-render", "gpui"), ("tether-render", "tether-ui"),
                            ("tether-terminal", "gpui"), ("tether-terminal", "tether-ui"),
                            ("tether-ffi", "gpui"), ("tether-ffi", "tether-ui"),
-                           ("tether-desktop", "xgpui")):
+                           ("tether-desktop", "gpui")):
         require(backend not in run("cargo", "tree", "--locked", "-p", crate, capture=True),
                 f"{crate} reaches forbidden backend {backend}")
     # The feature is not compiled here. The tree still has to stay in its layer:
     # GPUI for chrome, and not the terminal renderer or the window backend.
     featured = run("cargo", "tree", "--locked", "-p", "tether-ui", "--features", "gpui",
                    capture=True)
-    require("xgpui" in featured, "tether-ui gpui feature does not reach its UI toolkit")
+    require("gpui v" in featured, "tether-ui gpui feature does not reach its UI toolkit")
+    # The platform crates open windows. Chrome compiles without any of them.
     for backend in ("wgpu", "russh", "tether-render", "tether-terminal", "gpui_platform",
-                    "portable-pty"):
+                    "gpui_macos", "gpui_windows", "gpui_linux", "portable-pty"):
         require(backend not in featured, f"tether-ui gpui feature reaches {backend}")
 
 

@@ -12,7 +12,7 @@ tabs, splits, hosts, login questions, the palette, settings, plugins — and
 the two drift (`docs/windows-parity.md` exists to track the drift).
 
 `tether-ui` began as shared chrome painted with GPUI inside a window the
-native host kept. GPUI cannot do that. `xgpui` 3.0.1 opens its own window
+native host kept. GPUI cannot do that. It opens its own window
 and has no parent-view option; `Application::run_embedded` needs a platform
 whose run loop returns, and the macOS one blocks. Embedding would mean
 writing and keeping a GPUI platform of our own, to share one tab strip.
@@ -38,6 +38,12 @@ once in Rust.** iOS stays SwiftUI.
 The estimate is about 85–90% shared. What forks is the platform module:
 roughly 2.5–3.5k lines on a Mac (iCloud, Handoff, Credential Exchange, the
 quick-terminal panel) and 1–1.5k on Windows (WSL, DPAPI).
+
+GPUI is Zed's own, at Zed's latest stable release tag (`gpui` and
+`gpui_platform` in the workspace manifest). Not a crates.io fork: the one
+this started on was days old with one publisher, and Zed ships GPUI every
+week. Zed's `[patch.crates-io]` does not reach a git dependency; the build
+uses crates.io `async-task` where Zed patches its own.
 
 ## Consequences
 

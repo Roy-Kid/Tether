@@ -162,19 +162,22 @@ class GateTests(unittest.TestCase):
             def command(*args, **kwargs):
                 return featured if "--features" in args else "plain"
             return command
-        with patch.object(gate, "run", side_effect=tree("xgpui v3.0.1")):
+        with patch.object(gate, "run", side_effect=tree("gpui v0.2.2 (https://github.com/zed-industries/zed?tag=v1.27.0)")):
             gate.dependency_boundaries()
         with patch.object(gate, "run", side_effect=tree("nothing")):
             with self.assertRaisesRegex(RuntimeError, "does not reach"):
                 gate.dependency_boundaries()
-        with patch.object(gate, "run", side_effect=tree("xgpui v3.0.1\nwgpu v30")):
+        with patch.object(gate, "run", side_effect=tree("gpui v0.2.2\nwgpu v30")):
             with self.assertRaisesRegex(RuntimeError, "reaches wgpu"):
+                gate.dependency_boundaries()
+        with patch.object(gate, "run", side_effect=tree("gpui v0.2.2\ngpui_macos v0.1.0")):
+            with self.assertRaisesRegex(RuntimeError, "reaches gpui_macos"):
                 gate.dependency_boundaries()
 
     def test_a_layer_reaching_a_forbidden_backend_blocks(self):
         def command(*args, **kwargs):
             if "--features" in args:
-                return "xgpui"
+                return "gpui v0.2.2"
             return "russh v0.63" if "tether-local" in args else ""
         with patch.object(gate, "run", side_effect=command):
             with self.assertRaisesRegex(RuntimeError, "tether-local reaches forbidden backend russh"):
