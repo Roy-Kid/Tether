@@ -93,11 +93,12 @@ together. Read it before touching architecture.
 Install the repository-local commit gate once per clone with
 `python scripts/install-hooks.py`. It rejects partial staging. On a Mac a
 commit runs `linux` only: source checks, `cargo fmt`, Clippy, and `cargo test`.
-`apple` and `fuzz` are the slow compiles, so they run in CI when dev or master
-is pushed, and again nightly. See `docs/commit-checks.md`. Run
-`python scripts/check.py --job apple` for that matrix locally. Commits go
-straight to dev and master. A push also runs the Windows tests
-(`windows.yml`). Each CI job is one `check.py --job <name>`.
+Before a push, run the Mac jobs here:
+`python scripts/check.py --job apple --job desktop --job gpui-release`.
+GitHub Actions runs nothing on its own — no push or nightly triggers — and
+holds only what a Mac cannot run (Windows, plus Linux and fuzz passes),
+started by hand. See `docs/commit-checks.md`. Commits go straight to dev and
+master. Each CI job is one `check.py --job <name>`.
 
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place
@@ -130,8 +131,8 @@ swift test --package-path app                          # the app's own state
   -destination "platform=iOS Simulator,id=<udid>")     # the phone's frontend tests
 ```
 
-CI runs the cargo and Swift commands above; the app builds, the
-consumer check and the shipping XCFramework run here. The app links nothing from outside this repository;
+The gate runs the cargo and Swift commands above, on this Mac; the app
+builds, the consumer check and the shipping XCFramework run here too. The app links nothing from outside this repository;
 its plugins are the built-in ones. Nothing in any suite touches the system
 keychain. Nerve's native panel is linked only on a Mac with `../nerve` beside
 this checkout, and never under `TETHER_HERMETIC=1`, which the commit gate sets.

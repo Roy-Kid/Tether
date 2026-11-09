@@ -378,8 +378,8 @@ def fuzz():
 
 # A CI job is one of these, and runs nothing else (test-check.py holds the
 # workflows to it). A commit runs the job that is one workspace build.
-# `apple` compiles seven Swift packages and an iOS slice, and `fuzz` brings
-# up nightly; both run when the branch is pushed, not before the commit.
+# `apple` (seven Swift packages and an iOS slice), `desktop` (the GPUI host)
+# and `gpui-release` run on the Mac before a push; CI runs by hand.
 JOBS = {
     "linux": lambda: common(),
     "apple": lambda: apple(),
@@ -390,6 +390,9 @@ JOBS = {
     "gpui-release": gpui_release,
 }
 HOST_JOBS = {"darwin": ("linux",), "win32": ("windows",)}
+# Jobs with no CI job: they run on the Mac before a push. CI runs by hand,
+# and only what a Mac cannot (see ci.yml).
+LOCAL_JOBS = {"apple", "desktop", "gpui-release"}
 
 
 def drop_inherited_sdk():
@@ -434,8 +437,9 @@ def main():
         JOBS[job]()
     if args.staged:
         require(staged_clean() == checked_tree, "The staged tree changed during validation; run the checks again.")
-    others = sorted(set(JOBS) - set(jobs))
-    print("PASS: " + ", ".join(jobs) + (". Left to CI: " + ", ".join(others) if others else "") + ".")
+    local = sorted(LOCAL_JOBS - set(jobs))
+    print("PASS: " + ", ".join(jobs) + "."
+          + (" Before a push, on this Mac: " + ", ".join(local) + "." if local else ""))
 
 
 if __name__ == "__main__":

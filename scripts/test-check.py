@@ -93,7 +93,7 @@ class BindgenTests(unittest.TestCase):
     def test_ci_always_checks_bindgen_even_on_cache_hit(self):
         import yaml
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
-        for job, python in (("apple", "python3"), ("windows", "python")):
+        for job, python in (("windows", "python"),):
             steps = [step for step in jobs[job]["steps"] if "ensure-bindgen.py" in step.get("run", "")]
             self.assertEqual(len(steps), 1, job)
             self.assertEqual(steps[0]["run"], f"{python} scripts/ensure-bindgen.py")
@@ -300,7 +300,10 @@ class GateTests(unittest.TestCase):
                         self.assertRegex(command, f"^{setup.pattern}", f"{path.name} {name} runs outside the gate")
                 self.assertEqual(checks, [name], f"{path.name} {name}")
                 seen.add(name)
-        self.assertEqual(seen, set(gate.JOBS), "every gate job runs in CI, and only those")
+        # CI is by hand and small: each job there is a gate job, and the Mac
+        # jobs run only on the Mac that is pushing (`LOCAL_JOBS`).
+        self.assertLessEqual(seen, set(gate.JOBS), "a CI job is a gate job")
+        self.assertEqual(seen, set(gate.JOBS) - gate.LOCAL_JOBS, "every other gate job has a CI job")
 
     def test_an_sdk_git_exported_to_the_hook_is_not_used(self):
         os.environ["SDKROOT"] = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"

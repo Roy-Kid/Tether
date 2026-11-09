@@ -1,21 +1,15 @@
 # Every job is setup, then one `scripts/check.py --job <name>`.
 # `scripts/test-check.py` holds this file to that shape.
 #
-# A Mac commit runs `linux` only. `apple`, `desktop` and `fuzz` are the slow
-# compiles, so they run on a push to dev or master (fuzz for ten seconds a
-# target) and again each night, when fuzz is ten minutes a target. `linux`,
-# the full `windows` package and `gpui-release` run nightly and on demand: a
-# commit already ran `linux`, and a push already ran `windows-tests`.
+# Run by hand only: nothing here runs on a push or a schedule. A commit runs
+# `linux` on the machine that made it, and the Mac jobs (`apple`, `desktop`,
+# `gpui-release`) run there before a push; they are not here at all. What
+# stays is what a Mac cannot run: the Windows package, and a Linux pass and
+# a fuzz pass when one is wanted on clean machines.
 name: CI
 
 on:
-  push:
-    branches: [dev, master]
   workflow_dispatch:
-  # The night's fuzz pass is ten minutes a target, where something new is
-  # found; a push replays every recorded crash, then ten seconds a target.
-  schedule:
-    - cron: "0 3 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,7 +18,6 @@ env:
 jobs:
   linux:
     name: linux
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -49,108 +42,6 @@ jobs:
           sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
       - name: Check
         run: python3 scripts/check.py --job linux
-
-  apple:
-    name: apple
-    # The image carries the Xcode `.xcode-version` names; the gate refuses
-    # any other.
-    runs-on: xcode-27
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      # The image may carry a version as a release candidate,
-      # `Xcode_<version>_Release_Candidate.app`; that is still the version
-      # the gate checks. A version the image lacks fails here, by name.
-      - name: Select the pinned Xcode
-        run: |
-          version=$(cat .xcode-version)
-          app=$(ls -d "/Applications/Xcode_$version.app" "/Applications/Xcode_${version}_"*.app 2>/dev/null | head -1)
-          if [ -z "$app" ]; then
-            echo "::error::Xcode $version is not on this image"
-            ls -d /Applications/Xcode*.app
-            exit 1
-          fi
-          sudo xcode-select -s "$app"
-          xcodebuild -version
-      - name: Install the pinned Rust toolchain and iOS targets
-        run: |
-          rustup toolchain install
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install check dependencies
-        run: python3 -m pip install -r scripts/check-requirements.txt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # rust-cache saves nothing after an exact match: the key moves when
-          # what the build makes does. Not with check.py, or every edit to
-          # the gate starts every job cold.
-          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
-          cache-on-failure: true
-      # Swift and Xcode rebuilt everything from nothing on every run: most of
-      # this job's time. The last run's build directories are restored and
-      # only what changed compiles.
-      - name: Restore Swift and Xcode builds
-        uses: actions/cache@v4
-        with:
-          path: |
-            swift/.build
-            app/.build
-            app/Packages/*/.build
-            app/Plugins/*/.build
-            artifacts/ios-check
-          key: swift-${{ hashFiles('.xcode-version') }}-${{ github.sha }}
-          restore-keys: swift-${{ hashFiles('.xcode-version') }}-
-      - name: Restore the C# binding generator
-        id: bindgen
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/uniffi-bindgen-cs
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}
-      - name: Install the C# binding generator
-        run: python3 scripts/ensure-bindgen.py
-      - name: Check
-        run: python3 scripts/check.py --job apple
-
-  # The GPUI host, on every push: a GPUI move is proved here.
-  desktop:
-    name: desktop
-    runs-on: xcode-27
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install check dependencies
-        run: python3 -m pip install -r scripts/check-requirements.txt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # rust-cache saves nothing after an exact match: the key moves when
-          # what the build makes does. Not with check.py, or every edit to
-          # the gate starts every job cold.
-          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
-      - name: Check
-        run: python3 scripts/check.py --job desktop
-
-  # Nightly: red once Zed ships a stable release GPUI is not at.
-  gpui-release:
-    name: gpui-release
-    if: github.event_name != 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Check
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/check.py --job gpui-release
 
   fuzz:
     name: fuzz
@@ -183,7 +74,7 @@ jobs:
           workspaces: ". -> target\nfuzz -> target"
       - name: Check
         env:
-          TETHER_FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '10' }}
+          TETHER_FUZZ_SECONDS: '60'
         run: python3 scripts/check.py --job fuzz
       # A crash is worth keeping even when the job fails: it is the input a
       # fix has to be written against.
@@ -197,7 +88,6 @@ jobs:
 
   windows:
     name: windows
-    if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
