@@ -185,6 +185,24 @@ impl Workspaces {
         next
     }
 
+    /// `cycleTab` over `pages` only — the tabs one host shows.
+    pub fn cycling_tab_among(&self, pages: &[WorkspaceId], forward: bool) -> Self {
+        if pages.is_empty() {
+            return self.clone();
+        }
+        let current =
+            self.current().and_then(|page| pages.iter().position(|id| *id == page.id)).unwrap_or(0);
+        let next = if forward {
+            (current + 1) % pages.len()
+        } else {
+            (current + pages.len() - 1) % pages.len()
+        };
+        match self.pages.iter().find(|page| page.id == pages[next]) {
+            Some(page) => self.selecting(page.focused),
+            None => self.clone(),
+        }
+    }
+
     pub fn with_fraction(&self, page: WorkspaceId, path: &[bool], fraction: f32) -> Self {
         let mut next = self.clone();
         if let Some(page) = next.pages.iter_mut().find(|p| p.id == page) {

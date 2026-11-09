@@ -14,13 +14,7 @@ use crate::workspace::Desktop;
 
 impl Terminals for Desktop {
     fn menu_title(&self, id: PaneId) -> String {
-        let state = if self.ended.contains(&id) {
-            "Ended"
-        } else if self.panes.contains_key(&id) {
-            "Connected"
-        } else {
-            "Connecting"
-        };
+        let state = self.stages.get(&id).map_or("Connecting", crate::hosting::Stage::name);
         format!("{} — {state}", self.titles.get(&id).cloned().unwrap_or_default())
     }
 

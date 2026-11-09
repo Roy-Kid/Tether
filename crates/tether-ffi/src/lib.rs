@@ -37,8 +37,9 @@ pub use screen::{
     ScreenRow, StyledRun, UnderlineStyle, UpdatedRow,
 };
 pub use session::{
-    Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,
-    connect_cancellable, local_shell_available, open_local, open_local_with_arguments,
+    Destination, HostIdentity, HostTrust, Jump, LocalShell, Secret, Session, SessionEnding,
+    connect, connect_cancellable, connect_over_ssh_client, connect_over_ssh_client_cancellable,
+    local_shell_available, open_local, open_local_with_arguments, ssh_master_running,
 };
 
 /// One prompt from an interactive authentication exchange.

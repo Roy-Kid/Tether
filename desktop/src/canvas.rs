@@ -102,7 +102,8 @@ impl Desktop {
     /// The selected tab's terminals, each filling its share of the terminal rect.
     fn arrange(&self, shape: &Workspace, cx: &Context<Self>) -> (Vec<Placed>, Vec<Divider>) {
         let hole = layout(shape, &self.chrome.read(cx).tabs).region(Kind::Terminal);
-        let page = self.workspaces.current();
+        // Nothing of another host's: a host with no terminal shows an empty canvas.
+        let page = self.shown().and_then(|id| self.workspaces.containing(id));
         let (Some(hole), Some(page)) = (hole, page) else { return (Vec::new(), Vec::new()) };
         let arranged = page.visible().layout(hole);
         let split = arranged.panes.len() > 1;

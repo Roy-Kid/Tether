@@ -137,7 +137,7 @@ impl Desktop {
         let verb = dialog.actions.iter().position(|action| action.role == Role::Destructive);
         let answer = platform::ask(window, &dialog);
         cx.spawn(async move |this, cx| {
-            let chosen = answer.await.ok().flatten();
+            let chosen = answer.await.ok().flatten().map(|reply| reply.action);
             let _ = this.update(cx, |this, cx| {
                 this.closing = false;
                 if chosen.is_some() && chosen == verb {
@@ -150,7 +150,7 @@ impl Desktop {
 
     /// The session of a terminal whose shell is still running.
     fn live(&self, id: PaneId) -> Option<Arc<Session>> {
-        if self.ended.contains(&id) {
+        if !self.is_live(id) {
             return None;
         }
         self.panes.get(&id).map(|pane| pane.session.clone())

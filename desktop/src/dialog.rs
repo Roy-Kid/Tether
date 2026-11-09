@@ -22,6 +22,30 @@ pub enum Shortcut {
     CommandOption(char),
 }
 
+/// How a field shows what is typed (`Dialog.Field.Kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    /// Shown as typed.
+    Text,
+    /// Hidden, and a saved password where one fits.
+    Password,
+    /// Hidden, and a verification code where one fits.
+    Code,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Field {
+    pub placeholder: String,
+    pub kind: FieldKind,
+    pub initial: String,
+}
+
+impl Field {
+    pub fn new(placeholder: impl Into<String>, kind: FieldKind) -> Self {
+        Self { placeholder: placeholder.into(), kind, initial: String::new() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Action {
     pub title: String,
@@ -33,11 +57,45 @@ pub struct Action {
 pub struct Dialog {
     pub title: String,
     pub message: Option<String>,
+    pub fields: Vec<Field>,
     /// In reading order.
     pub actions: Vec<Action>,
 }
 
+impl Action {
+    /// `Dialog.Action.cancel`: Escape's.
+    pub fn cancel(title: &str) -> Self {
+        Self { title: title.into(), role: Role::Cancel, shortcuts: Vec::new() }
+    }
+
+    /// An ordinary verb; the first one is Return's.
+    pub fn confirm(title: &str) -> Self {
+        Self { title: title.into(), role: Role::Confirm, shortcuts: Vec::new() }
+    }
+}
+
+/// What a person chose: the action, and one value per field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub action: usize,
+    pub values: Vec<String>,
+}
+
 impl Dialog {
+    pub fn new(
+        title: impl Into<String>,
+        message: Option<String>,
+        fields: Vec<Field>,
+        actions: Vec<Action>,
+    ) -> Self {
+        Self { title: title.into(), message, fields, actions }
+    }
+
+    /// Whether `reply` chose a verb rather than the way out.
+    pub fn affirms(&self, reply: &Reply) -> bool {
+        self.actions.get(reply.action).is_some_and(|action| action.role != Role::Cancel)
+    }
+
     /// `Dialog.confirm`: Cancel, then the verb.
     pub fn confirm(
         title: impl Into<String>,
@@ -49,6 +107,7 @@ impl Dialog {
         Self {
             title: title.into(),
             message,
+            fields: Vec::new(),
             actions: vec![
                 Action { title: "Cancel".into(), role: Role::Cancel, shortcuts: Vec::new() },
                 Action { title: verb.into(), role, shortcuts },

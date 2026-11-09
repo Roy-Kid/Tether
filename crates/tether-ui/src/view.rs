@@ -20,7 +20,7 @@ use gpui::{
 use std::sync::Arc;
 
 use crate::field::{FieldEvent, TextField};
-use crate::icons::{Icon, Style, Symbols, icon};
+use crate::icons::{Icon, Style, Symbols, icon, spinner};
 use crate::{Chrome, Kind, Placement, Rect, Tab, Workspace, layout};
 
 /// Ink the host supplies. Chrome follows the platform's semantic colours, so
@@ -33,6 +33,8 @@ pub struct Ink {
     pub accent: u32,
     pub surface: u32,
     pub presence: u32,
+    /// `Theme.warning`: a terminal that is down.
+    pub warning: u32,
     pub text_alpha: f32,
     pub subtle_alpha: f32,
     pub separator_alpha: f32,
@@ -53,6 +55,42 @@ pub enum ChromeEvent {
     Renamed(usize, String),
     /// A chip's rename was abandoned.
     RenameCancelled,
+    /// The status bar's reconnect button: the selected terminal is down.
+    Reconnect,
+}
+
+/// The selected terminal's state, as the host bar shows it (`statusMark`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Connecting,
+    /// A question is waiting on the person.
+    Asking,
+    /// Down: a button that reconnects ("Restart" on this machine).
+    Reconnect,
+    Ended,
+}
+
+/// The dot before the host's name: live, down, or neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Presence {
+    Live,
+    Down,
+    #[default]
+    Idle,
+}
+
+/// One row of the host picker, in the order it is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRow {
+    pub name: String,
+    /// What the row's tooltip says: `Local machine`, or the address.
+    pub caption: String,
+    pub live: bool,
+    pub current: bool,
+    /// `⌘1`…`⌘9`.
+    pub shortcut: Option<u8>,
+    /// A hairline above: live hosts, then the idle ones.
+    pub divider_above: bool,
 }
 
 /// A chip being renamed in place.
@@ -72,14 +110,15 @@ pub struct ChromeView {
     pub workspace: Workspace,
     pub tabs: Vec<Tab>,
     pub host: String,
-    pub hosts: Vec<String>,
+    pub hosts: Vec<HostRow>,
+    pub presence: Presence,
     pub host_open: bool,
     pub settings_open: bool,
     pub ink: Ink,
     /// The platform's symbols. `None` draws the bundled stand-ins.
     pub symbols: Option<Arc<dyn Symbols>>,
-    /// The selected terminal's shell has ended: the status bar's mark.
-    pub ended: bool,
+    /// The selected terminal's state on the host bar.
+    pub mark: Option<Mark>,
     /// The chip whose name is being edited. Set by [`ChromeView::begin_rename`].
     pub renaming: Option<Rename>,
 }
@@ -395,15 +434,7 @@ fn status(view: &ChromeView, rect: Rect, cx: &mut Context<ChromeView>) -> gpui::
         .items_center()
         .px(px(Chrome::SPACE_INSET))
         .child(host_button(view, rect.height, cx))
-        .when(view.ended, |row| {
-            row.child(icon(
-                view.symbols.as_deref(),
-                Icon::Ended,
-                Style::Symbol,
-                ink.subtle,
-                ink.subtle_alpha,
-            ))
-        })
+        .children(view.mark.map(|mark| status_mark(view, mark, rect.height, cx)))
         .child(div().h(px(rect.height)).flex_1())
         .gap(px(Chrome::SPACE_GROUP));
     // Trailing: the inspector plugins' toggles, then Settings (`HostStatusBar`).
@@ -424,6 +455,67 @@ fn status(view: &ChromeView, rect: Rect, cx: &mut Context<ChromeView>) -> gpui::
         .bg(paint(ink.surface, 1.0))
         .child(hairline(rect.width, true, paint(ink.separator, ink.separator_alpha)))
         .child(row)
+}
+
+fn status_mark(
+    view: &ChromeView,
+    mark: Mark,
+    height: f32,
+    cx: &mut Context<ChromeView>,
+) -> gpui::AnyElement {
+    let ink = view.ink;
+    let symbols = view.symbols.as_deref();
+    match mark {
+        Mark::Connecting => spinner(ink.subtle, ink.subtle_alpha),
+        Mark::Asking => icon(symbols, Icon::Key, Style::Symbol, ink.subtle, ink.subtle_alpha),
+        Mark::Ended => icon(symbols, Icon::Ended, Style::Symbol, ink.subtle, ink.subtle_alpha),
+        Mark::Reconnect => hit(
+            "reconnect",
+            "reconnect",
+            false,
+            ink,
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.send(ChromeEvent::Reconnect, cx);
+            }),
+        )
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(px(Chrome::ICON))
+        .h(px(height))
+        .child(icon(symbols, Icon::Reconnect, Style::Symbol, ink.warning, 1.0))
+        .into_any_element(),
+    }
+}
+
+/// A name on hover (`.help`): the chrome says nothing until asked.
+struct Tip {
+    text: SharedString,
+    ink: Ink,
+}
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let ink = self.ink;
+        div()
+            .font_family(SYSTEM_FONT)
+            .text_size(px(Chrome::DETAIL))
+            .text_color(paint(ink.text, ink.text_alpha))
+            .px(px(Chrome::SPACE_INLINE))
+            .py(px(Chrome::SPACE_TIGHT))
+            .rounded(px(Chrome::ROW_RADIUS))
+            .bg(paint(ink.surface, 1.0))
+            .border_1()
+            .border_color(paint(ink.separator, ink.separator_alpha))
+            .child(self.text.clone())
+    }
+}
+
+fn tip(text: String, ink: Ink) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let text = SharedString::from(text);
+    move |_, cx| cx.new(|_| Tip { text: text.clone(), ink }).into()
 }
 
 fn host_button(
@@ -460,7 +552,11 @@ fn host_button(
                     .w(px(Chrome::PRESENCE))
                     .h(px(Chrome::PRESENCE))
                     .rounded(px(Chrome::PRESENCE / 2.0))
-                    .bg(rgb(ink.presence)),
+                    .bg(match view.presence {
+                        Presence::Live => paint(ink.presence, 1.0),
+                        Presence::Down => paint(ink.warning, 1.0),
+                        Presence::Idle => paint(ink.subtle, ink.subtle_alpha),
+                    }),
             )
             .child(host_label(view))
     };
@@ -479,24 +575,50 @@ fn host_label(view: &ChromeView) -> gpui::Div {
 
 fn host_picker(view: &ChromeView, cx: &mut Context<ChromeView>) -> gpui::Div {
     let ink = view.ink;
-    let rows = view.hosts.iter().enumerate().map(|(index, name)| {
-        let selected = name == &view.host;
-        let mut row = hit(
+    let symbols = view.symbols.clone();
+    let rows = view.hosts.iter().enumerate().flat_map(|(index, host)| {
+        let divider = host.divider_above.then(|| {
+            div()
+                .my(px(Chrome::SPACE_SMALL))
+                .h(px(Chrome::HAIRLINE))
+                .bg(paint(ink.separator, ink.separator_alpha))
+        });
+        let dot = div()
+            .flex_none()
+            .w(px(Chrome::PRESENCE))
+            .h(px(Chrome::PRESENCE))
+            .rounded(px(Chrome::PRESENCE / 2.0));
+        let dot = if host.live { dot.bg(paint(ink.presence, 1.0)) } else { dot };
+        let hint =
+            host.shortcut.map(|n| named(&ink, &format!("⌘{n}"), Chrome::DETAIL, false, false));
+        let check = host.current.then(|| {
+            icon(symbols.as_deref(), Icon::Check, Style::Accessory, ink.text, ink.text_alpha)
+        });
+        let row = hit(
             ("host-row", index),
             "host-row",
-            selected,
+            false,
             ink,
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.send(ChromeEvent::PickHost(index), cx);
             }),
         )
-        .h(px(Chrome::TAB))
-        .px(px(Chrome::SPACE_INSET))
+        .h(px(UI_ROW))
+        .px(px(Chrome::SPACE_GROUP))
         .flex()
-        .items_center();
-        row = row.child(named(&ink, name, Chrome::DETAIL, false, true));
-        row
+        .items_center()
+        .gap(px(Chrome::SPACE_INLINE))
+        .tooltip(tip(host.caption.clone(), ink))
+        .child(dot)
+        .child(named(&ink, &host.name, Chrome::TITLE, false, true))
+        .child(div().flex_1())
+        .children(hint)
+        .child(div().flex_none().w(px(Chrome::ICON)).flex().justify_center().children(check));
+        divider
+            .into_iter()
+            .map(IntoElement::into_any_element)
+            .chain(std::iter::once(row.into_any_element()))
     });
     // `UIStyle.pickerWidth`. Sits on the terminal hole, just above the host bar.
     div()
@@ -619,6 +741,8 @@ const DETAIL_LINE: f32 = 14.0;
 const HOVER_OPACITY: f32 = 0.06;
 /// `UIStyle.pickerWidth`.
 const PICKER_WIDTH: f32 = 280.0;
+/// `UIStyle.rowHeight` on a Mac.
+const UI_ROW: f32 = 22.0;
 /// GPUI's portable name for the platform UI font: SF on a Mac, Segoe on Windows.
 const SYSTEM_FONT: &str = ".SystemUIFont";
 
@@ -636,7 +760,15 @@ mod clicks {
             workspace: Workspace::mac(Chrome::WINDOW_WIDTH, Chrome::WINDOW_HEIGHT),
             tabs: vec![Tab::new("localhost").selected(), Tab::new("zsh")],
             host: "localhost".to_owned(),
-            hosts: vec!["localhost".to_owned()],
+            hosts: vec![HostRow {
+                name: "localhost".to_owned(),
+                caption: "Local machine".to_owned(),
+                live: true,
+                current: true,
+                shortcut: Some(1),
+                divider_above: false,
+            }],
+            presence: Presence::Live,
             host_open: false,
             settings_open: false,
             ink: Ink {
@@ -646,12 +778,13 @@ mod clicks {
                 accent: 0x007AFF,
                 surface: 0x1E1E1E,
                 presence: 0x30D158,
+                warning: 0xFF9F0A,
                 text_alpha: 0.85,
                 subtle_alpha: 0.55,
                 separator_alpha: 0.10,
             },
             symbols: None,
-            ended: false,
+            mark: None,
             renaming: None,
         }
     }

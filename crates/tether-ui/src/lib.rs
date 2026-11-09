@@ -37,7 +37,7 @@ pub use field::{FieldEvent, TextField};
 #[cfg(feature = "gpui")]
 pub use icons::{Assets, Drawn, Icon, Style, Symbols};
 #[cfg(feature = "gpui")]
-pub use view::{ChromeEvent, ChromeView, Ink, Rename};
+pub use view::{ChromeEvent, ChromeView, HostRow, Ink, Mark, Presence, Rename};
 
 /// The boundary in executable form, beside the `cargo tree` check.
 pub const BOUNDARY: &str = "tether-ui paints shared chrome, leaves the terminal and plugin surfaces empty, and leaves the window and platform services to the host";

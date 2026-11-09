@@ -6,7 +6,7 @@
 //! surface is laid over its share of the terminal rect. Drawing is
 //! `canvas.rs`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
@@ -22,6 +22,7 @@ use tether_ffi::{LocalShell, Session, TerminalInput, open_local};
 use tether_ui::{Assets, Chrome, ChromeEvent, ChromeView, Ink, Workspace};
 use tokio::runtime::Runtime;
 
+use crate::hosting::{self, Stage};
 use crate::pane::Pane;
 use crate::platform::{self, TerminalLayer};
 
@@ -42,12 +43,13 @@ pub fn run() -> Result<(), String> {
                 workspace: Workspace::mac(Chrome::WINDOW_WIDTH, Chrome::WINDOW_HEIGHT),
                 tabs: Vec::new(),
                 host: LOCALHOST.to_owned(),
-                hosts: vec![LOCALHOST.to_owned()],
+                hosts: Vec::new(),
+                presence: tether_ui::Presence::Idle,
                 host_open: false,
                 settings_open: false,
                 ink: dark_ink(),
                 symbols: platform::symbols(),
-                ended: false,
+                mark: None,
                 renaming: None,
             });
             cx.new(|cx| Desktop::new(chrome, runtime.clone(), window, cx))
@@ -108,8 +110,19 @@ pub(crate) struct Desktop {
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Chip titles, worked out together so twins are numbered.
     pub(crate) titles: HashMap<PaneId, String>,
-    /// Terminals whose shell has ended. They stay, as on a Mac, with the last screen.
-    pub(crate) ended: HashSet<PaneId>,
+    /// Where each terminal is in its life. An ended one stays, as on a Mac, with the last screen.
+    pub(crate) stages: HashMap<PaneId, Stage>,
+    /// The library, this machine first.
+    pub(crate) hosts: Vec<tether_desktop::hosts::Host>,
+    /// The host the window shows; the strip is its terminals.
+    pub(crate) current: String,
+    pub(crate) host_of: HashMap<PaneId, String>,
+    /// Each host's terminal to return to (`lastByHost`).
+    pub(crate) last_by_host: HashMap<String, PaneId>,
+    /// The host ids behind the picker's rows, in order.
+    picker_ids: Vec<String>,
+    /// Where a login's questions go.
+    pub(crate) questions: tokio::sync::mpsc::UnboundedSender<crate::connect::Question>,
     /// A close is being checked or asked; another waits for it.
     pub(crate) closing: bool,
     /// `Terminal N`, numbered per host as terminals open.
@@ -139,12 +152,20 @@ impl Desktop {
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let questions = Self::listen(window, cx);
+        let hosts = hosting::listed();
         let mut desktop = Self {
             chrome,
             workspaces: Workspaces::default(),
             panes: HashMap::new(),
             titles: HashMap::new(),
-            ended: HashSet::new(),
+            stages: HashMap::new(),
+            current: hosts.first().map(|host| host.id.clone()).unwrap_or_default(),
+            hosts,
+            host_of: HashMap::new(),
+            last_by_host: HashMap::new(),
+            picker_ids: Vec::new(),
+            questions,
             closing: false,
             serials: HashMap::new(),
             pinned: HashMap::new(),
@@ -162,7 +183,7 @@ impl Desktop {
     }
 
     fn chrome_event(&mut self, event: ChromeEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let strip = self.workspaces.strip();
+        let strip = self.strip();
         match event {
             // A second click on the selected chip opens its menu (`handleTabClick`).
             ChromeEvent::Select(index) => match strip.get(index) {
@@ -195,21 +216,33 @@ impl Desktop {
                 }
             }
             ChromeEvent::RenameCancelled => {}
-            // One host and no settings window yet: P3 and P4.
-            ChromeEvent::PickHost(_) | ChromeEvent::Settings => {}
+            ChromeEvent::PickHost(index) => {
+                if let Some(id) = self.picker_ids.get(index).cloned() {
+                    self.choose_host(&id, window, cx);
+                }
+            }
+            ChromeEvent::Reconnect => self.reconnect(window, cx),
+            // No settings window yet: P4.
+            ChromeEvent::Settings => {}
         }
         window.focus(&self.focus, cx);
         self.sync(cx);
     }
 
-    /// A terminal on this machine: a new tab (`⌘T`), or into `page` (`⌘N`).
+    /// A terminal on the current host: a new tab (`⌘T`), or into `page` (`⌘N`).
     pub(crate) fn open(
         &mut self,
         page: Option<WorkspaceId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let host = self.current_host();
+        if !host.is_local() {
+            self.open_remote(host, page, window, cx);
+            return;
+        }
         let id = self.new_terminal_id();
+        self.host_of.insert(id, host.id);
         self.workspaces = self.workspaces.adopting(id, page);
         self.start_shell(id, window, cx);
     }
@@ -221,20 +254,26 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(beside) = self.workspaces.selected() else { return };
+        let Some(beside) = self.shown() else { return };
         let id = self.new_terminal_id();
+        self.host_of.insert(id, self.current.clone());
         self.workspaces = self.workspaces.splitting(beside, id, direction);
-        self.start_shell(id, window, cx);
+        if self.current_host().is_local() {
+            self.start_shell(id, window, cx);
+        } else {
+            self.split_remote(id, beside, window, cx);
+        }
     }
 
-    fn new_terminal_id(&mut self) -> PaneId {
+    pub(crate) fn new_terminal_id(&mut self) -> PaneId {
         self.next_pane += 1;
         let id = PaneId(self.next_pane);
         self.serials.insert(id, format!("Terminal {}", self.next_pane));
         id
     }
 
-    fn start_shell(&mut self, id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_shell(&mut self, id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        self.stages.insert(id, Stage::Connecting);
         let layer = match TerminalLayer::attach(window) {
             Ok(layer) => layer,
             Err(error) => {
@@ -266,7 +305,7 @@ impl Desktop {
         self.sync(cx);
     }
 
-    fn attach(
+    pub(crate) fn attach(
         &mut self,
         id: PaneId,
         session: Arc<Session>,
@@ -277,8 +316,10 @@ impl Desktop {
             session.close();
             return;
         }
+        self.stages.insert(id, Stage::Connected);
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let watched = session.clone();
+        let stopped = session.clone();
         self.runtime.spawn(async move {
             while watched.await_change().await {
                 if sender.send(()).is_err() {
@@ -294,10 +335,7 @@ impl Desktop {
                     return;
                 }
             }
-            let _ = this.update(cx, |this, cx| {
-                this.ended.insert(id);
-                this.sync(cx);
-            });
+            let _ = this.update(cx, |this, cx| this.stopped(id, &stopped, cx));
         })
         .detach();
         let mut pane = Pane::new(session, layer, self.ink(cx).accent);
@@ -345,7 +383,9 @@ impl Desktop {
         if let Some(mut pane) = self.panes.remove(&id) {
             pane.close();
         }
-        self.ended.remove(&id);
+        self.stages.remove(&id);
+        self.host_of.remove(&id);
+        self.last_by_host.retain(|_, last| *last != id);
         self.serials.remove(&id);
         self.pinned.remove(&id);
         self.titles.remove(&id);
@@ -355,10 +395,10 @@ impl Desktop {
     /// to the chrome, which is a separate view and draws from its own copy.
     pub(crate) fn sync(&mut self, cx: &mut Context<Self>) {
         let home = std::env::var("HOME").ok();
-        let strip = self.workspaces.strip();
+        let strip = self.strip();
         let rows: Vec<Label> = strip.iter().map(|id| self.label(*id, home.as_deref())).collect();
         self.titles = labels::titles(&rows);
-        let selected = self.workspaces.selected();
+        let selected = self.shown();
         let chips: Vec<tether_ui::Tab> = strip
             .iter()
             .map(|id| tether_ui::Tab {
@@ -366,11 +406,22 @@ impl Desktop {
                 selected: selected == Some(*id),
             })
             .collect();
-        let ended = selected.is_some_and(|id| self.ended.contains(&id));
+        let (mark, presence) = self.status();
+        let (rows, ids) = self.host_rows();
+        self.picker_ids = ids;
+        let host = self.current_host().display_name();
         self.chrome.update(cx, |view, cx| {
-            if view.tabs != chips || view.ended != ended {
+            if view.tabs != chips
+                || view.mark != mark
+                || view.presence != presence
+                || view.hosts != rows
+                || view.host != host
+            {
                 view.tabs = chips;
-                view.ended = ended;
+                view.mark = mark;
+                view.presence = presence;
+                view.hosts = rows;
+                view.host = host;
                 cx.notify();
             }
         });
@@ -396,7 +447,7 @@ impl Desktop {
     /// ⌘R, Rename Terminal: the chip becomes a field holding its name
     /// without a twin number (`renameSeed`).
     pub(crate) fn begin_rename(&mut self, id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.workspaces.strip().iter().position(|other| *other == id) else {
+        let Some(index) = self.strip().iter().position(|other| *other == id) else {
             return;
         };
         let home = std::env::var("HOME").ok();
@@ -437,12 +488,8 @@ impl Desktop {
                 // `previousTerminal` / `nextTerminal`, and the tabs (`cycleTab`).
                 ("up", false, true) => self.workspaces = self.workspaces.cycling_terminal(false),
                 ("down", false, true) => self.workspaces = self.workspaces.cycling_terminal(true),
-                ("left", false, true) | ("[" | "{", true, false) => {
-                    self.workspaces = self.workspaces.cycling_tab(false)
-                }
-                ("right", false, true) | ("]" | "}", true, false) => {
-                    self.workspaces = self.workspaces.cycling_tab(true)
-                }
+                ("left", false, true) | ("[" | "{", true, false) => self.cycle_tab(false),
+                ("right", false, true) | ("]" | "}", true, false) => self.cycle_tab(true),
                 ("\\", false, false) => self.split(Direction::Right, window, cx),
                 ("\\", true, false) | ("|", _, false) => self.split(Direction::Down, window, cx),
                 ("v", false, false) => {
@@ -462,6 +509,13 @@ impl Desktop {
                     }
                 }
                 ("q", false, false) => cx.quit(),
+                // ⌘1–⌘4: the library's first hosts, this machine first.
+                (digit @ ("1" | "2" | "3" | "4"), false, false) => {
+                    let index = digit.parse::<usize>().unwrap_or(1) - 1;
+                    if let Some(host) = self.hosts.get(index).map(|host| host.id.clone()) {
+                        self.choose_host(&host, window, cx);
+                    }
+                }
                 _ => return,
             }
             cx.stop_propagation();
@@ -487,9 +541,23 @@ impl Desktop {
         self.send(crate::ime::typed(text));
     }
 
+    /// `cycleTab`, among the current host's tabs.
+    fn cycle_tab(&mut self, forward: bool) {
+        let visible: Vec<WorkspaceId> = self
+            .workspaces
+            .pages()
+            .iter()
+            .filter(|page| {
+                page.terminals.iter().any(|id| self.host_of.get(id) == Some(&self.current))
+            })
+            .map(|page| page.id)
+            .collect();
+        self.workspaces = self.workspaces.cycling_tab_among(&visible, forward);
+    }
+
     fn send(&self, input: TerminalInput) {
-        let Some(id) = self.workspaces.selected() else { return };
-        if self.ended.contains(&id) {
+        let Some(id) = self.shown() else { return };
+        if !self.is_live(id) {
             return;
         }
         let Some(pane) = self.panes.get(&id) else { return };
@@ -526,6 +594,8 @@ fn dark_ink() -> Ink {
         accent: 0x007AFF,
         surface: 0x1E1E1E,
         presence: 0x30D158,
+        // `NSColor.systemOrange` in dark.
+        warning: 0xFF9F0A,
         text_alpha: 0.85,
         subtle_alpha: 0.55,
         separator_alpha: 0.10,

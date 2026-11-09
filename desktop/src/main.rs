@@ -8,6 +8,8 @@
 
 mod canvas;
 mod close;
+mod connect;
+mod hosting;
 mod ime;
 mod menus;
 mod pane;

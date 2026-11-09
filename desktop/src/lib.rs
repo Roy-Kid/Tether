@@ -8,9 +8,12 @@
 pub mod activity;
 pub mod dialog;
 pub mod foreground;
+pub mod hosts;
 pub mod keys;
+pub mod known_hosts;
 pub mod labels;
 pub mod links;
+pub mod login;
 pub mod selection;
 pub mod split;
 pub mod tab_menu;

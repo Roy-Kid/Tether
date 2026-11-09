@@ -31,7 +31,7 @@ pub fn foreground_command(_shell: Option<u32>) -> Option<String> {
 pub fn ask(
     _window: &gpui::Window,
     _dialog: &tether_desktop::dialog::Dialog,
-) -> tokio::sync::oneshot::Receiver<Option<usize>> {
+) -> tokio::sync::oneshot::Receiver<Option<tether_desktop::dialog::Reply>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let _ = sender.send(None);
     receiver

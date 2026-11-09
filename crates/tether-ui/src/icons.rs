@@ -19,11 +19,29 @@ pub enum Icon {
     Settings,
     /// The status bar's mark for a shell that ended.
     Ended,
+    /// Needs authentication.
+    Key,
+    /// A down terminal's way back.
+    Reconnect,
+    /// The current host in the picker.
+    Check,
+    /// Connecting. No SF Symbol: drawn from the bundle and turned.
+    Spinner,
 }
 
 impl Icon {
-    pub const ALL: [Self; 6] =
-        [Self::Terminal, Self::Close, Self::Plus, Self::ChevronDown, Self::Settings, Self::Ended];
+    pub const ALL: [Self; 10] = [
+        Self::Terminal,
+        Self::Close,
+        Self::Plus,
+        Self::ChevronDown,
+        Self::Settings,
+        Self::Ended,
+        Self::Key,
+        Self::Reconnect,
+        Self::Check,
+        Self::Spinner,
+    ];
 
     /// The SF Symbol the Mac app draws for this mark.
     pub fn system_name(self) -> &'static str {
@@ -34,6 +52,10 @@ impl Icon {
             Self::ChevronDown => "chevron.down",
             Self::Settings => "gearshape",
             Self::Ended => "stop.circle",
+            Self::Key => "key.fill",
+            Self::Reconnect => "arrow.clockwise",
+            Self::Check => "checkmark",
+            Self::Spinner => "",
         }
     }
 
@@ -45,6 +67,10 @@ impl Icon {
             Self::ChevronDown => "icons/chevron-down.svg",
             Self::Settings => "icons/settings.svg",
             Self::Ended => "icons/ended.svg",
+            Self::Key => "icons/key.svg",
+            Self::Reconnect => "icons/reconnect.svg",
+            Self::Check => "icons/check.svg",
+            Self::Spinner => "icons/spinner.svg",
         }
     }
 
@@ -56,6 +82,10 @@ impl Icon {
             Self::ChevronDown => include_bytes!("../icons/chevron-down.svg"),
             Self::Settings => include_bytes!("../icons/settings.svg"),
             Self::Ended => include_bytes!("../icons/ended.svg"),
+            Self::Key => include_bytes!("../icons/key.svg"),
+            Self::Reconnect => include_bytes!("../icons/reconnect.svg"),
+            Self::Check => include_bytes!("../icons/check.svg"),
+            Self::Spinner => include_bytes!("../icons/spinner.svg"),
         }
     }
 }
@@ -117,6 +147,22 @@ pub trait Symbols: Send + Sync + 'static {
     fn draw(&self, icon: Icon, style: Style, rgb: u32, alpha: f32) -> Option<Drawn>;
 }
 
+/// The connecting mark (`ProgressView`, mini): an arc that turns.
+pub(crate) fn spinner(rgb: u32, alpha: f32) -> AnyElement {
+    use gpui::{Animation, AnimationExt, Transformation, percentage};
+    svg()
+        .path(Icon::Spinner.path())
+        .flex_none()
+        .size(px(Style::Symbol.points()))
+        .text_color(gpui::rgb(rgb).opacity(alpha))
+        .with_animation(
+            "connecting",
+            Animation::new(std::time::Duration::from_secs(1)).repeat(),
+            |svg, turned| svg.with_transformation(Transformation::rotate(percentage(turned))),
+        )
+        .into_any_element()
+}
+
 pub(crate) fn icon(
     symbols: Option<&dyn Symbols>,
     icon: Icon,
@@ -124,7 +170,10 @@ pub(crate) fn icon(
     rgb: u32,
     alpha: f32,
 ) -> AnyElement {
-    if let Some(drawn) = symbols.and_then(|symbols| symbols.draw(icon, style, rgb, alpha)) {
+    let system = !icon.system_name().is_empty();
+    if let Some(drawn) =
+        symbols.filter(|_| system).and_then(|symbols| symbols.draw(icon, style, rgb, alpha))
+    {
         return img(drawn.image)
             .flex_none()
             .w(px(drawn.width))
