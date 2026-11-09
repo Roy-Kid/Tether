@@ -149,13 +149,36 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(args[-1], ":lang=zh-cn")
                 return "en|zh-cn|zh-tw"
             return ""
-        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", side_effect=command):
+        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "dependency_boundaries"), patch.object(gate, "run", side_effect=command):
             gate.common()
 
     def test_missing_cjk_font_blocks(self):
-        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "run", return_value="en|fr"):
+        with patch.object(gate.sys, "platform", "linux"), patch.object(gate, "source_checks"), patch.object(gate, "dependency_boundaries"), patch.object(gate, "run", return_value="en|fr"):
             with self.assertRaisesRegex(RuntimeError, "fonts-noto-cjk"):
                 gate.common()
+
+    def test_chrome_feature_has_to_reach_gpui_and_nothing_below_it(self):
+        def tree(featured):
+            def command(*args, **kwargs):
+                return featured if "--features" in args else "plain"
+            return command
+        with patch.object(gate, "run", side_effect=tree("xgpui v3.0.1")):
+            gate.dependency_boundaries()
+        with patch.object(gate, "run", side_effect=tree("nothing")):
+            with self.assertRaisesRegex(RuntimeError, "does not reach"):
+                gate.dependency_boundaries()
+        with patch.object(gate, "run", side_effect=tree("xgpui v3.0.1\nwgpu v30")):
+            with self.assertRaisesRegex(RuntimeError, "reaches wgpu"):
+                gate.dependency_boundaries()
+
+    def test_a_layer_reaching_a_forbidden_backend_blocks(self):
+        def command(*args, **kwargs):
+            if "--features" in args:
+                return "xgpui"
+            return "russh v0.63" if "tether-local" in args else ""
+        with patch.object(gate, "run", side_effect=command):
+            with self.assertRaisesRegex(RuntimeError, "tether-local reaches forbidden backend russh"):
+                gate.dependency_boundaries()
 
     def test_unstaged_content_blocks(self):
         path = self.root / "example.txt"

@@ -144,6 +144,34 @@ def source_checks():
                 continue
             require(not re.search(r"\.alert\(|\.confirmationDialog\(|UIAlertController|NSAlert\b",
                                   path.read_text(encoding="utf-8")), f"Dialog boundary violation: {path}")
+    ui_boundaries(ROOT)
+
+
+def ui_boundaries(root=ROOT):
+    # Chrome paints no window and no platform service. `desktop/` owns both
+    # (Decisions/0022), and there only `desktop/src/platform/` names an OS.
+    forbidden = (
+        "open_window",
+        "gpui_platform",
+        "NSPanel",
+        "NSWindow",
+        "CKContainer",
+        "SecItem",
+        "UIAlertController",
+        "NSAlert",
+    )
+    for path in (root / "crates/tether-ui").rglob("*.rs"):
+        source = path.read_text(encoding="utf-8")
+        for word in forbidden:
+            require(word not in source, f"UI boundary violation: {path}: {word}")
+    # The host's workspace names no OS. What a platform alone has is one module.
+    platform = root / "desktop/src/platform"
+    for path in (root / "desktop/src").rglob("*.rs"):
+        if platform in path.parents:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for word in ("objc2", "NSView", "NSWindow", "CAMetalLayer", "HWND", "windows::"):
+            require(word not in source, f"platform API outside desktop/src/platform: {path}: {word}")
 
 
 def common():
@@ -159,10 +187,31 @@ def common():
     # build what they link. A separate full build added a minute and nothing.
     run("cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings")
     run("cargo", "test", "--locked", "--workspace")
+    dependency_boundaries()
+
+
+def dependency_boundaries():
+    # Default features. tether-ui's gpui feature stays off, so this compile
+    # does not include the UI toolkit. The pairs fail if a layer reaches
+    # into another: chrome into the renderer, the renderer into chrome.
     for crate, backend in (("tether-terminal", "russh"), ("tether-local", "russh"),
-                           ("tether-ssh", "portable-pty")):
+                           ("tether-ssh", "portable-pty"),
+                           ("tether-ui", "wgpu"), ("tether-ui", "russh"),
+                           ("tether-ui", "tether-render"), ("tether-ui", "tether-terminal"),
+                           ("tether-render", "gpui"), ("tether-render", "tether-ui"),
+                           ("tether-terminal", "gpui"), ("tether-terminal", "tether-ui"),
+                           ("tether-ffi", "gpui"), ("tether-ffi", "tether-ui"),
+                           ("tether-desktop", "xgpui")):
         require(backend not in run("cargo", "tree", "--locked", "-p", crate, capture=True),
                 f"{crate} reaches forbidden backend {backend}")
+    # The feature is not compiled here. The tree still has to stay in its layer:
+    # GPUI for chrome, and not the terminal renderer or the window backend.
+    featured = run("cargo", "tree", "--locked", "-p", "tether-ui", "--features", "gpui",
+                   capture=True)
+    require("xgpui" in featured, "tether-ui gpui feature does not reach its UI toolkit")
+    for backend in ("wgpu", "russh", "tether-render", "tether-terminal", "gpui_platform",
+                    "portable-pty"):
+        require(backend not in featured, f"tether-ui gpui feature reaches {backend}")
 
 
 def stage_native(release=False):

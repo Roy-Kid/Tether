@@ -20,6 +20,9 @@ together. Read it before touching architecture.
 - `Cargo.toml`, `crates/` — the SDK. Crates appear only when they have work;
   an empty crate for a future phase is a layer added "because it may be useful
   later", which the spec forbids (§22).
+- `desktop/` — the Windows and Mac host GPUI owns the window for
+  (`Decisions/0022`). It replaces `app-win/` and the SwiftUI Mac shell as
+  it reaches them; until then it is a second consumer beside them.
 - `app/` — the app, a consumer like any other. `app/Packages/TetherFrontend`
   is the plugin kit and shared UI; `app/Packages/TetherPluginHost` is the
   web plugin host; `app/Plugins/` holds the built-in plugins.
@@ -47,6 +50,13 @@ together. Read it before touching architecture.
   expose terminal state with no UI framework linked. An acceptance criterion,
   not an aspiration (spec §15).
 - **No UI toolkit types in the frontend contract** (spec §14).
+- **Chrome, cells, and platform services stay apart.** On Windows and Mac
+  GPUI owns the window (ADR 0022). `tether-ui` lays out and, behind its
+  `gpui` feature, paints the chrome; it opens no window and calls no
+  platform API. `tether-render` draws the terminal into a child surface
+  and does not link GPUI. What belongs to a platform — Keychain, iCloud,
+  Handoff, the credential extension, hotkeys, tray — lives under
+  `desktop/src/platform/`. `cargo tree` and `check.py` are the test.
 - **The app names no plugin.** A plugin reaches the app through
   `TetherPluginKit`; the one line that knows it by name registers it.
   `grep -ri tmux app/Sources` is the test.
@@ -102,6 +112,11 @@ cargo build
 cargo test
 cargo tree -p tether-terminal    # must show no russh
 cargo tree -p tether-local       # must show no russh either
+cargo tree -p tether-ui          # must show no wgpu and no tether-render
+cargo tree -p tether-render      # must show no gpui
+cargo tree -p tether-desktop     # must show no xgpui: the toolkit is --features gui
+cargo test -p tether-ui --features test-support   # the chrome's click tests
+cargo run -p tether-desktop --features gui        # the GPUI host
 
 swift test --package-path swift                        # the SDK's Swift facade
 swift test --package-path app/Packages/TetherFrontend  # frontend

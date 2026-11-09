@@ -460,6 +460,11 @@ impl TerminalSession {
             }
             bytes
         };
+        // A wheel over this side's history moved the viewport, which a
+        // repaint loop only hears about from here, as it does from `scroll`.
+        if bytes.is_none() {
+            self.shared.announce();
+        }
         match bytes {
             Some(bytes) if !bytes.is_empty() => self.write(bytes),
             _ => Ok(()),
@@ -782,5 +787,17 @@ mod tests {
 
         received(&writes, b"a\x1bOAb").await;
         assert_eq!(session.viewport().offset, 0, "typing returned to the live screen");
+    }
+
+    /// A wheel that scrolls this side's history wakes the repaint loop, as
+    /// `scroll` does. Without it the viewport moved and nothing redrew.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_wheel_over_history_is_a_change() {
+        let (session, sender, _) = probe();
+        printed(&session, &sender, b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8").await;
+        let before = session.shared.generation.load(Ordering::Relaxed);
+        session.wheel(-2, 0, 0, false).unwrap();
+        assert_eq!(session.viewport().offset, 2, "two lines back into history");
+        assert!(session.shared.generation.load(Ordering::Relaxed) > before, "the loop was told");
     }
 }

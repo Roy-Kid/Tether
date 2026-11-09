@@ -26,10 +26,12 @@ crates/tether-core      session orchestration + the public API
 crates/tether-files     SFTP over any byte stream
 crates/tether-tmux      tmux workspaces over any transport
 crates/tether-render    terminal state → GPU draw
+crates/tether-ui        shared window chrome; the terminal and platform services stay out
 crates/tether-ffi       the UniFFI seam the native bindings come from
 swift/                  the Swift package: bindings + façade
 dotnet/                 the C# façade
 app/                    the app, the SDK's first consumer
+desktop/                the Windows and Mac host in GPUI (Decisions/0022)
 ```
 
 A consuming Swift application imports the `swift/` package.

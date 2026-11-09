@@ -1,9 +1,8 @@
 # Tether — embeddable SSH terminal components.
 #
-# Crates appear here only when they have work to do. tether-render,
-# tether-view and tether-app arrive with Phase 4 and 5; an empty crate now
-# would be a layer added "because it may be useful later", which the
-# specification forbids (§22).
+# Crates appear here only when they have work to do. An empty crate would be
+# a layer added "because it may be useful later", which the specification
+# forbids (§22).
 [workspace]
 resolver = "3"
 members = [
@@ -15,6 +14,8 @@ members = [
     "crates/tether-tmux",
     "crates/tether-files",
     "crates/tether-render",
+    "crates/tether-ui",
+    "desktop",
 ]
 
 [workspace.package]

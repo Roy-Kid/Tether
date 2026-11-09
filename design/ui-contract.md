@@ -5,7 +5,8 @@ does not restate their numbers. A figure here that disagrees with a source
 below is stale.
 
 External terminal apps inform hierarchy and interaction. They do not supply
-tokens, and their rendering does not replace SwiftUI, AppKit or WinUI.
+tokens. Shared Windows and Mac chrome is `tether-ui`, in a window GPUI
+owns (ADR 0022). iOS stays SwiftUI.
 
 ## Authority
 
@@ -15,6 +16,7 @@ tokens, and their rendering does not replace SwiftUI, AppKit or WinUI.
 | Mac workspace shape | `design/compact-zen/final/SPEC.md` |
 | Apple colour, type, spacing, radii, state opacities | `Theme` and `UIStyle` in `app/Packages/TetherFrontend/Sources/TetherUI/Chrome.swift` |
 | Apple window metrics | `Chrome` in `app/Sources/TetherApp/Design.swift` |
+| Shared Windows and Mac chrome | `crates/tether-ui`, the same Mac metrics. The host passes the leading reserve |
 | Windows roles | `app-win/Design.xaml` |
 | Windows caption and status composition | `app-win/MainWindow.xaml` |
 | Release check sizes | `docs/ui-calibration.md` |
@@ -68,6 +70,13 @@ workspace backdrop is the main window's Mica Alt, and the host chooser uses
 `DesktopAcrylicBackdrop`. The terminal canvas brush stays the opaque palette
 colour. WinUI owns focus, contrast, disabled transparency and power-saving
 fallbacks.
+
+`tether-ui` paints the shared chrome and leaves the terminal rect empty for
+`tether-render`'s child surface, and a plugin rect empty for a web view.
+It does not draw cells and it does not open the window; `desktop/` does.
+Traffic lights stay the window's own. Menus, iCloud and Keychain are
+`desktop/src/platform/`. The `gpui` feature is how the chrome is painted;
+the default build does not compile it.
 
 ## Fixture
 

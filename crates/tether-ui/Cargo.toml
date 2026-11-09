@@ -1,0 +1,19 @@
+[package]
+name = "tether-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared window chrome for Windows and macOS. Layout is pure; GPUI paints it behind a feature."
+
+[features]
+# Off by default. The commit gate compiles this crate without a UI toolkit.
+# `desktop/` opts in; it owns the window (Decisions/0022), this crate does not.
+gpui = ["dep:gpui"]
+# GPUI's headless test platform, for the click tests. No window backend.
+test-support = ["gpui", "gpui/test-support"]
+
+[dependencies]
+# Registry package `xgpui`, library name `gpui`. No platform crate: that one
+# opens the native window, and the window belongs to the host.
+gpui = { package = "xgpui", version = "3.0.1", optional = true, default-features = false }

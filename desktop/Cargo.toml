@@ -1,0 +1,80 @@
+[package]
+name = "tether-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Windows and Mac host: a GPUI window around the shared chrome and the SDK (Decisions/0022)."
+publish = false
+
+[features]
+# Off by default, like tether-ui's `gpui`: the commit gate tests the pure
+# workspace logic without compiling a UI toolkit or a window backend. The
+# binary needs it.
+gui = [
+    "dep:gpui",
+    "dep:gpui_platform",
+    "tether-ui/gpui",
+    "tether-ffi/render",
+    "dep:tokio",
+    "dep:raw-window-handle",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
+    "dep:objc2-quartz-core",
+    "dep:objc2-core-foundation",
+    "dep:libc",
+]
+
+[dependencies]
+tether-ui = { path = "../crates/tether-ui" }
+tether-ffi = { path = "../crates/tether-ffi" }
+gpui = { package = "xgpui", version = "3.0.1", optional = true, default-features = false }
+# `font-kit` is the Mac text system. Without it GPUI installs one that draws no glyphs.
+gpui_platform = { package = "xgpui-platform", version = "2.0.3", optional = true, features = ["font-kit"] }
+tokio = { workspace = true, optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { version = "0.2", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSColor",
+    "NSColorSpace",
+    "NSFontDescriptor",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "NSWindowRestoration",
+    "objc2-quartz-core",
+] }
+objc2-foundation = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSString",
+    "objc2-core-foundation",
+] }
+objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CALayer",
+    "CAMetalLayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-foundation = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "CFCGTypes",
+] }
+
+[[bin]]
+name = "tether-desktop"
+path = "src/main.rs"
+required-features = ["gui"]
