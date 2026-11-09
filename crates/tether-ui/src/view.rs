@@ -13,12 +13,13 @@
 //! Only the host picker's open state is the view's own.
 
 use gpui::{
-    App, ClickEvent, Context, EventEmitter, FontWeight, IntoElement, MouseButton, Render,
-    SharedString, Stateful, Window, div, prelude::*, px, rgb,
+    App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement, MouseButton, Render,
+    SharedString, Stateful, Subscription, Window, div, prelude::*, px, rgb,
 };
 
 use std::sync::Arc;
 
+use crate::field::{FieldEvent, TextField};
 use crate::icons::{Icon, Style, Symbols, icon};
 use crate::{Chrome, Kind, Placement, Rect, Tab, Workspace, layout};
 
@@ -39,7 +40,7 @@ pub struct Ink {
 
 /// What a click on the chrome asks the host to do. Indices are into the
 /// `tabs` and `hosts` the view was given.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChromeEvent {
     Select(usize),
     /// A right click on a chip: the host opens that terminal's menu.
@@ -48,6 +49,17 @@ pub enum ChromeEvent {
     NewTab,
     PickHost(usize),
     Settings,
+    /// A chip's rename finished with this text. Empty clears the name.
+    Renamed(usize, String),
+    /// A chip's rename was abandoned.
+    RenameCancelled,
+}
+
+/// A chip being renamed in place.
+pub struct Rename {
+    index: usize,
+    field: Entity<TextField>,
+    _events: Subscription,
 }
 
 /// The workspace chrome. Mount it in the window the host opened.
@@ -68,11 +80,36 @@ pub struct ChromeView {
     pub symbols: Option<Arc<dyn Symbols>>,
     /// The selected terminal's shell has ended: the status bar's mark.
     pub ended: bool,
+    /// The chip whose name is being edited. Set by [`ChromeView::begin_rename`].
+    pub renaming: Option<Rename>,
 }
 
 impl EventEmitter<ChromeEvent> for ChromeView {}
 
 impl ChromeView {
+    /// The chip at `index` becomes a field holding `seed`, selected
+    /// (`beginRenamingTerminal`). Its answer is a [`ChromeEvent`].
+    pub fn begin_rename(
+        &mut self,
+        index: usize,
+        seed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (text, accent) = (self.ink.text, self.ink.accent);
+        let field = cx.new(|cx| TextField::new(seed, text, accent, window, cx));
+        let events = cx.subscribe_in(&field, window, move |this, _, event: &FieldEvent, _, cx| {
+            this.renaming = None;
+            cx.emit(match event {
+                FieldEvent::Submit(text) => ChromeEvent::Renamed(index, text.clone()),
+                FieldEvent::Cancel => ChromeEvent::RenameCancelled,
+            });
+            cx.notify();
+        });
+        self.renaming = Some(Rename { index, field, _events: events });
+        cx.notify();
+    }
+
     /// Close the picker and tell the host. Every click but the cluster's own does this.
     fn send(&mut self, event: ChromeEvent, cx: &mut Context<Self>) {
         self.host_open = false;
@@ -233,11 +270,19 @@ fn tab_face(
         .gap(px(Chrome::SPACE_INLINE))
         .h(px(row))
         .child(icon(view.symbols.as_deref(), Icon::Terminal, Style::Symbol, color, alpha));
-    if horizontal {
-        face.child(title_text(&tab.title, color, alpha, true))
-    } else {
-        face.flex_1().min_w(px(0.0)).child(title_text(&tab.title, color, alpha, false))
-    }
+    let editing = view.renaming.as_ref().filter(|rename| rename.index == index);
+    let title = match editing {
+        // The field is the title, in the title's face (`UIStyle.title`, medium in the strip).
+        Some(rename) => div()
+            .flex_none()
+            .text_size(px(Chrome::TITLE))
+            .line_height(px(TITLE_LINE))
+            .text_color(paint(color, alpha))
+            .when(horizontal, |field| field.font_weight(FontWeight::MEDIUM))
+            .child(rename.field.clone()),
+        None => title_text(&tab.title, color, alpha, horizontal),
+    };
+    if horizontal { face.child(title) } else { face.flex_1().min_w(px(0.0)).child(title) }
 }
 
 fn title_text(title: &str, color: u32, alpha: f32, medium: bool) -> gpui::Div {
@@ -491,7 +536,7 @@ fn control(
         ink,
         cx.listener(move |this, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
-            this.send(event, cx);
+            this.send(event.clone(), cx);
         }),
     )
     .flex()
@@ -607,6 +652,7 @@ mod clicks {
             },
             symbols: None,
             ended: false,
+            renaming: None,
         }
     }
 
@@ -624,8 +670,10 @@ mod clicks {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let sink = seen.clone();
         cx.update(|_, cx| {
-            cx.subscribe(&view, move |_, event: &ChromeEvent, _| sink.borrow_mut().push(*event))
-                .detach();
+            cx.subscribe(&view, move |_, event: &ChromeEvent, _| {
+                sink.borrow_mut().push(event.clone())
+            })
+            .detach();
         });
 
         let tab = cx.debug_bounds("tab-1").expect("tab");
@@ -660,5 +708,39 @@ mod clicks {
             assert_eq!(view.tabs, sample().tabs);
             assert!(!view.settings_open);
         });
+    }
+
+    #[gpui::test]
+    fn a_rename_submits_on_return_and_cancels_on_escape(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| sample());
+        cx.simulate_resize(size(px(Chrome::WINDOW_WIDTH), px(Chrome::WINDOW_HEIGHT)));
+        cx.run_until_parked();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &ChromeEvent, _| {
+                sink.borrow_mut().push(event.clone())
+            })
+            .detach();
+        });
+
+        cx.update(|window, cx| view.update(cx, |view, cx| view.begin_rename(1, "zsh", window, cx)));
+        cx.run_until_parked();
+        // The seed is selected, so typing replaces it.
+        cx.simulate_input("logs");
+        cx.simulate_keystrokes("backspace enter");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.begin_rename(0, "localhost", window, cx))
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+
+        assert_eq!(
+            *seen.borrow(),
+            [ChromeEvent::Renamed(1, "log".into()), ChromeEvent::RenameCancelled]
+        );
+        cx.update(|_, cx| assert!(view.read(cx).renaming.is_none()));
     }
 }

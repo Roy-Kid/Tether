@@ -30,7 +30,7 @@ impl Terminals for Desktop {
     }
 
     fn can_rename(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -105,7 +105,7 @@ impl Desktop {
                     self.workspaces = self.workspaces.joining(page);
                 }
             }
-            Choice::Rename => {}
+            Choice::Rename => self.begin_rename(id, window, cx),
             Choice::Close => self.request_close(id, window, cx),
             Choice::OpenLink => {
                 if let Some(address) = link.and_then(links::web_address) {

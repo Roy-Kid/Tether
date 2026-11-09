@@ -48,6 +48,7 @@ pub fn run() -> Result<(), String> {
                 ink: dark_ink(),
                 symbols: platform::symbols(),
                 ended: false,
+                renaming: None,
             });
             cx.new(|cx| Desktop::new(chrome, runtime.clone(), window, cx))
         });
@@ -113,6 +114,8 @@ pub(crate) struct Desktop {
     pub(crate) closing: bool,
     /// `Terminal N`, numbered per host as terminals open.
     serials: HashMap<PaneId, String>,
+    /// Names given with Rename Terminal. While set, activity does not change the chip.
+    pinned: HashMap<PaneId, String>,
     pub(crate) drag: Option<Drag>,
     /// The terminal a press began on, which hears the drag and the release.
     pub(crate) pointer_pane: Option<PaneId>,
@@ -132,7 +135,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> Self {
         let events = cx.subscribe_in(&chrome, window, |this, _, event, window, cx| {
-            this.chrome_event(*event, window, cx);
+            this.chrome_event(event.clone(), window, cx);
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -144,6 +147,7 @@ impl Desktop {
             ended: HashSet::new(),
             closing: false,
             serials: HashMap::new(),
+            pinned: HashMap::new(),
             drag: None,
             pointer_pane: None,
             marked: String::new(),
@@ -179,6 +183,18 @@ impl Desktop {
                 }
             }
             ChromeEvent::NewTab => self.open(None, window, cx),
+            // `rename`: an empty name clears the pin.
+            ChromeEvent::Renamed(index, name) => {
+                if let Some(id) = strip.get(index) {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        self.pinned.remove(id);
+                    } else {
+                        self.pinned.insert(*id, name.to_owned());
+                    }
+                }
+            }
+            ChromeEvent::RenameCancelled => {}
             // One host and no settings window yet: P3 and P4.
             ChromeEvent::PickHost(_) | ChromeEvent::Settings => {}
         }
@@ -331,6 +347,7 @@ impl Desktop {
         }
         self.ended.remove(&id);
         self.serials.remove(&id);
+        self.pinned.remove(&id);
         self.titles.remove(&id);
     }
 
@@ -339,22 +356,7 @@ impl Desktop {
     pub(crate) fn sync(&mut self, cx: &mut Context<Self>) {
         let home = std::env::var("HOME").ok();
         let strip = self.workspaces.strip();
-        let rows: Vec<Label> = strip
-            .iter()
-            .map(|id| {
-                let pane = self.panes.get(id);
-                Label {
-                    id: Some(*id),
-                    command: pane.and_then(|pane| pane.command.clone()),
-                    directory: labels::directory_name(
-                        pane.and_then(|pane| pane.directory.as_deref()),
-                        home.as_deref(),
-                    ),
-                    serial: self.serials.get(id).cloned().unwrap_or_default(),
-                    ..Label::default()
-                }
-            })
-            .collect();
+        let rows: Vec<Label> = strip.iter().map(|id| self.label(*id, home.as_deref())).collect();
         self.titles = labels::titles(&rows);
         let selected = self.workspaces.selected();
         let chips: Vec<tether_ui::Tab> = strip
@@ -375,12 +377,43 @@ impl Desktop {
         cx.notify();
     }
 
+    /// What a chip is named from (`TabSet.label(for:)`).
+    fn label(&self, id: PaneId, home: Option<&str>) -> Label {
+        let pane = self.panes.get(&id);
+        Label {
+            id: Some(id),
+            pinned: self.pinned.get(&id).cloned(),
+            command: pane.and_then(|pane| pane.command.clone()),
+            directory: labels::directory_name(
+                pane.and_then(|pane| pane.directory.as_deref()),
+                home,
+            ),
+            serial: self.serials.get(&id).cloned().unwrap_or_default(),
+            ..Label::default()
+        }
+    }
+
+    /// ⌘R, Rename Terminal: the chip becomes a field holding its name
+    /// without a twin number (`renameSeed`).
+    pub(crate) fn begin_rename(&mut self, id: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.workspaces.strip().iter().position(|other| *other == id) else {
+            return;
+        };
+        let home = std::env::var("HOME").ok();
+        let seed = labels::seed(&self.label(id, home.as_deref()));
+        self.chrome.update(cx, |view, cx| view.begin_rename(index, &seed, window, cx));
+    }
+
     pub(crate) fn key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A field in the chrome has the keyboard: a chip being renamed.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         if modifiers.platform {
@@ -421,6 +454,11 @@ impl Desktop {
                     let selected = self.workspaces.selected().and_then(|id| self.panes.get(&id));
                     if let Some(text) = selected.and_then(Pane::copy) {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    }
+                }
+                ("r", false, false) => {
+                    if let Some(id) = self.workspaces.selected() {
+                        self.begin_rename(id, window, cx);
                     }
                 }
                 ("q", false, false) => cx.quit(),

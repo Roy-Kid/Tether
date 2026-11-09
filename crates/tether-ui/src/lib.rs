@@ -17,7 +17,10 @@
 
 mod chrome;
 mod frame;
+mod line;
 
+#[cfg(feature = "gpui")]
+mod field;
 #[cfg(feature = "gpui")]
 mod icons;
 #[cfg(feature = "gpui")]
@@ -27,11 +30,14 @@ pub use chrome::Chrome;
 pub use frame::{
     Canvas, Frame, Hit, Kind, Placement, Rect, Region, Role, Side, Tab, Workspace, layout,
 };
+pub use line::Line;
 
+#[cfg(feature = "gpui")]
+pub use field::{FieldEvent, TextField};
 #[cfg(feature = "gpui")]
 pub use icons::{Assets, Drawn, Icon, Style, Symbols};
 #[cfg(feature = "gpui")]
-pub use view::{ChromeEvent, ChromeView, Ink};
+pub use view::{ChromeEvent, ChromeView, Ink, Rename};
 
 /// The boundary in executable form, beside the `cargo tree` check.
 pub const BOUNDARY: &str = "tether-ui paints shared chrome, leaves the terminal and plugin surfaces empty, and leaves the window and platform services to the host";
