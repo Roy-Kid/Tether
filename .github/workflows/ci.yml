@@ -1,15 +1,13 @@
-# Every job is setup, then one `scripts/check.py --job <name>`.
-# `scripts/test-check.py` holds this file to that shape.
-#
-# Run by hand only: nothing here runs on a push or a schedule. A commit runs
-# `linux` on the machine that made it, and the Mac jobs (`apple`, `desktop`,
-# `gpui-release`) run there before a push; they are not here at all. What
-# stays is what a Mac cannot run: the Windows package, and a Linux pass and
-# a fuzz pass when one is wanted on clean machines.
+# One job, on a push to master: `linux`, which is setup and one
+# `scripts/check.py --job linux` (`scripts/test-check.py` holds it to that).
+# Nothing runs on dev, on a schedule, or on another platform. Every other
+# gate job runs on the machine that can: the Mac ones before a push, the
+# Windows ones on Windows, fuzz with nightly Rust (see docs/commit-checks.md).
 name: CI
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,84 +40,3 @@ jobs:
           sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
       - name: Check
         run: python3 scripts/check.py --job linux
-
-  fuzz:
-    name: fuzz
-    runs-on: ubuntu-latest
-    # The night's pass is ten minutes for each of five targets.
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      # `cargo-fuzz` needs nightly and a sanitizer; `fuzz/` is its own workspace.
-      - name: Install nightly
-        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
-      - name: Restore cargo-fuzz
-        id: cargofuzz
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-fuzz
-          key: cargo-fuzz-${{ runner.os }}-0.13
-      - name: Install cargo-fuzz
-        if: steps.cargofuzz.outputs.cache-hit != 'true'
-        run: cargo +nightly install cargo-fuzz --locked
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # rust-cache saves nothing after an exact match: the key moves when
-          # what the build makes does. Not with check.py, or every edit to
-          # the gate starts every job cold.
-          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
-          workspaces: ". -> target\nfuzz -> target"
-      - name: Check
-        env:
-          TETHER_FUZZ_SECONDS: '60'
-        run: python3 scripts/check.py --job fuzz
-      # A crash is worth keeping even when the job fails: it is the input a
-      # fix has to be written against.
-      - name: Keep whatever crashed
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-artifacts
-          path: fuzz/artifacts/
-          if-no-files-found: ignore
-
-  windows:
-    name: windows
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install check dependencies
-        run: python -m pip install -r scripts/check-requirements.txt
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - name: Install the pinned Rust toolchain
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # rust-cache saves nothing after an exact match: the key moves when
-          # what the build makes does. Not with check.py, or every edit to
-          # the gate starts every job cold.
-          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
-      - name: Restore the C# binding generator
-        id: bindgen
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}
-      - name: Install the C# binding generator
-        run: python scripts/ensure-bindgen.py
-      - name: Check
-        run: python scripts/check.py --job windows
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Tether-win-x64
-          path: artifacts/windows-portable/Tether-win-x64.zip
-          compression-level: 0

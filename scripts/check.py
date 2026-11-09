@@ -390,8 +390,9 @@ JOBS = {
     "gpui-release": gpui_release,
 }
 HOST_JOBS = {"darwin": ("linux",), "win32": ("windows",)}
-# Jobs with no CI job: they run on the Mac before a push. CI runs by hand,
-# and only what a Mac cannot (see ci.yml).
+# The one job CI runs, on a push to master (ci.yml). The rest run where
+# they can: on the Mac before a push, on Windows, or with nightly Rust.
+CI_JOBS = {"linux"}
 LOCAL_JOBS = {"apple", "desktop", "gpui-release"}
 
 

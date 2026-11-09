@@ -18,21 +18,19 @@ take several minutes because it runs builds and tests.
 `linux`, `apple`, `desktop`, `gpui-release`, `windows`, `windows-tests`,
 `fuzz` — and a workflow job is setup steps and a single
 `python scripts/check.py --job <name>`, nothing else; `test-check.py` fails
-if a workflow runs anything outside the gate, or if a gate job other than
-the Mac ones (`LOCAL_JOBS`) has no CI job.
+if a workflow runs anything outside the gate, or runs other than `CI_JOBS`.
 
-**The Mac does the work; CI is by hand and small.** A commit on a Mac runs
+**The machines here do the work; CI is one job.** A commit on a Mac runs
 `linux`: source checks, `cargo fmt`, Clippy, and `cargo test`. Before a
 push, run the Mac jobs on the same machine:
 `python scripts/check.py --job apple --job desktop --job gpui-release`.
 `apple` compiles seven Swift packages, an iOS slice and the phone's tests;
 `desktop` builds the GPUI host (`--features gui`) and runs the chrome's
 click tests; `gpui-release` fails once Zed ships a stable release GPUI is
-not at, and `scripts/bump-gpui.py` moves the tag. GitHub Actions has no
-push or schedule triggers. Start a workflow by hand for what a Mac cannot
-run: `windows-tests` (`windows.yml`), the full `windows` package, and a
-clean-machine `linux` or `fuzz` pass (`ci.yml`, fuzz at 60 seconds a
-target). `--job fuzz` runs it locally with nightly Rust and cargo-fuzz.
+not at, and `scripts/bump-gpui.py` moves the tag. On Windows,
+`--job windows` and `--job windows-tests`; with nightly Rust and
+cargo-fuzz, `--job fuzz`. GitHub Actions runs `linux` on a push to master
+and nothing else: no dev, no schedule, no other platform.
 
 | Previous failure | Gate that catches recurrence |
 | --- | --- |
@@ -83,8 +81,7 @@ hook configuration when cloning a repository.
 
 A Linux commit runs the same `linux` job, which needs CJK fonts for the
 shaping tests. The fuzz job replays stored regressions, then runs every
-target for `TETHER_FUZZ_SECONDS` (60 in a workflow started by hand). It
-needs nightly Rust and cargo-fuzz.
+target for `TETHER_FUZZ_SECONDS`. It needs nightly Rust and cargo-fuzz.
 
 A local pass counts only on CI's compilers and inputs. Both compilers are
 pinned in the repository: `rust-toolchain.toml` (cargo obeys it here and on

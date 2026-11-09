@@ -95,10 +95,10 @@ Install the repository-local commit gate once per clone with
 commit runs `linux` only: source checks, `cargo fmt`, Clippy, and `cargo test`.
 Before a push, run the Mac jobs here:
 `python scripts/check.py --job apple --job desktop --job gpui-release`.
-GitHub Actions runs nothing on its own — no push or nightly triggers — and
-holds only what a Mac cannot run (Windows, plus Linux and fuzz passes),
-started by hand. See `docs/commit-checks.md`. Commits go straight to dev and
-master. Each CI job is one `check.py --job <name>`.
+GitHub Actions runs one job, `linux`, on a push to master; nothing on dev,
+nothing nightly, no other platform. Windows jobs run on a Windows machine
+and fuzz with nightly Rust, by hand. See `docs/commit-checks.md`. Commits go
+straight to dev and master. A CI job is one `check.py --job <name>`.
 
 ```bash
 ./scripts/tether.sh --help                        # every flag, in one place
