@@ -15,7 +15,7 @@ Run `python scripts/check.py` manually to validate the working tree. This can
 take several minutes because it runs builds and tests.
 
 **One definition of every check.** `check.py` has one function per CI job —
-`linux`, `apple`, `windows`, `windows-tests`, `fuzz` — and a workflow job is setup steps and a
+`linux`, `apple`, `desktop`, `gpui-release`, `windows`, `windows-tests`, `fuzz` — and a workflow job is setup steps and a
 single `python scripts/check.py --job <name>`, nothing else; `test-check.py`
 fails if a workflow runs anything outside the gate, or if the workflows' jobs
 and the gate's differ. A commit on a Mac runs `linux` only: source checks,
@@ -23,12 +23,15 @@ and the gate's differ. A commit on a Mac runs `linux` only: source checks,
 an iOS slice and the phone's tests; `fuzz` brings up nightly. Those two run
 when dev or master is pushed (fuzz for ten seconds a target) and again each
 night (`TETHER_FUZZ_SECONDS=600`). `--job apple` or `--job fuzz` runs one of
-them locally.
+them locally. `desktop` builds the GPUI host (`--features gui`) and runs the
+chrome's click tests, on every push. `gpui-release` runs each night and is
+red once Zed ships a stable release GPUI is not at; `scripts/bump-gpui.py`
+moves the tag and `desktop` proves the move.
 
 **A push runs what the commit did not.** Commits go straight to dev and
 master; there is no staging branch. A push to either runs `windows-tests`
 (`windows.yml`): the workspace's tests and the .NET suites on Windows, no lint.
-It also runs `apple` and the short `fuzz`. `linux` and the full `windows`
+It also runs `apple`, `desktop` and the short `fuzz`. `linux` and the full `windows`
 package run in `ci.yml` each night and on demand.
 
 | Previous failure | Gate that catches recurrence |

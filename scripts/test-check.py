@@ -183,6 +183,25 @@ class GateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "tether-local reaches forbidden backend russh"):
                 gate.dependency_boundaries()
 
+    def test_gpui_moves_both_lines_to_one_stable_tag(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bump", Path(__file__).with_name("bump-gpui.py"))
+        bump = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bump)
+        manifest = (
+            'gpui = { git = "https://github.com/zed-industries/zed", tag = "v1.27.0", default-features = false }\n'
+            'gpui_platform = { git = "https://github.com/zed-industries/zed", tag = "v1.27.0" }\n'
+        )
+        self.assertEqual(bump.pinned(manifest), "v1.27.0")
+        moved = bump.retagged(manifest, "v1.28.0")
+        self.assertEqual(bump.pinned(moved), "v1.28.0")
+        self.assertIn("default-features = false", moved)
+        with self.assertRaises(RuntimeError):
+            bump.retagged(manifest, "v1.28.0-pre")
+        with self.assertRaises(RuntimeError):
+            bump.pinned(manifest.replace('tag = "v1.27.0" }', 'tag = "v1.26.2" }'))
+        self.assertGreater(bump.version("v1.28.0"), bump.version("v1.27.10"))
+
     def test_unstaged_content_blocks(self):
         path = self.root / "example.txt"
         path.write_text("staged\n")

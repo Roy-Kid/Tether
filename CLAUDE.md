@@ -117,6 +117,7 @@ cargo tree -p tether-render      # must show no gpui
 cargo tree -p tether-desktop     # must show no gpui: the toolkit is --features gui
 cargo test -p tether-ui --features test-support   # the chrome's click tests
 cargo run -p tether-desktop --features gui        # the GPUI host
+python scripts/bump-gpui.py                       # GPUI to Zed's latest stable tag
 
 swift test --package-path swift                        # the SDK's Swift facade
 swift test --package-path app/Packages/TetherFrontend  # frontend

@@ -215,6 +215,20 @@ def dependency_boundaries():
         require(backend not in featured, f"tether-ui gpui feature reaches {backend}")
 
 
+def desktop():
+    # The GPUI host and the chrome's click tests. Nothing else compiles
+    # `--features gui`, so a GPUI release that moved an API breaks here.
+    run("cargo", "clippy", "--locked", "-p", "tether-desktop", "--features", "gui",
+        "--all-targets", "--", "-D", "warnings")
+    run("cargo", "test", "--locked", "-p", "tether-ui", "--features", "test-support")
+
+
+def gpui_release():
+    # Red when Zed has shipped a stable release GPUI is not at yet.
+    # `scripts/bump-gpui.py` moves it; `desktop` then proves the move.
+    run(sys.executable, ROOT / "scripts/bump-gpui.py", "--check")
+
+
 def stage_native(release=False):
     args = ["cargo", "build", "--locked", "-p", "tether-ffi", "--features", "render"]
     if release:
@@ -372,6 +386,8 @@ JOBS = {
     "windows": lambda: (common(), windows()),
     "windows-tests": windows_tests,
     "fuzz": lambda: fuzz(),
+    "desktop": desktop,
+    "gpui-release": gpui_release,
 }
 HOST_JOBS = {"darwin": ("linux",), "win32": ("windows",)}
 

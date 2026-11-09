@@ -1,11 +1,11 @@
 # Every job is setup, then one `scripts/check.py --job <name>`.
 # `scripts/test-check.py` holds this file to that shape.
 #
-# A Mac commit runs `linux` only. `apple` and `fuzz` are the slow compiles,
-# so they run on a push to dev or master (fuzz for ten seconds a target)
-# and again each night, when fuzz is ten minutes a target. `linux` and the
-# full `windows` package run nightly and on demand: a commit already ran
-# `linux`, and a push already ran `windows-tests`.
+# A Mac commit runs `linux` only. `apple`, `desktop` and `fuzz` are the slow
+# compiles, so they run on a push to dev or master (fuzz for ten seconds a
+# target) and again each night, when fuzz is ten minutes a target. `linux`,
+# the full `windows` package and `gpui-release` run nightly and on demand: a
+# commit already ran `linux`, and a push already ran `windows-tests`.
 name: CI
 
 on:
@@ -112,6 +112,45 @@ jobs:
         run: python3 scripts/ensure-bindgen.py
       - name: Check
         run: python3 scripts/check.py --job apple
+
+  # The GPUI host, on every push: a GPUI move is proved here.
+  desktop:
+    name: desktop
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install check dependencies
+        run: python3 -m pip install -r scripts/check-requirements.txt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # rust-cache saves nothing after an exact match: the key moves when
+          # what the build makes does. Not with check.py, or every edit to
+          # the gate starts every job cold.
+          key: ${{ hashFiles('scripts/build-xcframework.sh') }}
+      - name: Check
+        run: python3 scripts/check.py --job desktop
+
+  # Nightly: red once Zed ships a stable release GPUI is not at.
+  gpui-release:
+    name: gpui-release
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check.py --job gpui-release
 
   fuzz:
     name: fuzz
