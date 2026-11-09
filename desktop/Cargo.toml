@@ -24,6 +24,7 @@ gui = [
     "dep:objc2-quartz-core",
     "dep:objc2-core-foundation",
     "dep:libc",
+    "dep:block2",
 ]
 
 [dependencies]
@@ -37,11 +38,17 @@ raw-window-handle = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { version = "0.2", optional = true }
+block2 = { version = "0.6", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = [
+    "NSAlert",
     "NSApplication",
     "NSAttributedString",
     "NSBitmapImageRep",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSEvent",
     "NSColor",
     "NSColorSpace",
     "NSFont",
@@ -50,12 +57,15 @@ objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false,
     "NSGraphicsContext",
     "NSImage",
     "NSImageRep",
+    "NSMenu",
+    "NSMenuItem",
     "NSResponder",
     "NSStringDrawing",
     "NSScreen",
     "NSView",
     "NSWindow",
     "NSWindowRestoration",
+    "block2",
     "objc2-core-graphics",
     "objc2-quartz-core",
 ] }

@@ -106,9 +106,11 @@ pub(crate) struct Desktop {
     pub(crate) workspaces: Workspaces,
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Chip titles, worked out together so twins are numbered.
-    titles: HashMap<PaneId, String>,
+    pub(crate) titles: HashMap<PaneId, String>,
     /// Terminals whose shell has ended. They stay, as on a Mac, with the last screen.
-    ended: HashSet<PaneId>,
+    pub(crate) ended: HashSet<PaneId>,
+    /// A close is being checked or asked; another waits for it.
+    pub(crate) closing: bool,
     /// `Terminal N`, numbered per host as terminals open.
     serials: HashMap<PaneId, String>,
     pub(crate) drag: Option<Drag>,
@@ -117,7 +119,7 @@ pub(crate) struct Desktop {
     /// What the input method is composing, drawn at the cursor and not sent.
     pub(crate) marked: String,
     pub(crate) focus: FocusHandle,
-    runtime: Arc<Runtime>,
+    pub(crate) runtime: Arc<Runtime>,
     next_pane: u64,
     _chrome_events: Subscription,
 }
@@ -140,6 +142,7 @@ impl Desktop {
             panes: HashMap::new(),
             titles: HashMap::new(),
             ended: HashSet::new(),
+            closing: false,
             serials: HashMap::new(),
             drag: None,
             pointer_pane: None,
@@ -157,14 +160,22 @@ impl Desktop {
     fn chrome_event(&mut self, event: ChromeEvent, window: &mut Window, cx: &mut Context<Self>) {
         let strip = self.workspaces.strip();
         match event {
-            ChromeEvent::Select(index) => {
+            // A second click on the selected chip opens its menu (`handleTabClick`).
+            ChromeEvent::Select(index) => match strip.get(index) {
+                Some(id) if self.workspaces.selected() == Some(*id) => {
+                    self.open_tab_menu(*id, window, cx)
+                }
+                Some(id) => self.workspaces = self.workspaces.selecting(*id),
+                None => {}
+            },
+            ChromeEvent::Menu(index) => {
                 if let Some(id) = strip.get(index) {
-                    self.workspaces = self.workspaces.selecting(*id);
+                    self.open_tab_menu(*id, window, cx);
                 }
             }
             ChromeEvent::Close(index) => {
                 if let Some(id) = strip.get(index) {
-                    self.close_terminal(*id);
+                    self.request_close(*id, window, cx);
                 }
             }
             ChromeEvent::NewTab => self.open(None, window, cx),
@@ -176,14 +187,24 @@ impl Desktop {
     }
 
     /// A terminal on this machine: a new tab (`⌘T`), or into `page` (`⌘N`).
-    fn open(&mut self, page: Option<WorkspaceId>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(
+        &mut self,
+        page: Option<WorkspaceId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.new_terminal_id();
         self.workspaces = self.workspaces.adopting(id, page);
         self.start_shell(id, window, cx);
     }
 
     /// `⌘\` and `⇧⌘\`: a new terminal beside the selected one.
-    fn split(&mut self, direction: Direction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn split(
+        &mut self,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(beside) = self.workspaces.selected() else { return };
         let id = self.new_terminal_id();
         self.workspaces = self.workspaces.splitting(beside, id, direction);
@@ -289,15 +310,14 @@ impl Desktop {
         cx.notify();
     }
 
-    /// `⌘W`, a chip's close box: one terminal goes, and its split folds.
-    fn close_terminal(&mut self, id: PaneId) {
+    /// One terminal goes, and its split folds. Asked first: `request_close`.
+    pub(crate) fn close_terminal(&mut self, id: PaneId) {
         self.workspaces = self.workspaces.closing(id);
         self.forget(id);
     }
 
-    /// `⌥⌘W`: the selected tab and every terminal in it.
-    fn close_tab(&mut self) {
-        let Some(page) = self.workspaces.current().map(|page| page.id) else { return };
+    /// A tab and every terminal in it. Asked first: `request_close_tab`.
+    pub(crate) fn close_page(&mut self, page: WorkspaceId) {
         let (workspaces, gone) = self.workspaces.closing_page(page);
         self.workspaces = workspaces;
         for id in gone {
@@ -316,7 +336,7 @@ impl Desktop {
 
     /// The one place the chips are worked out (`TerminalLabels`) and handed
     /// to the chrome, which is a separate view and draws from its own copy.
-    fn sync(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn sync(&mut self, cx: &mut Context<Self>) {
         let home = std::env::var("HOME").ok();
         let strip = self.workspaces.strip();
         let rows: Vec<Label> = strip
@@ -373,10 +393,23 @@ impl Desktop {
                 }
                 ("w", false, false) => {
                     if let Some(id) = self.workspaces.selected() {
-                        self.close_terminal(id);
+                        self.request_close(id, window, cx);
                     }
                 }
-                ("w", false, true) => self.close_tab(),
+                ("w", false, true) => {
+                    if let Some(page) = self.workspaces.current().map(|page| page.id) {
+                        self.request_close_tab(page, window, cx);
+                    }
+                }
+                // `previousTerminal` / `nextTerminal`, and the tabs (`cycleTab`).
+                ("up", false, true) => self.workspaces = self.workspaces.cycling_terminal(false),
+                ("down", false, true) => self.workspaces = self.workspaces.cycling_terminal(true),
+                ("left", false, true) | ("[" | "{", true, false) => {
+                    self.workspaces = self.workspaces.cycling_tab(false)
+                }
+                ("right", false, true) | ("]" | "}", true, false) => {
+                    self.workspaces = self.workspaces.cycling_tab(true)
+                }
                 ("\\", false, false) => self.split(Direction::Right, window, cx),
                 ("\\", true, false) | ("|", _, false) => self.split(Direction::Down, window, cx),
                 ("v", false, false) => {

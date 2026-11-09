@@ -25,3 +25,19 @@ pub fn place_window(_title: &str) {}
 pub fn foreground_command(_shell: Option<u32>) -> Option<String> {
     None
 }
+
+/// No dialog surface here yet: every question goes unanswered, which a
+/// caller treats as Cancel.
+pub fn ask(
+    _window: &gpui::Window,
+    _dialog: &tether_desktop::dialog::Dialog,
+) -> tokio::sync::oneshot::Receiver<Option<usize>> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = sender.send(None);
+    receiver
+}
+
+/// No native menu here yet; nothing is chosen.
+pub fn menu(_entries: &[tether_desktop::tab_menu::Entry]) -> Option<usize> {
+    None
+}

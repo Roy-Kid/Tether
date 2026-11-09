@@ -42,6 +42,8 @@ pub struct Ink {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChromeEvent {
     Select(usize),
+    /// A right click on a chip: the host opens that terminal's menu.
+    Menu(usize),
     Close(usize),
     NewTab,
     PickHost(usize),
@@ -218,6 +220,13 @@ fn tab_face(
             cx.stop_propagation();
             this.send(ChromeEvent::Select(index), cx);
         }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.send(ChromeEvent::Menu(index), cx);
+            }),
+        )
         .flex()
         .flex_row()
         .items_center()

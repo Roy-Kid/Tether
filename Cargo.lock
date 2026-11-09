@@ -6302,6 +6302,7 @@ dependencies = [
 name = "tether-desktop"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
  "gpui",
  "gpui_platform",
  "libc",

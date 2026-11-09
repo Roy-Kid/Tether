@@ -7,7 +7,9 @@
 //! are one implementation. What only a platform has is `platform/`.
 
 mod canvas;
+mod close;
 mod ime;
+mod menus;
 mod pane;
 mod platform;
 mod pointer;

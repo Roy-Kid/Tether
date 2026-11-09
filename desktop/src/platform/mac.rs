@@ -24,12 +24,7 @@ impl TerminalLayer {
     /// Main thread only, which is where GPUI calls render.
     pub fn attach(window: &gpui::Window) -> Result<Self, String> {
         MainThreadMarker::new().ok_or("terminal layer off the main thread")?;
-        let handle = HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
-        let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-            return Err("not an AppKit window".to_owned());
-        };
-        // SAFETY: GPUI hands out its live content view for as long as the window exists.
-        let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
+        let view = content_view(window)?;
         let parent = view.layer().ok_or("GPUI view has no layer")?;
         let layer = CAMetalLayer::new();
         layer.setOpaque(true);
@@ -77,6 +72,16 @@ impl TerminalLayer {
         self.layer.setHidden(true);
         CATransaction::commit();
     }
+}
+
+/// GPUI's content view of `window`.
+pub(super) fn content_view(window: &gpui::Window) -> Result<&NSView, String> {
+    let handle = HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return Err("not an AppKit window".to_owned());
+    };
+    // SAFETY: GPUI hands out its live content view for as long as the window exists.
+    Ok(unsafe { appkit.ns_view.cast().as_ref() })
 }
 
 impl Drop for TerminalLayer {

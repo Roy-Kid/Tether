@@ -13,6 +13,8 @@ pub struct WorkspaceId(u64);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     pub id: WorkspaceId,
+    /// `Tab N`, numbered as tabs open; what Close Tab names.
+    pub name: String,
     pub terminals: Vec<PaneId>,
     pub focused: PaneId,
     /// `None` shows the focused terminal alone.
@@ -62,8 +64,10 @@ impl Workspaces {
             Some(page) => page.terminals.push(id),
             None => {
                 next.next += 1;
+                let name = format!("Tab {}", next.pages.len() + 1);
                 next.pages.push(Workspace {
                     id: WorkspaceId(next.next),
+                    name,
                     terminals: vec![id],
                     focused: id,
                     layout: None,
@@ -146,6 +150,39 @@ impl Workspaces {
             .unwrap_or_default();
         let next = terminals.iter().fold(self.clone(), |state, id| state.closing(*id));
         (next, terminals)
+    }
+
+    /// `cycleTerminal`: the next or previous terminal of the selected tab, wrapping.
+    pub fn cycling_terminal(&self, forward: bool) -> Self {
+        let Some(page) = self.current() else { return self.clone() };
+        let ids = &page.terminals;
+        let index = self.selected.and_then(|id| ids.iter().position(|t| *t == id)).unwrap_or(0);
+        let next =
+            if forward { (index + 1) % ids.len() } else { (index + ids.len() - 1) % ids.len() };
+        self.selecting(ids[next])
+    }
+
+    /// `cycleTab`: the next or previous tab, wrapping, at its focused terminal.
+    pub fn cycling_tab(&self, forward: bool) -> Self {
+        let count = self.pages.len();
+        if count == 0 {
+            return self.clone();
+        }
+        let current = self
+            .current()
+            .and_then(|page| self.pages.iter().position(|p| p.id == page.id))
+            .unwrap_or(0);
+        let next = if forward { (current + 1) % count } else { (current + count - 1) % count };
+        self.selecting(self.pages[next].focused)
+    }
+
+    /// `joinSplits`: the tab shows its focused terminal alone again.
+    pub fn joining(&self, page: WorkspaceId) -> Self {
+        let mut next = self.clone();
+        if let Some(page) = next.pages.iter_mut().find(|p| p.id == page) {
+            page.layout = None;
+        }
+        next
     }
 
     pub fn with_fraction(&self, page: WorkspaceId, path: &[bool], fraction: f32) -> Self {
@@ -242,6 +279,21 @@ mod tests {
         assert_eq!(gone, [A, B]);
         assert_eq!(state.strip(), [C]);
         assert_eq!(state.selected(), Some(C));
+    }
+
+    #[test]
+    fn cycling_wraps_within_a_tab_and_across_tabs() {
+        let state = Workspaces::default().adopting(A, None);
+        let page = state.current().unwrap().id;
+        let state = state.adopting(B, Some(page)).adopting(C, None);
+        assert_eq!(state.pages()[0].name, "Tab 1");
+        assert_eq!(state.pages()[1].name, "Tab 2");
+        let state = state.selecting(A);
+        assert_eq!(state.cycling_terminal(true).selected(), Some(B));
+        assert_eq!(state.cycling_terminal(false).selected(), Some(B));
+        assert_eq!(state.cycling_tab(true).selected(), Some(C));
+        assert_eq!(state.cycling_tab(true).cycling_tab(true).selected(), Some(A));
+        assert_eq!(state.cycling_tab(false).selected(), Some(C));
     }
 
     #[test]

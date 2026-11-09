@@ -5,9 +5,12 @@
 //! selected, which key is which — so the commit gate tests it without
 //! compiling GPUI.
 
+pub mod activity;
+pub mod dialog;
 pub mod foreground;
 pub mod keys;
 pub mod labels;
 pub mod selection;
 pub mod split;
+pub mod tab_menu;
 pub mod workspaces;
