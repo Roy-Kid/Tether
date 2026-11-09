@@ -40,26 +40,32 @@ libc = { version = "0.2", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = [
     "NSApplication",
+    "NSAttributedString",
     "NSBitmapImageRep",
     "NSColor",
     "NSColorSpace",
+    "NSFont",
     "NSFontDescriptor",
     "NSGraphics",
     "NSGraphicsContext",
     "NSImage",
     "NSImageRep",
     "NSResponder",
+    "NSStringDrawing",
     "NSScreen",
     "NSView",
     "NSWindow",
     "NSWindowRestoration",
+    "objc2-core-graphics",
     "objc2-quartz-core",
 ] }
 objc2-foundation = { version = "=0.3.2", optional = true, default-features = false, features = [
     "NSArray",
+    "NSAttributedString",
     "NSData",
     "NSDictionary",
     "NSGeometry",
+    "NSValue",
     "NSString",
     "objc2-core-foundation",
 ] }
@@ -67,8 +73,10 @@ objc2-quartz-core = { version = "=0.3.2", optional = true, default-features = fa
     "std",
     "CALayer",
     "CAMetalLayer",
+    "CATextLayer",
     "CATransaction",
     "objc2-core-foundation",
+    "objc2-core-graphics",
 ] }
 objc2-core-foundation = { version = "=0.3.2", optional = true, default-features = false, features = [
     "CFCGTypes",

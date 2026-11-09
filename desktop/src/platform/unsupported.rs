@@ -15,6 +15,8 @@ impl TerminalLayer {
 
     pub fn place(&self, _rect: tether_ui::Rect, _scale: f32, _visible: bool) {}
     pub fn hide(&self) {}
+
+    pub fn preedit(&self, _marked: &str, _caret: tether_ui::Rect, _row: f32, _scale: f32) {}
 }
 
 pub fn place_window(_title: &str) {}

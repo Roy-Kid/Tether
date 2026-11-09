@@ -112,6 +112,10 @@ pub(crate) struct Desktop {
     /// `Terminal N`, numbered per host as terminals open.
     serials: HashMap<PaneId, String>,
     pub(crate) drag: Option<Drag>,
+    /// The terminal a press began on, which hears the drag and the release.
+    pub(crate) pointer_pane: Option<PaneId>,
+    /// What the input method is composing, drawn at the cursor and not sent.
+    pub(crate) marked: String,
     pub(crate) focus: FocusHandle,
     runtime: Arc<Runtime>,
     next_pane: u64,
@@ -138,6 +142,8 @@ impl Desktop {
             ended: HashSet::new(),
             serials: HashMap::new(),
             drag: None,
+            pointer_pane: None,
+            marked: String::new(),
             focus,
             runtime,
             next_pane: 0,
@@ -257,7 +263,7 @@ impl Desktop {
             });
         })
         .detach();
-        let mut pane = Pane::new(session, layer);
+        let mut pane = Pane::new(session, layer, self.ink(cx).accent);
         pane.refresh_labels();
         self.panes.insert(id, pane);
         self.sync(cx);
@@ -378,8 +384,12 @@ impl Desktop {
                         self.send(TerminalInput::Paste { text });
                     }
                 }
-                // Selection is P2. Until then ⌘C is swallowed, never sent as text.
-                ("c", false, false) => {}
+                ("c", false, false) => {
+                    let selected = self.workspaces.selected().and_then(|id| self.panes.get(&id));
+                    if let Some(text) = selected.and_then(Pane::copy) {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    }
+                }
                 ("q", false, false) => cx.quit(),
                 _ => return,
             }
@@ -399,6 +409,11 @@ impl Desktop {
             self.send(input);
             cx.stop_propagation();
         }
+    }
+
+    /// Text an input method committed.
+    pub(crate) fn type_text(&self, text: &str) {
+        self.send(crate::ime::typed(text));
     }
 
     fn send(&self, input: TerminalInput) {

@@ -29,12 +29,12 @@ pub use render::{
 
 pub use files::{FileEntry, FileError, FileKind, RemoteFiles, TransferProgress};
 
-pub use input::{KeyModifiers, KeyPress, Resolved, TerminalInput};
+pub use input::{KeyModifiers, KeyPress, PointerButton, PointerPhase, Resolved, TerminalInput};
 pub use keys::{KeyProblem, LockedKey, PassphrasePrompter, SkippedKey};
 pub use link::{LinkKind, LinkSpan, TerminalLink};
 pub use screen::{
-    CaretShape, CellColor, CellStyle, ColorName, FrameUpdate, ScreenFrame, ScreenRow, StyledRun,
-    UnderlineStyle, UpdatedRow,
+    CaretShape, CellColor, CellStyle, ColorName, FrameUpdate, MouseTracking, ScreenFrame,
+    ScreenRow, StyledRun, UnderlineStyle, UpdatedRow,
 };
 pub use session::{
     Destination, HostIdentity, HostTrust, LocalShell, Secret, Session, SessionEnding, connect,

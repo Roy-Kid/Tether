@@ -7,8 +7,10 @@
 //! are one implementation. What only a platform has is `platform/`.
 
 mod canvas;
+mod ime;
 mod pane;
 mod platform;
+mod pointer;
 mod workspace;
 
 fn main() {

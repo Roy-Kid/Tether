@@ -5,13 +5,19 @@
 //! the accent rule along its top edge (`SplitCanvas`).
 
 use gpui::{
-    Context, CursorStyle, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Render, ScrollDelta, ScrollEvent, Window, div, prelude::*, px, rgb,
+    ClipboardItem, Context, CursorStyle, ElementInputHandler, IntoElement, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollDelta, ScrollEvent, Window, canvas,
+    div, prelude::*, px, rgb,
 };
 use tether_desktop::split::{Divider, PaneId};
+use tether_ffi::PointerButton;
 use tether_ui::{Chrome, Ink, Kind, Rect, Workspace, layout};
 
+use crate::pointer::Press;
 use crate::workspace::{Desktop, Drag};
+
+/// The buttons a terminal hears, as AppKit's three mouse handlers do.
+const BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
 
 /// `Palette.softDark` background, under the grid while a surface starts.
 const CANVAS: u32 = 0x171B22;
@@ -50,7 +56,7 @@ impl Render for Desktop {
             placed.iter().map(|placed| self.pane_area(placed, cx)).collect();
         let lines: Vec<gpui::Div> =
             dividers.iter().map(|divider| self.divider(divider, ink, cx)).collect();
-        div()
+        let root = div()
             .relative()
             .size_full()
             .bg(rgb(ink.surface))
@@ -58,12 +64,20 @@ impl Render for Desktop {
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 this.drag_to(event, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, _| this.drag = None),
-            )
+            }));
+        // Ups are heard anywhere in the window: a drag that leaves its terminal still ends.
+        BUTTONS
+            .into_iter()
+            .fold(root, |root, button| {
+                root.on_mouse_up(
+                    button,
+                    cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+                        this.pointer_up(button, event, cx);
+                    }),
+                )
+            })
             .children(hole.map(|rect| at(rect).bg(rgb(CANVAS))))
+            .child(self.input_target(cx))
             .children(rules)
             .children(areas)
             .children(lines)
@@ -137,26 +151,38 @@ impl Desktop {
     /// wheel over it scrolls it.
     fn pane_area(&self, placed: &Placed, cx: &mut Context<Self>) -> gpui::Div {
         let pane = placed.pane;
-        let select =
-            move |this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>| {
-                this.select(pane, cx);
-            };
-        at(placed.terminal).on_mouse_down(MouseButton::Left, cx.listener(select)).on_scroll(
-            cx.listener(move |this, event: &ScrollEvent, _, cx| {
-                let Some(target) = this.panes.get_mut(&pane) else { return };
-                // A trackpad's travel is points, divided by the row; a wheel's is rows.
-                let rows = match event.delta {
-                    ScrollDelta::Pixels(delta) => match target.line_points() {
-                        Some(line) => f32::from(delta.y) / line,
-                        None => return,
-                    },
-                    ScrollDelta::Lines(delta) => delta.y,
-                };
+        let area = BUTTONS.into_iter().fold(at(placed.terminal), |area, button| {
+            area.on_mouse_down(
+                button,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.pointer_down(pane, button, event, cx);
+                }),
+            )
+        });
+        area.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, _| {
+            // Over a terminal with no press in progress: a program that wants every move.
+            if this.pointer_pane.is_none()
+                && event.pressed_button.is_none()
+                && let Some(target) = this.panes.get_mut(&pane)
+            {
                 let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
-                target.wheel(rows, x, y, event.modifiers.shift);
-                cx.stop_propagation();
-            }),
-        )
+                target.moved(x, y, false, press(event.modifiers, 0));
+            }
+        }))
+        .on_scroll(cx.listener(move |this, event: &ScrollEvent, _, cx| {
+            let Some(target) = this.panes.get_mut(&pane) else { return };
+            // A trackpad's travel is points, divided by the row; a wheel's is rows.
+            let rows = match event.delta {
+                ScrollDelta::Pixels(delta) => match target.line_points() {
+                    Some(line) => f32::from(delta.y) / line,
+                    None => return,
+                },
+                ScrollDelta::Lines(delta) => delta.y,
+            };
+            let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+            target.wheel(rows, x, y, event.modifiers.shift);
+            cx.stop_propagation();
+        }))
     }
 
     fn divider(&self, divider: &Divider, ink: Ink, cx: &mut Context<Self>) -> gpui::Div {
@@ -176,7 +202,58 @@ impl Desktop {
         div().child(line).child(handle)
     }
 
+    /// Where the input method's text arrives: the whole window while it has
+    /// the keyboard, as the terminal's capture view is on a Mac.
+    fn input_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let focus = self.focus.clone();
+        let entity = cx.entity();
+        canvas(
+            |_, _, _| (),
+            move |bounds, (), window, cx| {
+                window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// A press on a terminal selects it, and the terminal takes the press.
+    fn pointer_down(
+        &mut self,
+        pane: PaneId,
+        button: MouseButton,
+        event: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.select(pane, cx);
+        let Some(target) = self.panes.get_mut(&pane) else { return };
+        let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+        target.press(pointer_button(button), x, y, press(event.modifiers, event.click_count));
+        self.pointer_pane = Some(pane);
+    }
+
+    /// The press ends wherever the pointer is; a drag that selected copies.
+    fn pointer_up(&mut self, button: MouseButton, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        if button == MouseButton::Left {
+            self.drag = None;
+        }
+        let Some(pane) = self.pointer_pane.take() else { return };
+        let Some(target) = self.panes.get_mut(&pane) else { return };
+        let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+        let modifiers = press(event.modifiers, event.click_count);
+        if let Some(text) = target.release(pointer_button(button), x, y, modifiers) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
     fn drag_to(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.drag.is_none() {
+            if let Some(target) = self.pointer_pane.and_then(|pane| self.panes.get_mut(&pane)) {
+                let (x, y) = (f32::from(event.position.x), f32::from(event.position.y));
+                target.moved(x, y, event.pressed_button.is_some(), press(event.modifiers, 0));
+            }
+            return;
+        }
         let Some(drag) = &self.drag else { return };
         if event.pressed_button != Some(MouseButton::Left) {
             self.drag = None;
@@ -191,6 +268,18 @@ impl Desktop {
             divider.fraction_at(f32::from(event.position.x), f32::from(event.position.y));
         self.resize_split(fraction, cx);
     }
+}
+
+fn pointer_button(button: MouseButton) -> PointerButton {
+    match button {
+        MouseButton::Right => PointerButton::Right,
+        MouseButton::Middle => PointerButton::Middle,
+        _ => PointerButton::Left,
+    }
+}
+
+fn press(modifiers: Modifiers, clicks: usize) -> Press {
+    Press { clicks, shift: modifiers.shift, alt: modifiers.alt, control: modifiers.control }
 }
 
 fn at(rect: Rect) -> gpui::Div {

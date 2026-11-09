@@ -3,6 +3,8 @@
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
+mod mac_preedit;
+#[cfg(target_os = "macos")]
 mod mac_symbols;
 #[cfg(target_os = "macos")]
 pub use mac::{TerminalLayer, foreground_command, place_window};

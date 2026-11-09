@@ -17,6 +17,7 @@ use tether_ui::{Chrome, Rect};
 pub struct TerminalLayer {
     layer: Retained<CAMetalLayer>,
     parent: Retained<CALayer>,
+    preedit: super::mac_preedit::Preedit,
 }
 
 impl TerminalLayer {
@@ -34,7 +35,8 @@ impl TerminalLayer {
         layer.setOpaque(true);
         layer.setHidden(true);
         parent.addSublayer(&layer);
-        Ok(Self { layer, parent })
+        let preedit = super::mac_preedit::Preedit::new(&layer);
+        Ok(Self { layer, parent, preedit })
     }
 
     /// The `CAMetalLayer` pointer `RenderSurface::from_metal_layer` takes.
@@ -63,6 +65,12 @@ impl TerminalLayer {
         self.layer.setHidden(!visible || rect.width <= 0.0 || rect.height <= 0.0);
         CATransaction::commit();
     }
+    /// The input method's composing text at `caret`, in this terminal's
+    /// points from its top left. Empty hides it.
+    pub fn preedit(&self, marked: &str, caret: Rect, row: f32, scale: f32) {
+        self.preedit.show(&self.layer, marked, caret, row, scale);
+    }
+
     pub fn hide(&self) {
         CATransaction::begin();
         CATransaction::setDisableActions(true);

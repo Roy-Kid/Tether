@@ -8,5 +8,6 @@
 pub mod foreground;
 pub mod keys;
 pub mod labels;
+pub mod selection;
 pub mod split;
 pub mod workspaces;

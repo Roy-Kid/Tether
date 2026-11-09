@@ -6,36 +6,50 @@
 
 use std::sync::Arc;
 
-use tether_ffi::{FontMetricsDto, PaletteDto, RenderSurface, RgbaDto, Session};
+use tether_desktop::selection::{self, Selection};
+use tether_ffi::{
+    FontMetricsDto, OverlayDto, PaletteDto, RenderSurface, RgbaDto, ScreenFrame, SelectionDto,
+    Session,
+};
 use tether_ui::{Chrome, Rect};
 
 use crate::platform::TerminalLayer;
+use crate::pointer::Pointer;
 
 /// `terminalFontSize`'s default on a Mac, in points.
 const FONT_POINTS: f32 = 13.0;
 const MAX_COLUMNS: f32 = 1000.0;
 const MAX_ROWS: f32 = 500.0;
+/// `UIStyle.textSelectionOpacity`: over glyphs, and still readable.
+const TEXT_SELECTION_OPACITY: f32 = 0.40;
 
 pub struct Pane {
     pub session: Arc<Session>,
     layer: TerminalLayer,
     surface: Option<Arc<RenderSurface>>,
     starting: bool,
-    metrics: Option<FontMetricsDto>,
+    pub(crate) metrics: Option<FontMetricsDto>,
     pixels: (u32, u32),
-    scale: f32,
-    grid: (u16, u16),
-    rect: Rect,
+    pub(crate) scale: f32,
+    pub(crate) grid: (u16, u16),
+    pub(crate) rect: Rect,
     /// Wheel travel short of a whole line, carried to the next event.
     carried: f32,
     /// The program in front of the shell, and the directory the shell
     /// reported: what the chip is named from (`refreshLabels`).
     pub command: Option<String>,
     pub directory: Option<String>,
+    /// The highlighted cells, if any, and the press or drag in progress.
+    pub(crate) selection: Option<Selection>,
+    pub(crate) pointer: Pointer,
+    /// The screen last drawn: what a selection is read from.
+    pub(crate) frame: Option<ScreenFrame>,
+    /// The overlay's colours: the accent, and the accent at `textSelectionOpacity`.
+    accent: u32,
 }
 
 impl Pane {
-    pub fn new(session: Arc<Session>, layer: TerminalLayer) -> Self {
+    pub fn new(session: Arc<Session>, layer: TerminalLayer, accent: u32) -> Self {
         Self {
             session,
             layer,
@@ -49,6 +63,10 @@ impl Pane {
             carried: 0.0,
             command: None,
             directory: None,
+            selection: None,
+            pointer: Pointer::default(),
+            frame: None,
+            accent,
         }
     }
 
@@ -142,18 +160,61 @@ impl Pane {
         }
     }
 
-    /// The cell under a window point, clamped to the grid. The renderer
-    /// centres the grid across the width and rests it on the bottom edge.
-    fn cell_at(&self, x: f32, y: f32) -> (u16, u16) {
-        let Some(metrics) = &self.metrics else { return (0, 0) };
+    /// The cell under a window point, clamped to the grid.
+    pub(crate) fn cell_at(&self, x: f32, y: f32) -> (u16, u16) {
+        let Some((row, column)) = self.cell_offset(x, y) else { return (0, 0) };
+        let (columns, rows) = self.grid;
+        let column = column.floor().clamp(0.0, f32::from(columns.max(1) - 1));
+        let row = row.floor().clamp(0.0, f32::from(rows.max(1) - 1));
+        (row as u16, column as u16)
+    }
+
+    /// The cell under a window point, or `None` off the grid (`cell(at:)`).
+    pub(crate) fn cell_within(&self, x: f32, y: f32) -> Option<(u16, u16)> {
+        let (row, column) = self.cell_offset(x, y)?;
+        let (columns, rows) = self.grid;
+        let inside =
+            (0.0..f32::from(columns)).contains(&column) && (0.0..f32::from(rows)).contains(&row);
+        inside.then(|| (row.floor() as u16, column.floor() as u16))
+    }
+
+    /// The cursor's cell, in this terminal's points from its top left.
+    pub(crate) fn caret(&self) -> Option<Rect> {
+        let metrics = self.metrics.as_ref()?;
+        let frame = self.frame.as_ref()?;
+        let (columns, rows) = self.grid;
+        let left = (self.pixels.0 as f32 - f32::from(columns) * metrics.cell_width) / 2.0;
+        let top = self.pixels.1 as f32 - f32::from(rows) * metrics.line_height;
+        Some(Rect {
+            x: (left + frame.cursor_column as f32 * metrics.cell_width) / self.scale,
+            y: (top + frame.cursor_row as f32 * metrics.line_height) / self.scale,
+            width: metrics.cell_width / self.scale,
+            height: metrics.line_height / self.scale,
+        })
+    }
+
+    /// The caret in window points, where an input method puts its candidates.
+    pub(crate) fn caret_in_window(&self) -> Option<Rect> {
+        let caret = self.caret()?;
+        Some(Rect { x: caret.x + self.rect.x, y: caret.y + self.rect.y, ..caret })
+    }
+
+    /// The input method's composing text at the cursor. Empty hides it.
+    pub fn preedit(&self, marked: &str) {
+        let (Some(caret), Some(row)) = (self.caret(), self.line_points()) else { return };
+        self.layer.preedit(marked, caret, row, self.scale);
+    }
+
+    /// Fractional row and column. The renderer centres the grid across the
+    /// width and rests it on the bottom edge.
+    fn cell_offset(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let metrics = self.metrics.as_ref()?;
         let (columns, rows) = self.grid;
         let left = (self.pixels.0 as f32 - f32::from(columns) * metrics.cell_width) / 2.0;
         let top = self.pixels.1 as f32 - f32::from(rows) * metrics.line_height;
         let px = (x - self.rect.x) * self.scale - left;
         let py = (y - self.rect.y) * self.scale - top;
-        let column = (px / metrics.cell_width).floor().clamp(0.0, f32::from(columns.max(1) - 1));
-        let row = (py / metrics.line_height).floor().clamp(0.0, f32::from(rows.max(1) - 1));
-        (row as u16, column as u16)
+        Some((py / metrics.line_height, px / metrics.cell_width))
     }
 
     /// Reads what the chip is named from. True when it changed.
@@ -170,11 +231,35 @@ impl Pane {
     pub fn draw(&mut self) {
         let Some(surface) = self.surface.as_ref() else { return };
         let frame = self.session.frame();
-        match surface.draw_update(frame, soft_dark(), None, self.font_pixels(), None) {
+        // A different width moves every cell; the highlight would be on other text.
+        if self.frame.as_ref().is_some_and(|last| last.columns != frame.columns) {
+            self.selection = None;
+        }
+        let overlay = self.overlay(&frame);
+        self.frame = Some(frame.clone());
+        match surface.draw_update(frame, soft_dark(), overlay, self.font_pixels(), None) {
             // A skipped acquire keeps nothing back: the next change draws the whole screen.
             Ok(_) => {}
             Err(error) => eprintln!("tether-desktop: draw: {error}"),
         }
+    }
+
+    /// The selection, as the renderer tints it (`TerminalSurface.renderOverlay`).
+    fn overlay(&self, frame: &ScreenFrame) -> Option<OverlayDto> {
+        let spans = selection::spans(self.selection?, frame);
+        let (first, last) = (spans.first()?, spans.last()?);
+        let accent = srgb(self.accent);
+        Some(OverlayDto {
+            selection: Some(SelectionDto {
+                anchor_column: first.start as u32,
+                anchor_row: first.row as u32,
+                focus_column: (last.end - 1) as u32,
+                focus_row: last.row as u32,
+            }),
+            link_underlines: Vec::new(),
+            selection_color: RgbaDto { alpha: TEXT_SELECTION_OPACITY, ..accent },
+            link_color: accent,
+        })
     }
 
     pub fn close(&mut self) {
