@@ -73,10 +73,14 @@ enum WorkspaceIntent: Equatable {
 @MainActor
 @Observable
 final class TabSet {
-  let keyBindings = KeyBindingStore()
+  /// The shortcut store, kept in this set's own defaults — a TabSet
+  /// made over a test suite must not read or write the shared app
+  /// preferences.
+  let keyBindings: KeyBindingStore
   #if os(macOS)
-    /// The app's one quick terminal. It is the main window, summoned; every
-    /// window's menu talks to this same controller.
+    /// The app's one quick terminal: its own panel, summoned over the
+    /// workspace window by the global shortcut. Every window's menu talks
+    /// to this same controller.
     var quickTerminal: QuickTerminalController
   #endif
   var tabs: [SessionTab] = []
@@ -143,6 +147,14 @@ final class TabSet {
   /// hosted in an AppKit window, not a scene.
   var menuShortcuts: Bool?
   var paletteQuery = ""
+  /// The main workspace window's gates, published by its root (`RootView`,
+  /// the primary window only) and read by the quick panel: while the main
+  /// window holds a blocking question — a close confirmation, a password
+  /// offer, a connection sheet — the quick terminal takes no input and
+  /// claims no shortcuts, and offers the way there rather than acting
+  /// behind it. One list, owned where the presenters live.
+  var mainWindowInputAllowed = true
+  var mainWindowShortcutsAllowed = true
 
   /// The windows these tabs are on screen in, by an id each window makes
   /// for itself. The one most recently key while shown sizes the sessions
@@ -155,6 +167,15 @@ final class TabSet {
   /// is in front — and it alone answers an intent and shows the host picker
   /// and the palette, so ⌘T opens one tab, in one window.
   private(set) var frontWindow: UUID?
+
+  #if os(macOS)
+    /// The workspace window region dialogs stay with while the quick panel
+    /// holds `frontWindow`: the one most recently key while shown, tracked
+    /// as if the panel were not there. The panel sizes the sessions and
+    /// takes the front, but it never presents — a question asked from the
+    /// summoned overlay belongs to the workspace window behind it.
+    private(set) var workspaceFront: UUID?
+  #endif
 
   /// Where `window` is now. Order-free: what is decided reads the sets,
   /// not which window reported last.
@@ -172,7 +193,33 @@ final class TabSet {
     } else if frontWindow == nil, shown {
       frontWindow = window
     }
+    #if os(macOS)
+      noteWorkspaceFront(window: window, shown: shown, key: key)
+    #endif
   }
+
+  #if os(macOS)
+    private func noteWorkspaceFront(window: UUID, shown: Bool, key: Bool) {
+      guard window != quickTerminal.panelID else { return }
+      if shown && key {
+        workspaceFront = window
+      } else if workspaceFront == window && !shown {
+        workspaceFront = keyWindows.first { shownWindows.contains($0) && $0 != quickTerminal.panelID }
+          ?? shownWindows.first { $0 != quickTerminal.panelID }
+      } else if workspaceFront == nil, shown {
+        workspaceFront = window
+      }
+    }
+
+    /// Whether `window` presents the region dialogs of the tab it shows
+    /// (`DialogAnchorReader`). While the quick panel holds the front, the
+    /// anchor stays with the workspace window behind it — a question asked
+    /// from the overlay is still the main window's question, and the panel
+    /// offers the way there rather than a second copy of the dialog.
+    func presentsDialogs(_ window: UUID) -> Bool {
+      frontWindow == quickTerminal.panelID ? workspaceFront == window : isFront(window)
+    }
+  #endif
 
   /// Whether `window` is the one in front. With none noted yet, any is.
   func isFront(_ window: UUID) -> Bool { frontWindow == nil || frontWindow == window }
@@ -318,6 +365,7 @@ final class TabSet {
     }
   ) {
     self.defaults = defaults
+    keyBindings = KeyBindingStore(defaults: defaults)
     #if os(macOS)
       quickTerminal = QuickTerminalController(defaults: defaults)
     #endif

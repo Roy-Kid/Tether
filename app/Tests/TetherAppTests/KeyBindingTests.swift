@@ -104,6 +104,95 @@ struct KeyBindingTests {
   }
 
   #if os(macOS)
+  @Test("quick terminal appears once in unified shortcuts under Window with Control-backtick")
+  func quickTerminalCatalog() throws {
+    try isolated { store, defaults in
+      let catalog = KeyBindingCatalog.commands(registry: PluginRegistry(defaults: defaults))
+      let matches = catalog.filter { $0.id == WorkspaceAction.quickTerminal.rawValue }
+      let command = try #require(matches.first)
+      let binding = KeyBinding("`", .control)
+      #expect(matches.count == 1)
+      #expect(Set(catalog.map(\.id)).count == catalog.count)
+      #expect(command == WorkspaceAction.quickTerminal.command)
+      #expect(command.group == "Window")
+      #expect(command.layer == .workspace)
+      #expect(command.defaults == [binding, nil])
+      #expect(catalog.filter { $0.defaults.contains(binding) }.map(\.id) == [command.id])
+      #expect(store.command(for: binding, in: catalog) == command.id)
+      #expect(store.filtered(catalog, query: "quick terminal", boundOnly: true) == [command])
+      #expect(store.filtered(catalog, query: "Control+`", boundOnly: true) == [command])
+    }
+  }
+
+  @Test("quick terminal's two custom shortcuts, clearing and reset persist in the unified store")
+  func quickTerminalCustomization() throws {
+    try isolated { store, defaults in
+      let catalog = KeyBindingCatalog.commands(registry: PluginRegistry(defaults: defaults))
+      let command = WorkspaceAction.quickTerminal.command
+      let original = KeyBinding("`", .control)
+      let primary = KeyBinding("q", [.control, .option])
+      let secondary = KeyBinding("f12", [])
+      try store.set(primary, for: command, slot: 0, commands: catalog)
+      try store.set(secondary, for: command, slot: 1, commands: catalog)
+
+      let loaded = KeyBindingStore(defaults: defaults)
+      #expect(loaded.overrides[command.id] == [primary, secondary])
+      #expect(loaded.bindings(forID: command.id) == [primary, secondary])
+      #expect(loaded.command(for: primary, in: catalog) == command.id)
+      #expect(loaded.command(for: secondary, in: catalog) == command.id)
+      #expect(loaded.command(for: original, in: catalog) == nil)
+      #expect(loaded.summary(for: command) == "\(primary.label) / \(secondary.label)")
+
+      try loaded.set(nil, for: command, slot: 0, commands: catalog)
+      let secondaryOnly = KeyBindingStore(defaults: defaults)
+      #expect(secondaryOnly.bindings(for: command) == [nil, secondary])
+      #expect(secondaryOnly.command(for: primary, in: catalog) == nil)
+      #expect(secondaryOnly.command(for: secondary, in: catalog) == command.id)
+      try secondaryOnly.set(nil, for: command, slot: 1, commands: catalog)
+
+      let cleared = KeyBindingStore(defaults: defaults)
+      #expect(cleared.overrides[command.id] == [nil, nil])
+      #expect(cleared.bindings(for: command) == [nil, nil])
+      #expect(cleared.command(for: original, in: catalog) == nil)
+      #expect(cleared.command(for: secondary, in: catalog) == nil)
+      #expect(cleared.filtered(catalog, query: "quick terminal", boundOnly: true).isEmpty)
+      #expect(cleared.filtered(catalog, query: "quick terminal", boundOnly: false) == [command])
+
+      try cleared.reset(command, commands: catalog)
+      let restored = KeyBindingStore(defaults: defaults)
+      #expect(restored.overrides[command.id] == nil)
+      #expect(restored.bindings(forID: command.id) == [original, nil])
+      #expect(restored.command(for: original, in: catalog) == command.id)
+      #expect(restored.command(for: secondary, in: catalog) == nil)
+    }
+  }
+
+  @Test("quick terminal cannot steal another command's shortcut in either slot", arguments: [0, 1])
+  func quickTerminalConflict(slot: Int) throws {
+    try isolated { store, defaults in
+      let catalog = KeyBindingCatalog.commands(registry: PluginRegistry(defaults: defaults))
+      let command = WorkspaceAction.quickTerminal.command
+      let other = WorkspaceAction.newTerminal.command
+      let binding = try #require(other.defaults[0])
+      let primary = KeyBinding("q", [.control, .option])
+      let secondary = KeyBinding("f12", [])
+      try store.set(primary, for: command, slot: 0, commands: catalog)
+      try store.set(secondary, for: command, slot: 1, commands: catalog)
+      let saved = defaults.data(forKey: KeyBindingStore.syncPreferenceKey)
+
+      #expect(throws: KeyBindingStore.BindingError.self) {
+        try store.set(binding, for: command, slot: slot, commands: catalog)
+      }
+      #expect(store.requestedBindings(for: command) == [primary, secondary])
+      #expect(defaults.data(forKey: KeyBindingStore.syncPreferenceKey) == saved)
+      let loaded = KeyBindingStore(defaults: defaults)
+      #expect(loaded.bindings(for: command) == [primary, secondary])
+      #expect(loaded.command(for: binding, in: catalog) == other.id)
+      #expect(loaded.command(for: primary, in: catalog) == command.id)
+      #expect(loaded.command(for: secondary, in: catalog) == command.id)
+    }
+  }
+
   @Test("routing consumes both bindings once and leaves disabled windows, IME and unbound keys alone")
   func monitorRouting() throws {
     _ = NSApplication.shared

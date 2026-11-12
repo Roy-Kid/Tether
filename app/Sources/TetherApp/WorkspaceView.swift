@@ -67,6 +67,9 @@ struct RootView: View {
   #if os(macOS)
     @Environment(\.openSettings) private var openSettings
   #endif
+  /// The window that started the app publishes the input and shortcut
+  /// gates; additional windows only read them.
+  @Environment(\.workspaceIsPrimary) private var isPrimaryWindow
   #if os(macOS)
     /// On screen and key, as the window reports them; a scene would have said.
     @State private var windowShown = true
@@ -663,7 +666,10 @@ struct RootView: View {
         }
       }
       #if os(macOS)
-        .background(DialogAnchorReader(anchor: tab.dialogAnchor, claimsView: tabs.isFront(windowID)))
+        // The window that claims a tab's dialog region is the one that
+        // presents it — the quick panel never does, even in front
+        // (`TabSet.presentsDialogs`).
+        .background(DialogAnchorReader(anchor: tab.dialogAnchor, claimsView: tabs.presentsDialogs(windowID)))
       #endif
     }
   }
@@ -1193,6 +1199,15 @@ extension RootView {
   private var watchedWindow: some View {
     container
       .terminalInputEnabled(terminalInputAllowed)
+      // The primary window is the one list of input and shortcut gates;
+      // the quick panel reads what it publishes instead of keeping a
+      // second list that could drift (`TabSet.mainWindowInputAllowed`).
+      .onChange(of: terminalInputAllowed, initial: true) { _, allowed in
+        if isPrimaryWindow { tabs.mainWindowInputAllowed = allowed }
+      }
+      .onChange(of: shortcutsAllowed, initial: true) { _, allowed in
+        if isPrimaryWindow { tabs.mainWindowShortcutsAllowed = allowed }
+      }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
       #if os(macOS)
         .background {
