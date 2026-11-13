@@ -153,6 +153,17 @@ struct QuickTerminalPlacementTests {
     defer { controller.stop(); panel.close() }
     controller.attach(panel: panel)
 
+    // Size persistence is independent of the pointer's display. Keep the
+    // simulated drag on that same display so it is not a cross-screen move.
+    let screen = try #require(NSScreen.screens.first {
+      QuickDisplayCatalog.id(for: $0) != nil &&
+        $0.visibleFrame.width >= max(800, panel.minSize.width) &&
+        $0.visibleFrame.height >= max(421, panel.minSize.height)
+    }, "size persistence needs an identifiable display fitting 800 × 421 and the panel minimum")
+    controller.displayID = QuickDisplayCatalog.id(for: screen)
+    let visible = screen.visibleFrame
+    let bottomSize = NSSize(width: min(900, visible.width), height: min(500, visible.height))
+
     // A previous launch stored the top placement's size: a fresh
     // controller reads it, and the top placement keeps these keys.
     defaults.set(800.0, forKey: "quickTerminal.width")
@@ -164,29 +175,33 @@ struct QuickTerminalPlacementTests {
 
     // A bottom drag remembers bottom keys, and the legacy keys survive.
     controller.placement = .bottom
-    panel.setFrame(NSRect(x: 100, y: 500, width: 900, height: 500), display: false)
+    let dragged = NSRect(
+      x: floor(visible.midX - bottomSize.width / 2), y: visible.minY,
+      width: bottomSize.width, height: bottomSize.height)
+    try #require(visible.contains(dragged), "the simulated drag must fit the pinned display")
+    panel.setFrame(dragged, display: false)
+    try #require(panel.frame == dragged, "the drag must apply before its size is persisted")
     NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: panel)
     controller.hide()
-    #expect(defaults.double(forKey: "quickTerminal.width.bottom") == 900)
-    #expect(defaults.double(forKey: "quickTerminal.height.bottom") == 500)
+    #expect(defaults.double(forKey: "quickTerminal.width.bottom") == Double(bottomSize.width))
+    #expect(defaults.double(forKey: "quickTerminal.height.bottom") == Double(bottomSize.height))
     #expect(defaults.double(forKey: "quickTerminal.width") == 800, "the top placement's keys are its own")
 
     // Each mode comes back with its own shape.
     controller.toggle()
-    #expect(panel.frame.size == NSSize(width: 900, height: 500))
-    #expect(panel.frame.minY == panel.screen?.visibleFrame.minY, "bottom rests on the edge")
+    #expect(panel.frame.size == bottomSize)
+    #expect(panel.frame.minY == visible.minY, "bottom rests on the pinned display's edge")
     controller.placement = .top
     #expect(panel.frame.size == NSSize(width: 800, height: 420))
-    #expect(panel.frame.maxY == panel.screen?.visibleFrame.maxY, "top hangs from the edge")
+    #expect(panel.frame.maxY == visible.maxY, "top hangs from the pinned display's edge")
 
     // Reset restores the current mode's default and touches no other mode.
     controller.placement = .bottom
     controller.resetSize()
     #expect(defaults.object(forKey: "quickTerminal.width.bottom") == nil)
     #expect(defaults.double(forKey: "quickTerminal.width") == 800)
-    let screen = try #require(panel.screen)
     #expect(panel.frame == QuickTerminalController.frame(
-      in: screen.visibleFrame, size: nil, minimum: panel.minSize, placement: .bottom))
+      in: visible, size: nil, minimum: panel.minSize, placement: .bottom))
   }
 
   @Test("a fixed display that is gone falls back to the pointer's display and the choice is kept")
@@ -216,10 +231,22 @@ struct QuickTerminalPlacementTests {
     let panel = KeyedQuickPanel(hosting: Color.clear)
     defer { controller.stop(); panel.close() }
     controller.attach(panel: panel)
+    let screen = try #require(NSScreen.screens.first {
+      QuickDisplayCatalog.id(for: $0) != nil &&
+        $0.visibleFrame.width >= panel.minSize.width + 40 &&
+        $0.visibleFrame.height >= panel.minSize.height + 40
+    }, "floating persistence needs an identifiable display fitting the panel with an interior margin")
+    controller.displayID = QuickDisplayCatalog.id(for: screen)
+    let visible = screen.visibleFrame
     controller.placement = .floating
     controller.toggle()
-    let moved = NSRect(x: 150, y: 260, width: 720, height: 480)
+    let moved = NSRect(
+      x: visible.minX + 20, y: visible.minY + 20,
+      width: max(panel.minSize.width, min(720, visible.width - 40)),
+      height: max(panel.minSize.height, min(480, visible.height - 40)))
+    try #require(visible.contains(moved), "the moved frame must fit the pinned display")
     panel.setFrame(moved, display: false)
+    try #require(panel.frame == moved, "the floating move must apply before testing notifications")
     NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: panel)
     #expect(panel.frame == moved.integral, "a screen change does not snap a floating panel")
     controller.toggle()
@@ -272,12 +299,13 @@ struct QuickTerminalPlacementTests {
     controller.stop()
   }
 
-  @Test("a floating frame is kept only on an unchanged basis that still fits")
-  func frameKeepingPolicy() {
+  @Test("a floating frame is kept only on an unchanged basis that still fits",
+    arguments: [NSPoint.zero, NSPoint(x: -1600, y: 924), NSPoint(x: 1440, y: -1120)])
+  func frameKeepingPolicy(origin: NSPoint) {
     let basis = QuickTerminalController.FrameBasis(placement: .floating, targetID: "a")
-    let visible = NSRect(x: 0, y: 0, width: 500, height: 500)
-    let inside = NSRect(x: 10, y: 10, width: 100, height: 100)
-    let outside = NSRect(x: 400, y: 10, width: 200, height: 100)
+    let visible = NSRect(origin: origin, size: NSSize(width: 500, height: 500))
+    let inside = NSRect(x: origin.x + 10, y: origin.y + 10, width: 100, height: 100)
+    let outside = NSRect(x: origin.x + 400, y: origin.y + 10, width: 200, height: 100)
     #expect(QuickTerminalController.shouldKeepFrame(
       current: basis, requested: basis, frame: inside, visibleFrame: visible))
     // A frame that no longer fits (a smaller visible frame) is recomputed.

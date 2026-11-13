@@ -479,7 +479,7 @@ private struct GeneralSettings: View {
 
     #if os(macOS)
       if let controller = connections?.quickTerminal {
-        QuickTerminalSettings(controller: controller, bindings: connections?.keyBindings)
+        QuickTerminalSettings(controller: controller)
       }
     #endif
 

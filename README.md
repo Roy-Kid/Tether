@@ -77,11 +77,10 @@ the menu-bar icon for Show Main Window and Quit Tether. **Settings → General
 Tether, and still asks when a terminal is live. Hide keeps the sessions,
 removes the Dock icon, and leaves the menu-bar icon.
 
-**Settings → General → Quick Terminal** controls the menu-bar button and global
-hotkey, plus automatic hiding when switching apps. Turn off **Hide When
-Switching Apps** to keep the summoned window up until the shortcut closes it.
+**Settings → General → Quick Terminal** turns the panel on and chooses its
+**Placement** and **Display**.
 **Keep Window on Top** applies while the window is in its ordinary place.
 Shortcut registration conflicts appear in General settings; choose another
-combination there rather than changing another app.
+combination in **Settings → Key Bindings** rather than changing another app.
 
 MIT licensed.

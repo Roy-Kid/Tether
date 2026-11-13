@@ -826,15 +826,12 @@ enum MenuBarMark {
 
 struct QuickTerminalSettings: View {
   @Bindable var controller: QuickTerminalController
-  var bindings: KeyBindingStore?
   /// The displays attached now, refreshed when the hardware changes.
   @State private var displays: [QuickDisplay] = QuickDisplayCatalog.current()
 
   var body: some View {
     Section("Quick Terminal") {
       Toggle("Enable Quick Terminal", isOn: $controller.enabled)
-      LabeledContent("Global Shortcut", value: bindings?.summary(for: WorkspaceAction.quickTerminal.command) ?? "Not set")
-      Button("Change Shortcut…") { SettingsSectionPreference.show(.keyBindings) }
       Picker("Placement", selection: $controller.placement) {
         ForEach(QuickTerminalPlacement.allCases, id: \.self) { placement in
           Text(placement.title).tag(placement)
@@ -853,18 +850,9 @@ struct QuickTerminalSettings: View {
           Text(display.name).tag(String?.some(display.id))
         }
       }
-      Toggle("Hide When Switching Apps", isOn: $controller.autoHide)
-        .disabled(!controller.enabled)
-      Toggle("Show in Menu Bar", isOn: $controller.showsMenuBarIcon)
-        .disabled(!controller.enabled)
       if let problem = controller.shortcutProblem {
         Text(problem).foregroundStyle(Theme.warning)
       }
-      Button("Show / Hide Quick Terminal") { controller.toggle() }
-        .disabled(!controller.enabled)
-      Button("Reset Size") { controller.resetSize() }
-        .disabled(!controller.enabled)
-        .help("This placement's default size")
     }
     Section("Window") {
       Toggle("Keep Window on Top", isOn: $controller.alwaysOnTop)
