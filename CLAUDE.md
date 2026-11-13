@@ -225,21 +225,49 @@ library through iCloud again.
 
 On a Mac the workspace window is the app's own `NSPanel`
 (`WorkspaceWindow`), hosting the SwiftUI root, not a SwiftUI scene. The
-quick terminal is that same window. The shortcut shows it on the display
-under the pointer, as a non-activating overlay — key without making Tether
-the active app, on every Space, another app's full-screen one on another
-display included — and only a panel can be that. Closing it puts the window
-back at the frame it had, and at the visibility it had. The Dock and the
-menu-bar icon open that window where it was; only the shortcut summons it
-onto the pointer's display. Settings → General → When the Window Closes
+quick terminal is a separate panel, non-activating from initialization;
+never change a live panel's activation style to summon it. Its shortcut
+belongs to the unified key binding manager (`quickTerminal`), not a second
+shortcut preference. It follows the pointer's display by default, or targets
+a display selected in Settings by its stable identity, not its list position.
+An unavailable selected display falls back to the pointer's display without
+forgetting the selection. It takes key without activating Tether, with floating
+and full-screen/Spaces behavior. Summoning
+or hiding it leaves the main window's frame, visibility and native full-screen
+state alone. Keep Window on Top remains an independent main-window setting.
+The main workspace and its quick panel share one effective interaction host.
+Ordinary terminal commands and their questions belong to that host: opening,
+closing, reconnecting, renaming, splitting, picking a host and using the command
+palette must not implicitly replace the quick panel with the main window.
+The effective host is application state, not AppKit's main window, and is not
+lost merely because a menu, a child dialog or another app takes key focus.
+An already presented blocking question keeps its host until its surface is
+gone; hiding or switching that host must not silently cancel the question.
+Plugin UI and Settings remain explicit main-window capabilities; global
+library imports and startup handoff keep their single primary owner. Shared
+session changes remain shared; effective-host routing does not copy sessions.
+The primary workspace and quick panel remember tab-bar visibility separately.
+The workspace keeps its existing preference; quick inherits it once when no
+quick preference exists. Extra windows keep local choices for their lifetime.
+Tab layout remains shared, and Zen temporarily hides rather than rewrites either choice.
+The quick panel shares the main workspace's terminal sessions, not its native
+views; plugin pages and inspectors stay in the main window. Each terminal
+surface has its own renderer, only the front window drives session sizing,
+and the quick surface must not consume the main surface's incremental damage.
+The Dock and menu-bar icon open the main window where it was; only the quick
+terminal command summons the panel. Settings → General → When the Window Closes
 chooses Quit or Hide. Hide orders the window out, leaves the Dock, and keeps
 the menu-bar icon; that icon brings the window and the Dock icon back. Quit
-still confirms live terminals. Summoning closes no session. Its summoned size
+still confirms live terminals. Hiding the quick panel closes no session. Its size
 and the ordinary frame are remembered apart: dragged in either place, that
 place comes back that size. Returning to either lays the terminal out again,
 so the grid fills the window it is in. The grid rests on the bottom edge,
-and a status line meets the status bar. Hung from the top and centred while
-summoned. Menu enabling reads the model (`TabSet.menuShortcuts`);
+and a status line meets the status bar. Quick Terminal's position is Top,
+Bottom, Left, Right or Floating; Top is the default. Each placement remembers
+its own size, and Reset Size resets only that placement. Floating starts
+centered and keeps a dragged position while its target display is unchanged
+and the frame still fits. These choose placement, not the panel's window level
+or activation behavior. Menu enabling reads the model (`TabSet.menuShortcuts`);
 a focused value does not leave an `NSHostingView`.
 
 tmux is a tab plugin: an accessory on every terminal tab,

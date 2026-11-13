@@ -42,19 +42,25 @@ enum OpenPath {
   /// Asks for a path and opens it. The application is the one Launch Services
   /// would use; a missing path is reported here and nowhere else.
   @MainActor
-  static func ask(workingDirectory: String?) async {
+  static func ask(workingDirectory: String?, interaction: WorkspaceInteraction? = nil) async {
+    let generation = interaction?.lifecycleGeneration
+    @MainActor func current() -> Bool {
+      !Task.isCancelled && (generation.map { interaction?.workIsCurrent($0) == true } ?? true)
+    }
+    guard current() else { return }
     let pasted = NSPasteboard.general.string(forType: .string)
-    let reply = await DialogPresenter.ask(Dialog.input(
+    let dialog = Dialog.input(
       "Open Path",
       field: Dialog.Field("Path", initial: suggestion(from: pasted, workingDirectory: workingDirectory)),
       verb: "Open",
-      perform: { _ in }))
-    guard reply?.role == .confirm else { return }
+      perform: { _ in })
+    let reply = await ask(dialog, interaction: interaction)
+    guard current(), reply?.role == .confirm else { return }
     let typed = reply?.values.first ?? ""
     guard let url = fileURL(from: typed, workingDirectory: workingDirectory),
       FileManager.default.fileExists(atPath: url.path)
     else {
-      await DialogPresenter.ask(Dialog.notice("Not found"))
+      await ask(Dialog.notice("Not found"), interaction: interaction)
       return
     }
     let configuration = NSWorkspace.OpenConfiguration()
@@ -64,9 +70,15 @@ enum OpenPath {
         continuation.resume(returning: application != nil)
       }
     }
-    if !opened {
-      await DialogPresenter.ask(Dialog.notice("Can't open"))
+    if current(), !opened {
+      await ask(Dialog.notice("Can't open"), interaction: interaction)
     }
+  }
+
+  @MainActor @discardableResult
+  private static func ask(_ dialog: Dialog, interaction: WorkspaceInteraction?) async -> DialogReply? {
+    if let interaction { return await interaction.askDialog(dialog) }
+    return await DialogPresenter.ask(dialog)
   }
 }
 #endif

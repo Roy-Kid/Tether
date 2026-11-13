@@ -101,6 +101,21 @@ events declares `.appKitEventLoop` (`TetherTestSupport`), which runs
 `EventLoopTests` queues those stops on purpose. The gate no longer takes a
 status of 0 on trust: a `✘` or a missing summary blocks.
 
+The native main-window pointer acceptance test additionally needs an interactive
+macOS test session where the test application can become active and acquire the
+real key window. Enable it there with:
+
+```bash
+TETHER_NATIVE_WINDOW_TESTS=1 TETHER_HERMETIC=1 swift test --package-path app --filter QuickTerminalRootTests
+```
+
+Its native-focus and outside-click assertions remain in the test; the default
+gate skips it rather than substituting a fake key window.
+A default gate pass therefore does not establish that interactive behavior, or
+another application's active/full-screen behavior. Ordinary picker selection,
+Quick Terminal dismissal, command routing and input gates remain in the default
+tests.
+
 The CI workflows use these same entry points on Windows, Linux and macOS.
 The common checks include renderer-evidence parser regressions. Windows checks
 also lint the opt-in render-diagnostics feature and build the HWND evaluation

@@ -183,6 +183,15 @@
     struct Value: Equatable {
       var shown = false
       var key = false
+      var orderedIn = false
+      var miniaturized = false
+      var renderVisible = false
+      var keyWithinHost = false
+
+      var workspaceHostState: WorkspaceHostState {
+        WorkspaceHostState(orderedIn: orderedIn, miniaturized: miniaturized,
+          renderVisible: renderVisible, keyWithinHost: keyWithinHost)
+      }
     }
     var scheme: ColorScheme?
     let onChange: @MainActor (Value) -> Void
@@ -228,7 +237,11 @@
       private func report() {
         let next = Value(
           shown: window.map { $0.isVisible && !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false,
-          key: window?.isKeyWindow ?? false)
+          key: window?.isKeyWindow ?? false,
+          orderedIn: window?.isVisible ?? false,
+          miniaturized: window?.isMiniaturized ?? false,
+          renderVisible: window?.occlusionState.contains(.visible) ?? false,
+          keyWithinHost: window.map { NativeWorkspaceHostBridge.keyIsWithin($0) } ?? false)
         guard next != value else { return }
         value = next
         RunLoop.main.perform { [weak self] in
@@ -241,6 +254,52 @@
         window?.appearance = scheme.flatMap { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) }
       }
     }
+  }
+
+  /// Native lifetime bridge independent of SwiftUI mount/occlusion. Losing
+  /// render visibility never means that a host was ordered out.
+  @MainActor
+  final class NativeWorkspaceHostBridge: NSObject {
+    private weak var window: NSWindow?
+    private weak var interaction: WorkspaceInteraction?
+    private let id: UUID
+
+    init(window: NSWindow, interaction: WorkspaceInteraction, id: UUID) {
+      self.window = window
+      self.interaction = interaction
+      self.id = id
+      super.init()
+      for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+        NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
+        NSWindow.didDeminiaturizeNotification, NSWindow.didBecomeMainNotification,
+        NSWindow.didEndSheetNotification] {
+        NotificationCenter.default.addObserver(self, selector: #selector(changed), name: name, object: window)
+      }
+      NotificationCenter.default.addObserver(self, selector: #selector(closing), name: NSWindow.willCloseNotification, object: window)
+      refresh()
+    }
+
+    static func keyIsWithin(_ window: NSWindow) -> Bool {
+      if window.isKeyWindow { return true }
+      var key = NSApp.keyWindow
+      while let candidate = key {
+        if candidate === window { return true }
+        key = candidate.sheetParent ?? candidate.parent
+      }
+      return false
+    }
+
+    @objc private func changed() { refresh() }
+    @objc private func closing() { interaction?.unregister(id: id) }
+
+    func refresh() {
+      guard let window else { return }
+      interaction?.update(id: id, state: WorkspaceHostState(orderedIn: window.isVisible,
+        miniaturized: window.isMiniaturized, renderVisible: window.occlusionState.contains(.visible),
+        keyWithinHost: Self.keyIsWithin(window)))
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
   }
 
   /// What a double-click on a titlebar does, as the person chose it in

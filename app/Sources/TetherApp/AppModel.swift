@@ -18,6 +18,7 @@ final class AppModel {
   let store: HostStore
   let tabs: TabSet
   let registry: PluginRegistry
+  let interaction: WorkspaceInteraction
   let plugins = PluginAPI(consent: DialogConsent())
   let imports = CredentialImport.shared
   /// One keychain for the process. Passwords are read at the moment of
@@ -29,7 +30,15 @@ final class AppModel {
   var additionalSessions: [TabSet] = []
   /// The key window's tabs. Menu commands follow it.
   var keyTabs: TabSet?
-  var commandTabs: TabSet { keyTabs ?? tabs }
+  var commandTabs: TabSet {
+    #if os(macOS)
+    if let key = NSApp?.keyWindow,
+      let owner = ([tabs] + additionalSessions).first(where: { $0.interaction?.hostID(for: key) != nil }) {
+      return owner
+    }
+    #endif
+    return keyTabs ?? tabs
+  }
   var openAdditionalWindow: (() -> Void)?
 
   init() {
@@ -56,6 +65,12 @@ final class AppModel {
     registry.register(NervePlugin())
     #endif
     self.registry = registry
+    interaction = WorkspaceInteraction(tabs: tabs, store: store, registry: registry, secrets: secrets)
+    registry.onDisable = { [weak self] id in
+      guard let self else { return }
+      for tabs in [self.tabs] + self.additionalSessions { tabs.closePlugin(id) }
+      PluginLive.end(id)
+    }
     #if TETHER_NERVE
     // A row click in the hosted panel uses the same landing as the web page.
     // The panel is created above; the closure is read when the row is clicked.

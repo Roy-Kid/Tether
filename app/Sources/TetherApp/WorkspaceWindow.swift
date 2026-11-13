@@ -2,16 +2,15 @@
   import AppKit
   import SwiftUI
 
-  /// The workspace window. A panel, because the quick terminal is this same
-  /// window shown as an overlay — key without making this the active app,
-  /// over any Space, another app's full-screen one on another display
-  /// included — and only a panel can be that (`QuickTerminalController`).
+  /// The workspace window: the app's document window, an `NSPanel` because
+  /// that is what the workspace has always been. The quick terminal is a
+  /// separate panel (`QuickTerminalWindow`) summoned over it; this window's
+  /// frame, style, level and full-screen state are never touched by that.
   /// Ordinarily it is titled, resizable, full-screen capable, and remembered
   /// across launches.
   class WorkspaceWindow: NSPanel {
     override var canBecomeKey: Bool { true }
-    /// An overlay is not the app's main window: the app in front stays as it was.
-    override var canBecomeMain: Bool { !styleMask.contains(.nonactivatingPanel) }
+    override var canBecomeMain: Bool { true }
 
     /// A panel does not offer a declined key to the menu bar. SwiftUI's
     /// ⇧⌘letter items are rewritten just before this runs; without the

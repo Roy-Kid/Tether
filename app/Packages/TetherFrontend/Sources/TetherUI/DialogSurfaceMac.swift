@@ -12,10 +12,15 @@
   final class PlatformDialogSurface: DialogSurface {
     @MainActor
     private final class Presentation {
+      let id = UUID()
       let alert: NSAlert
       weak var host: NSWindow?
       var withdrawn = false
       var answering = false
+      var ending = false
+      var sheetObserver: NSObjectProtocol?
+      var cleanup: DispatchWorkItem?
+      var gone: (() -> Void)?
       var shortcuts: [(Dialog.Action.Shortcut, NSButton)] = []
       var buttons: [NSButton] = []
       /// Retained target for a terminal dialog's buttons. A sheet's own
@@ -35,6 +40,7 @@
       func end(_ response: NSApplication.ModalResponse) {
         guard let ended else { return }
         self.ended = nil
+        ending = true
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         if let dim {
@@ -42,7 +48,7 @@
           dim.parent?.removeChildWindow(dim)
           self.dim = nil
         }
-        if usesRegion {
+        if usesRegion, alert.window.sheetParent == nil {
           alert.window.orderOut(nil)
           alert.window.parent?.removeChildWindow(alert.window)
         }
@@ -59,6 +65,7 @@
       _ dialog: Dialog, in anchor: DialogAnchor?,
       answer: @escaping (Int, [String]) -> Void, gone: @escaping () -> Void
     ) -> Bool {
+      if let anchor, anchor.pinsWindow, anchor.window?.isVisible != true { return false }
       let alert = NSAlert()
       alert.messageText = dialog.title
       alert.informativeText = dialog.message ?? ""
@@ -133,13 +140,16 @@
       }
 
       current = presentation
+      presentation.gone = gone
       presentation.ended = { [weak self] response in
         let position = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         if !presentation.withdrawn, order.indices.contains(position) {
           answer(order[position], boxes.map(\.stringValue))
         }
-        if self?.current === presentation { self?.current = nil }
-        gone()
+        // NSAlert's response callback runs before AppKit finishes detaching
+        // the sheet. Check after returning control to AppKit, not inside its
+        // callback, and keep the current presentation until it is truly gone.
+        self?.finishAfterResponse(presentation)
       }
       if !presentation.shortcuts.isEmpty || presentation.cancelButton != nil {
         presentation.keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -264,7 +274,45 @@
 
     private func beginSheet(_ alert: NSAlert, on window: NSWindow, presentation: Presentation) {
       presentation.host = window
+      let id = presentation.id
+      presentation.sheetObserver = NotificationCenter.default.addObserver(
+        forName: NSWindow.didEndSheetNotification, object: window, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.finishIfGone(id) }
+      }
       alert.beginSheetModal(for: window) { presentation.end($0) }
+    }
+
+    private func finishAfterResponse(_ presentation: Presentation) {
+      let id = presentation.id
+      DispatchQueue.main.async { [weak self] in self?.finishIfGone(id) }
+      // A single bounded recovery/diagnostic, not polling and never a timed
+      // substitute for gone. Only our alert is hidden; AppKit owns detachment.
+      let cleanup = DispatchWorkItem { [weak self] in
+        guard let self, let current = self.current, current.id == id, current.ending else { return }
+        current.alert.window.orderOut(nil)
+        self.finishIfGone(id)
+        if self.current?.id == id {
+          NSLog("Dialog invariant failure: native surface remained attached after its response")
+          assertionFailure("A responded dialog must detach before its host lease can be released")
+        }
+      }
+      presentation.cleanup = cleanup
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: cleanup)
+    }
+
+    private func finishIfGone(_ id: UUID) {
+      guard let presentation = current, presentation.id == id, presentation.ending,
+        !presentation.alert.window.isVisible, presentation.alert.window.sheetParent == nil,
+        presentation.alert.window.parent == nil, presentation.dim == nil else { return }
+      if let observer = presentation.sheetObserver { NotificationCenter.default.removeObserver(observer) }
+      presentation.sheetObserver = nil
+      presentation.cleanup?.cancel()
+      presentation.cleanup = nil
+      let gone = presentation.gone
+      presentation.gone = nil
+      current = nil
+      gone?()
     }
 
     /// No window to hang it on. `runModal` blocks, so not from inside
@@ -315,12 +363,10 @@
       return nil
     }
 
-    /// Ends the sheet, and the dialog with it even when AppKit does not —
-    /// a sheet still queued behind another, or a parent already gone —
-    /// because the queue waits on this dialog's ending before any other.
+    /// Starts withdrawal once. A native sheet ends through its response
+    /// callback; a region child or a not-yet-presented dialog ends here.
     func withdraw() {
-      guard let current else { return }
-      self.current = nil
+      guard let current, !current.withdrawn, !current.ending else { return }
       current.withdrawn = true
       let sheet = current.alert.window
       // A terminal dialog is not a sheet, unless its view never appeared and
@@ -329,10 +375,12 @@
         current.end(.abort)
         return
       }
-      if let host = current.host, sheet.sheetParent != nil {
-        host.endSheet(sheet, returnCode: .abort)
+      if let parent = sheet.sheetParent {
+        parent.endSheet(sheet, returnCode: .abort)
+        return
       } else if NSApp.modalWindow == sheet {
         NSApp.abortModal()
+        return
       } else {
         sheet.orderOut(nil)
       }

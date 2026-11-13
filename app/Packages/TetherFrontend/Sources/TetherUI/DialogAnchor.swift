@@ -21,6 +21,8 @@ public final class DialogAnchor {
   #if os(macOS)
     /// The terminal (or other region) this dialog covers. Nil covers the window.
     weak var view: NSView?
+    /// A caller-owned host must not be replaced by a view in another window.
+    private(set) var pinsWindow = false
     /// Questions asked with this anchor belong on `view`.
     var limitsToView = false
     /// The covered view moved, or left the window.
@@ -30,6 +32,15 @@ public final class DialogAnchor {
   #endif
 
   public init() {}
+
+  #if os(macOS)
+    /// Binds questions to this exact host, including a nonactivating panel.
+    /// If it is no longer visible, the question is not shown elsewhere.
+    public init(window: NSWindow) {
+      self.window = window
+      pinsWindow = true
+    }
+  #endif
 
   /// A reconnect question covers the terminal this anchor is read from.
   public func coverItsView() {
@@ -89,9 +100,13 @@ public final class DialogAnchor {
 
       func claim() {
         guard let anchor else { return }
-        if let window { anchor.window = window }
-        guard anchor.limitsToView else { return }
+        guard !anchor.pinsWindow || anchor.window === window else { return }
+        guard anchor.limitsToView else {
+          if !anchor.pinsWindow, let window { anchor.window = window }
+          return
+        }
         if claimsView, window != nil {
+          anchor.window = window
           anchor.view = self
           let ready = anchor.whenViewReady
           anchor.whenViewReady = nil
@@ -100,6 +115,10 @@ public final class DialogAnchor {
         } else if anchor.view === self {
           anchor.view = nil
           anchor.onRegionChange?()
+        } else if !anchor.pinsWindow, anchor.window == nil, let window {
+          // A passive reader may supply an initial fallback, never replace
+          // the effective terminal owner's host during another view's layout.
+          anchor.window = window
         }
       }
     }

@@ -28,6 +28,7 @@ struct TabAttachmentEntry {
 @MainActor
 @Observable
 final class SessionTab: Identifiable {
+  weak var interaction: WorkspaceInteraction?
   let id = UUID()
   /// Where this terminal's reconnect questions are drawn. The view in front
   /// fills it in; a handshake asked with no view still reaches a window.
@@ -141,7 +142,8 @@ final class SessionTab: Identifiable {
   private var session: TerminalSession?
   var connection: RemoteConnection? { session?.connection }
   private var closed = false
-  private var ready: [CheckedContinuation<RemoteConnection, Error>] = []
+  private var ready: [UUID: CheckedContinuation<RemoteConnection, Error>] = [:]
+  var connectionWaiterCount: Int { ready.count }
   private var pump: Task<Void, Never>?
   private var dialTask: Task<Void, Never>?
   /// Bumped every time a new dial or a reused lease replaces the one in
@@ -437,7 +439,7 @@ final class SessionTab: Identifiable {
     // `connection` builds another, so the object handed out here is the
     // one a plugin can recognise as the lease it was given.
     if let connection = session.connection {
-      ready.forEach { $0.resume(returning: connection) }
+      ready.values.forEach { $0.resume(returning: connection) }
       ready.removeAll()
       // The shell was dialled again in this same tab. Attachments still
       // hold the lease that died — the files browser in particular — and
@@ -459,7 +461,7 @@ final class SessionTab: Identifiable {
   /// which ends the tab without a word.
   func fail(_ error: Error) {
     stage = .failed(message(for: error))
-    ready.forEach { $0.resume(throwing: error) }
+    ready.values.forEach { $0.resume(throwing: error) }
     ready.removeAll()
     guard !closed else { return }
     if error is CancellationError {
@@ -817,6 +819,7 @@ final class SessionTab: Identifiable {
   }
 
   func connectionReady() async throws -> RemoteConnection {
+    try Task.checkCancellation()
     if let connection { return connection }
     switch stage {
     case .failed(let reason), .lost(let reason):
@@ -827,7 +830,15 @@ final class SessionTab: Identifiable {
       break
     }
     if closed { throw CancellationError() }
-    return try await withCheckedThrowingContinuation { ready.append($0) }
+    let id = UUID()
+    return try await withTaskCancellationHandler {
+      try Task.checkCancellation()
+      return try await withCheckedThrowingContinuation { continuation in
+        ready[id] = continuation
+      }
+    } onCancel: {
+      Task { @MainActor in self.ready.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+    }
   }
 
   func checkpointHistory() {
@@ -847,7 +858,7 @@ final class SessionTab: Identifiable {
     passwordOffer = nil
     dialTask?.cancel()
     ttySearch?.cancel()
-    ready.forEach { $0.resume(throwing: CancellationError()) }
+    ready.values.forEach { $0.resume(throwing: CancellationError()) }
     ready.removeAll()
     // A question on screen is withdrawn, and the handshake waiting on it is
     // told no — rather than left suspended for the life of the process,
@@ -895,7 +906,12 @@ final class SessionTab: Identifiable {
     // Back to `.connecting`: the handshake is still open, now waiting on the
     // answer just given rather than on the person.
     defer { if case .asking = stage { stage = .connecting } }
-    let reply = await DialogPresenter.ask(question.dialog, in: dialogAnchor, shown: shown)
+    let reply: DialogReply?
+    if let interaction {
+      reply = await interaction.askDialog(question.dialog, shown: shown)
+    } else {
+      reply = await DialogPresenter.ask(question.dialog, in: dialogAnchor, shown: shown)
+    }
     // Nowhere to show it, or taken away by the platform: not the person's
     // no, and not to be closed as if it were.
     if reply == nil, !Task.isCancelled { authentication?.questionWentUnanswered() }

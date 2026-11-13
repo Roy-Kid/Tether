@@ -19,10 +19,12 @@ import TmuxPlugin
   /// real windows: each has its own tabs, and the red button ends them.
   private final class ExtraWindow {
     let tabs: TabSet
+    let interaction: WorkspaceInteraction
     let window: WorkspaceWindow
     var closeObserver: NSObjectProtocol?
-    init(tabs: TabSet, window: WorkspaceWindow) {
+    init(tabs: TabSet, interaction: WorkspaceInteraction, window: WorkspaceWindow) {
       self.tabs = tabs
+      self.interaction = interaction
       self.window = window
     }
   }
@@ -32,7 +34,9 @@ import TmuxPlugin
   /// the menu-bar icon brings it back (`HideInsteadOfClose`).
   ///
   /// The window is made here, not by a scene: SwiftUI's own window cannot
-  /// be shown as the quick terminal (`WorkspaceWindow`).
+  /// be a permanently non-activating panel. The quick terminal is such a
+  /// panel, a separate one (`QuickTerminalWindow`); the workspace window
+  /// itself is never summoned, restyled or moved.
   @MainActor
   final class TetherAppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
@@ -48,11 +52,17 @@ import TmuxPlugin
     func applicationDidFinishLaunching(_ notification: Notification) {
       let window = WorkspaceWindow(hosting: RootHost(model: model))
       self.window = window
+      model.interaction.register(id: model.interaction.workspaceHostID, kind: .workspace, window: window)
       model.openAdditionalWindow = { [weak self] in self?.openAdditionalWindow() }
       let quick = model.tabs.quickTerminal
+      quick.interaction = model.interaction
       quick.attach(to: window)
+      quick.attach(panel: QuickTerminalWindow(
+        hosting: QuickTerminalRoot(tabs: model.tabs, registry: model.registry, controller: quick, interaction: model.interaction)
+          .environment(model.interaction)))
       quick.useBindings(model.tabs.keyBindings)
       window.makeKeyAndOrderFront(nil)
+      model.interaction.start()
       shortcutMonitor = MenuKeyEquivalents.install { [weak self] event in
         guard let self else { return event }
         let tabs = self.model.commandTabs
@@ -102,6 +112,7 @@ import TmuxPlugin
       if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor) }
       if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
       model.tabs.quickTerminal.stop()
+      model.interaction.stop()
       for extra in extras { extra.tabs.closeAll() }
     }
 
@@ -110,6 +121,7 @@ import TmuxPlugin
     func openAdditionalWindow() {
       let tabs = TabSet()
       tabs.quickTerminal = model.tabs.quickTerminal
+      let interaction = WorkspaceInteraction(tabs: tabs, store: model.store, registry: model.registry, secrets: model.secrets)
       let window = WorkspaceWindow(
         hosting: RootHost(model: model, ownedSessions: tabs)
           .environment(\.workspaceHidesOnClose, false),
@@ -118,7 +130,8 @@ import TmuxPlugin
       if let main = self.window {
         window.setFrame(main.frame.offsetBy(dx: 32, dy: -32), display: false)
       }
-      let extra = ExtraWindow(tabs: tabs, window: window)
+      interaction.register(id: interaction.workspaceHostID, kind: .workspace, window: window)
+      let extra = ExtraWindow(tabs: tabs, interaction: interaction, window: window)
       extras.append(extra)
       model.additionalSessions.append(tabs)
       extra.closeObserver = NotificationCenter.default.addObserver(
@@ -127,20 +140,24 @@ import TmuxPlugin
         Task { @MainActor in self?.closeExtra(window) }
       }
       window.makeKeyAndOrderFront(nil)
+      interaction.start()
     }
 
     private func closeExtra(_ window: NSWindow) {
       guard let index = extras.firstIndex(where: { $0.window === window }) else { return }
       let tabs = extras[index].tabs
+      extras[index].interaction.stop()
+      extras[index].interaction.unregister(id: extras[index].interaction.workspaceHostID)
       extras.remove(at: index)
       model.additionalSessions.removeAll { $0 === tabs }
       if model.keyTabs === tabs { model.keyTabs = nil }
       tabs.closeAll()
     }
 
-    /// The Dock asks for the main window, at its own frame. The shortcut is
-    /// what summons that same window onto the pointer's display. Answered
-    /// here, so nothing else opens a second window for the same scene.
+    /// The Dock asks for the main window, at its own frame. The shortcut
+    /// summons the quick panel, which is a different window: a reopen while
+    /// it is up steps back to the main window. Answered here, so nothing
+    /// else opens a second window for the same scene.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
       let quick = model.tabs.quickTerminal
       if quick.isQuick {
@@ -364,6 +381,7 @@ struct RootHost: View {
   /// sync a second time.
   var ownedSessions: TabSet? = nil
   private var windowTabs: TabSet { ownedSessions ?? model.tabs }
+  private var interaction: WorkspaceInteraction { windowTabs.interaction ?? model.interaction }
   /// The window that starts the app.
   private var isPrimary: Bool { ownedSessions == nil }
   #if os(iOS)
@@ -376,12 +394,14 @@ struct RootHost: View {
 
   var body: some View {
     RootView(store: model.store, tabs: windowTabs, registry: model.registry, secrets: model.secrets,
-      plugins: model.plugins, installedPlugins: $model.installedPlugins)
+      plugins: model.plugins, installedPlugins: $model.installedPlugins, interaction: interaction)
+      .environment(interaction)
       .onOpenURL { url in
         guard let id = PluginReturn.pluginID(from: url) else { return }
         PluginOpen.ask(id)
       }
       .task {
+        interaction.start()
         // First, so the keychain is listed before anything on screen could
         // be holding a key it has not saved yet.
         PluginAPI.deliverSystemNotes { await NotificationPermission.askIfNeeded() }
@@ -472,6 +492,7 @@ struct RootHost: View {
           .allowsHitTesting(false)
         }
         .environment(\.workspaceHidesOnClose, isPrimary)
+        .environment(\.workspaceIsPrimary, isPrimary)
       #else
         .onChange(of: phase) { _, phase in
           attend(phase == .active)

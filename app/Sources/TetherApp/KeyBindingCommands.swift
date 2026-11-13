@@ -154,7 +154,7 @@ extension TabSet {
   func title(for action: WorkspaceAction) -> String {
     switch action {
     case .zen: zen ? "Exit Zen Mode" : action.command.title
-    case .toggleTabBar: showsTabBar ? "Hide Tab Bar" : "Show Tab Bar"
+    case .toggleTabBar: showsTabBar(for: interaction?.effectiveHost ?? frontWindow) ? "Hide Tab Bar" : "Show Tab Bar"
     case .reconnect: current?.host.isLocal == true ? "Restart" : action.command.title
     case .alwaysOnTop:
       #if os(macOS)
@@ -241,6 +241,13 @@ extension TabSet {
   }
 
   func perform(_ action: WorkspaceAction) {
+    if let interaction { _ = interaction.dispatch(action); return }
+    apply(action)
+  }
+
+  /// Domain application only. The interaction calls this, never `perform`,
+  /// so forwarding cannot recursively re-enter dispatch.
+  func apply(_ action: WorkspaceAction) {
     guard canPerform(action) else { return }
     switch action {
     case .quickTerminal:

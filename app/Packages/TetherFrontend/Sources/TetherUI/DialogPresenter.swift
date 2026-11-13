@@ -30,6 +30,7 @@ final class DialogQueue {
     let dialog: Dialog
     let anchor: DialogAnchor?
     let shown: (@MainActor () -> Void)?
+    let didDismiss: (@MainActor () -> Void)?
     let finish: (DialogReply?) -> Void
   }
 
@@ -37,7 +38,7 @@ final class DialogQueue {
   private var waiting: [Entry] = []
   private var showing: Entry?
   /// From `show` until `gone`: the surface is occupied even after an answer.
-  private var occupied = false
+  private var occupied: Entry?
 
   init(surface: DialogSurface) {
     self.surface = surface
@@ -49,7 +50,8 @@ final class DialogQueue {
   /// can be long after it was asked: another question may be ahead of it.
   @discardableResult
   func ask(
-    _ dialog: Dialog, in anchor: DialogAnchor? = nil, shown: (@MainActor () -> Void)? = nil
+    _ dialog: Dialog, in anchor: DialogAnchor? = nil, shown: (@MainActor () -> Void)? = nil,
+    didDismiss: (@MainActor () -> Void)? = nil
   ) async -> DialogReply? {
     let id = UUID()
     return await withTaskCancellationHandler {
@@ -59,7 +61,9 @@ final class DialogQueue {
           return
         }
         waiting.append(
-          Entry(id: id, dialog: dialog, anchor: anchor, shown: shown) { continuation.resume(returning: $0) })
+          Entry(id: id, dialog: dialog, anchor: anchor, shown: shown, didDismiss: didDismiss) {
+            continuation.resume(returning: $0)
+          })
         showNext()
       }
     } onCancel: {
@@ -78,20 +82,20 @@ final class DialogQueue {
   }
 
   private func showNext() {
-    guard !occupied, !waiting.isEmpty else { return }
+    guard occupied == nil, !waiting.isEmpty else { return }
     let entry = waiting.removeFirst()
     showing = entry
-    occupied = true
+    occupied = entry
     let shown = surface.show(
       entry.dialog, in: entry.anchor,
       answer: { [weak self] action, values in self?.answer(entry.id, action: action, values: values) },
-      gone: { [weak self] in self?.gone() })
+      gone: { [weak self] in self?.gone(entry.id) })
     guard !shown else {
       entry.shown?()
       return
     }
     showing = nil
-    occupied = false
+    occupied = nil
     entry.finish(nil)
     showNext()
   }
@@ -108,12 +112,14 @@ final class DialogQueue {
 
   /// Gone without an answer is still an ending: whoever asked hears nil,
   /// rather than waiting on a dialog that is no longer anywhere.
-  private func gone() {
+  private func gone(_ id: UUID) {
+    guard let entry = occupied, entry.id == id else { return }
     if let unanswered = showing {
       showing = nil
       unanswered.finish(nil)
     }
-    occupied = false
+    occupied = nil
+    entry.didDismiss?()
     showNext()
   }
 }
@@ -141,6 +147,20 @@ public enum DialogPresenter {
     _ dialog: Dialog, in anchor: DialogAnchor? = nil, shown: (@MainActor () -> Void)? = nil
   ) async -> DialogReply? {
     await queue.ask(dialog, in: anchor, shown: shown)
+  }
+
+  /// Like ``ask(_:in:shown:)``, with a presentation lifetime independent of
+  /// the answer. `didDismiss` runs exactly once after a presented surface is
+  /// truly gone, including withdrawal or an unanswered dismissal. It does
+  /// not run for a question cancelled while waiting or with no usable host.
+  /// Keep a host lease from `shown` until `didDismiss`, not until this returns:
+  /// the reply may arrive while the surface is still leaving the screen.
+  @discardableResult
+  public static func ask(
+    _ dialog: Dialog, in anchor: DialogAnchor? = nil, shown: (@MainActor () -> Void)? = nil,
+    didDismiss: (@MainActor () -> Void)?
+  ) async -> DialogReply? {
+    await queue.ask(dialog, in: anchor, shown: shown, didDismiss: didDismiss)
   }
 }
 

@@ -50,6 +50,12 @@ enum Palette: Equatable {
   case quickSwitch
 }
 
+/// Only the app's stable workspace and quick roles persist. Extra windows
+/// have no identity across launches and keep their UUID choices in memory.
+enum TabBarPersistence {
+  case workspace, quick, windowLocal
+}
+
 enum WorkspaceIntent: Equatable {
   case newTerminal
   case newTab
@@ -73,10 +79,15 @@ enum WorkspaceIntent: Equatable {
 @MainActor
 @Observable
 final class TabSet {
-  let keyBindings = KeyBindingStore()
+  weak var interaction: WorkspaceInteraction?
+  /// The shortcut store, kept in this set's own defaults — a TabSet
+  /// made over a test suite must not read or write the shared app
+  /// preferences.
+  let keyBindings: KeyBindingStore
   #if os(macOS)
-    /// The app's one quick terminal. It is the main window, summoned; every
-    /// window's menu talks to this same controller.
+    /// The app's one quick terminal: its own panel, summoned over the
+    /// workspace window by the global shortcut. Every window's menu talks
+    /// to this same controller.
     var quickTerminal: QuickTerminalController
   #endif
   var tabs: [SessionTab] = []
@@ -108,6 +119,13 @@ final class TabSet {
       }
     }
   }
+  private(set) var quickTabBarVisible: Bool {
+    didSet {
+      if quickTabBarVisible != oldValue {
+        defaults.set(quickTabBarVisible, forKey: TabBarPreference.quickKey)
+      }
+    }
+  }
   var inspector = false
   /// Whether the window has room for a second column — the inspector, or
   /// terminals side by side. Always on a Mac; an iPad says so from its size
@@ -132,7 +150,15 @@ final class TabSet {
   private var closeActivity: ShellActivity = .idle
   private let inspectActivity: @MainActor (SessionTab) async -> ShellActivity
   var renaming: SessionTab.ID?
-  var intent: WorkspaceIntent?
+  /// Compatibility for producers: assignments are delivered synchronously,
+  /// not observed by a pair of views (nor coalesced by Observation).
+  var intent: WorkspaceIntent? {
+    didSet {
+      guard let intent, let interaction else { return }
+      self.intent = nil
+      interaction.submit(intent)
+    }
+  }
   /// How many times the window has been asked to close itself. A count, not
   /// a flag: the window answers each new one, and two in a row are two.
   private(set) var windowCloseRequests = 0
@@ -143,6 +169,14 @@ final class TabSet {
   /// hosted in an AppKit window, not a scene.
   var menuShortcuts: Bool?
   var paletteQuery = ""
+  /// The main workspace window's gates, published by its root (`RootView`,
+  /// the primary window only) and read by the quick panel: while the main
+  /// window holds a blocking question — a close confirmation, a password
+  /// offer, a connection sheet — the quick terminal takes no input and
+  /// claims no shortcuts, and offers the way there rather than acting
+  /// behind it. One list, owned where the presenters live.
+  var mainWindowInputAllowed = true
+  var mainWindowShortcutsAllowed = true
 
   /// The windows these tabs are on screen in, by an id each window makes
   /// for itself. The one most recently key while shown sizes the sessions
@@ -155,6 +189,15 @@ final class TabSet {
   /// is in front — and it alone answers an intent and shows the host picker
   /// and the palette, so ⌘T opens one tab, in one window.
   private(set) var frontWindow: UUID?
+
+  #if os(macOS)
+    /// The workspace window region dialogs stay with while the quick panel
+    /// holds `frontWindow`: the one most recently key while shown, tracked
+    /// as if the panel were not there. The panel sizes the sessions and
+    /// takes the front, but it never presents — a question asked from the
+    /// summoned overlay belongs to the workspace window behind it.
+    private(set) var workspaceFront: UUID?
+  #endif
 
   /// Where `window` is now. Order-free: what is decided reads the sets,
   /// not which window reported last.
@@ -172,10 +215,40 @@ final class TabSet {
     } else if frontWindow == nil, shown {
       frontWindow = window
     }
+    #if os(macOS)
+      noteWorkspaceFront(window: window, shown: shown, key: key)
+    #endif
   }
 
+  #if os(macOS)
+    private func noteWorkspaceFront(window: UUID, shown: Bool, key: Bool) {
+      guard window != quickTerminal.panelID else { return }
+      if shown && key {
+        workspaceFront = window
+      } else if workspaceFront == window && !shown {
+        workspaceFront = keyWindows.first { shownWindows.contains($0) && $0 != quickTerminal.panelID }
+          ?? shownWindows.first { $0 != quickTerminal.panelID }
+      } else if workspaceFront == nil, shown {
+        workspaceFront = window
+      }
+    }
+
+    /// Whether `window` presents the region dialogs of the tab it shows
+    /// (`DialogAnchorReader`). While the quick panel holds the front, the
+    /// anchor stays with the workspace window behind it — a question asked
+    /// from the overlay is still the main window's question, and the panel
+    /// offers the way there rather than a second copy of the dialog.
+    func presentsDialogs(_ window: UUID) -> Bool {
+      if let interaction { return interaction.effectiveHost == window }
+      return frontWindow == quickTerminal.panelID ? workspaceFront == window : isFront(window)
+    }
+  #endif
+
   /// Whether `window` is the one in front. With none noted yet, any is.
-  func isFront(_ window: UUID) -> Bool { frontWindow == nil || frontWindow == window }
+  func isFront(_ window: UUID) -> Bool {
+    if let interaction { return interaction.drivesSurface(window) }
+    return frontWindow == nil || frontWindow == window
+  }
 
   /// The accepted host keys, shared by every session: trust belongs to the
   /// person and their machine, not to one tab.
@@ -318,6 +391,7 @@ final class TabSet {
     }
   ) {
     self.defaults = defaults
+    keyBindings = KeyBindingStore(defaults: defaults)
     #if os(macOS)
       quickTerminal = QuickTerminalController(defaults: defaults)
     #endif
@@ -326,8 +400,16 @@ final class TabSet {
     historyProblem = historyStore?.problem
     reportedHistoryProblem = historyStore?.problem
     self.inspectActivity = inspectActivity
-    tabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
+    let workspaceTabBarVisible = defaults.object(forKey: TabBarPreference.key) as? Bool
       ?? TabBarPreference.default
+    tabBarVisible = workspaceTabBarVisible
+    let savedQuick = defaults.object(forKey: TabBarPreference.quickKey) as? Bool
+    quickTabBarVisible = savedQuick ?? workspaceTabBarVisible
+    if savedQuick == nil {
+      // Materialize the inherited value once: a later workspace toggle must
+      // not silently change quick's initial choice on the next launch.
+      defaults.set(quickTabBarVisible, forKey: TabBarPreference.quickKey)
+    }
   }
 
   var current: SessionTab? {
@@ -365,7 +447,7 @@ final class TabSet {
 
   var recentHostIDs: [UUID] { recents }
 
-  var showsTabBar: Bool { tabBarVisible && !zen }
+  var showsTabBar: Bool { showsTabBar(for: nil) }
 
   func open(_ host: Host, password: String, typedNow: Bool = false, in workspaceID: UUID? = nil) {
     show(host)
@@ -426,6 +508,7 @@ final class TabSet {
   }
 
   func adopt(_ tab: SessionTab, at index: Int? = nil, in workspaceID: UUID? = nil) {
+    tab.interaction = interaction
     if let workspaceID {
       if checkingClose == workspaceID { cancelClose() }
       guard let page = workspaces.first(where: { $0.id == workspaceID }),
@@ -627,13 +710,18 @@ final class TabSet {
   }
 
   /// First click on another tab selects it; click the active tab to open its menu.
-  func handleTabClick(_ id: UUID) {
+  ///
+  /// A strip that does not host plugin views passes `handingAccessoryOff`:
+  /// an accessory is never opened from there — the interaction goes to the
+  /// window that does host it, and the shared `accessory` state is that
+  /// window's to set.
+  func handleTabClick(_ id: UUID, handingAccessoryOff handAccessoryOff: (() -> Void)? = nil) {
     if selectedWorkspaceID == id || selected == id {
       if let tab = current {
         if let picker = accessories.first(where: { $0.accessory.placement == .popover }),
           tab.canOpen(picker.id)
         {
-          toggleAccessory(picker.id, on: tab.id)
+          if let handAccessoryOff { handAccessoryOff() } else { toggleAccessory(picker.id, on: tab.id) }
         }
       } else {
         tabMenu = tabMenu == id ? nil : id
@@ -1051,24 +1139,74 @@ final class TabSet {
     inspector.toggle()
   }
 
-  func toggleTabBar() {
-    if zen {
-      revealTabBar()
-    } else {
-      tabBarVisible.toggle()
-      if !tabBarVisible {
-        tabMenu = nil
-        accessory = nil
-      }
+  /// Transient hosts only. Stable workspace/quick choices use their own
+  /// persisted values, never these launch-specific UUIDs.
+  private(set) var tabBarOverrides: [UUID: Bool] = [:]
+
+  func registerTabBarHost(_ window: UUID) {
+    guard tabBarPersistence(for: window) == .windowLocal, tabBarOverrides[window] == nil else { return }
+    tabBarOverrides[window] = tabBarVisible
+  }
+
+  private func tabBarPersistence(for window: UUID?) -> TabBarPersistence {
+    guard let window else { return .workspace }
+    #if os(macOS)
+      if window == quickTerminal.panelID { return .quick }
+    #endif
+    return interaction?.tabBarPersistence(for: window) ?? .windowLocal
+  }
+
+  private func tabBarChoice(for window: UUID?) -> Bool {
+    switch tabBarPersistence(for: window) {
+    case .workspace: tabBarVisible
+    case .quick: quickTabBarVisible
+    case .windowLocal: window.flatMap { tabBarOverrides[$0] } ?? tabBarVisible
     }
+  }
+
+  func showsTabBar(for window: UUID?) -> Bool {
+    tabBarChoice(for: window) && !zen
+  }
+
+  private func setTabBarVisible(_ visible: Bool, for window: UUID?) {
+    switch tabBarPersistence(for: window) {
+    case .workspace: tabBarVisible = visible
+    case .quick: quickTabBarVisible = visible
+    case .windowLocal:
+      if let window { tabBarOverrides[window] = visible }
+    }
+    if !visible {
+      tabMenu = nil
+      accessory = nil
+    }
+  }
+
+  /// Toggle Tab Bar answers for the focused window — the one the chord,
+  /// menu or palette ran in; the other window's bar is not touched.
+  /// With no window in front (a lone root, the phone) the shared
+  /// preference toggles, as it always has.
+  func toggleTabBar() {
+    toggleTabBar(for: interaction?.effectiveHost ?? frontWindow)
+  }
+
+  func toggleTabBar(for window: UUID?) {
+    if zen {
+      revealTabBar(for: window)
+      return
+    }
+    setTabBarVisible(!tabBarChoice(for: window), for: window)
   }
 
   /// A popover needs a visible tab to anchor to, including when opened by
   /// a command or a terminal link while the tab bar is hidden.
   private func revealTabBar() {
+    revealTabBar(for: interaction?.effectiveHost ?? frontWindow)
+  }
+
+  private func revealTabBar(for window: UUID?) {
     #if os(macOS)
       if zen { toggleZen() }
-      tabBarVisible = true
+      setTabBarVisible(true, for: window)
     #endif
   }
 
