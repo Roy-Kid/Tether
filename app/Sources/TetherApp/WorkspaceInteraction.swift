@@ -31,6 +31,7 @@ final class WorkspaceInteraction {
   let registry: PluginRegistry
   let secrets: any SecretStore
   let workspaceHostID: UUID
+  let windowFeedback = WindowFeedback()
   private(set) var effectiveHost: UUID?
   private(set) var lastEffectiveHost: UUID?
   private(set) var started = false
@@ -90,6 +91,7 @@ final class WorkspaceInteraction {
   }
 
   func stop() {
+    windowFeedback.dismissAll()
     started = false
     stopped = true
     lifecycleGeneration += 1
@@ -131,6 +133,7 @@ final class WorkspaceInteraction {
   func register(id: UUID, kind: WorkspaceHostKind, window: NSWindow) {
     register(id: id, kind: kind)
     guard hosts[id]?.window !== window else { return }
+    windowFeedback.dismiss(in: id)
     hosts[id]?.window = window
     hosts[id]?.anchor = DialogAnchor(window: window)
     hosts[id]?.bridge = NativeWorkspaceHostBridge(window: window, interaction: self, id: id)
@@ -165,6 +168,7 @@ final class WorkspaceInteraction {
   }
 
   func unregister(id: UUID) {
+    windowFeedback.dismiss(in: id)
     hosts.removeValue(forKey: id)
     hostRevision += 1
     claimOrder.removeAll { $0 == id }
@@ -183,6 +187,7 @@ final class WorkspaceInteraction {
     if let window = host.window { state.keyWithinHost = NativeWorkspaceHostBridge.keyIsWithin(window) }
     #endif
     host.state = state
+    if !state.eligible { windowFeedback.dismiss(in: id) }
     hostRevision += 1
     if state.keyWithinHost && state.eligible { _ = claim(id) }
     reconcileHost()
@@ -298,7 +303,22 @@ final class WorkspaceInteraction {
       return true
     }
     if action == .toggleTabBar { tabs.toggleTabBar(for: host); return true }
-    if action == .manageHosts || action == .inspector || action == .alwaysOnTop {
+    if action == .alwaysOnTop {
+      // The quick panel already floats permanently. Consume its shortcut
+      // without revealing main, changing a preference, or emitting feedback.
+      if hosts[host]?.kind == .quick { return true }
+      return performOnWorkspace {
+        self.tabs.apply(action)
+        #if os(macOS)
+        let enabled = self.tabs.quickTerminal.alwaysOnTop
+        self.windowFeedback.show(title: "Always on Top",
+          symbol: enabled ? "pin.fill" : "pin.slash", isStruckThrough: !enabled,
+          accessibilityLabel: enabled ? "Always on Top: On" : "Always on Top: Off",
+          in: self.workspaceHostID)
+        #endif
+      }
+    }
+    if action == .manageHosts || action == .inspector {
       return performOnWorkspace { self.tabs.apply(action) }
     }
     tabs.apply(action)

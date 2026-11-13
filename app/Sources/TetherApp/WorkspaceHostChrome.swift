@@ -41,11 +41,14 @@
     }
   }
 
-  /// The presentations either host can be asked for, drawn by exactly
+  /// The shared presentations either host can be asked for, drawn by exactly
   /// one. The interaction's presentation owner — the host a blocking
   /// question fixed until it is answered — presents what blocks; without
   /// one, the effective host presents. The other host draws nothing, so
   /// two hosts never present the same thing.
+  ///
+  /// Window feedback is outside that sharing: a message belongs to one host
+  /// id, and this modifier draws only the message addressed to `hostID`.
   ///
   /// Questions are not here: ordinary dialogs are submitted once by the
   /// controller and held to their answer (`WorkspaceInteraction`'s
@@ -58,6 +61,7 @@
     let hostID: UUID
     let store: HostStore
     let registry: PluginRegistry
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Whether this host is the one presenting: a blocking question's
     /// fixed owner first, then the effective host. Never both, never
@@ -66,8 +70,15 @@
       (interaction.presentationOwner ?? interaction.effectiveHost) == hostID
     }
 
+    /// State feedback is addressed to one host and stays there; it is not a
+    /// shared presentation that arbitration can hand to the other window.
+    private var feedbackID: UUID? {
+      interaction.windowFeedback.message(for: hostID)?.id
+    }
+
     func body(content: Content) -> some View {
-      content
+      let feedbackID = feedbackID
+      return content
         .overlay {
           if presents {
             PaletteOverlay(
@@ -86,6 +97,16 @@
                   .padding(.bottom, Chrome.status + UIStyle.Space.group)
               }
           }
+        }
+        .overlay(alignment: .center) {
+          Group {
+            if let message = interaction.windowFeedback.message(for: hostID) {
+              WindowFeedbackView(message: message)
+                .id(message.id)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+          }
+          .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: feedbackID)
         }
     }
   }
