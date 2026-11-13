@@ -37,20 +37,14 @@ struct RootView: View {
   let secrets: any SecretStore
   let plugins: PluginAPI
   @Binding var installedPlugins: InstalledPlugins?
+  /// The one executor these tabs answer to. Business — opening, splits,
+  /// reconnects, passwords, notices, plugins — runs there; this view
+  /// draws what the shared TabSet reports.
+  let interaction: WorkspaceInteraction
   /// Where hosts are managed: Settings, opened at that page.
   @State private var route = SettingsRoute.shared
-  /// Passwords to ask for before dialling, one at a time, in the order
-  /// they were needed. A queue rather than a slot: two tabs can need one at
-  /// once, and a question overwritten is a tab left waiting for nothing.
-  @State private var connectRequests: [ConnectRequest] = []
   @State private var visibility: NavigationSplitViewVisibility = .all
   @State private var showingSettings = false
-  /// A plugin's reconnect waiting on its own password question, by request.
-  @State private var reconnectAnswers: [UUID: CheckedContinuation<String, Error>] = [:]
-  /// Something that already went wrong, told once: a keychain that refused
-  /// — silence would leave a person who ticked "remember" believing it was
-  /// kept — or a host that cannot be connected to as configured.
-  @State private var notice: WorkspaceNotice?
   @AppStorage("appearance") private var appearance = "system"
   #if os(macOS)
     @AppStorage(TetherUI.Palette.colorStyleKey) private var theme = TetherUI.Palette.defaultColorStyle
@@ -67,16 +61,10 @@ struct RootView: View {
   #if os(macOS)
     @Environment(\.openSettings) private var openSettings
   #endif
-  /// The window that started the app publishes the input and shortcut
-  /// gates; additional windows only read them.
   @Environment(\.workspaceIsPrimary) private var isPrimaryWindow
-  #if os(macOS)
-    /// On screen and key, as the window reports them; a scene would have said.
-    @State private var windowShown = true
-    /// This window among the ones these tabs are shown in (`TabSet.note`).
-    @State private var windowID = UUID()
-    @State private var windowKey = false
-  #else
+  /// The workspace host's stable id on both platforms, not a new one per view.
+  private var windowID: UUID { interaction.workspaceHostID }
+  #if os(iOS)
     @Environment(\.scenePhase) private var phase
   #endif
   #if os(iOS)
@@ -106,28 +94,47 @@ struct RootView: View {
   /// a terminal already on screen covers only that terminal.
   private var connectBlocksWindow: Bool {
     #if os(macOS)
-      connectRequests.contains { !$0.coversTerminal }
+      // A reconnect question covers its terminal. History still belongs to
+      // the window, and so does a password for a connection with no terminal.
+      interaction.connectRequests.contains { !$0.coversTerminal }
     #else
-      !connectRequests.isEmpty
+      !interaction.connectRequests.isEmpty
     #endif
   }
 
   private var terminalInputAllowed: Bool {
-    var allowed = tabs.palette == nil && !tabs.hostPicker && tabs.accessory == nil
-      && tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && !connectBlocksWindow && !showingSettings
-      && notice == nil
-    #if os(iOS)
-      allowed = allowed && statusPanel == nil
+    #if os(macOS)
+      interaction.inputAllowed(in: windowID) && !connectBlocksWindow
+    #else
+      interaction.inputAllowed(in: windowID) && !connectBlocksWindow && statusPanel == nil
     #endif
-    return allowed
   }
   var body: some View {
     windowChrome
       .onAppear {
         tabs.onEmptied = { LastTabPreference.quitIfChosen() }
+        #if os(iOS)
+          // One workspace host on the phone, on the same controller the
+          // Mac's hosts use; the scene phase is its window state.
+          interaction.register(id: windowID, kind: .workspace)
+          updateScenePhase(phase)
+        #endif
       }
+      #if os(iOS)
+        .onChange(of: phase) { _, phase in
+          updateScenePhase(phase)
+        }
+      #endif
   }
+
+  #if os(iOS)
+    private func updateScenePhase(_ phase: ScenePhase) {
+      interaction.update(id: windowID, state: WorkspaceHostState(
+        orderedIn: phase != .background,
+        renderVisible: phase == .active,
+        keyWithinHost: phase == .active))
+    }
+  #endif
 
   @ViewBuilder
   private var container: some View {
@@ -144,8 +151,12 @@ struct RootView: View {
         reduceTransparency: reduceTransparency, contrast: contrast)
       return ZStack(alignment: .bottomLeading) {
         VStack(spacing: 0) {
-          if tabs.showsTabBar && tabLayout == .horizontal {
-            WorkspaceTabBar(tabs: tabs, registry: registry, onClose: { tabs.requestCloseFromTabBar($0) })
+          if tabs.showsTabBar(for: windowID) && tabLayout == .horizontal {
+            WorkspaceTabBar(
+              tabs: tabs, registry: registry,
+              onNewTab: { _ = interaction.dispatch(.newTab, from: windowID) },
+              performAction: { _ = interaction.dispatch($0, from: windowID) },
+              onClose: { interaction.requestCloseFromTabBar($0, from: windowID) })
             // One strip for every terminal on this host, above every pane. A
             // split used to be a system split view that drew over this row.
             .layoutPriority(1)
@@ -161,14 +172,21 @@ struct RootView: View {
           // Side columns keep their width; the window's changes go to the
           // canvas alone (`SideColumn`).
           HStack(spacing: 0) {
-            if tabs.showsTabBar && tabLayout == .vertical {
+            if tabs.showsTabBar(for: windowID) && tabLayout == .vertical {
               SideColumn(side: .leading, width: $tabSidebarWidth,
                          range: Chrome.tabSidebarMin...Chrome.tabSidebarMax) {
                 WorkspaceTabBar(tabs: tabs, registry: registry, layout: .vertical,
-                  onClose: { tabs.requestCloseFromTabBar($0) })
+                  onNewTab: { _ = interaction.dispatch(.newTab, from: windowID) },
+                  performAction: { _ = interaction.dispatch($0, from: windowID) },
+                  onClose: { interaction.requestCloseFromTabBar($0, from: windowID) })
               }
             }
-            macCanvas
+            WorkspaceCanvas(
+              tabs: tabs, interaction: interaction,
+              inputAllowed: terminalInputAllowed,
+              claimsDialogs: presentsDialogs,
+              rendersPluginContent: true, passive: false,
+              placeholder: AnyView(canvasPlaceholder))
               .frame(maxWidth: .infinity, maxHeight: .infinity)
               .clipped()
             // The inspector sits under the tab strip, not beside it in the
@@ -201,14 +219,6 @@ struct RootView: View {
               .layoutPriority(1)
           }
         }
-        if tabs.hostPicker, !tabs.zen, isFront {
-          Color.black.opacity(0.001)
-            .ignoresSafeArea()
-            .onTapGesture { tabs.hostPicker = false }
-          HostPicker(tabs: tabs, store: store)
-            .padding(.leading, UIStyle.panelRadius)
-            .padding(.bottom, Chrome.status + UIStyle.Space.group)
-        }
       }
       .background { WorkspaceBackdrop() }
       .background { CompactTitlebar(closeRequests: tabs.windowCloseRequests) }
@@ -218,6 +228,18 @@ struct RootView: View {
         tabs.accessory = nil
         tabs.tabMenu = nil
       }
+    }
+
+    /// Whether this host presents the workspace's shared presentations:
+    /// the blocking question's fixed owner first, then the effective host.
+    private var presentsDialogs: Bool {
+      (interaction.presentationOwner ?? interaction.effectiveHost) == windowID
+    }
+
+    /// What the canvas fills itself with when nothing is selected.
+    private var canvasPlaceholder: some View {
+      EmptyWorkspace()
+        .padding(Chrome.margin)
     }
 
     private var showInspector: Bool {
@@ -397,7 +419,7 @@ struct RootView: View {
   private var sidebar: some View {
     Sidebar(
       store: store,
-      onOpen: { open($0) }, onEdit: { route.show(.edit($0.id)) }, onNew: { route.show(.newHost) },
+      onOpen: { interaction.open($0) }, onEdit: { route.show(.edit($0.id)) }, onNew: { route.show(.newHost) },
       onSettings: { showingSettings = true }
     )
     .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
@@ -414,283 +436,6 @@ struct RootView: View {
     #endif
   }
 
-  /// Opens a host, asking for a password only where one could be used.
-  ///
-  /// The question exists to collect a credential for a handshake. A shell on
-  /// this machine has neither, so asking would be asking a person to
-  /// dismiss a question about a stranger they are not talking to. A host
-  /// that is already connected has spent that handshake; another terminal
-  /// is another channel on the same lease. A host with an `IdentityFile`
-  /// already has a credential — the key — and `ssh` would not ask for a
-  /// password first either.
-  private func open(_ host: Host, in workspaceID: UUID? = nil) {
-    if host.isLocal {
-      tabs.open(host, password: "", in: workspaceID)
-      return
-    }
-    Task { await openRemote(host, in: workspaceID) }
-  }
-
-  private func splitTerminal(_ id: UUID, direction: SplitDirection) {
-    guard let source = tabs.tabs.first(where: { $0.id == id }) else { return }
-    if source.host.isLocal {
-      tabs.splitTerminal(id, direction: direction)
-      return
-    }
-    Task {
-      do {
-        let connection = try await source.connectionReady()
-        guard tabs.tabs.contains(where: { $0.id == id }), tabs.currentHost?.id == source.host.id else { return }
-        tabs.splitTerminal(id, direction: direction, on: connection)
-      } catch {
-        notice = WorkspaceNotice(title: "Could Not Split Terminal", message: error.localizedDescription)
-      }
-    }
-  }
-
-  private func openRemote(_ host: Host, in workspaceID: UUID? = nil) async {
-    if let issue = host.connectionProblem {
-      notice = WorkspaceNotice(title: "Could Not Connect", message: issue)
-      return
-    }
-    do {
-      if let connection = try await tabs.lease(for: host) {
-        tabs.open(host, on: connection, in: workspaceID)
-        return
-      }
-    } catch {
-      // The in-flight handshake failed. Asking again is the remaining path.
-    }
-    switch await passwordSource(for: host) {
-    case .none: tabs.open(host, password: "", in: workspaceID)
-    case .saved(let password): tabs.open(host, password: password, in: workspaceID)
-    case .ask: ask(ConnectRequest(host: host, workspaceID: workspaceID))
-    }
-  }
-
-  /// Take Over runs on the device being left. One nearby device is handed
-  /// the workspace immediately. Several are named, and Cancel keeps it here.
-  private func offerTakeOver() async {
-    let peers = store.handoff.nearby
-    guard !peers.isEmpty, let snapshot = tabs.captureHandoff() else { return }
-    if peers.count == 1 {
-      store.handoff.send(snapshot, to: peers[0].id)
-      return
-    }
-    var actions = [Dialog.Action.cancel()]
-    for peer in peers {
-      actions.append(Dialog.Action(peer.name) { _ in
-        store.handoff.send(snapshot, to: peer.id)
-      })
-    }
-    _ = await DialogPresenter.ask(Dialog(title: "Take Over", actions: actions))
-  }
-
-  /// The last workspace handed to this device, opened when nothing else is.
-  /// A library that does not yet hold those hosts leaves the file alone.
-  private func resumeSavedHandoff() {
-    guard tabs.tabs.isEmpty, tabs.restoringTab == nil else { return }
-    let archive = HandoffArchive()
-    guard let snapshot = archive.load() else { return }
-    if tabs.prepareHandoff(snapshot, hosts: store.listed) { archive.consume() }
-  }
-
-  private func restoreTab(_ id: UUID) {
-    guard let record = tabs.restoration(for: id) else { return }
-    let host = latest(record.host)
-    if host.isLocal {
-      finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
-      return
-    }
-    Task {
-      if let issue = host.connectionProblem {
-        tabs.cancelRestore(id)
-        notice = WorkspaceNotice(title: "Could Not Connect", message: issue)
-        return
-      }
-      if let connection = try? await tabs.lease(for: host) {
-        finishRestore(record, tab: tabs.restore(id, host: host, on: connection))
-        return
-      }
-      let source = await passwordSource(for: host)
-      guard tabs.restoration(for: id) != nil else { return }
-      switch source {
-      case .none: finishRestore(record, tab: tabs.restore(id, host: host, password: ""))
-      case .saved(let password): finishRestore(record, tab: tabs.restore(id, host: host, password: password))
-      case .ask: ask(ConnectRequest(host: host, restoring: id))
-      }
-    }
-  }
-
-  private func finishRestore(_ record: ClosedTerminal, tab: SessionTab?) {
-    guard let tab, let page = tabs.workspace(containing: tab.id) else { return }
-    let members = record.members
-    for (saved, terminalID) in zip(members, page.terminalIDs) {
-      guard !saved.attachments.isEmpty, let terminal = tabs.tabs.first(where: { $0.id == terminalID }) else { continue }
-      Task { [weak terminal] in
-        guard let terminal else { return }
-        guard (try? await terminal.connectionReady()) != nil,
-          tabs.tabs.contains(where: { $0.id == terminal.id }) else { return }
-        for attachment in saved.attachments {
-          guard registry.isEnabled(attachment.pluginID) else { continue }
-          prepareAttachment(attachment.pluginID, on: terminal)
-          terminal.attachment(for: attachment.pluginID)?.restore(from: attachment.state)
-        }
-      }
-    }
-  }
-
-  private func ask(_ request: ConnectRequest) {
-    if let tab = request.retrying, connectRequests.contains(where: { $0.retrying == tab }) { return }
-    connectRequests.append(request)
-  }
-
-  /// The host as it is now. A tab keeps the one it opened with; a password
-  /// kept or a label edited since belongs to this one.
-  private func latest(_ host: Host) -> Host {
-    store.hosts.first { $0.id == host.id } ?? host
-  }
-
-  /// Where a handshake's password comes from: nowhere, because a key, a
-  /// running master or this machine needs none; the keychain; or the person.
-  private enum PasswordSource {
-    case none
-    case saved(String)
-    case ask
-  }
-
-  /// A saved password comes first even for a host with a key: the key may
-  /// be refused, or the server may ask for the password as well, and a
-  /// password kept for that is one to use rather than to ask for again.
-  private func passwordSource(for host: Host) async -> PasswordSource {
-    if host.isLocal { return .none }
-    if let password = remembered(for: host), !password.isEmpty { return .saved(password) }
-    let master = host.allowsMasterReuse ? await TerminalSession.sshMasterIsRunning(host.sshTarget) : false
-    if master || host.offersConfiguredKey { return .none }
-    return .ask
-  }
-
-  /// Tries a tab again, in place, after the person asked to.
-  ///
-  /// After a refused login the person is asked, whatever is saved: sending
-  /// the same refused password again is the loop this exists to break.
-  private func retry(_ report: TabProblem) {
-    guard let tab = tabs.tabs.first(where: { $0.id == report.tab }) else { return }
-    tab.acknowledge()
-    let host = latest(report.host)
-    if report.problem.refusedLogin, !host.isLocal {
-      ask(ConnectRequest(host: host, retrying: tab.id))
-      return
-    }
-    Task {
-      let source = await passwordSource(for: host)
-      // Closed while the keychain was being read: nothing to try again.
-      guard tabs.tabs.contains(where: { $0.id == tab.id }), tab.canReconnect else { return }
-      // Someone else on this host is already logging in, or has. A channel
-      // on that lease is the rest of the reconnect.
-      if let leader = tabs.reconnectLeader(for: host, besides: tab.id) {
-        tab.follow(leader)
-        return
-      }
-      switch source {
-      case .none: tab.redial(host: host, password: "", typedNow: false)
-      case .saved(let password): tab.redial(host: host, password: password, typedNow: false)
-      case .ask: ask(ConnectRequest(host: host, retrying: tab.id))
-      }
-    }
-  }
-
-  /// The password question, answered.
-  private func connect(_ request: ConnectRequest, password: String) {
-    connectRequests.removeAll { $0.id == request.id }
-    if let answer = reconnectAnswers.removeValue(forKey: request.id) {
-      answer.resume(returning: password)
-    } else if let id = request.restoring {
-      guard let record = tabs.restoration(for: id) else { return }
-      finishRestore(record, tab: tabs.restore(id, host: latest(request.host), password: password, typedNow: true))
-    } else if let id = request.retrying {
-      // A tab closed while its password was being asked for stays closed.
-      tabs.tabs.first { $0.id == id }?.redial(host: latest(request.host), password: password, typedNow: true)
-    } else {
-      tabs.open(latest(request.host), password: password, typedNow: true, in: request.workspaceID)
-    }
-  }
-
-  /// The password question, declined: nothing is dialled, and a failed tab
-  /// that was waiting on it closes.
-  private func cancelConnect(_ request: ConnectRequest) {
-    connectRequests.removeAll { $0.id == request.id }
-    reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
-    if let id = request.restoring { tabs.cancelRestore(id) }
-    if let id = request.retrying { tabs.close(id) }
-  }
-
-  /// A password that worked, kept — or said why not.
-  private func keep(_ offer: TabPasswordOffer) {
-    keep(offer.offer.password, for: offer.host)
-    tabs.answer(offer, kept: true)
-  }
-
-  #if os(macOS)
-  #endif
-
-  #if os(macOS)
-  @ViewBuilder
-  private var macCanvas: some View {
-    if let layout = tabs.workspaceSplit, let workspace = tabs.currentWorkspace?.id {
-      SplitCanvas(
-        layout: layout, selected: tabs.selected, inputAllowed: terminalInputAllowed,
-        pane: { AnyView(workspaceContent($0)) },
-        onReplace: { tabs.replaceLayout(of: workspace, with: $0) },
-        onCommit: { tabs.commitLayout() },
-        onSelect: { tabs.select($0) },
-        onPlace: { dragged, target, edge in _ = tabs.place(dragged, beside: target, edge: edge) })
-    } else {
-      canvas
-    }
-  }
-  #endif
-
-  @ViewBuilder
-  private func workspaceContent(_ id: UUID) -> some View {
-    if let workspace = tabs.extensions.first(where: { $0.id == id })?.workspace {
-      workspace.content().id(workspace.id).padding(Chrome.margin)
-    } else if let tab = tabs.tabs.first(where: { $0.id == id }) {
-      Group {
-        if let shown = tab.shown {
-          shown.content().id(tab.id).padding(Chrome.margin)
-        } else {
-          SessionView(tab: tab, links: links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: tabs.selected == id,
-            onFocus: { tabs.select(id) }).id(tab.id)
-            .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
-        }
-      }
-      #if os(macOS)
-        // The window that claims a tab's dialog region is the one that
-        // presents it — the quick panel never does, even in front
-        // (`TabSet.presentsDialogs`).
-        .background(DialogAnchorReader(anchor: tab.dialogAnchor, claimsView: tabs.presentsDialogs(windowID)))
-      #endif
-    }
-  }
-
-  private var canvas: some View {
-    Group {
-      if let id = tabs.selected {
-        workspaceContent(id)
-          #if os(macOS)
-            .overlay { PaneDrop(target: id) { dragged, edge in _ = tabs.place(dragged, beside: id, edge: edge) } }
-          #endif
-      } else if tabs.currentHost != nil {
-        EmptyWorkspace()
-          .padding(Chrome.margin)
-      } else {
-        welcome
-          .padding(Chrome.margin)
-      }
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
 
   /// The window's second column, where there is a window to put one in:
   /// a Mac's, or an iPad's at full width.
@@ -767,7 +512,7 @@ struct RootView: View {
             ForEach(Array(TouchCommands.sections(wide: tabs.wide).enumerated()), id: \.offset) { _, section in
               Section {
                 ForEach(section, id: \.self) { action in
-                  Button(tabs.title(for: action)) { tabs.perform(action) }
+                  Button(tabs.title(for: action)) { _ = interaction.dispatch(action, from: windowID) }
                     .disabled(!tabs.canPerform(action))
                 }
               }
@@ -815,7 +560,7 @@ struct RootView: View {
         #if os(iOS)
           if tabs.wide {
             Button {
-              tabs.perform(.inspector)
+              _ = interaction.dispatch(.inspector, from: windowID)
             } label: {
               Label(tabs.title(for: .inspector), systemImage: "sidebar.right")
             }
@@ -994,7 +739,7 @@ struct RootView: View {
       }
       Section {
         Button {
-          tabs.perform(.newTerminal)
+          _ = interaction.dispatch(.newTerminal, from: windowID)
         } label: {
           Label(tabs.title(for: .newTerminal), systemImage: "plus")
         }
@@ -1032,8 +777,8 @@ struct RootView: View {
         shown.content()
       } else {
         SessionView(
-          tab: tab, links: links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: true, onFocus: {})
-          .modifier(TerminalDrop(tab: tab) { drop($0, on: tab) })
+          tab: tab, links: interaction.links(for: tab), menuItems: tabs.terminalMenu(for: tab.id), active: true, onFocus: {})
+          .modifier(TerminalDrop(tab: tab) { interaction.drop($0, on: tab) })
       }
     }
     .id(tab.id)
@@ -1050,66 +795,12 @@ extension RootView {
   @ViewBuilder
   fileprivate var windowChrome: some View {
     watchedWindow
-    .onChange(of: tabs.intent) { _, intent in
-      // Both windows on these tabs see the intent; the one in front acts.
-      guard let intent, isFront else { return }
-      tabs.intent = nil
-      switch intent {
-      case .splitTerminal(let id, let direction):
-        splitTerminal(id, direction: direction)
-      case .restoreTab(let id): restoreTab(id)
-      case .addTerminal(let workspaceID):
-        if let page = tabs.workspaces.first(where: { $0.id == workspaceID }) { open(page.host, in: workspaceID) }
-      case .newTerminal:
-        if let page = tabs.currentWorkspace { open(page.host, in: page.id) }
-        else if TerminalSession.isLocalAvailable { open(.local) }
-        else { tabs.hostPicker = true }
-      case .newTab:
-        if let host = tabs.currentHost {
-          open(host)
-        } else if TerminalSession.isLocalAvailable {
-          open(.local)
-        } else {
-          tabs.hostPicker = true
-        }
-      case .connect(let host): open(host)
-      case .reconnect(let id):
-        if let report = tabs.reconnectReport(for: id) { retry(report) }
-      case .takeOver:
-        Task { await offerTakeOver() }
-      case .switchHost(let index):
-        guard store.listed.indices.contains(index) else { return }
-        if let next = tabs.reveal(store.listed[index]), case .connect(let host) = next { open(host) }
-      case .edit(let host):
-        tabs.hostPicker = false
-        route.show(store.hosts.contains { $0.id == host.id } ? .edit(host.id) : .newHost)
-      case .launchPlugin(let id):
-        if let plugin = registry.plugins.first(where: { $0.metadata.id == id }),
-          registry.isEnabled(id)
-        {
-          launch(plugin)
-        }
-      case .openPath:
-        #if os(macOS)
-          let directory = tabs.current?.workingDirectory
-          Task { await OpenPath.ask(workingDirectory: directory) }
-        #endif
-      }
-    }
     .onChange(of: route.requests) { _, _ in
       #if os(macOS)
         openSettings()
       #else
         showingSettings = true
       #endif
-    }
-    .dialog(for: tabs.pendingClose) { _ in
-      Dialog.confirm(
-        tabs.closeQuestion, message: tabs.closeNote, verb: tabs.pendingCloseVerb, role: .destructive,
-        // Return is not a way to close a live shell; the same close chord
-        // twice is (spec §6): ⌘W for a terminal, ⌥⌘W for a whole tab.
-        shortcuts: [tabs.closingWorkspaceID == nil ? .command("w") : .commandOption("w")],
-        cancel: { tabs.cancelClose() }, perform: { tabs.confirmClose() })
     }
     #if !os(macOS)
       .sheet(isPresented: $showingSettings) {
@@ -1125,10 +816,6 @@ extension RootView {
       // Closed, it opens next time on its list, not the page left open.
       .onChange(of: showingSettings) { _, shown in if !shown { route.phonePath = [] } }
     #endif
-    .modifier(
-      ConnectionDialogs(
-        tabs: tabs, connecting: connectRequests.first, connect: connect, cancelConnect: cancelConnect,
-        retry: retry, keep: keep, remembers: { latest($0).remembersPassword }))
     // Closing every session on the way out is not tidiness: each one holds a
     // socket and a task, and the far side is owed a disconnect rather than a
     // dropped connection. The notification is named differently on each
@@ -1142,34 +829,18 @@ extension RootView {
         tabs.closePlugin(id)
         PluginLive.end(id)
       }
-      store.handoff.start(store)
-      tabs.takeOverReady = !store.handoff.nearby.isEmpty
-      resumeSavedHandoff()
-      #if os(iOS)
-        openReturned(nil)
-      #endif
-    }
-    .onChange(of: store.handoff.nearby.map(\.id)) { _, ids in
-      tabs.takeOverReady = !ids.isEmpty
-    }
-    .onChange(of: store.handoff.receivedToken) { _, _ in
-      guard isFront, let snapshot = store.handoff.takeReceived() else { return }
-      _ = tabs.prepareHandoff(snapshot, hosts: store.listed)
-    }
-    .onChange(of: store.hosts.map(\.id)) { _, _ in
-      resumeSavedHandoff()
-    }
-    .onChange(of: store.snapshot.trust.local?.id) { _, _ in
-      store.handoff.start(store)
+      // The startup role is the primary window's alone, not wherever the
+      // effective host happens to be: library import questions and the
+      // handoff listener belong to the one window that owns Settings.
+      if isPrimaryWindow {
+        store.handoff.start(store)
+      }
     }
     .onChange(of: pluginStatusItems.map(\.id)) { _, ids in
       PluginLive.retain(Set(ids))
       #if os(iOS)
         openReturned(nil)
       #endif
-    }
-    .dialog(for: notice) { shown in
-      Dialog.notice(shown.title, message: shown.message) { notice = nil }
     }
     #if os(iOS)
       .safeAreaInset(edge: .top, spacing: 0) {
@@ -1186,7 +857,10 @@ extension RootView {
       }
     #endif
     #if os(macOS)
-      .dialog(for: store.pendingImport) { offer in
+      // A library import question is the primary window's, fixed — a
+      // startup/Settings concern, not an ordinary workspace question, so
+      // it is not routed through the effective host.
+      .dialog(for: isPrimaryWindow ? store.pendingImport : nil) { offer in
         Dialog.confirm(
           offer.title, message: offer.message, detail: offer.diff, verb: "Import",
           cancel: { store.declineConfigurationImport() },
@@ -1199,172 +873,50 @@ extension RootView {
   private var watchedWindow: some View {
     container
       .terminalInputEnabled(terminalInputAllowed)
-      // The primary window is the one list of input and shortcut gates;
-      // the quick panel reads what it publishes instead of keeping a
-      // second list that could drift (`TabSet.mainWindowInputAllowed`).
-      .onChange(of: terminalInputAllowed, initial: true) { _, allowed in
-        if isPrimaryWindow { tabs.mainWindowInputAllowed = allowed }
-      }
-      .onChange(of: shortcutsAllowed, initial: true) { _, allowed in
-        if isPrimaryWindow { tabs.mainWindowShortcutsAllowed = allowed }
-      }
       .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
       #if os(macOS)
         .background {
-          WindowState(scheme: appearance == "system" ? nil : (appearance == "dark" ? .dark : .light)) {
-            windowShown = $0.shown
-            windowKey = $0.key
-            tabs.note(window: windowID, shown: $0.shown, key: $0.key)
-            routeMenuShortcuts()
-          }
-          .allowsHitTesting(false)
+          WindowState(scheme: appearance == "system" ? nil : (appearance == "dark" ? .dark : .light)) { _ in }
+            .allowsHitTesting(false)
         }
-        .onChange(of: windowKey, initial: true) { _, _ in routeMenuShortcuts() }
-        .onChange(of: shortcutsAllowed) { _, _ in routeMenuShortcuts() }
-        .onDisappear { tabs.note(window: windowID, shown: false, key: false) }
-        .environment(\.isFrontWindow, tabs.isFront(windowID))
+        .background {
+          WorkspaceHostReporter(hostID: windowID, kind: .workspace, interaction: interaction)
+            .allowsHitTesting(false)
+        }
+        .modifier(WorkspaceHostPresenters(
+          tabs: tabs, interaction: interaction, hostID: windowID, store: store, registry: registry))
+        .environment(\.isFrontWindow, presentsDialogs)
+        .environment(\.surfaceDrivesSize, interaction.drivesSurface(windowID))
       #endif
-      .overlay {
-        PaletteOverlay(
-          tabs: tabs, store: store, commands: commandItems, onPickHost: { open($0) })
-      }
       #if os(macOS)
         .background {
-          WorkspaceKeyBindingMonitor(enabled: shortcutsAllowed, textEditingEnabled: true) { binding, repeated, editingText in
-            let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
-            guard let id = tabs.keyBindings.command(for: binding, in: definitions, offered: tabs.offeredCommandIDs),
-              !editingText || WorkspaceAction.answersWhileEditingText(id)
-            else { return false }
-            if !repeated {
-              if let action = WorkspaceAction(rawValue: id) { tabs.perform(action) }
-              else if let item = commandItems.first(where: { $0.id == id && $0.enabled }) { item.run() }
-            }
-            return true
+          WorkspaceKeyBindingMonitor(enabled: true, textEditingEnabled: true) {
+            binding, repeated, editingText in
+            handleWorkspaceShortcut(binding, repeated: repeated, editingText: editingText,
+              interaction: interaction, hostID: windowID, registry: registry)
           }
           .allowsHitTesting(false)
         }
       #endif
       #if os(iOS)
+        .overlay {
+          PaletteOverlay(
+            tabs: tabs, store: store,
+            commands: interaction.commandItems(from: windowID),
+            onPickHost: { interaction.open($0) })
+        }
         .focusedSceneValue(\.workspaceShortcutsEnabled, shortcutsAllowed)
       #endif
-      .onChange(of: tabs.accessory) { _, open in
-        guard let open, let tab = tabs.tabs.first(where: { $0.id == open.tab }) else { return }
-        prepareAttachment(open.plugin, on: tab)
-      }
-      // The inspector follows the selected tab, so the tab now in front needs
-      // its own attachment the first time it is shown there.
-      .onChange(of: [tabs.inspectorPlugin, tabs.selected?.uuidString]) { _, _ in
-        guard let pluginID = tabs.inspectorPlugin, let tab = tabs.current else { return }
-        prepareAttachment(pluginID, on: tab)
-      }
-      .onChange(of: tabs.selected, initial: true) { _, _ in refreshFramePublishing() }
-      .onChange(of: tabs.tabs.map(\.id), initial: true) { _, _ in refreshFramePublishing() }
-      .onChange(of: tabs.workspaceSplit?.ids ?? [], initial: false) { _, _ in refreshFramePublishing() }
-      #if os(macOS)
-        .onChange(of: windowShown) { _, _ in refreshFramePublishing() }
-        .onChange(of: tabs.shownWindows) { _, _ in refreshFramePublishing() }
-      #else
-        .onChange(of: phase) { _, _ in refreshFramePublishing() }
-      #endif
-      .onChange(of: registry.disabled, initial: true) { _, _ in
-        tabs.accessories = registry.plugins.compactMap { plugin in
-          guard let plugin = plugin as? any TabPlugin, registry.isEnabled(plugin.metadata.id)
-          else { return nil }
-          return PluginAccessory(
-            id: plugin.metadata.id, title: plugin.metadata.name, accessory: plugin.accessory)
-        }
-        attachLiveTabs()
-      }
-      // A wheel over the shell is offered to whatever is attached, which has
-      // to exist before the accessory is opened: a full-screen program can
-      // be keeping the history the wheel is asking for.
-      .onChange(of: tabs.tabs.map(\.isLive), initial: true) { _, _ in attachLiveTabs() }
       // On a Mac the accessory is a popover, so the window can present this.
       // A phone's accessory is a sheet, and a sheet's ancestor cannot present a
       // second one over it — so there it is presented from inside that sheet.
       .modifier(PluginSheetPresentation(tabs: tabs))
   }
 
-  /// Sheets and authentication questions own their keyboard while presented.
+  /// Which chords this window answers: the interaction decides, on
+  /// the same list the quick panel reads.
   private var shortcutsAllowed: Bool {
-    #if os(iOS)
-      if tabs.accessory != nil || tabs.palette != nil || tabs.hostPicker { return false }
-    #endif
-    let problemBlocksWindow: Bool
-    #if os(macOS)
-      // A reconnect question covers its terminal. History still belongs to
-      // the window, and so does a password for a connection with no terminal.
-      problemBlocksWindow = tabs.problem?.coversTerminal == false
-    #else
-      problemBlocksWindow = tabs.problem != nil
-    #endif
-    return tabs.sheet == nil && tabs.pendingClose == nil && tabs.renaming == nil && tabs.renamingWorkspace == nil
-      && !connectBlocksWindow
-      && !showingSettings && notice == nil
-      && !problemBlocksWindow && tabs.passwordOffer == nil
-  }
-
-  private var commandItems: [CommandItem] {
-    let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
-    func detail(_ command: KeyBindingCommand) -> String {
-      let shortcut = tabs.keyBindings.summary(for: command)
-      return shortcut.isEmpty ? command.group : "\(command.group) · \(shortcut)"
-    }
-    var items = WorkspaceAction.available.filter { action in
-      #if os(iOS)
-        // Split stays a Mac layout. Here the same idea is New Terminal.
-        switch action {
-        case .splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups: return false
-        default: break
-        }
-      #endif
-      return tabs.wide || !action.needsWidth
-    }.filter { action in
-      action.hostSlot.map { store.listed.indices.contains($0) } ?? true
-    }.map { action in
-      let command = action.command
-      return CommandItem(
-        id: command.id,
-        // Keep the searchable toggle name consistent with Key Bindings.
-        // Native menus and the titlebar button still say Show/Hide Tab Bar.
-        title: hostLabel(action) ?? (action == .toggleTabBar ? command.title : tabs.title(for: action)),
-        // From the palette these close what is behind it, never the window.
-        detail: detail(command),
-        enabled: [.closeTerminal, .closeTab].contains(action) ? tabs.selected != nil : tabs.canPerform(action)
-      ) {
-        tabs.palette = nil
-        tabs.perform(action)
-      }
-    }
-    for plugin in registry.plugins where registry.isEnabled(plugin.metadata.id) {
-      let id = plugin.metadata.id
-      if !plugin.isStatusBarOnly, let definition = definitions.first(where: { $0.id == KeyBindingCatalog.launchID(id) }) {
-        let blocked = plugin is any TabPlugin
-          ? tabs.current?.canOpen(id) != true
-          : plugin.needsRemoteConnection && tabs.current?.connection == nil
-        items.append(CommandItem(id: definition.id, title: definition.title,
-                                 detail: detail(definition), enabled: !blocked) {
-          tabs.palette = nil
-          launch(plugin)
-        })
-      }
-      let commands: [PluginCommand]
-      if let entry = tabs.extensions.first(where: { $0.id == tabs.selected && $0.pluginID == id }) {
-        commands = entry.workspace.commands
-      } else {
-        commands = tabs.current?.attachment(for: id)?.commands ?? []
-      }
-      for command in commands {
-        let commandID = KeyBindingCatalog.commandID(command.id, plugin: id)
-        guard let definition = definitions.first(where: { $0.id == commandID }) else { continue }
-        items.append(CommandItem(id: commandID, title: command.title,
-                                 detail: detail(definition), enabled: true) {
-          tabs.palette = nil
-          command.action()
-        })
-      }
-    }
-    return items
+    interaction.shortcutsAllowed(in: windowID)
   }
 
   /// ⌘1…⌘4 name the host they open. The binding table keeps "Host 1".
@@ -1374,616 +926,10 @@ extension RootView {
   }
 
 
-  /// What the keychain already has for this host, if the person asked for it
-  /// to be kept. Read at the moment of connecting, not held in memory: a
-  /// password sitting in a view model is a password in a crash report.
-  ///
-  /// A keychain that refuses is said so, before the person is asked to type
-  /// what it would not give: otherwise the question looks like a password
-  /// that was forgotten.
-  private func remembered(for host: Host) -> String? {
-    guard host.remembersPassword else { return nil }
-    do {
-      return try secrets.password(for: host.passwordID)
-    } catch {
-      notice = WorkspaceNotice(title: "Could Not Read Password for \(host.displayName)", message: message(for: error))
-      return nil
-    }
-  }
 
-  /// Records or clears what a person asked to be remembered.
-  ///
-  /// The flag on the host and the item in the keychain are two facts that
-  /// must agree: a host marked as remembering with nothing stored prefills
-  /// an empty field for ever, so a keychain that refuses leaves the flag off.
-  /// Keeps a password that has just worked. Only for a host that is still
-  /// in the list: a login can outlive the host it was for, and a deleted
-  /// host must not come back through its keychain item.
-  ///
-  /// Kept through the host's record, like everything else about it.
-  private func keep(_ password: String, for host: Host) {
-    guard let host = store.hosts.first(where: { $0.id == host.id }) else {
-      notSaved(host, "This host is no longer in the list.")
-      return
-    }
-    if !store.save(host, password: password) { notSaved(host, store.problem) }
-  }
-
-  private func notSaved(_ host: Host, _ problem: String?) {
-    notice = WorkspaceNotice(title: "Could Not Save Password for \(host.displayName)", message: problem ?? "")
-  }
-
-  private func shellLabel(for tab: SessionTab?) -> String {
-    if tab?.host.isLocal == true, let path = ProcessInfo.processInfo.environment["SHELL"], !path.isEmpty {
-      return URL(fileURLWithPath: path).lastPathComponent
-    }
-    return "Shell"
-  }
-
-  private func pluginContext(for tab: SessionTab, pluginID: String = "", pluginName: String = "") -> PluginContext {
-    return PluginContext(
-      connection: tab.connection,
-      hostLabel: tab.host.label.isEmpty ? tab.host.hostname : tab.host.label,
-      hostID: tab.host.id,
-      shellLabel: shellLabel(for: tab),
-      pluginID: pluginID,
-      pluginName: pluginName,
-      openWorkspace: { _ in },
-      reconnect: { [weak tab] in
-        guard let tab else { throw CancellationError() }
-        return try await reconnect(host: tab.host)
-      }
-    )
-  }
-
-  /// Whether this window is the one in front of those showing these tabs.
-  private var isFront: Bool {
-    #if os(macOS)
-      tabs.isFront(windowID)
-    #else
-      true
-    #endif
-  }
-
-  #if os(macOS)
-    /// The menu's shortcuts go to the key window. A window that is not key
-    /// clears them only when no window on these tabs is, so whichever of two
-    /// windows reports last cannot take them from the one in front.
-    private func routeMenuShortcuts() {
-      if windowKey { tabs.menuShortcuts = shortcutsAllowed }
-      else if tabs.keyWindows.isEmpty { tabs.menuShortcuts = nil }
-    }
-  #endif
-
-  /// Only the tab in front copies a frame, and only while the app is in
-  /// front. The others stay subscribed, so the next time they are shown
-  /// the screen they copy is the current one. Every tab keeps reading:
-  /// a session left unread backs up to its far side, and a server drops
-  /// a client that has stopped answering (`TerminalSession.pause`).
-  private func refreshFramePublishing() {
-    #if os(macOS)
-      // This window, or another showing these tabs. Hiding the only one pauses frames.
-      let foreground = windowShown || !tabs.shownWindows.isEmpty
-    #else
-      let foreground = phase != .background
-    #endif
-    for tab in tabs.tabs {
-      #if os(iOS)
-        // One terminal fills the screen. The others stay in the title menu.
-        let showing = tab.id == tabs.selected
-      #else
-        let showing = tab.id == tabs.selected || tabs.workspaceSplit?.ids.contains(tab.id) == true
-      #endif
-      tab.setPublishesFrames(foreground && showing)
-    }
-  }
-
-  /// Attaches every tab plugin on a live tab, once. The accessory used to
-  /// be the first time; a wheel can need the attachment before that opens.
-  private func attachLiveTabs() {
-    for tab in tabs.tabs where tab.isLive {
-      for plugin in tabs.accessories {
-        prepareAttachment(plugin.id, on: tab)
-      }
-    }
-  }
-
-  /// Makes the tab's attachment for this plugin the first time its
-  /// accessory opens there, and hands an existing one the tab's current
-  /// lease — which a reconnect may have replaced since.
-  private func prepareAttachment(_ pluginID: String, on tab: SessionTab) {
-    if let attachment = tab.attachment(for: pluginID) {
-      if let connection = tab.connection { attachment.connectionChanged(connection) }
-      return
-    }
-    guard let plugin = registry.plugins.first(where: { $0.metadata.id == pluginID }) as? any TabPlugin,
-      registry.isEnabled(pluginID)
-    else { return }
-    tab.attach(plugin.attach(to: tabContext(for: tab, plugin: plugin)), for: pluginID)
-  }
-
-  private func tabContext(for tab: SessionTab, plugin: any TetherPlugin) -> TabContext {
-    let id = tab.id
-    let pluginID = plugin.metadata.id
-    return TabContext(
-      id: id,
-      plugin: pluginContext(for: tab, pluginID: pluginID, pluginName: plugin.metadata.name),
-      terminalName: { [weak tab] in tab?.terminalName },
-      terminalHost: { [weak tab] in tab?.pluginTerminalIdentity?.host },
-      focus: { tabs.select(id) },
-      dismissAccessory: { tabs.dismissAccessory(pluginID, on: id) },
-      present: { view in tabs.sheet = PluginSheet(tab: id, plugin: pluginID, view: view) },
-      dismissSheet: { if tabs.sheet?.tab == id { tabs.sheet = nil } },
-      insertText: { [weak tab] text in tab?.send(.paste(text)) },
-      runInTerminal: { [weak tab] line in
-        // Clear the whole draft, including text after a moved caret.
-        tab?.send(.key(.text("e"), .init(control: true)))
-        tab?.send(.key(.text("u"), .init(control: true)))
-        tab?.send(.paste(line))
-        tab?.send(.key(.enter))
-      },
-      workingDirectory: { [weak tab] in tab?.workingDirectory },
-      resolveWorkingDirectory: { [weak tab] link in
-        guard let tab else { return nil }
-        return await workingDirectory(for: link, on: tab)
-      },
-      showAccessory: { tabs.showAccessory(pluginID, on: id) },
-      linkActions: { [weak tab] pointed in tab.flatMap { linkActions(for: pointed, on: $0) } },
-      shells: {
-        guard let host = tabs.tabs.first(where: { $0.id == id })?.host.id else { return [] }
-        return tabs.hostShells(host, current: id)
-      },
-      openShell: { tabs.select($0) },
-      newShell: {
-        if let page = tabs.workspace(containing: id) { tabs.intent = .addTerminal(page.id) }
-      },
-      renameShell: { shell, name in tabs.rename(shell, to: name) },
-      scrollBy: { [weak tab] lines in tab?.scrollOwnHistory(by: lines) },
-      reportWheel: { [weak tab] lines, column, row in
-        guard let tab, lines != 0 else { return }
-        let button: PointerButton = lines > 0 ? .wheelUp : .wheelDown
-        for _ in 0..<WheelReports.count(lines) {
-          tab.send(.pointer(button: button, phase: .press, column: column, row: row))
-        }
-      },
-      mouseTracking: { [weak tab] in tab?.frame?.mouse ?? .off },
-      terminalIndicator: { [weak tab] terminals in
-        tab.flatMap { registry.indicator(on: $0, terminals: terminals) }
-      })
-  }
-
-  /// What pointing at the terminal does on this tab: whatever its plugins
-  /// offer, read relative to where the tab's shell said it was.
-  private func links(for tab: SessionTab) -> TerminalLinks {
-    TerminalLinks(
-      find: { [weak tab] row, column in tab?.link(atRow: row, column: column) },
-      actions: { [weak tab] link in
-        guard let tab else { return nil }
-        return linkActions(
-          for: PointedLink(link: link, directory: { [weak tab] in
-            guard let tab else { return nil }
-            return await workingDirectory(for: link, on: tab)
-          }),
-          on: tab)
-      })
-  }
-
-  private func workingDirectory(for link: TerminalLink?, on tab: SessionTab) async -> String? {
-    for plugin in tabs.accessories { prepareAttachment(plugin.id, on: tab) }
-    for item in tab.attachments {
-      if let directory = await item.attachment.workingDirectory(for: link) { return directory }
-    }
-    return tab.workingDirectory
-  }
-
-  /// Everything offered for a link on a tab, as one.
-  ///
-  /// A web address opens in the browser, which needs nobody's help. Anything
-  /// else is offered to the tab's plugins — attaching them first, since
-  /// pointing at a path is as much a reason to need one as opening its
-  /// accessory — and the menu always has the text itself to copy.
-  private func linkActions(for pointed: PointedLink, on tab: SessionTab) -> LinkActions? {
-    let copy = PluginCommand(id: "copy", title: "Copy", symbol: "doc.on.doc") {
-      copyToPasteboard(pointed.link.text)
-    }
-    if let url = webAddress(pointed.link) {
-      let open = PluginCommand(id: "openLink", title: "Open Link", symbol: "safari") {
-        openURL(url)
-      }
-      return LinkActions(open: { openURL(url) }, commands: [open, copy], exists: { true })
-    }
-    for plugin in tabs.accessories { prepareAttachment(plugin.id, on: tab) }
-    let offers = tab.attachments.compactMap { $0.attachment.actions(for: pointed) }
-    guard let combined = LinkActions.combining(offers) else {
-      // Nothing can look for it: copyable, but not underlined as a promise.
-      return LinkActions(commands: [copy], exists: { false })
-    }
-    return LinkActions(
-      open: combined.open, preview: combined.preview, commands: combined.commands + [copy],
-      exists: combined.exists)
-  }
-
-  /// A link that is a web page, whether printed or attached with `OSC 8`.
-  private func webAddress(_ link: TerminalLink) -> URL? {
-    let text: String
-    switch link.kind {
-    case .url(let url): text = url
-    case .hyperlink(let uri): text = uri
-    case .path: return nil
-    }
-    guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased())
-    else { return nil }
-    return url
-  }
-
-  /// A path dragged from the files list is pasted as that absolute path.
-  /// Anything else that is a file is handed to `receiveFiles`. A Mac reads
-  /// the drop in AppKit (`TerminalDropContent`); a phone through SwiftUI.
-  private struct TerminalDrop: ViewModifier {
-    let tab: SessionTab
-    let receiveFiles: ([URL]) -> Void
-
-    func body(content: Content) -> some View {
-      #if os(macOS)
-        content.terminalDrop(TerminalDropHandler(types: TerminalDropContent.types) { board in
-          switch TerminalDropContent.read(board) {
-          case .paste(let text):
-            tab.send(.paste(text))
-            return true
-          case .files(let urls):
-            receiveFiles(urls)
-            return true
-          case nil:
-            return false
-          }
-        })
-      #else
-        phoneDrop(content)
-      #endif
-    }
-
-    /// A phone's drag is SwiftUI's on both ends: one provider an item.
-    private func phoneDrop(_ content: Content) -> some View {
-      content.onDrop(of: [DroppedPath.contentType, .fileURL], isTargeted: nil) { providers in
-        let carried = providers.filter {
-          $0.hasItemConformingToTypeIdentifier(DroppedPath.contentType.identifier)
-        }
-        if !carried.isEmpty {
-          Task { @MainActor in
-            var texts: [String] = []
-            for provider in carried {
-              if let item = await Self.load(DroppedPath.self, from: provider) {
-                texts.append(item.text)
-              }
-            }
-            let text = texts.joined(separator: "\n")
-            guard !text.isEmpty else { return }
-            tab.send(.paste(text))
-          }
-          return true
-        }
-        Task { @MainActor in
-          var urls: [URL] = []
-          for provider in providers {
-            if let url = await Self.load(URL.self, from: provider), url.isFileURL {
-              urls.append(url)
-            }
-          }
-          receiveFiles(urls)
-        }
-        return !providers.isEmpty
-      }
-    }
-
-    private static func load<T: Transferable>(_ type: T.Type, from provider: NSItemProvider) async -> T? {
-      await withCheckedContinuation { continuation in
-        _ = provider.loadTransferable(type: type) { result in
-          continuation.resume(returning: try? result.get())
-        }
-      }
-    }
-  }
-
-  /// Files dropped on a terminal from outside the files list.
-  ///
-  /// On this machine a terminal types their paths, which is what every
-  /// terminal does and all a local shell needs. Anywhere else a local path
-  /// means nothing, so the tab's plugins are offered them — the first to
-  /// take them decides what a drop means there. A path dragged out of the
-  /// files list is not one of these: that drop is the absolute path itself.
-  private func drop(_ urls: [URL], on tab: SessionTab) {
-    let files = urls.filter(\.isFileURL)
-    guard !files.isEmpty else { return }
-    if tab.host.isLocal {
-      tab.send(.paste(files.map { shellQuoted($0.path) }.joined(separator: " ") + " "))
-      return
-    }
-    for plugin in tabs.accessories { prepareAttachment(plugin.id, on: tab) }
-    // First taker wins, which is what `contains` short-circuited on — spelled
-    // as a loop because no caller consumes whether anyone took them.
-    for attachment in tab.attachments {
-      if attachment.attachment.receive(files: files) { break }
-    }
-  }
-
-  private func reconnect(host: Host) async throws -> RemoteConnection {
-    let host = latest(host)
-    if let connection = try? await tabs.lease(for: host) {
-      return connection
-    }
-    let password: String
-    let typedNow: Bool
-    switch await passwordSource(for: host) {
-    case .none:
-      (password, typedNow) = ("", false)
-    case .saved(let saved):
-      (password, typedNow) = (saved, false)
-    case .ask:
-      typedNow = true
-      let request = ConnectRequest(host: host)
-      password = try await withTaskCancellationHandler {
-        try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { continuation in
-          reconnectAnswers[request.id] = continuation
-          ask(request)
-        }
-      } onCancel: {
-        Task { @MainActor in
-          connectRequests.removeAll { $0.id == request.id }
-          reconnectAnswers.removeValue(forKey: request.id)?.resume(throwing: CancellationError())
-        }
-      }
-    }
-    let selected = tabs.selected
-    tabs.open(host, password: password, typedNow: typedNow)
-    guard let tab = tabs.current else { throw CancellationError() }
-    let connection = try await withTaskCancellationHandler {
-      try await tab.connectionReady()
-    } onCancel: {
-      Task { @MainActor in tabs.close(tab.id) }
-    }
-    tabs.selected = selected
-    return connection
-  }
-
-  private func launch(_ plugin: any TetherPlugin) {
-    let tab = tabs.current
-    // A tab plugin has nothing to open but its accessory, on this tab.
-    if plugin is any TabPlugin {
-      guard let tab, tab.canOpen(plugin.metadata.id) else { return }
-      tabs.toggleAccessory(plugin.metadata.id, on: tab.id)
-      return
-    }
-    if plugin.needsRemoteConnection {
-      guard tab?.connection != nil else { return }
-    }
-    let host = tab?.host
-    plugin.launch(
-      in: PluginContext(
-        connection: tab?.connection,
-        hostLabel: host.map { $0.label.isEmpty ? $0.hostname : $0.label } ?? "",
-        hostID: host?.id ?? UUID(),
-        shellLabel: shellLabel(for: tab),
-        pluginID: plugin.metadata.id,
-        pluginName: plugin.metadata.name,
-        openWorkspace: { workspace in
-          tabs.openExtension(
-            workspace,
-            pluginID: plugin.metadata.id,
-            hostID: plugin.needsRemoteConnection ? host?.id : nil)
-        },
-        reconnect: {
-          guard let host else { throw CancellationError() }
-          return try await reconnect(host: host)
-        }))
-  }
-  private var welcome: some View {
-    EmptyWorkspace()
-  }
 }
 
 #if os(macOS)
-  /// One split, sized from the fraction the page stored. A system split view
-  /// keeps its own divider, and that divider is wrong after the panes leave
-  /// the window and come back — and it draws through the tab strip.
-  private struct SplitCanvas: View {
-    let layout: WorkspaceSplit
-    let selected: UUID?
-    let inputAllowed: Bool
-    let pane: (UUID) -> AnyView
-    let onReplace: (WorkspaceSplit) -> Void
-    let onCommit: () -> Void
-    let onSelect: (UUID) -> Void
-    var onPlace: (UUID, UUID, SplitDirection) -> Void = { _, _, _ in }
-
-    var body: some View {
-      switch layout {
-      case .tab(let id):
-        pane(id)
-          .terminalInputEnabled(inputAllowed && selected == id)
-          .frame(minWidth: 120, maxWidth: .infinity, minHeight: 80, maxHeight: .infinity)
-          .clipped()
-          .contentShape(Rectangle())
-          .simultaneousGesture(TapGesture().onEnded { onSelect(id) })
-          .overlay { PaneDrop(target: id) { dragged, edge in onPlace(dragged, id, edge) } }
-          .overlay(alignment: .top) {
-            if selected == id {
-              Rectangle().fill(Color.accentColor).frame(height: UIStyle.Mark.rule)
-                .allowsHitTesting(false)
-            }
-          }
-      case .split(let direction, let first, let second, let fraction):
-        let vertical = direction == .up || direction == .down
-        DividedPanes(axis: vertical ? .vertical : .horizontal, fraction: fraction, onFraction: { next in
-          onReplace(.split(direction, first, second, next))
-        }, onCommit: onCommit) {
-          SplitCanvas(layout: first, selected: selected, inputAllowed: inputAllowed, pane: pane,
-            onReplace: { onReplace(.split(direction, $0, second, fraction)) },
-            onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
-        } second: {
-          SplitCanvas(layout: second, selected: selected, inputAllowed: inputAllowed, pane: pane,
-            onReplace: { onReplace(.split(direction, first, $0, fraction)) },
-            onCommit: onCommit, onSelect: onSelect, onPlace: onPlace)
-        }
-      }
-    }
-  }
-
-  private struct DividedPanes<First: View, Second: View>: View {
-    var axis: Axis
-    var fraction: Double
-    var onFraction: (Double) -> Void
-    var onCommit: () -> Void
-    @ViewBuilder var first: () -> First
-    @ViewBuilder var second: () -> Second
-    @State private var dragStart: Double?
-
-    var body: some View {
-      GeometryReader { geometry in
-        let horizontal = axis == .horizontal
-        let length = horizontal ? geometry.size.width : geometry.size.height
-        let minimum: CGFloat = horizontal ? 120 : 80
-        let size = Self.length(fraction, usable: length, minimum: minimum)
-        Group {
-          if horizontal {
-            HStack(spacing: 0) {
-              first().frame(width: size).frame(maxHeight: .infinity)
-              grip(horizontal: true, usable: length, minimum: minimum)
-              second().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-          } else {
-            VStack(spacing: 0) {
-              first().frame(height: size).frame(maxWidth: .infinity)
-              grip(horizontal: false, usable: length, minimum: minimum)
-              second().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-          }
-        }
-        .frame(width: geometry.size.width, height: geometry.size.height)
-      }
-    }
-
-    /// The first pane's length. Below the minimum, both panes share what is left.
-    private static func length(_ fraction: Double, usable: CGFloat, minimum: CGFloat) -> CGFloat {
-      guard usable > 0 else { return 0 }
-      let floor = min(minimum, usable / 2)
-      let proposed = CGFloat(fraction.isFinite ? fraction : 0.5) * usable
-      return min(max(proposed, floor), usable - floor)
-    }
-
-    private func grip(horizontal: Bool, usable: CGFloat, minimum: CGFloat) -> some View {
-      Divider()
-        .overlay {
-          Color.clear
-            .frame(width: horizontal ? Chrome.columnHandle : nil, height: horizontal ? nil : Chrome.columnHandle)
-            .contentShape(Rectangle())
-            .pointerStyle(horizontal ? .columnResize : .rowResize)
-            .gesture(
-              DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                  guard usable > 0 else { return }
-                  let origin = dragStart ?? fraction
-                  dragStart = origin
-                  let moved = horizontal ? value.translation.width : value.translation.height
-                  let pixels = Self.length(origin, usable: usable, minimum: minimum) + moved
-                  onFraction(Double(Self.length(pixels / usable, usable: usable, minimum: minimum) / usable))
-                }
-                .onEnded { _ in
-                  dragStart = nil
-                  onCommit()
-                })
-        }
-        .accessibilityHidden(true)
-    }
-  }
-
-  /// Drop a dragged tab on the side of a pane. The overlay stays out of the
-  /// way until a drag is in progress, so typing and clicking still reach the shell.
-  private struct PaneDrop: NSViewRepresentable {
-    var target: UUID
-    var onPlace: (UUID, SplitDirection) -> Void
-
-    func makeNSView(context: Context) -> Dropper {
-      let view = Dropper()
-      view.registerForDraggedTypes([TabDrag.type])
-      return view
-    }
-
-    func updateNSView(_ view: Dropper, context: Context) {
-      view.target = target
-      view.onPlace = onPlace
-    }
-
-    final class Dropper: NSView {
-      var target: UUID?
-      var onPlace: ((UUID, SplitDirection) -> Void)?
-      private let mark = CALayer()
-      private var edge: SplitDirection?
-
-      override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let event = window?.currentEvent, event.type == .leftMouseDragged else { return nil }
-        let local = convert(point, from: superview)
-        return bounds.contains(local) ? self : nil
-      }
-
-      override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        wantsLayer = true
-        layer?.backgroundColor = .clear
-        mark.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
-        mark.isHidden = true
-        if mark.superlayer == nil { layer?.addSublayer(mark) }
-      }
-
-      override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
-          dragged != target else {
-          hide()
-          return []
-        }
-        let local = convert(sender.draggingLocation, from: nil)
-        let point = bounds.contains(local) ? local : NSPoint(x: local.x, y: bounds.height - local.y)
-        guard let side = SplitDirection.drop(
-          x: point.x - bounds.minX, y: point.y - bounds.minY,
-          width: bounds.width, height: bounds.height, band: 0.28)
-        else {
-          hide()
-          return []
-        }
-        show(side)
-        return .move
-      }
-
-      override func draggingExited(_ sender: NSDraggingInfo?) { hide() }
-
-      override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        defer { hide() }
-        guard let dragged = sender.draggingPasteboard.string(forType: TabDrag.type).flatMap(UUID.init),
-          let target, let edge, dragged != target else { return false }
-        onPlace?(dragged, edge)
-        return true
-      }
-
-      private func show(_ side: SplitDirection) {
-        edge = side
-        let thickness = min(bounds.width, bounds.height) * 0.28
-        let rect: CGRect
-        switch side {
-        case .left: rect = CGRect(x: 0, y: 0, width: thickness, height: bounds.height)
-        case .right: rect = CGRect(x: bounds.width - thickness, y: 0, width: thickness, height: bounds.height)
-        case .up: rect = CGRect(x: 0, y: bounds.height - thickness, width: bounds.width, height: thickness)
-        case .down: rect = CGRect(x: 0, y: 0, width: bounds.width, height: thickness)
-        }
-        mark.isHidden = false
-        mark.frame = rect
-      }
-
-      private func hide() {
-        edge = nil
-        mark.isHidden = true
-      }
-    }
-  }
 #endif
 
 /// Something the window tells a person once, with nothing to decide.

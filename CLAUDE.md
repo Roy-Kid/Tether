@@ -235,6 +235,21 @@ forgetting the selection. It takes key without activating Tether, with floating
 and full-screen/Spaces behavior. Summoning
 or hiding it leaves the main window's frame, visibility and native full-screen
 state alone. Keep Window on Top remains an independent main-window setting.
+The main workspace and its quick panel share one effective interaction host.
+Ordinary terminal commands and their questions belong to that host: opening,
+closing, reconnecting, renaming, splitting, picking a host and using the command
+palette must not implicitly replace the quick panel with the main window.
+The effective host is application state, not AppKit's main window, and is not
+lost merely because a menu, a child dialog or another app takes key focus.
+An already presented blocking question keeps its host until its surface is
+gone; hiding or switching that host must not silently cancel the question.
+Plugin UI and Settings remain explicit main-window capabilities; global
+library imports and startup handoff keep their single primary owner. Shared
+session changes remain shared; effective-host routing does not copy sessions.
+The primary workspace and quick panel remember tab-bar visibility separately.
+The workspace keeps its existing preference; quick inherits it once when no
+quick preference exists. Extra windows keep local choices for their lifetime.
+Tab layout remains shared, and Zen temporarily hides rather than rewrites either choice.
 The quick panel shares the main workspace's terminal sessions, not its native
 views; plugin pages and inspectors stay in the main window. Each terminal
 surface has its own renderer, only the front window drives session sizing,

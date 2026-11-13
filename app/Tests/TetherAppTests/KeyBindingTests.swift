@@ -104,6 +104,106 @@ struct KeyBindingTests {
   }
 
   #if os(macOS)
+  @Test("workspace shortcut handling claims before live gates and never consumes disabled or blocked repeats")
+  func workspaceShortcutLiveGates() throws {
+    try isolated { _, defaults in
+      let location = temporaryFile("shortcut-hosts.json")
+      let secrets = MemorySecrets()
+      let tabs = TabSet(defaults: defaults)
+      let registry = PluginRegistry(defaults: defaults)
+      let interaction = WorkspaceInteraction(tabs: tabs,
+        store: HostStore(location: location, secrets: secrets), registry: registry, secrets: secrets)
+      let main = interaction.workspaceHostID
+      let quick = UUID()
+      interaction.register(id: main, kind: .workspace)
+      interaction.register(id: quick, kind: .quick)
+      for id in [main, quick] {
+        interaction.update(id: id, state: WorkspaceHostState(orderedIn: true, renderVisible: true))
+      }
+      defer { interaction.stop(); tabs.closeAll(); removeDirectory(of: location) }
+      let zen = KeyBinding("z", [.command, .shift])
+      @MainActor func route(_ binding: KeyBinding, repeated: Bool = false, editing: Bool = false, from host: UUID) -> Bool {
+        handleWorkspaceShortcut(binding, repeated: repeated, editingText: editing,
+          interaction: interaction, hostID: host, registry: registry)
+      }
+      #expect(route(zen, from: quick))
+      #expect(tabs.zen && interaction.effectiveHost == quick)
+      #expect(route(zen, repeated: true, from: quick))
+      #expect(tabs.zen, "an allowed repeat is consumed but never executes")
+      #expect(route(zen, from: main), "the new source claims before shortcutsAllowed is evaluated")
+      #expect(!tabs.zen && interaction.effectiveHost == main)
+
+      let lease = try #require(interaction.acquirePresentation())
+      for repeated in [false, true] {
+        #expect(!route(zen, repeated: repeated, from: main))
+        #expect(!route(zen, repeated: repeated, from: quick))
+      }
+      #expect(!tabs.zen && interaction.presentationOwner == main)
+      interaction.presentationDidDismiss(lease)
+      for repeated in [false, true] {
+        #expect(!route(KeyBinding("r"), repeated: repeated, from: main), "Rename Terminal has no target")
+        #expect(!route(KeyBinding("q", [.control, .option]), repeated: repeated, from: main), "unmatched chord")
+        #expect(!route(zen, repeated: repeated, editing: true, from: main), "Redo belongs to a text field")
+        #expect(!route(zen, repeated: repeated, from: UUID()), "no fallback from an unknown source")
+      }
+      #expect(route(KeyBinding("o", [.command, .shift]), editing: true, from: main))
+      #expect(tabs.palette == .command, "palette commands remain available in their search fields")
+      interaction.update(id: quick, state: WorkspaceHostState())
+      #expect(!route(zen, from: quick))
+      #expect(!route(zen, repeated: true, from: quick))
+    }
+  }
+
+  @Test("workspace shortcut handling runs only offered enabled plugin commands and consumes valid repeats without rerunning")
+  func workspaceShortcutPluginResolution() throws {
+    try isolated { _, defaults in
+      let location = temporaryFile("shortcut-plugin-hosts.json")
+      let secrets = MemorySecrets()
+      let tabs = TabSet(defaults: defaults)
+      let registry = PluginRegistry(defaults: defaults)
+      let plugin = CataloguePlugin(id: "shortcut-fixture")
+      registry.register(plugin)
+      let interaction = WorkspaceInteraction(tabs: tabs,
+        store: HostStore(location: location, secrets: secrets), registry: registry, secrets: secrets)
+      let host = interaction.workspaceHostID
+      let window = ShortcutHostWindow(contentRect: NSRect(x: -6000, y: -6000, width: 200, height: 200),
+        styleMask: [.borderless], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      interaction.register(id: host, kind: .workspace, window: window)
+      defer {
+        interaction.stop(); interaction.unregister(id: host); tabs.closeAll(); window.close()
+        removeDirectory(of: location)
+      }
+      let catalog = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
+      let refresh = try #require(catalog.first { $0.id == KeyBindingCatalog.commandID("refresh", plugin: plugin.metadata.id) })
+      let launch = try #require(catalog.first { $0.id == KeyBindingCatalog.launchID(plugin.metadata.id) })
+      let refreshChord = KeyBinding("j", [.control, .option])
+      let launchChord = KeyBinding("l", [.control, .option])
+      try tabs.keyBindings.set(refreshChord, for: refresh, slot: 0, commands: catalog)
+      try tabs.keyBindings.set(launchChord, for: launch, slot: 0, commands: catalog)
+      @MainActor func route(_ chord: KeyBinding, repeated: Bool = false) -> Bool {
+        handleWorkspaceShortcut(chord, repeated: repeated, editingText: false,
+          interaction: interaction, hostID: host, registry: registry)
+      }
+      for repeated in [false, true] {
+        #expect(!route(refreshChord, repeated: repeated), "a descriptor alone is not a runnable plugin item")
+        #expect(!route(launchChord, repeated: repeated), "launch requiring a missing connection is disabled")
+      }
+      var runs = 0
+      let workspace = StubWorkspace(title: "Shortcut fixture")
+      workspace.offered = [PluginCommand(id: "refresh", title: "Refresh", symbol: "arrow.clockwise") { runs += 1 }]
+      tabs.openExtension(workspace, pluginID: plugin.metadata.id, hostID: nil)
+      #expect(route(refreshChord))
+      #expect(runs == 1)
+      #expect(route(refreshChord, repeated: true))
+      #expect(runs == 1)
+      workspace.offered = []
+      #expect(!route(refreshChord))
+      #expect(!route(refreshChord, repeated: true))
+      #expect(runs == 1)
+    }
+  }
+
   @Test("quick terminal appears once in unified shortcuts under Window with Control-backtick")
   func quickTerminalCatalog() throws {
     try isolated { store, defaults in
@@ -253,5 +353,14 @@ private final class CataloguePlugin: TetherPlugin {
 @MainActor
 private final class KeyBindingTestWindow: NSWindow {
   override var isKeyWindow: Bool { true }
+}
+
+/// Gives the handler a native identity without ordering a real window in or
+/// changing desktop focus when a plugin command hands off to its workspace.
+@MainActor
+private final class ShortcutHostWindow: NSWindow {
+  override var isKeyWindow: Bool { true }
+  override var isVisible: Bool { true }
+  override func makeKeyAndOrderFront(_ sender: Any?) {}
 }
 #endif

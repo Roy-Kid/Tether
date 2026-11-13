@@ -3,9 +3,14 @@ import Tether
 import TetherUI
 
 extension EnvironmentValues {
-  /// Whether this window is in front of those showing its tabs
-  /// (`TabSet.isFront`). Two windows can show the same tabs at different
-  /// sizes; the one in front sizes the sessions and shows the pickers.
+  /// Whether this window is the interaction's effective host: it sizes
+  /// the sessions and shows the pickers. Set by each root from
+  /// `WorkspaceInteraction.drivesSurface`; a lone root (previews, tests)
+  /// draws with the default.
+  @Entry var surfaceDrivesSize = true
+  /// Whether this host presents the workspace's shared presentations
+  /// (palette, host picker, inline rename): the interaction's blocking
+  /// owner first, then the effective host — one at a time, never both.
   @Entry var isFrontWindow = true
   /// The window that started the app. It owns the shared presenters and
   /// publishes the input/shortcut gates the quick panel reads; additional
@@ -41,7 +46,7 @@ struct SessionView: View {
   var onFocus: () -> Void = {}
   @AppStorage(TetherUI.Palette.colorStyleKey) private var colorStyle = TetherUI.Palette.defaultColorStyle
   @Environment(\.colorScheme) private var scheme
-  @Environment(\.isFrontWindow) private var drivesSize
+  @Environment(\.surfaceDrivesSize) private var drivesSize
   /// What this window's surface would size the session to. Kept while
   /// another window sizes it, and applied when this one does again.
   @State private var wanted: GridSize?

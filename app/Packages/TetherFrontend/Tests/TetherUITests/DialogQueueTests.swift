@@ -8,6 +8,7 @@ private final class RecordingSurface: DialogSurface {
   private(set) var shown: [String] = []
   private(set) var withdrawn: [String] = []
   var available = true
+  var delaysWithdrawal = false
   private var answer: ((Int, [String]) -> Void)?
   private var gone: (() -> Void)?
   private var current: String?
@@ -27,7 +28,7 @@ private final class RecordingSurface: DialogSurface {
 
   func withdraw() {
     if let current { withdrawn.append(current) }
-    finishDismissal()
+    if !delaysWithdrawal { finishDismissal() }
   }
 
   /// A person taps an action; the dialog then finishes animating away.
@@ -180,6 +181,91 @@ struct DialogQueueTests {
       shortcuts: [.enter, .command("w")]) {}
     #expect(close.defaultAction == 1)
     #expect(close.cancelAction == 0)
+  }
+
+  @Test("Answer completion retains the presentation lease until gone, then releases before the next shown")
+  func dismissalAfterAnswer() async {
+    let surface = RecordingSurface()
+    let queue = DialogQueue(surface: surface)
+    var events: [String] = []
+    let first = Task {
+      let reply = await queue.ask(dialog("First") { _ in events.append("performed") },
+        shown: { events.append("shown") }, didDismiss: { events.append("dismissed") })
+      events.append("returned")
+      return reply
+    }
+    await settle { surface.shown.count == 1 }
+    let second = Task {
+      await queue.ask(dialog("Second"), shown: { events.append("next shown") })
+    }
+    await settle()
+    surface.tapWithoutDismissing(1)
+    #expect(await first.value?.isAffirmative == true)
+    #expect(events == ["shown", "performed", "returned"])
+    surface.finishDismissal()
+    await settle { surface.shown.count == 2 }
+    #expect(events == ["shown", "performed", "returned", "dismissed", "next shown"])
+    surface.finishDismissal()
+    surface.finishDismissal()
+    #expect(await second.value == nil)
+    #expect(events.filter { $0 == "dismissed" }.count == 1)
+  }
+
+  @Test("Cancellation completion does not release a visible surface's presentation lease")
+  func dismissalAfterWithdrawal() async {
+    let surface = RecordingSurface()
+    surface.delaysWithdrawal = true
+    let queue = DialogQueue(surface: surface)
+    var shown = 0
+    var dismissed = 0
+    let task = Task {
+      await queue.ask(dialog("First"), shown: { shown += 1 }, didDismiss: { dismissed += 1 })
+    }
+    await settle { shown == 1 }
+    task.cancel()
+    #expect(await task.value == nil)
+    #expect(dismissed == 0)
+    surface.finishDismissal()
+    surface.finishDismissal()
+    #expect(shown == 1 && dismissed == 1)
+  }
+
+  @Test("Unpresented questions never acquire or release a presentation lease")
+  func noUnpresentedLifecycle() async {
+    let surface = RecordingSurface()
+    let queue = DialogQueue(surface: surface)
+    var shown = 0
+    var dismissed = 0
+    let first = Task { await queue.ask(dialog("First")) }
+    await settle { surface.shown.count == 1 }
+    let waiting = Task {
+      await queue.ask(dialog("Waiting"), shown: { shown += 1 }, didDismiss: { dismissed += 1 })
+    }
+    await settle()
+    waiting.cancel()
+    #expect(await waiting.value == nil)
+    surface.finishDismissal()
+    #expect(await first.value == nil)
+    surface.available = false
+    let missingHost = await queue.ask(dialog("Nowhere"), shown: { shown += 1 }, didDismiss: { dismissed += 1 })
+    #expect(missingHost == nil)
+    #expect(shown == 0 && dismissed == 0)
+  }
+
+  @Test("Unanswered disappearance ends the owner lifecycle exactly once")
+  func unansweredLifecycle() async {
+    let surface = RecordingSurface()
+    let queue = DialogQueue(surface: surface)
+    var shown = 0
+    var dismissed = 0
+    let task = Task {
+      await queue.ask(dialog("First"), shown: { shown += 1 }, didDismiss: { dismissed += 1 })
+    }
+    await settle { shown == 1 }
+    surface.finishDismissal()
+    surface.finishDismissal()
+    #expect(await task.value == nil)
+    #expect(shown == 1 && dismissed == 1)
   }
 
 }

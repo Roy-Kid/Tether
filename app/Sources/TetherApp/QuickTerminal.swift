@@ -18,6 +18,10 @@ import TetherUI
 /// main window back. Hiding never closes a session.
 @MainActor @Observable
 final class QuickTerminalController: NSObject {
+  weak var interaction: WorkspaceInteraction?
+  private var deferredHide = false
+  private var deferredMainReveal = false
+  private var deferredSummon = false
   var enabled: Bool {
     didSet {
       defaults.set(enabled, forKey: "quickTerminal.enabled")
@@ -109,6 +113,9 @@ final class QuickTerminalController: NSObject {
   /// activates the app the summon took key from; a test replaces it with
   /// a recorder rather than watching real activations.
   @ObservationIgnored var focusRestore: (@MainActor (NSRunningApplication) -> Void) = { $0.activate() }
+  /// Test-owned windows may substitute the native ordering/activation only;
+  /// focus generation, quick retirement and target selection still run here.
+  @ObservationIgnored var workspaceReveal: (@MainActor (NSWindow) -> Void)?
   /// The app currently in front, read at summon time. Injected in tests.
   @ObservationIgnored var frontmostApplication: () -> NSRunningApplication? = {
     NSWorkspace.shared.frontmostApplication
@@ -195,6 +202,7 @@ final class QuickTerminalController: NSObject {
     guard self.panel !== panel else { return }
     unobservePanel()
     self.panel = panel
+    interaction?.register(id: panelID, kind: .quick, window: panel)
     for name in Self.panelNotes {
       NotificationCenter.default.addObserver(self, selector: selector(for: name), name: name, object: panel)
     }
@@ -292,10 +300,36 @@ final class QuickTerminalController: NSObject {
   /// restore an earlier hide scheduled is dropped, not deferred into a
   /// fight over key.
   func showAsMainWindow() {
-    focusGeneration += 1
-    panel?.orderOut(nil)
+    if interaction?.hasBlockingPresentation == true {
+      deferredMainReveal = true
+      deferredHide = false
+      deferredSummon = false
+      return
+    }
     guard let mainWindow else { return }
-    orderMain(mainWindow)
+    guard revealWorkspace(mainWindow) else { return }
+    if let interaction {
+      interaction.update(id: interaction.workspaceHostID, state: WorkspaceHostState(
+        orderedIn: true, renderVisible: mainWindow.occlusionState.contains(.visible), keyWithinHost: true))
+      _ = interaction.claim(interaction.workspaceHostID)
+    }
+  }
+
+  /// A main-only action may belong to an extra workspace, not `mainWindow`.
+  /// Retire the quick panel and invalidate its scheduled focus restore once,
+  /// then reveal exactly the workspace supplied by that action's controller.
+  @discardableResult
+  func revealWorkspace(_ window: NSWindow) -> Bool {
+    if isShown && interaction?.hasBlockingPresentation == true { return false }
+    focusGeneration += 1
+    previousApp = nil
+    deferredHide = false
+    deferredSummon = false
+    deferredMainReveal = false
+    panel?.orderOut(nil)
+    interaction?.update(id: panelID, state: WorkspaceHostState())
+    if let workspaceReveal { workspaceReveal(window) } else { orderMain(window) }
+    return true
   }
 
   /// Summon: onto the chosen display, key without activating. The main
@@ -303,6 +337,12 @@ final class QuickTerminalController: NSObject {
   /// goes over it, on whatever Space it is on.
   private func show() {
     guard enabled, let panel else { return }
+    if interaction?.hasBlockingPresentation == true {
+      deferredSummon = true
+      deferredMainReveal = false
+      deferredHide = false
+      return
+    }
     // A newer summon supersedes any restore an earlier hide scheduled.
     focusGeneration += 1
     let front = frontmostApplication()
@@ -324,6 +364,11 @@ final class QuickTerminalController: NSObject {
     if placed { placeIfNeeded(force: true) }
     placing = false
     panel.makeKey()
+    // The first chord after summon belongs here, before a delayed WindowState
+    // report can arrive. It must never be dispatched against yesterday's host.
+    interaction?.update(id: panelID, state: WorkspaceHostState(
+      orderedIn: true, renderVisible: true, keyWithinHost: true))
+    _ = interaction?.claim(panelID)
     // The grid follows the view's bounds. A frame set here does not otherwise
     // reach it, and the shell keeps the size it had.
     refit(panel)
@@ -379,10 +424,32 @@ final class QuickTerminalController: NSObject {
   /// Dismiss: the panel orders out and nothing else changes. No session is
   /// closed — the panel owns none — and the workspace window is untouched.
   func hide() {
+    if interaction?.hasBlockingPresentation == true {
+      deferredHide = true
+      deferredMainReveal = false
+      deferredSummon = false
+      return
+    }
     guard let panel, panel.isVisible else { return }
     let wasKey = panel.isKeyWindow
     panel.orderOut(nil)
+    interaction?.update(id: panelID, state: WorkspaceHostState())
     returnFocus(wasKey)
+  }
+
+  func presentationDidDismiss() {
+    if deferredMainReveal {
+      deferredMainReveal = false
+      showAsMainWindow()
+    } else if deferredSummon {
+      deferredSummon = false
+      show()
+    } else if deferredHide {
+      deferredHide = false
+      hide()
+    } else {
+      DispatchQueue.main.async { [weak self] in self?.considerHiding() }
+    }
   }
 
   private func orderMain(_ window: NSWindow) {
@@ -504,6 +571,7 @@ final class QuickTerminalController: NSObject {
   }
 
   private func considerHiding() {
+    if interaction?.hasBlockingPresentation == true { return }
     guard !showingStatusMenu, let panel, panel.isVisible,
       !panel.isKeyWindow, NSApp.modalWindow == nil else { return }
     if NSApp.isActive || autoHide { hide() }

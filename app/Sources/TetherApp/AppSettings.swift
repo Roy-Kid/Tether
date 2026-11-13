@@ -30,9 +30,11 @@ enum TabLayout: String {
   static let `default`: Self = .horizontal
 }
 
-/// The last tab-bar visibility on this device, independent of layout and Zen.
+/// Each stable host's last tab-bar visibility, independent of layout and Zen.
 enum TabBarPreference {
+  /// The existing workspace preference, including lone roots and iOS.
   static let key = "tabBarVisible"
+  static let quickKey = "quickTerminal.tabBarVisible"
   static let `default` = true
 }
 

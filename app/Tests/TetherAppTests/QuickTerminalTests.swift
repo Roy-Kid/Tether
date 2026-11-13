@@ -3,13 +3,27 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 import Testing
+import TetherPluginKit
 import TetherTestSupport
 @testable import TetherApp
 
 /// The quick panel the way a summon finds it, which a test process cannot
 /// otherwise make: always key, so `toggle()` takes the hide path.
 final class KeyedQuickPanel: QuickTerminalWindow {
-  override var isKeyWindow: Bool { true }
+  var testFocus: TestWorkspaceFocus?
+  override var isKeyWindow: Bool { testFocus?.isKey(self) ?? true }
+  override func makeKey() {
+    super.makeKey()
+    testFocus?.becameKey(self)
+  }
+  override func makeKeyAndOrderFront(_ sender: Any?) {
+    super.makeKeyAndOrderFront(sender)
+    testFocus?.becameKey(self)
+  }
+  override func orderOut(_ sender: Any?) {
+    super.orderOut(sender)
+    testFocus?.orderedOut(self)
+  }
 }
 
 /// Key until a test says it resigned, so a resign-key notification is what
@@ -22,6 +36,140 @@ final class ResignableQuickPanel: QuickTerminalWindow {
 @MainActor
 @Suite("Quick Terminal", .serialized, .appKitEventLoop)
 struct QuickTerminalTests {
+  /// A panel without ordering any real window in or changing desktop focus.
+  final class ModelOnlyPanel: QuickTerminalWindow {
+    var orderedIn = true
+    override var isVisible: Bool { orderedIn }
+    override func orderOut(_ sender: Any?) { orderedIn = false }
+    override func orderFrontRegardless() { orderedIn = true }
+    override func makeKey() {}
+  }
+
+  @Test("summoning from another host waits for its question to truly dismiss before claiming quick")
+  func quickSummonDefersForOtherHostQuestion() throws {
+    let suite = "quick-terminal-deferred-summon.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defaults.set(false, forKey: "quickTerminal.menuBarIcon")
+    let location = temporaryFile("hosts.json")
+    let secrets = MemorySecrets()
+    let tabs = TabSet(defaults: defaults)
+    let interaction = WorkspaceInteraction(tabs: tabs,
+      store: HostStore(location: location, secrets: secrets), registry: PluginRegistry(), secrets: secrets)
+    let quick = tabs.quickTerminal
+    let panel = ModelOnlyPanel(hosting: Color.clear)
+    panel.orderedIn = false
+    quick.interaction = interaction
+    quick.frontmostApplication = { nil }
+    quick.attach(panel: panel)
+    let main = interaction.workspaceHostID
+    interaction.register(id: main, kind: .workspace)
+    interaction.update(id: main, state: WorkspaceHostState(orderedIn: true, renderVisible: true, keyWithinHost: true))
+    defer {
+      interaction.stop(); quick.stop(); panel.close()
+      defaults.removePersistentDomain(forName: suite); removeDirectory(of: location)
+    }
+    let lease = try #require(interaction.acquirePresentation())
+    interaction.presentationDidPresent(lease)
+    quick.toggle()
+    #expect(!panel.orderedIn)
+    #expect(interaction.effectiveHost == main)
+    interaction.presentationDidDismiss(lease)
+    #expect(panel.orderedIn)
+    #expect(interaction.effectiveHost == quick.panelID)
+  }
+
+  @Test("native host registration preserves an unchanged anchor and replaces the old window observer on rebind")
+  func nativeHostRebinding() throws {
+    let suite = "quick-terminal-rebind.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    let location = temporaryFile("hosts.json")
+    let secrets = MemorySecrets()
+    let tabs = TabSet(defaults: defaults)
+    let interaction = WorkspaceInteraction(tabs: tabs,
+      store: HostStore(location: location, secrets: secrets), registry: PluginRegistry(), secrets: secrets)
+    let old = ModelOnlyPanel(hosting: Color.clear)
+    let replacement = ModelOnlyPanel(hosting: Color.clear)
+    replacement.orderedIn = false
+    let id = UUID()
+    defer {
+      interaction.unregister(id: id); interaction.stop(); tabs.quickTerminal.stop()
+      old.close(); replacement.close()
+      defaults.removePersistentDomain(forName: suite); removeDirectory(of: location)
+    }
+    interaction.register(id: id, kind: .quick, window: old)
+    let originalAnchor = interaction.windowAnchor(for: id)
+    interaction.register(id: id, kind: .quick, window: old)
+    #expect(interaction.windowAnchor(for: id) === originalAnchor)
+    interaction.register(id: id, kind: .quick, window: replacement)
+    #expect(interaction.windowAnchor(for: id) !== originalAnchor)
+    NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: old)
+    #expect(!interaction.claim(id), "old visible window no longer contributes state")
+    replacement.orderedIn = true
+    NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: replacement)
+    #expect(interaction.claim(id))
+  }
+
+  @Test("closing the effective quick host hides only its panel and leaves the shared session alive")
+  func closeQuickHostKeepsSession() throws {
+    let suite = "quick-terminal-interaction.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defaults.set(false, forKey: "quickTerminal.enabled")
+    defaults.set(false, forKey: "quickTerminal.menuBarIcon")
+    let location = temporaryFile("hosts.json")
+    let secrets = MemorySecrets()
+    let tabs = TabSet(defaults: defaults)
+    let interaction = WorkspaceInteraction(tabs: tabs,
+      store: HostStore(location: location, secrets: secrets), registry: PluginRegistry(), secrets: secrets)
+    let panel = ModelOnlyPanel(hosting: Color.clear)
+    let quick = tabs.quickTerminal
+    quick.interaction = interaction
+    quick.frontmostApplication = { nil }
+    quick.attach(panel: panel)
+    let tab = SessionTab(preview: .local, known: tabs.known, name: "Shared", live: true)
+    tabs.adopt(tab)
+    defer {
+      interaction.stop(); quick.stop(); tabs.closeAll(); panel.close()
+      defaults.removePersistentDomain(forName: suite); removeDirectory(of: location)
+    }
+    #expect(interaction.claim(quick.panelID))
+    #expect(interaction.dispatch(.closeWindow, from: quick.panelID))
+    #expect(!panel.orderedIn)
+    #expect(tabs.tabs.first === tab)
+    #expect(tab.isLive)
+    #expect(interaction.effectiveHost == nil)
+    #expect(!interaction.dispatch(.closeWindow, from: quick.panelID), "a hidden host cannot consume a second close")
+  }
+
+  @Test("a quick hide waits until the blocking surface actually dismisses")
+  func quickHideDefersForPresentationLease() throws {
+    let suite = "quick-terminal-presentation.\(UUID())"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defaults.set(false, forKey: "quickTerminal.enabled")
+    defaults.set(false, forKey: "quickTerminal.menuBarIcon")
+    let location = temporaryFile("hosts.json")
+    let secrets = MemorySecrets()
+    let tabs = TabSet(defaults: defaults)
+    let interaction = WorkspaceInteraction(tabs: tabs,
+      store: HostStore(location: location, secrets: secrets), registry: PluginRegistry(), secrets: secrets)
+    let panel = ModelOnlyPanel(hosting: Color.clear)
+    let quick = tabs.quickTerminal
+    quick.interaction = interaction
+    quick.attach(panel: panel)
+    defer {
+      interaction.stop(); quick.stop(); panel.close()
+      defaults.removePersistentDomain(forName: suite); removeDirectory(of: location)
+    }
+    #expect(interaction.claim(quick.panelID))
+    let lease = try #require(interaction.acquirePresentation())
+    interaction.presentationDidPresent(lease)
+    quick.hide()
+    #expect(panel.orderedIn)
+    #expect(interaction.presentationOwner == quick.panelID)
+    interaction.presentationDidDismiss(lease)
+    #expect(!panel.orderedIn)
+    #expect(interaction.presentationOwner == nil)
+  }
+
   @Test("the top third respects display origins, the menu bar and small screens; a dragged size comes back centred and clamped")
   func geometry() {
     let screen = NSRect(x: -1600, y: 924, width: 1600, height: 876)

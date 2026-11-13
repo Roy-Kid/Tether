@@ -16,6 +16,24 @@ struct WorkspaceTabBar: View {
   @Bindable var tabs: TabSet
   var registry: PluginRegistry? = nil
   var layout: TabLayout = .horizontal
+  /// Room the leading edge leaves for the window's controls. The
+  /// workspace window clears the traffic lights; the quick panel has
+  /// none and starts its tabs at the inset.
+  var leadingClearance: CGFloat = Chrome.trafficLights
+  /// What the add button asks for. Nil asks the shared TabSet, as the
+  /// workspace window does; the quick panel hands the action to the
+  /// main window instead (`QuickTerminalRoot`).
+  var onNewTab: (() -> Void)? = nil
+  /// Where an accessory interaction goes when this strip does not host
+  /// it. Nil opens the accessory here, as the workspace window does;
+  /// the quick panel passes a handoff to the main window, and the
+  /// accessory never renders here — whoever opened it.
+  var accessoryHandoff: (() -> Void)? = nil
+  /// Where a workspace action asked from this strip's menu is
+  /// performed. Nil performs it on the shared TabSet, as the workspace
+  /// window does; the quick panel hands it to the main window, the one
+  /// that consumes intents.
+  var performAction: ((WorkspaceAction) -> Void)? = nil
   var onClose: (UUID) -> Void
   /// The chip the pointer is over. A close box on every tab at once is a
   /// row of crosses; one that only appears under the pointer is a tab
@@ -39,9 +57,24 @@ struct WorkspaceTabBar: View {
     }
   }
 
+  /// A press on a chip goes through the same routing as the button
+  /// under it: selection here, an accessory only where one hosts it.
+  private func clickChip(_ id: UUID) {
+    if let accessoryHandoff {
+      tabs.handleTabClick(id, handingAccessoryOff: accessoryHandoff)
+    } else {
+      tabs.handleTabClick(id)
+    }
+  }
+
+  /// Where a workspace action from this strip's menu runs.
+  private func perform(_ action: WorkspaceAction) {
+    if let performAction { performAction(action) } else { tabs.perform(action) }
+  }
+
   private var titlebar: some View {
     HStack(spacing: 0) {
-      Color.clear.frame(width: Chrome.trafficLights)
+      Color.clear.frame(width: leadingClearance)
       tabList
       Spacer(minLength: 12)
         .background { WindowDragArea() }
@@ -55,7 +88,7 @@ struct WorkspaceTabBar: View {
 
   private var newTabButton: some View {
     Button {
-      tabs.perform(.newTab)
+      onNewTab?() ?? tabs.perform(.newTab)
     } label: {
       Image(systemName: "plus")
         .font(UIStyle.symbol)
@@ -113,8 +146,8 @@ struct WorkspaceTabBar: View {
               closeWidth: UIStyle.Mark.icon + (layout == .horizontal ? UIStyle.Space.inset : UIStyle.Space.small),
               editing: inlineRenameID,
               onPrimary: { id in
-                if id == addTabID { tabs.perform(.newTab) }
-                else { tabs.handleTabClick(id) }
+                if id == addTabID { onNewTab?() ?? tabs.perform(.newTab) }
+                else { clickChip(id) }
               },
               onClose: { if $0 != addTabID { onClose($0) } },
               onPlace: { dragged, target, edge in
@@ -227,7 +260,7 @@ struct WorkspaceTabBar: View {
           .frame(height: rowHeight)
       } else {
       Button {
-        tabs.handleTabClick(id)
+        clickChip(id)
       } label: {
         chipFace(
           editing: false, title: title, subtitle: subtitle, symbol: symbol, disconnected: disconnected,
@@ -294,7 +327,7 @@ struct WorkspaceTabBar: View {
     // One popover anchor for the open tab. An anchor on every chip in the
     // strip steals hits from the others once more than one tab is open.
     .modifier(TabAccessoryPopover(
-      presented: selected && tabs.accessory?.tab == focused,
+      presented: accessoryHandoff == nil && selected && tabs.accessory?.tab == focused,
       edge: layout == .vertical ? .trailing : .bottom,
       dismiss: { if tabs.accessory?.tab == focused { tabs.accessory = nil } }
     ) {
@@ -381,12 +414,14 @@ struct WorkspaceTabBar: View {
   }
 
   #if os(macOS)
-    private func tabMenu(_ id: UUID) -> NSMenu {
+    /// The right-press menu for one chip. Internal so a test can perform
+    /// an item the way a person's click does, without popping the menu.
+    func tabMenu(_ id: UUID) -> NSMenu {
       let menu = NSMenu()
       menu.autoenablesItems = false
       if let page = tabs.workspaces.first(where: { $0.id == id }) ?? tabs.workspace(containing: id) {
         let terminalID = page.terminalIDs.contains(id) ? id : page.focused
-        menu.addItem(ActionMenuItem("New Terminal") { tabs.select(terminalID); tabs.perform(.newTerminal) })
+        menu.addItem(ActionMenuItem("New Terminal") { tabs.select(terminalID); perform(.newTerminal) })
         menu.addItem(.separator())
         for other in page.terminalIDs {
           guard let terminal = tabs.tabs.first(where: { $0.id == other }) else { continue }
@@ -398,7 +433,7 @@ struct WorkspaceTabBar: View {
         let canSplit = tabs.tabs.first { $0.id == terminalID }
           .map { tabs.wide && ($0.isLive || $0.host.isLocal) } ?? false
         for action: WorkspaceAction in [.splitLeft, .splitRight, .splitUp, .splitDown, .joinGroups] {
-          let item = ActionMenuItem(tabs.title(for: action)) { tabs.select(terminalID); tabs.perform(action) }
+          let item = ActionMenuItem(tabs.title(for: action)) { tabs.select(terminalID); perform(action) }
           item.isEnabled = action == .joinGroups ? page.layout != nil : canSplit
           menu.addItem(item)
         }
@@ -417,7 +452,7 @@ struct WorkspaceTabBar: View {
   private func tabContextMenu(_ id: UUID) -> some View {
     if let page = tabs.workspaces.first(where: { $0.id == id }) ?? tabs.workspace(containing: id) {
       let terminalID = page.terminalIDs.contains(id) ? id : page.focused
-      Button("New Terminal") { tabs.select(terminalID); tabs.perform(.newTerminal) }
+      Button("New Terminal") { tabs.select(terminalID); perform(.newTerminal) }
       Section {
         ForEach(page.terminalIDs, id: \.self) { other in
           if let terminal = tabs.tabs.first(where: { $0.id == other }) {
@@ -433,10 +468,10 @@ struct WorkspaceTabBar: View {
       if tabs.wide {
         Section {
           ForEach([WorkspaceAction.splitLeft, .splitRight, .splitUp, .splitDown], id: \.self) { action in
-            Button(tabs.title(for: action)) { tabs.select(terminalID); tabs.perform(action) }
+            Button(tabs.title(for: action)) { tabs.select(terminalID); perform(action) }
               .disabled(!(tabs.tabs.first { $0.id == terminalID }.map { $0.isLive || $0.host.isLocal } ?? false))
           }
-          Button(tabs.title(for: .joinGroups)) { tabs.select(terminalID); tabs.perform(.joinGroups) }
+          Button(tabs.title(for: .joinGroups)) { tabs.select(terminalID); perform(.joinGroups) }
             .disabled(page.layout == nil)
         }
       }

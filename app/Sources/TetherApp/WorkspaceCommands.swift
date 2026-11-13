@@ -105,14 +105,19 @@ struct WorkspaceCommands: Commands {
         ForEach(tabs.accessories) { plugin in
           Menu(plugin.title) {
             Button("\(plugin.accessory.name.localizedCapitalized)…") {
-              tabs.toggleAccessory(plugin.id, on: tab.id)
+              if let interaction = tabs.interaction {
+                _ = interaction.performOnWorkspace { tabs.toggleAccessory(plugin.id, on: tab.id) }
+              } else { tabs.toggleAccessory(plugin.id, on: tab.id) }
             }
             .modifier(PluginShortcut(tabs: tabs, id: KeyBindingCatalog.launchID(plugin.id)))
             .disabled(!tab.canOpen(plugin.id))
             if let commands = tab.attachment(for: plugin.id)?.commands, !commands.isEmpty {
               Divider()
               ForEach(commands) { command in
-                Button(command.title, action: command.action)
+                Button(command.title) {
+                  if let interaction = tabs.interaction { _ = interaction.performOnWorkspace(command.action) }
+                  else { command.action() }
+                }
                   .modifier(PluginShortcut(tabs: tabs, id: KeyBindingCatalog.commandID(command.id, plugin: plugin.id)))
               }
             }

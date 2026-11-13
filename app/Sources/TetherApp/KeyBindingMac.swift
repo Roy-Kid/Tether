@@ -163,6 +163,31 @@ struct WorkspaceKeyBindingMonitor: NSViewRepresentable {
   }
 }
 
+/// Shared by native app routing and both hosted roots. View updates may lag a
+/// key transition, so claim and evaluate model gates at the event, not while
+/// constructing the SwiftUI monitor. A declined command never consumes a key.
+@MainActor
+func handleWorkspaceShortcut(
+  _ binding: KeyBinding, repeated: Bool, editingText: Bool,
+  interaction: WorkspaceInteraction, hostID: UUID, registry: PluginRegistry
+) -> Bool {
+  let tabs = interaction.tabs
+  let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
+  guard let id = tabs.keyBindings.command(for: binding, in: definitions, offered: tabs.offeredCommandIDs),
+    !editingText || WorkspaceAction.answersWhileEditingText(id),
+    interaction.claim(hostID), interaction.shortcutsAllowed(in: hostID) else { return false }
+  if let action = WorkspaceAction(rawValue: id) {
+    guard tabs.canPerform(action) else { return false }
+    if repeated { return true }
+    return interaction.dispatch(action, from: hostID)
+  }
+  guard let item = interaction.commandItems(from: hostID).first(where: { $0.id == id && $0.enabled }) else {
+    return false
+  }
+  if !repeated { item.run() }
+  return true
+}
+
 /// SwiftUI stores ⇧⌘H as `"h"` plus Shift. AppKit matches that chord only
 /// when the letter is uppercase and Shift is not in the mask, so the menu
 /// never fires it while the terminal is first responder.
@@ -185,23 +210,31 @@ enum MenuKeyEquivalents {
 
   /// Runs a workspace chord from the app monitor. The panel never delivers
   /// that chord to the menu bar, and the view monitor is not the only copy
-  /// of these windows. A plugin command is left for the view monitor, which
-  /// knows the items the window is offering.
+  /// of these windows. Local and global routes share the same live dispatcher;
+  /// the first successful route consumes the event before another sees it.
   @MainActor
   static func dispatch(_ event: NSEvent, tabs: TabSet, registry: PluginRegistry) -> NSEvent? {
-    guard tabs.menuShortcuts == true,
-      let window = event.window, window is WorkspaceWindow, window.isKeyWindow,
+    guard let window = event.window, window.isKeyWindow,
       window.attachedSheet == nil, NSApp.modalWindow == nil,
       (window.firstResponder as? NSTextInputClient)?.hasMarkedText() != true,
       let binding = KeyBinding(event: event)
     else { return event }
     let editing = WorkspaceKeyBindingMonitor.MonitorView.isEditingText(window.firstResponder)
+    if let interaction = tabs.interaction {
+      guard let host = interaction.hostID(for: window) else { return event }
+      for chord in [binding, KeyBinding.unshifted(event)].compactMap({ $0 }) {
+        if handleWorkspaceShortcut(chord, repeated: event.isARepeat, editingText: editing,
+          interaction: interaction, hostID: host, registry: registry) { return nil }
+      }
+      return event
+    }
     let definitions = KeyBindingCatalog.commands(registry: registry, tabs: tabs)
     for chord in [binding, KeyBinding.unshifted(event)].compactMap({ $0 }) {
       guard let id = tabs.keyBindings.command(for: chord, in: definitions, offered: tabs.offeredCommandIDs)
       else { continue }
-      guard let action = WorkspaceAction(rawValue: id) else { return event }
       guard !editing || WorkspaceAction.answersWhileEditingText(id) else { return event }
+      guard tabs.menuShortcuts == true, window is WorkspaceWindow,
+        let action = WorkspaceAction(rawValue: id), tabs.canPerform(action) else { return event }
       if !event.isARepeat { tabs.perform(action) }
       return nil
     }
